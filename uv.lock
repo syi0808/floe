@@ -254,7 +254,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "llama-cpp-python", specifier = ">=0.3.8" },
-    { name = "python-a2a", extras = ["all", "mcp", "openai", "server"], specifier = ">=0.4.4" },
+    { name = "python-a2a", extras = ["all", "mcp", "openai", "server"], specifier = ">=0.4.6" },
 ]
 
 [[package]]
@@ -615,7 +615,7 @@ wheels = [
 
 [[package]]
 name = "python-a2a"
-version = "0.4.4"
+version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -630,9 +630,9 @@ dependencies = [
     { name = "requests" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/9a/28113d16b6cd998e079b300e4368fb332e466653ae0755a027dbfa9ddf74/python_a2a-0.4.4.tar.gz", hash = "sha256:8bef92947fbc2f0fc40a66bcaa4d0d9aae1d919852505499fd2d780a8e285a46", size = 123276, upload_time = "2025-04-23T13:28:49.157Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/3e/7f60d727072aafc4d7e019cb7201250b6dd8e16aa96cb8c45a518342b053/python_a2a-0.4.6.tar.gz", hash = "sha256:6b37156684badccb9e5a49fe2eab37c2e5853be23c0767c88c99e871aa7f5484", size = 137044, upload_time = "2025-04-24T14:47:56.314Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/22/d116362bb6cb87f6100d6261c2c0fbf1815f25ebfd50a55a9dc00cd2a150/python_a2a-0.4.4-py3-none-any.whl", hash = "sha256:edeb7e6de199dae8c866739798f544e7e30e7fbef7da5e3c69019ab0e9491beb", size = 100020, upload_time = "2025-04-23T13:28:47.023Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/c1/12c0061193035ba65339cf35a1224d029ad5da951b1fe2e9c223c6e60ad1/python_a2a-0.4.6-py3-none-any.whl", hash = "sha256:a7bef40288ff262c3fff10ae70c2379cafa2c9a9263275fd09cba30dfbbc867b", size = 114427, upload_time = "2025-04-24T14:47:54.264Z" },
 ]
 
 [package.optional-dependencies]
