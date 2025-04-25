@@ -1,93 +1,204 @@
-from python_a2a import agent, skill, run_server
-from lib.llm.llama_client import LlamaClient  # 제공된 LlamaClient 사용
-from lib.server.llm import LlamaCppA2AServer  # 제공된 LlamaCppA2AServer 사용
+import json
+import random
+from typing import Any, AsyncIterable, Dict, Optional
+from google.adk.agents.llm_agent import LlmAgent
+from google.adk.tools.tool_context import ToolContext
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+from common.agent.base_agent import BaseAgent
+from common.llm.llama_model_lite_llm import LlamaModelLiteLlm
 
-llm = LlamaClient()
+# Local cache of created request_ids for demo purposes.
+request_ids = set()
 
 
-@agent(
-    name="ScheduleAgent",
-    description="일정 관리: 자연어 파싱, 충돌 검사, 시간 추천, 이벤트 생성, 요약",
-    version="1.0.0",
-)
-class ScheduleAgent(LlamaCppA2AServer):
+def create_request_form(
+    date: Optional[str] = None,
+    amount: Optional[str] = None,
+    purpose: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Create a request form for the employee to fill out.
 
-    def handle_task(self, task):
-        # 태스크가 시작될 때 로깅
-        print(f"[ScheduleAgent] Handling task {task.id} start")
-        # 기본 로직으로 스킬 디스패치
-        result = super().handle_task(task)
-        # 태스크 처리 결과 출력
-        print(
-            f"[ScheduleAgent] Task {task.id} completed with status {result.status.state}"
-        )
-        return result
+    Args:
+        date (str): The date of the request. Can be an empty string.
+        amount (str): The requested amount. Can be an empty string.
+        purpose (str): The purpose of the request. Can be an empty string.
 
-    @skill(
-        name="자연어 일정 파싱",
-        description="자연어로 입력된 일정을 구조화된 이벤트 데이터로 변환",
-        tags=["nlp", "schedule", "parsing"],
-    )
-    def parse_schedule_text(self, text: str) -> dict:
-        functions = [
-            {
-                "name": "parse_event",
-                "description": "Convert text to event JSON",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "start_time": {"type": "string"},
-                        "end_time": {"type": "string"},
-                        "location": {"type": "string"},
-                        "participants": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["start_time", "end_time"],
+    Returns:
+        dict[str, Any]: A dictionary containing the request form data.
+    """
+    request_id = "request_id_" + str(random.randint(1000000, 9999999))
+    request_ids.add(request_id)
+    return {
+        "request_id": request_id,
+        "date": "<transaction date>" if not date else date,
+        "amount": "<transaction dollar amount>" if not amount else amount,
+        "purpose": (
+            "<business justification/purpose of the transaction>"
+            if not purpose
+            else purpose
+        ),
+    }
+
+
+def return_form(
+    form_request: dict[str, Any],
+    tool_context: ToolContext,
+    instructions: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Returns a structured json object indicating a form to complete.
+
+    Args:
+        form_request (dict[str, Any]): The request form data.
+        tool_context (ToolContext): The context in which the tool operates.
+        instructions (str): Instructions for processing the form. Can be an empty string.
+
+    Returns:
+        dict[str, Any]: A JSON dictionary for the form response.
+    """
+    if isinstance(form_request, str):
+        form_request = json.loads(form_request)
+
+    tool_context.actions.skip_summarization = True
+    tool_context.actions.escalate = True
+    form_dict = {
+        "type": "form",
+        "form": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Date of expense",
+                    "title": "Date",
                 },
-            }
-        ]
-        resp = llm.chat(
-            messages=[{"role": "user", "content": text}],
-            functions=functions,
-            function_call="auto",
+                "amount": {
+                    "type": "string",
+                    "format": "number",
+                    "description": "Amount of expense",
+                    "title": "Amount",
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "Purpose of expense",
+                    "title": "Purpose",
+                },
+                "request_id": {
+                    "type": "string",
+                    "description": "Request id",
+                    "title": "Request ID",
+                },
+            },
+            "required": list(form_request.keys()),
+        },
+        "form_data": form_request,
+        "instructions": instructions,
+    }
+    return json.dumps(form_dict)
+
+
+def reimburse(request_id: str) -> dict[str, Any]:
+    """Reimburse the amount of money to the employee for a given request_id."""
+    if request_id not in request_ids:
+        return {"request_id": request_id, "status": "Error: Invalid request_id."}
+    return {"request_id": request_id, "status": "approved"}
+
+
+class ScheduleAgent(BaseAgent):
+    """An agent that handles reimbursement requests."""
+
+    SUPPORTED_CONTENT_TYPES = ["text", "text/plain"]
+
+    def __init__(self):
+        self._agent = self._build_agent()
+        self._user_id = "remote_agent"
+        self._runner = Runner(
+            app_name=self._agent.name,
+            agent=self._agent,
+            artifact_service=InMemoryArtifactService(),
+            session_service=InMemorySessionService(),
+            memory_service=InMemoryMemoryService(),
         )
-        return resp["choices"][0]["message"]["function_call"]["arguments"]
 
-    @skill(
-        name="일정 충돌 감지",
-        description="신규 이벤트와 캘린더 간 시간 충돌 여부 확인",
-        tags=["calendar", "conflict"],
-    )
-    def check_conflict(self, event: dict) -> dict:
-        conflict = False
-        return {"conflict": conflict}
+    def invoke(self, query, session_id) -> str:
+        session = self._runner.session_service.get_session(
+            app_name=self._agent.name, user_id=self._user_id, session_id=session_id
+        )
+        content = types.Content(role="user", parts=[types.Part.from_text(text=query)])
+        if session is None:
+            session = self._runner.session_service.create_session(
+                app_name=self._agent.name,
+                user_id=self._user_id,
+                state={},
+                session_id=session_id,
+            )
+        events = list(
+            self._runner.run(
+                user_id=self._user_id, session_id=session.id, new_message=content
+            )
+        )
+        if not events or not events[-1].content or not events[-1].content.parts:
+            return ""
+        return "\n".join([p.text for p in events[-1].content.parts if p.text])
 
-    @skill(
-        name="시간 추천",
-        description="참여자 가용 시간을 기반으로 회의 시간 추천",
-        tags=["availability", "recommendation"],
-    )
-    def suggest_time_slot(self, participants: list[str]) -> dict:
-        suggestions = ["2025-05-02T10:00", "2025-05-02T14:00"]
-        return {"suggestions": suggestions}
+    async def stream(self, query, session_id) -> AsyncIterable[Dict[str, Any]]:
+        session = self._runner.session_service.get_session(
+            app_name=self._agent.name, user_id=self._user_id, session_id=session_id
+        )
+        content = types.Content(role="user", parts=[types.Part.from_text(text=query)])
+        if session is None:
+            session = self._runner.session_service.create_session(
+                app_name=self._agent.name,
+                user_id=self._user_id,
+                state={},
+                session_id=session_id,
+            )
+        async for event in self._runner.run_async(
+            user_id=self._user_id, session_id=session.id, new_message=content
+        ):
+            if event.is_final_response():
+                response = ""
+                if (
+                    event.content
+                    and event.content.parts
+                    and event.content.parts[0].text
+                ):
+                    response = "\n".join(
+                        [p.text for p in event.content.parts if p.text]
+                    )
+                elif (
+                    event.content
+                    and event.content.parts
+                    and any([True for p in event.content.parts if p.function_response])
+                ):
+                    response = next(
+                        (p.function_response.model_dump() for p in event.content.parts)
+                    )
+                yield {
+                    "is_task_complete": True,
+                    "content": response,
+                }
+            else:
+                yield {
+                    "is_task_complete": False,
+                    "updates": "Processing the reimbursement request...",
+                }
 
-    @skill(
-        name="이벤트 생성",
-        description="구조화된 이벤트 데이터를 캘린더에 등록",
-        tags=["calendar", "event", "integration"],
-    )
-    def create_event(self, event: dict) -> dict:
-        return {"status": "created", "event": event}
-
-    @skill(
-        name="일정 요약",
-        description="주간/일일 일정을 간결히 요약하여 제공",
-        tags=["summary", "overview"],
-    )
-    def summarize_schedule(self, timeframe: str) -> dict:
-        summary = f"{timeframe}에 총 5개의 일정이 있습니다."
-        return {"summary": summary}
-
-
-if __name__ == "__main__":
-    agent = ScheduleAgent()
-    run_server(agent, host="0.0.0.0", port=7002)
+    def _build_agent(self) -> LlmAgent:
+        """Builds the LLM agent for the reimbursement agent."""
+        return LlmAgent(
+            model=LlamaModelLiteLlm,
+            name="schedule_agent",
+            description=("asdasd"),
+            instruction="""asdasd""",
+            tools=[
+                create_request_form,
+                reimburse,
+                return_form,
+            ],
+        )

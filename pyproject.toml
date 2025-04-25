@@ -5,9 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "llama-cpp-python>=0.3.8",
-    "python-a2a[all,mcp,openai,server]>=0.4.6",
+    "google-adk>=0.3.0",
+    "jwcrypto>=1.5.6",
+    "litellm>=1.67.2",
+    "llama-cpp-python[server]>=0.3.8",
+    "pyjwt>=2.10.1",
 ]
 
-[tool.setuptools]
-packages = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.uv.sources]
+a2a-samples = { workspace = true }
