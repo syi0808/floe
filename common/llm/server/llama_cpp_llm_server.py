@@ -5,7 +5,17 @@ import logging
 from fastapi import Request, Response
 from starlette.background import BackgroundTask
 
-model_path = os.path.abspath("./models/gemma3_4b_q4.gguf")
+# model_path = os.path.abspath("./models/gemma3_4b_q4.gguf")
+# model_alias = "gemma3"
+# model_path = os.path.abspath("./models/qwen_7b_q3.gguf")
+# model_alias = "qwen"
+model_path = os.path.abspath("./models/qwen_2.5_7b_q3_k_m.gguf")
+model_alias = "qwen2.5"
+# model_path = os.path.abspath("./models/mistral_7b.gguf")
+# model_alias = "mistral"
+# model_path = os.path.abspath("./models/llama3.2_3b.gguf")
+# model_alias = "llama3.2"
+
 host = "0.0.0.0"
 port = 7100
 
@@ -14,7 +24,8 @@ app = create_app(
         ModelSettings(
             n_ctx=4096,
             model=model_path,
-            model_alias="gemma3_4b_q4",
+            model_alias=model_alias,
+            hf_model_repo_id="Qwen/Qwen2.5-7B",
         )
     ],
     server_settings=ServerSettings(
@@ -35,7 +46,6 @@ def log_info(req_body, res_body):
 @app.middleware("http")
 async def some_middleware(request: Request, call_next):
     req_body = await request.body()
-    # await set_body(request, req_body)  # not needed when using FastAPI>=0.108.0.
     response = await call_next(request)
 
     chunks = []

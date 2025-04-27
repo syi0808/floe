@@ -21,7 +21,7 @@ from common.types import (
     DataPart,
     Part,
 )
-from common.llm.llama_model_lite_llm import LlamaModelLiteLlm
+from common.llm.global_model_llm import GlobalModelLlm
 
 
 class HostAgent:
@@ -61,7 +61,7 @@ class HostAgent:
 
     def create_agent(self) -> Agent:
         return Agent(
-            model=LlamaModelLiteLlm,
+            model=GlobalModelLlm,
             name="host_agent",
             instruction=self.root_instruction,
             before_model_callback=self.before_model_callback,

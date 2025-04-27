@@ -7,7 +7,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from common.agent.base_agent import BaseAgent
-from common.llm.llama_model_lite_llm import LlamaModelLiteLlm
+from common.llm.global_model_llm import GlobalModelLlm
 
 # Helper functions for ScheduleAgent tools
 
@@ -137,7 +137,7 @@ class ScheduleAgent(BaseAgent):
     def _build_agent(self) -> LlmAgent:
         """Builds the LLM agent for schedule handling."""
         return LlmAgent(
-            model=LlamaModelLiteLlm,
+            model=GlobalModelLlm,
             name="schedule_agent",
             description="일정 생성, 충돌 감지, 시간 추천, 일정 요약 등을 처리하는 에이전트입니다.",
             instruction="""

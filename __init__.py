@@ -11,6 +11,7 @@ from .common import (
     TaskManager,
     InMemoryCache,
     PushNotificationAuth,
+    GlobalModelLlm,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "TaskManager",
     "InMemoryCache",
     "PushNotificationAuth",
+    "GlobalModelLlm",
 ]

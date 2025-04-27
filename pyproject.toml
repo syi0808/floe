@@ -10,6 +10,7 @@ dependencies = [
     "litellm>=1.67.2",
     "llama-cpp-python[server]>=0.3.8",
     "pyjwt>=2.10.1",
+    "transformers>=4.51.3",
 ]
 
 [tool.hatch.build.targets.wheel]
