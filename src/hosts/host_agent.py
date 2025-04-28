@@ -202,7 +202,7 @@ Current agent: {current_agent['active_agent']}
         if task.status.message:
             # Assume the information is in the task message.
             response.extend(convert_parts(task.status.message.parts, tool_context))
-        if task.artifacts:
+        if getattr(task, "artifacts", None):
             for artifact in task.artifacts:
                 response.extend(convert_parts(artifact.parts, tool_context))
         return response
