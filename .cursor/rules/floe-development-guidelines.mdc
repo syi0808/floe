@@ -1,0 +1,346 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 🛠️ Floe 개발 가이드라인 및 코딩 표준
+
+## 🎯 Agent 구현 표준 (MVP)
+
+### OpenAI Agents SDK 패턴
+모든 Agent는 OpenAI Agents SDK를 기반으로 구현합니다.
+
+```python
+from openai import OpenAI
+from typing import Dict, Any, List
+
+class ScheduleAgent:
+    """OpenAI Agents SDK 기반 일정 관리 에이전트"""
+    
+    def __init__(self, client: OpenAI):
+        self.client = client
+        self.agent_id = "schedule_agent"
+        self.tools = [
+            self._create_event_tool,
+            self._check_conflicts_tool,
+            self._suggest_time_tool
+        ]
+    
+    def process_request(self, user_input: str, context: Dict[str, Any]) -> str:
+        """사용자 요청 처리"""
+        response = self.client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": self._get_system_prompt()},
+                {"role": "user", "content": user_input}
+            ],
+            tools=self.tools,
+            tool_choice="auto"
+        )
+        return self._handle_response(response)
+    
+    def _get_system_prompt(self) -> str:
+        return """당신은 일정 관리 전문 AI입니다. 
+        사용자의 일정 요청을 분석하고 적절한 도구를 사용하여 처리하세요."""
+```
+
+### MCP 서버 연동 패턴
+기존 MCP 서버들을 Agent의 도구로 활용합니다.
+
+```python
+import mcp
+from mcp.client import Session
+
+class AgentWithMCP:
+    """MCP 서버를 활용하는 Agent 기본 패턴"""
+    
+    def __init__(self):
+        self.mcp_sessions = {}
+        self._connect_mcp_servers()
+    
+    async def _connect_mcp_servers(self):
+        """필요한 MCP 서버들에 연결"""
+        # 파일시스템 MCP
+        self.mcp_sessions['filesystem'] = await mcp.ClientSession.connect(
+            "filesystem-mcp-server"
+        )
+        
+        # 데이터베이스 MCP  
+        self.mcp_sessions['database'] = await mcp.ClientSession.connect(
+            "sqlite-mcp-server"
+        )
+    
+    async def call_mcp_tool(self, server: str, tool: str, params: Dict) -> Any:
+        """MCP 서버의 도구 호출"""
+        session = self.mcp_sessions[server]
+        return await session.call_tool(tool, params)
+```
+
+## 🗄️ 데이터 관리 패턴
+
+### 메모리 타입별 TTL 설정
+```python
+MEMORY_TYPES = {
+    "short_term_dialogue": {"ttl_days": 7, "vectorized": True},
+    "tasks_events": {"ttl_days": None, "vectorized": True},  # Forever
+    "health_logs": {"ttl_days": 30, "vectorized": True},
+    "health_aggregates": {"ttl_days": None, "vectorized": False}  # Forever
+}
+```
+
+### 단순화된 데이터 저장 (MVP)
+- **기본 암호화**: 간단한 환경변수 기반 키 관리
+- **벡터 인덱스**: Chroma DB와 SQLite 연동 (MCP 데이터베이스 서버 활용)
+- **검색**: 시맨틱 검색 + 전통적 SQL 쿼리 조합
+
+## 🔧 도구(Tool) 구현 가이드 (MVP)
+
+### OpenAI Function Calling 패턴
+```python
+def create_schedule_tool():
+    """OpenAI Function Calling용 일정 생성 도구"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "create_schedule_event",
+            "description": "새로운 일정 이벤트를 생성합니다",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "일정 제목"},
+                    "start_time": {"type": "string", "description": "시작 시간 (ISO 8601)"},
+                    "end_time": {"type": "string", "description": "종료 시간 (ISO 8601)"},
+                    "description": {"type": "string", "description": "상세 설명"}
+                },
+                "required": ["title", "start_time", "end_time"]
+            }
+        }
+    }
+
+async def execute_create_schedule_event(params: Dict[str, Any]) -> Dict[str, Any]:
+    """실제 일정 생성 로직 (MCP 서버 활용)"""
+    # MCP 캘린더 서버 호출
+    result = await mcp_client.call_tool("calendar", "create_event", params)
+    return {"success": True, "event_id": result.get("id")}
+```
+
+### 에러 처리 표준
+```python
+def check_conflict(event: Dict[str, Any]) -> Dict[str, Any]:
+    """시간 충돌 감지"""
+    try:
+        # 비즈니스 로직
+        return {"conflict": False}
+    except Exception as e:
+        return {"conflict": True, "error": str(e)}
+```
+
+## 🎨 UI/UX 패턴 (Mesop MVP)
+
+### 단순한 채팅 인터페이스
+```python
+import mesop as me
+
+@me.stateclass
+class ChatState:
+    """간단한 채팅 상태"""
+    messages: list[dict] = me.field(default_factory=list)
+    current_input: str = ""
+    processing: bool = False
+
+def chat_page():
+    """메인 채팅 페이지"""
+    state = me.state(ChatState)
+    
+    with me.box(style=me.Style(height="100vh", display="flex", flex_direction="column")):
+        # 메시지 영역
+        with me.box(style=me.Style(flex_grow=1, overflow_y="auto")):
+            for msg in state.messages:
+                render_message(msg)
+        
+        # 입력 영역
+        with me.box(style=me.Style(padding=me.Padding.all(16))):
+            me.input(
+                value=state.current_input,
+                placeholder="메시지를 입력하세요...",
+                on_input=on_input_change
+            )
+            me.button("전송", on_click=send_message, disabled=state.processing)
+
+def render_message(msg: dict):
+    """메시지 렌더링"""
+    role_color = "#007bff" if msg["role"] == "user" else "#28a745"
+    with me.box(style=me.Style(margin=me.Margin.all(8))):
+        me.text(f"[{msg['role']}]: {msg['content']}", 
+                style=me.Style(color=role_color))
+```
+
+## 🔄 비동기 처리 패턴
+
+### 스트리밍 응답
+```python
+async def stream(self, query: str, session_id: str) -> AsyncIterable[Dict[str, Any]]:
+    async for event in self._runner.run_async(
+        user_id=self._user_id, 
+        session_id=session.id, 
+        new_message=content
+    ):
+        if event.is_final_response():
+            yield {"is_task_complete": True, "content": response}
+        else:
+            yield {"is_task_complete": False, "updates": "Processing..."}
+```
+
+### 간단한 비동기 처리
+```python
+import asyncio
+from typing import AsyncGenerator
+
+async def stream_agent_response(user_input: str) -> AsyncGenerator[str, None]:
+    """Agent 응답 스트리밍"""
+    # 단계별 처리 시뮬레이션
+    yield "요청을 분석하고 있습니다..."
+    await asyncio.sleep(0.5)
+    
+    yield "관련 정보를 검색하고 있습니다..."
+    await asyncio.sleep(1.0)
+    
+    # 실제 Agent 호출
+    response = await agent.process_request(user_input)
+    yield f"처리 완료: {response}"
+```
+
+## 🧪 테스트 패턴
+
+### Agent 단위 테스트 (MVP)
+```python
+import pytest
+from unittest.mock import Mock
+
+def test_schedule_agent_basic():
+    """기본적인 일정 생성 테스트"""
+    client_mock = Mock()
+    agent = ScheduleAgent(client_mock)
+    
+    # Mock OpenAI 응답 설정
+    client_mock.chat.completions.create.return_value.choices[0].message = {
+        "content": "일정이 생성되었습니다.",
+        "tool_calls": [{"function": {"name": "create_schedule_event", "arguments": "{}"}}]
+    }
+    
+    result = agent.process_request("내일 3시에 회의 잡아줘")
+    assert "생성되었습니다" in result
+
+@pytest.mark.asyncio
+async def test_mcp_integration():
+    """MCP 서버 연동 테스트"""
+    agent = AgentWithMCP()
+    
+    # MCP 호출 테스트 (mock 사용)
+    with patch('mcp.ClientSession.connect') as mock_connect:
+        await agent._connect_mcp_servers()
+        assert len(agent.mcp_sessions) > 0
+```
+
+## 📝 명명 규칙
+
+### 파일 및 디렉토리 (MVP 단순화)
+- **Agent 구현**: `agents/{domain}_agent.py`
+- **MCP 연동**: `mcp_clients/{server}_client.py`  
+- **도구 정의**: `tools/{domain}_tools.py`
+- **UI 페이지**: `ui/{page}_page.py`
+- **테스트**: `tests/test_{module_name}.py`
+
+### 클래스 및 함수
+- **Agent 클래스**: `{Domain}Agent` (예: `ScheduleAgent`)
+- **MCP 클라이언트**: `{Server}MCPClient` (예: `CalendarMCPClient`)
+- **도구 함수**: `create_{action}_tool` (예: `create_schedule_tool`)
+
+## ✅ MVP 체크리스트 (기능 중심)
+
+### 기본 동작
+- [ ] 모든 Agent가 오류 없이 응답
+- [ ] 사용자 입력이 적절한 Agent로 라우팅
+- [ ] 일정/태스크 CRUD 동작 확인
+- [ ] 대화 히스토리 저장/조회 동작
+
+### 데이터 저장
+- [ ] SQLite 테이블 생성 및 연결
+- [ ] 앱 재시작 후 데이터 유지
+- [ ] MCP 서버 연동 확인
+- [ ] 기본 에러 핸들링
+
+### UI/UX
+- [ ] 메시지 입력/전송 동작
+- [ ] 응답 표시 확인
+- [ ] 로딩 상태 표시
+- [ ] 기본 에러 메시지 표시
+
+## 📈 v1.1 이후 성능 체크리스트
+
+### 성능 최적화
+- [ ] Intent 라우팅 < 150ms
+- [ ] 메모리 검색 < 1s  
+- [ ] 스트리밍 응답 지연 < 100ms
+- [ ] 벡터 인덱스 최적화
+
+### 고급 보안
+- [ ] 암호화 키 로테이션
+- [ ] SQLite WAL 모드
+- [ ] 벡터 임베딩 익명화
+- [ ] 데이터 만료 정책
+
+## 📚 MVP 코드 리뷰 체크리스트
+
+### Agent 구현 (MVP)
+- [ ] OpenAI SDK 패턴 사용
+- [ ] 기본 도구 함수 구현
+- [ ] 간단한 에러 처리
+- [ ] 기본 docstring 작성
+
+### 데이터 처리 (MVP)
+- [ ] SQLite 연결 확인
+- [ ] 기본 CRUD 동작
+- [ ] MCP 서버 호출 확인
+- [ ] 기본 입력 검증
+
+### UI/UX (MVP)
+- [ ] Mesop 컴포넌트 동작
+- [ ] 기본 상태 관리
+- [ ] 에러 상태 표시
+- [ ] 로딩 상태 표시
+
+## 📈 v1.1 이후 고급 리뷰
+
+### 성능 최적화
+- [ ] 응답 시간 측정
+- [ ] 메모리 사용량 체크
+- [ ] 캐싱 전략 적용
+- [ ] 병렬 처리 구현
+
+### 고급 기능
+- [ ] 벡터화 최적화
+- [ ] 암호화 적용
+- [ ] 버전 호환성
+- [ ] API 설계 일관성
+
+## 🔧 개발 환경 설정
+
+### 필수 도구 (MVP)
+- **Python**: 3.13+
+- **패키지 매니저**: uv
+- **LLM**: OpenAI API (또는 llama-cpp-python)
+- **MCP 서버들**: filesystem, database, browser 등
+- **UI**: Mesop
+
+### 설정 파일 참조
+- **프로젝트 설정**: [pyproject.toml](mdc:pyproject.toml)
+- **메인 엔트리**: [main.py](mdc:main.py)
+- **MCP 서버 활용**: 기존 MCP 서버 생태계 적극 활용
+
+### 개발 워크플로우
+1. **기능 브랜치 생성**: `feature/{agent-name}-{feature}`
+2. **Agent 구현**: 명세서 기반 개발
+3. **단위 테스트 작성**: 95% 커버리지 목표
+4. **통합 테스트**: Agent 간 상호작용 검증
+5. **성능 테스트**: 목표 지표 달성 확인
