@@ -1,6 +1,6 @@
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List
 from __future__ import annotations
+
+from abc import ABC, abstractmethod
 from typing import Dict, Any, List, TYPE_CHECKING
 
 if TYPE_CHECKING:                        # only during type-checking
