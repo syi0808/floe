@@ -78,75 +78,117 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 
     ```python
     # Example: Intent and Entity Extraction
-    import openai
     import os
-    import json
+    from agents import Agent, Runner, Tool # Updated imports
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"] # Updated comment
+
+    class ExtractScheduleInfoTool(Tool):
+        def __init__(self):
+            self.name = "extract_schedule_info"
+            self.description = "Extracts information for scheduling an event."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "The title of the event."},
+                    "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participants."},
+                    "time": {"type": "string", "description": "Time of the event, e.g., '2 PM'."},
+                    "date": {"type": "string", "description": "Date of the event, e.g., 'tomorrow', 'next Tuesday'."},
+                    "description": {"type": "string", "description": "Brief description or agenda for the event."}
+                },
+                "required": ["title", "participants", "time", "date"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, title: str, participants: list[str], time: str, date: str, description: str = None):
+            # The tool's job is to return the extracted entities.
+            # The Runner will capture these and provide them in tool_input.
+            return {
+                "title": title,
+                "participants": participants,
+                "time": time,
+                "date": date,
+                "description": description
+            }
+
+    class CreateTaskTool(Tool):
+        def __init__(self):
+            self.name = "create_task"
+            self.description = "Creates a new task."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "task_description": {"type": "string", "description": "The description of the task."},
+                    "due_date": {"type": "string", "description": "Optional due date for the task."},
+                    "priority": {"type": "string", "description": "Optional priority for the task (e.g., high, medium, low)."}
+                },
+                "required": ["task_description"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, task_description: str, due_date: str = None, priority: str = None):
+            # The tool's job is to return the extracted entities.
+            return {
+                "task_description": task_description,
+                "due_date": due_date,
+                "priority": priority
+            }
 
     def extract_intent_and_entities(user_query: str):
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-0613", # Or other suitable model that supports functions
-                messages=[{"role": "user", "content": user_query}],
-                functions=[
-                    {
-                        "name": "extract_schedule_info",
-                        "description": "Extracts information for scheduling an event.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string", "description": "The title of the event."},
-                                "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participants."},
-                                "time": {"type": "string", "description": "Time of the event, e.g., '2 PM'."},
-                                "date": {"type": "string", "description": "Date of the event, e.g., 'tomorrow', 'next Tuesday'."},
-                                "description": {"type": "string", "description": "Brief description or agenda for the event."}
-                            },
-                            "required": ["title", "participants", "time", "date"]
-                        }
-                    },
-                    {
-                        "name": "create_task",
-                        "description": "Creates a new task.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "task_description": {"type": "string", "description": "The description of the task."},
-                                "due_date": {"type": "string", "description": "Optional due date for the task."},
-                                "priority": {"type": "string", "description": "Optional priority for the task (e.g., high, medium, low)."}
-                            },
-                            "required": ["task_description"]
-                        }
-                    }
-                    # Add other function definitions for different intents
-                ],
-                function_call="auto" # Let the model decide which function to call
+            # 1. Create instances of the defined tools
+            schedule_tool = ExtractScheduleInfoTool()
+            task_tool = CreateTaskTool()
+            tools = [schedule_tool, task_tool]
+
+            # 2. Create an agents.Agent instance
+            agent = Agent(
+                tools=tools,
+                instructions="Your task is to identify the user's intent and extract relevant entities from their query. Use the available tools to structure this information. If the query is about scheduling, use the 'extract_schedule_info' tool. If it's about creating a task, use the 'create_task' tool. If neither, indicate general conversation."
             )
-            message = response.choices[0].message
-            if message.get("function_call"):
-                function_name = message["function_call"]["name"]
-                arguments = json.loads(message["function_call"]["arguments"])
-                # This structured data can now be used by OrchestratorAgent
-                # to route to the correct agent (e.g., ScheduleAgent, TaskAgent)
-                # or to perform an action.
-                return {"intent": function_name, "entities": arguments}
+
+            # 3. Call agents.Runner.run_sync to get the result
+            result = Runner.run_sync(agent=agent, user_input=user_query) # Changed user_query to user_input as per common SDK patterns
+
+            # 4. Inspect result.tool_calls
+            if result.tool_calls and len(result.tool_calls) > 0:
+                tool_call = result.tool_calls[0]
+                # The tool_input is the dictionary returned by the tool's __call__ method
+                return {"intent": tool_call.tool_name, "entities": tool_call.tool_input}
+            elif result.final_output:
+                # 5. Handle general conversation
+                return {"intent": "general_conversation", "response_text": result.final_output}
             else:
-                # Handle cases where no function call was made (e.g., general conversation)
-                return {"intent": "general_conversation", "response_text": message.content}
+                # Handle cases where no function call was made and no final_output (should be rare with good instructions)
+                return {"error": "Could not determine intent or provide a response."} # More specific error
+
         except Exception as e:
-            # print(f"Error in OpenAI call: {e}")
-            return {"error": str(e)}
+            # print(f"Error in agent processing: {e}") # Keep for debugging if needed
+            return {"error": f"Could not determine intent: {str(e)}"} # Updated error message
 
     # Example usage:
     # intent_data = extract_intent_and_entities("Schedule a meeting with Jane for tomorrow at 2 PM about the project budget.")
     # if intent_data and "intent" in intent_data:
     #    print(f"Intent: {intent_data['intent']}")
-    #    print(f"Entities: {intent_data['entities']}")
+    #    if "entities" in intent_data: # Check if entities exist
+    #        print(f"Entities: {intent_data['entities']}")
+    #    elif "response_text" in intent_data: # Check for response_text
+    #        print(f"Response: {intent_data['response_text']}")
     #
     # intent_data_task = extract_intent_and_entities("Remind me to buy milk tomorrow")
     # if intent_data_task and "intent" in intent_data_task:
     #    print(f"Intent: {intent_data_task['intent']}")
-    #    print(f"Entities: {intent_data_task['entities']}")
+    #    if "entities" in intent_data_task: # Check if entities exist
+    #        print(f"Entities: {intent_data_task['entities']}")
+    #    elif "response_text" in intent_data_task: # Check for response_text
+    #        print(f"Response: {intent_data_task['response_text']}")
+    #
+    # # Example of a general query
+    # general_query_data = extract_intent_and_entities("How are you today?")
+    # if general_query_data and "intent" in general_query_data:
+    #    print(f"Intent: {general_query_data['intent']}")
+    #    if "response_text" in general_query_data:
+    #        print(f"Response: {general_query_data['response_text']}")
     ```
 
 4.  **MCP Integration Points:**
@@ -210,14 +252,16 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     *   Primarily `openai.Embedding.create()` for generating embeddings.
     *   Consider SDK features if it offers higher-level abstractions for managing vectorized data or interfacing with vector stores in the future.
 
+    Note: The `openai-agents` SDK is focused on agent orchestration and tool usage. For generating text embeddings, using `openai.Embedding.create()` directly from the `openai` library remains a standard approach, as shown in this example. Ensure you have the `openai` library installed and configured.
     ```python
     # Example: Generating Embeddings
     import openai
     import os
+    from typing import List, Optional # Added import
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def get_embedding(text: str, model: str = "text-embedding-ada-002") -> list[float] | None:
+    def get_embedding(text: str, model: str = "text-embedding-ada-002") -> Optional[List[float]]: # Updated type hint
         try:
             response = openai.Embedding.create(
                 input=[text.replace("\n", " ")], # Model performs best with single line of text
@@ -305,20 +349,30 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 
     ```python
     # Example: Generating a Contextual Response
-    import openai
     import os
+    from agents import Agent, Runner, Message # Updated imports
+    from typing import List, Dict, Optional # Added for type hinting
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def generate_contextual_reply(conversation_history: list[dict], user_message: str) -> str | None:
-        # Ensure conversation history is in the correct format, e.g., list of {"role": "user/assistant", "content": "..."}
-        messages = conversation_history + [{"role": "user", "content": user_message}]
+    def generate_contextual_reply(conversation_history: List[Dict[str, str]], user_message: str) -> Optional[str]: # Updated type hints
+        # Convert conversation_history from list of dicts to list of agents.Message objects
+        processed_history = []
+        for item in conversation_history:
+            role = item.get("role")
+            content = item.get("content")
+            if role and content: # Ensure both role and content exist
+                 processed_history.append(Message(role=role, content=content))
+            # else: skip or log malformed history item
+
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo", # Or other suitable model
-                messages=messages
+            agent = Agent(
+                instructions="You are a helpful assistant.", # General instructions
+                history=processed_history # Pass converted history
             )
-            return response.choices[0].message.content
+            result = Runner.run_sync(agent=agent, user_input=user_message) # Pass user_message as user_input
+
+            return result.final_output # Return the agent's final output
         except Exception as e:
             # print(f"Error in generating contextual reply: {e}")
             return None
@@ -332,8 +386,10 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     # reply = generate_contextual_reply(history, current_user_message)
     # if reply:
     #    print(f"Assistant's reply: {reply}")
-    #    history.append({"role": "user", "content": current_user_message})
-    #    history.append({"role": "assistant", "content": reply})
+    #    # Note: The history for the next turn should include the current_user_message and the assistant's reply.
+    #    # Example of updating history for a subsequent call:
+    #    # history.append({"role": "user", "content": current_user_message})
+    #    # history.append({"role": "assistant", "content": reply})
     ```
 
 5.  **MCP Integration Points:**
@@ -396,46 +452,60 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 5.  **OpenAI SDK Integration:**
     *   Use for the NLP aspects in `schedule_parser.py` if simple entity extraction is insufficient. Function calling is a strong candidate here for structured output.
     ```python
-    # Example: Parsing Schedule Details with Function Calling
-    import openai
+    # Example: Parsing Schedule Details with an Agent Tool
     import os
-    import json
+    from agents import Agent, Runner, Tool
+    from typing import Optional, Dict, Any, List
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def parse_schedule_from_query(natural_language_query: str):
+    class ExtractScheduleInfoTool(Tool):
+        def __init__(self):
+            self.name = "extract_schedule_info"
+            self.description = "Extracts detailed information for scheduling an event from natural language."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "event_title": {"type": "string", "description": "The title or subject of the event."},
+                    "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participant names or email addresses."},
+                    "date_expression": {"type": "string", "description": "The date of the event (e.g., 'next Friday', 'August 15th', 'tomorrow')."},
+                    "time_expression": {"type": "string", "description": "The time of the event (e.g., '3 PM', 'morning', 'evening')."},
+                    "duration_minutes": {"type": "integer", "description": "Optional duration of the event in minutes."},
+                    "location": {"type": "string", "description": "Optional location of the event."},
+                    "recurrence_rule": {"type": "string", "description": "Optional recurrence rule (e.g., 'every week', 'monthly on the 1st')."}
+                },
+                "required": ["event_title", "date_expression", "time_expression"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, event_title: str, date_expression: str, time_expression: str,
+                     participants: Optional[List[str]] = None, duration_minutes: Optional[int] = None,
+                     location: Optional[str] = None, recurrence_rule: Optional[str] = None) -> Dict[str, Any]:
+            return {
+                "event_title": event_title,
+                "participants": participants,
+                "date_expression": date_expression,
+                "time_expression": time_expression,
+                "duration_minutes": duration_minutes,
+                "location": location,
+                "recurrence_rule": recurrence_rule
+            }
+
+    def parse_schedule_from_query(natural_language_query: str) -> Optional[Dict[str, Any]]:
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-0613", # Model supporting functions
-                messages=[{"role": "user", "content": natural_language_query}],
-                functions=[
-                    {
-                        "name": "extract_schedule_info",
-                        "description": "Extracts detailed information for scheduling an event from natural language.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "event_title": {"type": "string", "description": "The title or subject of the event."},
-                                "participants": {"type": "array", "items": {"type": "string"}, "description": "List of participant names or email addresses."},
-                                "date_expression": {"type": "string", "description": "The date of the event (e.g., 'next Friday', 'August 15th', 'tomorrow')."},
-                                "time_expression": {"type": "string", "description": "The time of the event (e.g., '3 PM', 'morning', 'evening')."},
-                                "duration_minutes": {"type": "integer", "description": "Optional duration of the event in minutes."},
-                                "location": {"type": "string", "description": "Optional location of the event."},
-                                "recurrence_rule": {"type": "string", "description": "Optional recurrence rule (e.g., 'every week', 'monthly on the 1st')."}
-                            },
-                            "required": ["event_title", "date_expression", "time_expression"]
-                        }
-                    }
-                ],
-                function_call={"name": "extract_schedule_info"} # Force calling this function
+            schedule_tool = ExtractScheduleInfoTool()
+            agent = Agent(
+                tools=[schedule_tool],
+                instructions="You are an assistant that extracts schedule information. Use the extract_schedule_info tool to parse the user's query."
+                # Forcing tool usage is implicitly handled by having only one tool and clear instructions.
+                # If more tools were present, instructions might need to be more specific or Agent configured to force this tool.
             )
-            message = response.choices[0].message
-            if message.get("function_call"):
-                arguments = json.loads(message["function_call"]["arguments"])
-                # These arguments can then be processed by ScheduleAgent, including
-                # normalizing dates/times using libraries like dateparser,
-                # resolving participant contacts, etc.
-                return arguments
+
+            result = Runner.run_sync(agent=agent, user_input=natural_language_query)
+
+            if result.tool_calls and result.tool_calls[0].tool_name == "extract_schedule_info":
+                # The tool_input here is the dictionary returned by ExtractScheduleInfoTool.__call__
+                return result.tool_calls[0].tool_input
             return None
         except Exception as e:
             # print(f"Error in parsing schedule details: {e}")
@@ -447,7 +517,7 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     # if schedule_details:
     #    print(f"Parsed schedule details: {schedule_details}")
     #    # Further processing:
-    #    # - Normalize date_expression and time_expression to actual datetime objects.
+    #    # - Normalize date_expression and time_expression to actual datetime objects using libraries like dateparser.
     #    # - Resolve participant names to user_ids or email addresses.
     #    # - Handle recurrence_rule.
     ```
@@ -509,42 +579,50 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     *   Critical for `task_parser.py` for both direct task commands ("Remind me to buy milk") and action item extraction ("John will follow up on the slides").
     *   Function calling for structured output of task details is highly recommended.
     ```python
-    # Example: Extracting Task Details with Function Calling
-    import openai
+    # Example: Extracting Task Details with an Agent Tool
     import os
-    import json
+    from agents import Agent, Runner, Tool
+    from typing import Optional, Dict, Any # String is a built-in, List is not used here for tool output
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def extract_task_details(natural_language_query: str):
+    class CreateTaskFromDetailsTool(Tool):
+        def __init__(self):
+            self.name = "create_task_from_details"
+            self.description = "Extracts task details like description, due date, and priority from natural language."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "The full description of the task."},
+                    "due_date": {"type": "string", "description": "Optional due date (e.g., 'tomorrow', 'end of week', 'July 20th')."},
+                    "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "Optional task priority."},
+                    "project": {"type": "string", "description": "Optional project or category for the task."}
+                },
+                "required": ["description"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, description: str, due_date: Optional[str] = None,
+                     priority: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
+            return {
+                "description": description,
+                "due_date": due_date,
+                "priority": priority,
+                "project": project
+            }
+
+    def extract_task_details(natural_language_query: str) -> Optional[Dict[str, Any]]:
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-0613", # Model supporting functions
-                messages=[{"role": "user", "content": natural_language_query}],
-                functions=[
-                    {
-                        "name": "create_task_from_details",
-                        "description": "Extracts task details like description, due date, and priority from natural language.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "description": {"type": "string", "description": "The full description of the task."},
-                                "due_date": {"type": "string", "description": "Optional due date (e.g., 'tomorrow', 'end of week', 'July 20th')."},
-                                "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "Optional task priority."},
-                                "project": {"type": "string", "description": "Optional project or category for the task."}
-                            },
-                            "required": ["description"]
-                        }
-                    }
-                ],
-                function_call={"name": "create_task_from_details"}
+            task_tool = CreateTaskFromDetailsTool()
+            agent = Agent(
+                tools=[task_tool],
+                instructions="You are an assistant that extracts task details. Use the create_task_from_details tool to parse the user's query."
             )
-            message = response.choices[0].message
-            if message.get("function_call"):
-                arguments = json.loads(message["function_call"]["arguments"])
-                # These arguments can be used by TaskAgent to create a new task.
-                # Due dates would need further parsing/normalization.
-                return arguments
+
+            result = Runner.run_sync(agent=agent, user_input=natural_language_query)
+
+            if result.tool_calls and result.tool_calls[0].tool_name == "create_task_from_details":
+                return result.tool_calls[0].tool_input
             return None
         except Exception as e:
             # print(f"Error in extracting task details: {e}")
@@ -555,36 +633,8 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     # task_details = extract_task_details(task_query)
     # if task_details:
     #    print(f"Parsed task details: {task_details}")
-
-    # Example for action item extraction from a larger text:
-    # action_item_query = "From the meeting notes: 'Sarah to draft the proposal by Monday. Team to review the budget next week.' Can you extract the action items?"
-    # (A different function definition optimized for action item extraction might be needed here,
-    # focusing on identifying assignees, actions, and deadlines from sentences.)
-    # For instance:
-    # {
-    #    "name": "extract_action_items",
-    #    "description": "Extracts one or more action items from a given text, identifying the action, assignee, and deadline.",
-    #    "parameters": {
-    #        "type": "object",
-    #        "properties": {
-    #            "action_items": {
-    #                "type": "array",
-    #                "items": {
-    #                    "type": "object",
-    #                    "properties": {
-    #                        "action": {"type": "string"},
-    #                        "assignee": {"type": "string"},
-    #                        "deadline": {"type": "string"}
-    #                    },
-    #                    "required": ["action"]
-    #                }
-    #            }
-    #        }
-    #    }
-    # }
-    # action_items = extract_task_details(action_item_query) # Assuming the function is adapted
-    # if action_items:
-    #    print(f"Extracted action items: {action_items}")
+    #    # Further processing:
+    #    # - Due dates would need further parsing/normalization.
     ```
 
 6.  **MCP Integration Points:**
@@ -651,23 +701,27 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 
     ```python
     # Example: Email Summarization
-    import openai
     import os
+    from agents import Agent, Runner, Message # Updated imports
+    from typing import Optional # Added for type hinting
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def summarize_email_text(email_body: str, max_tokens: int = 150) -> str | None:
+    def summarize_email_text(email_body: str, max_tokens: int = 150) -> Optional[str]: # Updated type hint
+        messages = [
+            Message(role="system", content="Summarize the following email text concisely, focusing on key information and action items."),
+            Message(role="user", content=email_body)
+        ]
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Summarize the following email text concisely, focusing on key information and action items."},
-                    {"role": "user", "content": email_body}
-                ],
-                max_tokens=max_tokens,
-                temperature=0.5 # Adjust for more factual summary
+            agent = Agent(
+                instructions="You are an email summarization assistant.", # General instructions
+                history=messages, # Pass system and user messages as history
+                model_settings={"max_tokens": max_tokens, "temperature": 0.5}
             )
-            return response.choices[0].message.content
+            # Pass empty string for user_input as the main content is already in history
+            result = Runner.run_sync(agent=agent, user_input="")
+
+            return result.final_output
         except Exception as e:
             # print(f"Error in summarizing email: {e}")
             return None
@@ -683,40 +737,83 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     # if summary:
     #    print(f"Email Summary: {summary}")
 
-    # Example: Extracting Actions/Intents from Email
-    # This would use a function calling approach similar to OrchestratorAgent (3.1.3)
-    # or TaskAgent (3.5.5). The functions defined would be specific to email contexts.
-    # For example:
-    # functions = [
-    #    {
-    #        "name": "extract_schedule_proposal_from_email",
-    #        "description": "Identifies and extracts details of a schedule proposal from an email.",
-    #        "parameters": {
-    #            "type": "object",
-    #            "properties": {
-    #                "proposed_times": {"type": "array", "items": {"type": "string"}, "description": "Suggested dates/times for the meeting."},
-    #                "subject": {"type": "string", "description": "Subject of the proposed meeting."},
-    #                "context": {"type": "string", "description": "Brief context of the proposal."}
-    #            },
-    #            "required": ["proposed_times"]
-    #        }
-    #    },
-    #    {
-    #        "name": "extract_task_from_email",
-    #        "description": "Identifies and extracts tasks assigned or requested in an email.",
-    #        "parameters": { /* Similar to TaskAgent's create_task_from_details */ }
-    #    },
-    #    {
-    #        "name": "archive_document_info_from_email",
-    #        "description": "Identifies information about documents or attachments to be archived.",
-    #        "parameters": { /* Schema for document name, type, source link if any */ }
-    #    }
-    # ]
-    # To use this, one would call openai.ChatCompletion.create with the email content as a message
-    # and these function definitions.
-    # e.g., email_content = "User: Hi, can we meet next Tuesday or Wednesday? John mentioned he wants to discuss the report."
-    # extracted_info = process_email_with_functions(email_content, functions_definition)
-    # print(extracted_info)
+    # Example: Extracting Actions/Intents from Email using Agent Tools
+    import os
+    from agents import Agent, Runner, Tool
+    from typing import Optional, Dict, Any, List
+
+    # Ensure API key is set (though not directly used by Agent/Runner in this snippet,
+    # the underlying API calls made by the SDK would require it)
+    # e.g., os.environ["OPENAI_API_KEY"] = "YOUR_API_KEY"
+
+    class ExtractScheduleProposalFromEmailTool(Tool):
+        def __init__(self):
+            self.name = "extract_schedule_proposal_from_email"
+            self.description = "Identifies and extracts details of a schedule proposal from an email."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "proposed_times": {"type": "array", "items": {"type": "string"}, "description": "Suggested dates/times for the meeting."},
+                    "subject": {"type": "string", "description": "Subject of the proposed meeting."},
+                    "context": {"type": "string", "description": "Brief context of the proposal."}
+                },
+                "required": ["proposed_times"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, proposed_times: List[str], subject: Optional[str] = None, context: Optional[str] = None) -> Dict[str, Any]:
+            return {
+                "proposed_times": proposed_times,
+                "subject": subject,
+                "context": context
+            }
+
+    # You could define other tools here, e.g., ExtractTaskFromEmailTool, ArchiveDocumentInfoFromEmailTool
+    # by mirroring their original function definitions into Tool classes.
+    # For brevity, only one tool is fully defined and used in the example function below.
+
+    def extract_actions_from_email_text(email_content: str) -> Optional[List[Dict[str, Any]]]:
+        try:
+            schedule_proposal_tool = ExtractScheduleProposalFromEmailTool()
+            # Instantiate other tools if defined, e.g., task_extraction_tool = ExtractTaskFromEmailTool()
+
+            tools = [schedule_proposal_tool] # Add other tools to this list
+
+            agent = Agent(
+                tools=tools,
+                instructions="You are an assistant that extracts actions, intents, and structured information from emails. Use the available tools to parse the email content."
+            )
+
+            result = Runner.run_sync(agent=agent, user_input=email_content)
+
+            extracted_actions = []
+            if result.tool_calls:
+                for tool_call in result.tool_calls:
+                    extracted_actions.append({
+                        "intent": tool_call.tool_name,
+                        "entities": tool_call.tool_input
+                    })
+
+            return extracted_actions if extracted_actions else None
+        except Exception as e:
+            # print(f"Error in extracting actions from email: {e}")
+            return None
+
+    # Example Usage:
+    # email_text = "Hi team, Can we meet next Tuesday or Wednesday to discuss the Q3 report? John mentioned it's urgent."
+    # actions = extract_actions_from_email_text(email_text)
+    # if actions:
+    #    for action in actions:
+    #        print(f"Intent: {action['intent']}, Entities: {action['entities']}")
+    #
+    # Example with a different email that might not trigger the schedule tool:
+    # other_email_text = "Just a reminder that the project deadline is next Friday."
+    # other_actions = extract_actions_from_email_text(other_email_text)
+    # if other_actions:
+    #    for action in other_actions:
+    #        print(f"Intent: {action['intent']}, Entities: {action['entities']}")
+    # else:
+    #    print("No specific actions extracted from the second email.")
     ```
 
 6.  **MCP Integration Points:**
@@ -820,27 +917,33 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 
     ```python
     # Example: Generating Personalized Health Suggestion
-    import openai
     import os
+    from agents import Agent, Runner, Message # Updated imports
+    from typing import Optional, Dict, Any # Updated imports
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def get_personalized_health_suggestion(user_health_data: dict) -> str | None:
+    def get_personalized_health_suggestion(user_health_data: Dict[str, Any]) -> Optional[str]: # Updated type hints
         # user_health_data might contain fields like:
         # {"stress_level": "high", "avg_sleep_hours": 5.5, "activity_level": "low",
         #  "reported_mood": "anxious", "preferences": ["walking", "meditation"]}
         prompt = f"Based on the following user health data, provide a concise, actionable, and personalized health suggestion: {str(user_health_data)}"
+
+        messages = [
+            Message(role="system", content="You are a supportive AI health assistant providing personalized, actionable advice."),
+            Message(role="user", content=prompt)
+        ]
+
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a supportive AI health assistant providing personalized, actionable advice."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7, # Allow some creativity in suggestions
-                max_tokens=150
+            agent = Agent(
+                instructions="Generate a health suggestion based on the user's data.", # Or use system message
+                history=messages,
+                model_settings={"temperature": 0.7, "max_tokens": 150}
             )
-            return response.choices[0].message.content
+            # Pass empty string for user_input as the main content (prompt) is already in history
+            result = Runner.run_sync(agent=agent, user_input="")
+
+            return result.final_output
         except Exception as e:
             # print(f"Error in generating health suggestion: {e}")
             return None
@@ -851,37 +954,56 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
     # if suggestion:
     #    print(f"Health Suggestion: {suggestion}")
 
-    # Example: Nutrient Estimation from Food Description (using function calling)
-    import json
-    def estimate_nutrients_for_food(food_description: str) -> dict | None:
+    # Example: Nutrient Estimation from Food Description using an Agent Tool
+    import os # Added for OPENAI_API_KEY consistency
+    from agents import Agent, Runner, Tool
+    from typing import Optional, Dict, Any
+
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
+    # (though not directly used by Agent/Runner in this snippet,
+    # the underlying API calls made by the SDK would require it)
+
+    class EstimateFoodNutrientsTool(Tool):
+        def __init__(self):
+            self.name = "estimate_food_nutrients"
+            self.description = "Estimates calories, protein, carbohydrates, and fat for a given food item or meal description."
+            self.parameters = {
+                "type": "object",
+                "properties": {
+                    "food_item_description": {"type": "string", "description": "The description of the food item or meal."},
+                    "calories": {"type": "integer", "description": "Estimated calories in kcal."},
+                    "protein_grams": {"type": "integer", "description": "Estimated protein in grams."},
+                    "carbs_grams": {"type": "integer", "description": "Estimated carbohydrates in grams."},
+                    "fat_grams": {"type": "integer", "description": "Estimated fat in grams."}
+                },
+                "required": ["food_item_description", "calories", "protein_grams", "carbs_grams", "fat_grams"]
+            }
+            super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+
+        def __call__(self, food_item_description: str, calories: int, protein_grams: int, carbs_grams: int, fat_grams: int) -> Dict[str, Any]:
+            return {
+                "food_item_description": food_item_description,
+                "calories": calories,
+                "protein_grams": protein_grams,
+                "carbs_grams": carbs_grams,
+                "fat_grams": fat_grams
+            }
+
+    def estimate_nutrients_for_food(food_description: str) -> Optional[Dict[str, Any]]: # Updated type hint
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-0613", # Model supporting functions
-                messages=[{"role": "user", "content": f"Estimate the nutrients for: {food_description}"}],
-                functions=[
-                   {
-                       "name": "estimate_food_nutrients",
-                       "description": "Estimates calories, protein, carbohydrates, and fat for a given food item or meal description.",
-                       "parameters": {
-                           "type": "object",
-                           "properties": {
-                               "food_item_description": {"type": "string", "description": "The description of the food item or meal."},
-                               "calories": {"type": "integer", "description": "Estimated calories in kcal."},
-                               "protein_grams": {"type": "integer", "description": "Estimated protein in grams."},
-                               "carbs_grams": {"type": "integer", "description": "Estimated carbohydrates in grams."},
-                               "fat_grams": {"type": "integer", "description": "Estimated fat in grams."}
-                           },
-                           "required": ["food_item_description", "calories", "protein_grams", "carbs_grams", "fat_grams"]
-                       }
-                   }
-                ],
-                function_call={"name": "estimate_food_nutrients"}
+            nutrient_tool = EstimateFoodNutrientsTool()
+            agent = Agent(
+                tools=[nutrient_tool],
+                instructions="You are an assistant that estimates food nutrients. Use the estimate_food_nutrients tool."
             )
-            message = response.choices[0].message
-            if message.get("function_call"):
-                arguments = json.loads(message["function_call"]["arguments"])
-                return arguments
-            return None # Or handle cases where function wasn't called as expected
+
+            # The user query will be the food description itself, prompting the agent to use the tool.
+            user_query = f"Estimate the nutrients for: {food_description}"
+            result = Runner.run_sync(agent=agent, user_input=user_query)
+
+            if result.tool_calls and result.tool_calls[0].tool_name == "estimate_food_nutrients":
+                return result.tool_calls[0].tool_input
+            return None
         except Exception as e:
             # print(f"Error in nutrient estimation: {e}")
             return None
@@ -921,12 +1043,13 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
 - **OpenAI Agents SDK Usage**: For data analysis, complex pattern recognition, trend identification in user data, and generating personalized, actionable insights and report narratives.
     ```python
     # Example: Generating Report Narrative Snippet for InsightAgent
-    import openai
     import os
+    from agents import Agent, Runner, Message # Updated imports
+    from typing import Optional, Dict, Any # Updated imports
 
-    # Ensure API key is set, e.g., openai.api_key = os.environ.get("OPENAI_API_KEY")
+    # Ensure API key is set, e.g., os.environ["OPENAI_API_KEY"]
 
-    def generate_productivity_insight_narrative(analyzed_data: dict) -> str | None:
+    def generate_productivity_insight_narrative(analyzed_data: Dict[str, Any]) -> Optional[str]: # Updated type hints
         # analyzed_data could contain summaries like:
         # {"tasks_completed_this_week": 15, "tasks_pending": 5, "avg_focus_hours_daily": 2.5,
         #  "meetings_attended": 7, "most_productive_day": "Wednesday"}
@@ -946,17 +1069,21 @@ Floe utilizes a multi-agent system orchestrated by a central agent. Key componen
         prompt_parts.append("\nGenerate a brief (2-3 sentences) narrative insight based on this data, highlighting achievements or areas for potential focus.")
         prompt = "\n".join(prompt_parts)
 
+        messages = [
+            Message(role="system", content="You are an AI assistant that generates concise, encouraging, and actionable productivity insights for user reports."),
+            Message(role="user", content=prompt)
+        ]
+
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an AI assistant that generates concise, encouraging, and actionable productivity insights for user reports."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.6
+            agent = Agent(
+                instructions="Generate a narrative insight based on the provided productivity data.", # Or use system message
+                history=messages,
+                model_settings={"max_tokens": 100, "temperature": 0.6}
             )
-            return response.choices[0].message.content
+            # Pass empty string for user_input as the main content (prompt) is already in history
+            result = Runner.run_sync(agent=agent, user_input="")
+
+            return result.final_output
         except Exception as e:
             # print(f"Error in generating report narrative: {e}")
             return None
