@@ -58,9 +58,11 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
             memory_item: A dictionary representing the memory to add.
                          Expected to have at least 'type' and 'content'.
         """
-        if 'type' not in memory_item or 'content' not in memory_item:
-            print("MemoryManagerAgent: Error - memory_item must have 'type' and 'content'.")
-            return
+        required = {'type', 'content'}
+        if not required.issubset(memory_item):
+            raise ValueError(
+                f"memory_item must contain keys {required}, got {set(memory_item)}"
+            )
 
         if user_id not in self._memory_storage:
             self._memory_storage[user_id] = []
