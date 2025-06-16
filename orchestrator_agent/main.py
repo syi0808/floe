@@ -68,13 +68,21 @@ def main():
     if model_name_env:
         print(f"Using LITELLM_MODEL_NAME: {model_name_env}")
         # Heuristic to check if a common corresponding API key is also set
-        if "gpt-" in model_name_env.lower() and not os.getenv("OPENAI_API_KEY"):
-            api_key_env_var = "OPENAI_API_KEY"
-        elif "mistral" in model_name_env.lower() and not os.getenv("MISTRAL_API_KEY"):
-            api_key_env_var = "MISTRAL_API_KEY"
-        elif "claude" in model_name_env.lower() and not os.getenv("ANTHROPIC_API_KEY"):
-            api_key_env_var = "ANTHROPIC_API_KEY"
-        # Add more checks if other models are commonly used
+        # Map model patterns to their required API key environment variables
+        api_key_mapping = {
+            "gpt-":    "OPENAI_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "claude":  "ANTHROPIC_API_KEY",
+            "gemini":  "GOOGLE_API_KEY",
+            "command": "COHERE_API_KEY",
+            "palm":    "GOOGLE_API_KEY",
+            # Add more mappings as needed
+        }
+
+        for pattern, env_var in api_key_mapping.items():
+            if pattern in model_name_env.lower() and not os.getenv(env_var):
+                api_key_env_var = env_var
+                break
 
         if api_key_env_var:
             print(f"Warning: LITELLM_MODEL_NAME is set to '{model_name_env}', but the corresponding API key environment variable '{api_key_env_var}' might not be set.")
