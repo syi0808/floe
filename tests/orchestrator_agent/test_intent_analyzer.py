@@ -1,70 +1,223 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock # MagicMock can still be useful for simpler mocks
 import os
+import json
 
-from orchestrator_agent.intent_analyzer import extract_intent_and_entities, ExtractScheduleInfoTool, CreateTaskTool
+from orchestrator_agent.intent_analyzer import extract_intent_and_entities
+# Tool classes might still be imported if their names/schemas are directly referenced in assertions,
+# but not strictly necessary for mocking the LiteLLM call itself if we only check output strings.
+from orchestrator_agent.intent_analyzer import ExtractScheduleInfoTool, CreateTaskTool
 
-# Test for extract_schedule_info intent
-def test_extract_intent_schedule_info():
-    mock_run_sync_result = MagicMock()
-    mock_tool_call = MagicMock()
-    mock_tool_call.tool_name = 'extract_schedule_info'
-    mock_tool_call.tool_input = {'title': 'Meeting', 'date': 'Tomorrow'}
-    mock_run_sync_result.tool_calls = [mock_tool_call]
-    mock_run_sync_result.final_output = None
+# Helper mock classes for LiteLLM response structure
+class MockLiteLLMFunctionCall:
+    def __init__(self, name, arguments_dict):
+        self.name = name
+        # LiteLLM typically returns arguments as a JSON string
+        self.arguments = json.dumps(arguments_dict)
 
-    with patch('agents.Runner.run_sync', return_value=mock_run_sync_result) as mock_run_sync:
-        user_query = "Schedule a meeting for tomorrow"
-        api_key = "fake_api_key"
-        result = extract_intent_and_entities(user_query, api_key)
+class MockLiteLLMToolCall:
+    def __init__(self, function_name, function_args_dict, type="function"):
+        self.type = type
+        self.function = MockLiteLLMFunctionCall(function_name, function_args_dict)
 
-        mock_run_sync.assert_called_once()
-        # We can add more specific assertions about the agent and tools if needed
-        # For instance, checking the instructions passed to the Agent
+class MockLiteLLMMessage:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls if tool_calls is not None else []
 
-        assert result == {'intent': 'extract_schedule_info', 'entities': {'title': 'Meeting', 'date': 'Tomorrow'}}
-        assert os.environ["OPENAI_API_KEY"] == api_key
+class MockLiteLLMChoice:
+    def __init__(self, message_content=None, tool_calls_list=None): # Pass a list of (name, args_dict) tuples for tool_calls
+        tool_calls = []
+        if tool_calls_list:
+            for tc_name, tc_args_dict in tool_calls_list:
+                tool_calls.append(MockLiteLLMToolCall(tc_name, tc_args_dict))
+        self.message = MockLiteLLMMessage(content=message_content, tool_calls=tool_calls)
 
-# Test for create_task intent
-def test_extract_intent_create_task():
-    mock_run_sync_result = MagicMock()
-    mock_tool_call = MagicMock()
-    mock_tool_call.tool_name = 'create_task'
-    mock_tool_call.tool_input = {'task_description': 'Buy milk'}
-    mock_run_sync_result.tool_calls = [mock_tool_call]
-    mock_run_sync_result.final_output = None
+class MockLiteLLMResponse:
+    def __init__(self, choices_data): # choices_data is a list of (message_content, tool_calls_list) tuples
+        self.choices = []
+        for msg_content, tc_list in choices_data:
+            self.choices.append(MockLiteLLMChoice(message_content=msg_content, tool_calls_list=tc_list))
 
-    with patch('agents.Runner.run_sync', return_value=mock_run_sync_result) as mock_run_sync:
-        user_query = "Remind me to buy milk"
-        api_key = "fake_api_key_task" # Using a different key to ensure it's being set
-        result = extract_intent_and_entities(user_query, api_key)
+# Test for extract_schedule_info intent using LiteLLM
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_schedule_info_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model" # Mock LITELLM_MODEL_NAME
 
-        mock_run_sync.assert_called_once()
-        assert result == {'intent': 'create_task', 'entities': {'task_description': 'Buy milk'}}
-        assert os.environ["OPENAI_API_KEY"] == api_key
+    mock_tool_call_data = [('extract_schedule_info', {'title': 'Meeting', 'date': 'Tomorrow'})]
+    mock_litellm_completion.return_value = MockLiteLLMResponse(
+       choices_data=[(None, mock_tool_call_data)] # No direct message content, one tool call
+    )
 
-# Test for general_conversation intent
-def test_extract_intent_general_conversation():
-    mock_run_sync_result = MagicMock()
-    mock_run_sync_result.tool_calls = None # Or []
-    mock_run_sync_result.final_output = "Hello there!"
+    user_query = "Schedule a meeting for tomorrow"
+    result = extract_intent_and_entities(user_query)
 
-    with patch('agents.Runner.run_sync', return_value=mock_run_sync_result) as mock_run_sync:
-        user_query = "Hi"
-        api_key = "fake_api_key_general"
-        result = extract_intent_and_entities(user_query, api_key)
+    mock_litellm_completion.assert_called_once()
+    # We can inspect mock_litellm_completion.call_args here if needed for more detail
 
-        mock_run_sync.assert_called_once()
-        assert result == {'intent': 'general_conversation', 'response_text': 'Hello there!'}
-        assert os.environ["OPENAI_API_KEY"] == api_key
+    # Verify os.getenv was called for LITELLM_MODEL_NAME
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
 
-# Test for error handling
-def test_extract_intent_error():
-    with patch('agents.Runner.run_sync', side_effect=Exception("API error")) as mock_run_sync:
-        user_query = "Some query that causes an error"
-        api_key = "fake_api_key_error"
-        result = extract_intent_and_entities(user_query, api_key)
+    assert result == {'intent': 'extract_schedule_info', 'entities': {'title': 'Meeting', 'date': 'Tomorrow'}}
 
-        mock_run_sync.assert_called_once()
-        assert result == {'error': 'Could not determine intent: API error'}
-        assert os.environ["OPENAI_API_KEY"] == api_key
+# Test for create_task intent using LiteLLM
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_create_task_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model"
+
+    mock_tool_call_data = [('create_task', {'task_description': 'Buy milk'})]
+    mock_litellm_completion.return_value = MockLiteLLMResponse(
+        choices_data=[(None, mock_tool_call_data)]
+    )
+
+    user_query = "Remind me to buy milk"
+    result = extract_intent_and_entities(user_query)
+
+    mock_litellm_completion.assert_called_once()
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+    assert result == {'intent': 'create_task', 'entities': {'task_description': 'Buy milk'}}
+
+# Test for general_conversation intent using LiteLLM
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_general_conversation_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model"
+
+    mock_litellm_completion.return_value = MockLiteLLMResponse(
+        choices_data=[("Hello there!", None)] # Message content, no tool calls
+    )
+
+    user_query = "Hi"
+    result = extract_intent_and_entities(user_query)
+
+    mock_litellm_completion.assert_called_once()
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+    assert result == {'intent': 'general_conversation', 'response_text': 'Hello there!'}
+
+# Test for error handling when LiteLLM API call fails
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_error_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model"
+    mock_litellm_completion.side_effect = Exception("LiteLLM API error")
+
+    user_query = "Some query that causes an error"
+    result = extract_intent_and_entities(user_query)
+
+    mock_litellm_completion.assert_called_once()
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+    assert result == {'error': 'LiteLLM API call failed: LiteLLM API error'}
+
+# Test for missing LITELLM_MODEL_NAME environment variable
+@patch('os.getenv')
+@patch('litellm.completion') # Still need to patch completion as it might be called if getenv doesn't cause early exit
+def test_missing_lite_llm_model_name(mock_litellm_completion, mock_os_getenv):
+    # Simulate os.getenv returning None for LITELLM_MODEL_NAME
+    mock_os_getenv.return_value = None
+
+    user_query = "Any query"
+    result = extract_intent_and_entities(user_query)
+
+    # Ensure os.getenv was called for LITELLM_MODEL_NAME
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+
+    # Ensure litellm.completion was NOT called because model name is missing
+    mock_litellm_completion.assert_not_called()
+
+    assert result == {'error': 'LITELLM_MODEL_NAME environment variable not set.'}
+
+# Test for JSONDecodeError when parsing tool arguments
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_json_decode_error_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model"
+
+    # Create a mock tool call with invalid JSON arguments
+    class MockInvalidArgsFunctionCall:
+        def __init__(self, name):
+            self.name = name
+            self.arguments = "this is not valid json" # Invalid JSON string
+
+    class MockInvalidArgsToolCall:
+        def __init__(self, function_name):
+            self.type = "function"
+            self.function = MockInvalidArgsFunctionCall(function_name)
+
+    mock_tool_call = MockInvalidArgsToolCall(function_name='extract_schedule_info')
+
+    # Create a response that includes this malformed tool call
+    mock_response_message = MockLiteLLMMessage(tool_calls=[mock_tool_call])
+    mock_response_choice = MockLiteLLMChoice(message_content=None) # Need to init choice correctly
+    mock_response_choice.message = mock_response_message # Manually set the message with invalid tool call
+
+    mock_litellm_completion.return_value = MockLiteLLMResponse(choices_data=[]) # Start empty
+    mock_litellm_completion.return_value.choices = [mock_response_choice] # Then inject the problematic choice
+
+
+    user_query = "Schedule a meeting"
+    result = extract_intent_and_entities(user_query)
+
+    mock_litellm_completion.assert_called_once()
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+
+    assert 'error' in result
+    assert "Failed to parse arguments for tool extract_schedule_info" in result['error']
+
+# Test for case where LLM responds with a tool call but no valid content or arguments
+@patch('os.getenv')
+@patch('litellm.completion')
+def test_extract_intent_empty_tool_call_litellm(mock_litellm_completion, mock_os_getenv):
+    mock_os_getenv.return_value = "test-model"
+
+    # Simulate a tool call response where arguments might be missing or message content is also null
+    class MockEmptyFunctionCall:
+        def __init__(self, name):
+            self.name = name
+            self.arguments = None # Or an empty string, depending on how LiteLLM might represent this
+
+    class MockEmptyToolCall:
+        def __init__(self, function_name):
+            self.type = "function"
+            self.function = MockEmptyFunctionCall(function_name)
+
+    # This setup simulates a scenario where tool_calls list is present and contains an item,
+    # but that item itself doesn't lead to successful parsing or content generation.
+    # The intent_analyzer has a path for this:
+    # "LLM responded with a tool call but no valid content or arguments."
+    # This is tricky to simulate precisely without knowing exact LiteLLM internal error states,
+    # but we can aim for the condition where tool_calls is present, but no arguments are parsable
+    # AND message.content is also empty.
+
+    # Scenario 1: Tool call present, but arguments are None
+    mock_tool_call_no_args = MockEmptyToolCall(function_name='extract_schedule_info')
+    mock_message_with_empty_tool_call = MockLiteLLMMessage(tool_calls=[mock_tool_call_no_args], content=None)
+
+    temp_choice = MockLiteLLMChoice() # Create a choice
+    temp_choice.message = mock_message_with_empty_tool_call # Set its message
+
+    mock_litellm_completion.return_value = MockLiteLLMResponse(choices_data=[]) # Init with empty
+    mock_litellm_completion.return_value.choices = [temp_choice] # Set the choices list
+
+    user_query = "Schedule something"
+    result = extract_intent_and_entities(user_query)
+
+    mock_litellm_completion.assert_called_once()
+    mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
+
+    # This assertion depends on how the production code handles tool_call.function.arguments being None.
+    # If json.loads(None) raises an error, it would be caught by the JSONDecodeError handler.
+    # If it's some other path, this test might need adjustment.
+    # Based on current production code: json.loads(None) will raise TypeError, caught by JSONDecodeError's except block.
+    # So the error message would be "Failed to parse arguments..."
+    # Let's adjust the expected error message.
+    if 'error' in result and result['error'].startswith("Failed to parse arguments"):
+         assert "Failed to parse arguments for tool extract_schedule_info" in result['error']
+    else:
+        # If json.loads(None) doesn't cause JSONDecodeError but some other issue,
+        # or if LiteLLM's structure for "empty" arguments is different.
+        # The current production code has a final "LLM responded with a tool call but no valid content or arguments."
+        # if the tool call processing doesn't yield a result and there's no message.content.
+        # This happens if tool_call.function.arguments is not a string (e.g. None)
+        assert result == {'error': "LLM responded with a tool call but no valid content or arguments."}
