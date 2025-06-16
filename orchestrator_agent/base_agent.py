@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List
-from .orchestrator_core import AgentResponse # Assuming AgentResponse is in orchestrator_core
+from __future__ import annotations
+from typing import Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:                        # only during type-checking
+    from .orchestrator_core import AgentResponse
 
 class BaseAgent(ABC):
     @abstractmethod
