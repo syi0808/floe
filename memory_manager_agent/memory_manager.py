@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from orchestrator_agent.base_agent import BaseAgent # For type hinting if MemoryManagerAgent itself becomes an agent
-from orchestrator_agent.orchestrator_core import AgentResponse # For process method if it's an agent
+from orchestrator_agent.common_types import AgentResponse # For process method if it's an agent
 
 # Forward declaration or import of BaseMemoryModel if it were defined elsewhere
 # For now, we'll use Dict[str, Any] for memory items.

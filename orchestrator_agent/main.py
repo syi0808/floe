@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from orchestrator_agent.intent_analyzer import extract_intent_and_entities
 from orchestrator_agent.orchestrator_core import OrchestrationEngine, AgentResponse
 from orchestrator_agent.base_agent import BaseAgent
+from schedule_agent.schedule_agent import ScheduleAgent # Import ScheduleAgent
 from memory_manager_agent.memory_manager import MemoryManagerAgent # Assuming this path is correct
 
 from typing import Dict, Any, List # Ensure these are imported
@@ -10,27 +11,7 @@ from typing import Dict, Any, List # Ensure these are imported
 # --- Mock Agent Implementations ---
 # (These will be simple mocks for demonstration in main.py)
 
-class MockMainScheduleAgent(BaseAgent):
-    @property
-    def name(self) -> str:
-        return "mock_main_schedule_agent"
-
-    @property
-    def supported_intents(self) -> List[str]:
-        return ["extract_schedule_info"]
-
-    def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        print(f"--- {self.name} processing ---")
-        print(f"User ID: {user_id}")
-        print(f"Entities: {entities}")
-        # Simulate some processing
-        confirmation_id = f"sched_{hash(str(entities)) % 10000}"
-        return AgentResponse(
-            status='success',
-            data={'confirmation_id': confirmation_id, 'processed_entities': entities, 'user_id': user_id},
-            message=f'Successfully scheduled event: {entities.get("title", "Unknown Event")}',
-            source_agent=self.name
-        )
+# MockMainScheduleAgent class removed
 
 class MockMainTaskAgent(BaseAgent):
     @property
@@ -102,7 +83,7 @@ def main():
     engine = OrchestrationEngine(memory_manager_client=memory_manager)
 
     # Instantiate and register mock agents
-    schedule_agent = MockMainScheduleAgent()
+    schedule_agent = ScheduleAgent() # Use actual ScheduleAgent
     task_agent = MockMainTaskAgent()
 
     engine.register_agent(schedule_agent)
