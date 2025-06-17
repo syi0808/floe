@@ -2,14 +2,13 @@ import os
 import json
 import litellm
 from typing import Optional, List, Dict, Any
-# Tool base class is kept for its structure, though not directly used by LiteLLM in the same way
-from agents import Tool # Keep Tool for structure if ExtractScheduleInfoTool/CreateTaskTool inherit from it
+# from agents import Tool # Tool import removed as it's no longer needed for inheritance
 
 # The classes ExtractScheduleInfoTool and CreateTaskTool can remain as they are,
 # as their .name, .description, and .parameters attributes are used to build the
 # JSON for LiteLLM. Their __call__ methods are not used in this LiteLLM-based approach.
 
-class ExtractScheduleInfoTool(Tool):
+class ExtractScheduleInfoTool: # Removed (Tool) inheritance
     def __init__(self):
         self.name = "extract_schedule_info"
         self.description = "Extracts information for scheduling an event."
@@ -24,7 +23,7 @@ class ExtractScheduleInfoTool(Tool):
             },
             "required": ["title", "participants", "time", "date"]
         }
-        super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+        # super().__init__(...) call removed
 
     def __call__(self, title: str, participants: List[str], time: str, date: str, description: Optional[str] = None) -> Dict[str, Any]:
         # This method is not directly called by LiteLLM's tool usage mechanism.
@@ -37,7 +36,7 @@ class ExtractScheduleInfoTool(Tool):
             "description": description
         }
 
-class CreateTaskTool(Tool):
+class CreateTaskTool: # Removed (Tool) inheritance
     def __init__(self):
         self.name = "create_task"
         self.description = "Creates a new task."
@@ -50,7 +49,7 @@ class CreateTaskTool(Tool):
             },
             "required": ["task_description"]
         }
-        super().__init__(name=self.name, description=self.description, parameters=self.parameters)
+        # super().__init__(...) call removed
 
     def __call__(self, task_description: str, due_date: Optional[str] = None, priority: Optional[str] = None) -> Dict[str, Any]:
         # This method is not directly called by LiteLLM's tool usage mechanism.
