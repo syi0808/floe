@@ -115,7 +115,7 @@ def parse_task_request(natural_language_query: str, context_document: Optional[s
         # print(f"Debug: Tool not called or result unexpected. Result: {result}") # Optional: for debugging
         return None
 
-    except Exception as e:
+    except Exception:
         # print(f"Error in parsing task details: {e}") # Optional: for debugging
         # In case of any exception during the process, return None.
         return None
