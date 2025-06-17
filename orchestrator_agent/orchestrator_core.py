@@ -27,7 +27,8 @@ class OrchestrationEngine:
             self.intent_to_agent_map[intent] = agent_name
 
     def route_request(self, intent_data: Dict[str, Any], user_id: str) -> AgentResponse:
-        agent_name = self.intent_to_agent_map.get(intent_data.get('intent')) # Determine agent_name early
+        intent = intent_data.get('intent')
+        agent_name = self.intent_to_agent_map.get(intent) # Determine agent_name early
 
         # Actual MemoryManager Interaction
         if self.memory_manager: # Check if memory_manager is available
@@ -40,6 +41,7 @@ class OrchestrationEngine:
                 query_text=current_query_summary
             )
             print(f"OrchestrationEngine: Retrieved context for user '{user_id}', agent '{context_agent_name}': {context}")
+            # TODO: Pass context to agent.process() method or use it in routing decisions
 
         intent = intent_data.get('intent')
         entities = intent_data.get('entities')
