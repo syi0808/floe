@@ -1,4 +1,6 @@
 from typing import TypedDict, Optional, Any, Dict, List
+from .base_agent import BaseAgent # Import BaseAgent
+from memory_manager_agent.memory_manager import MemoryManagerAgent # Import MemoryManagerAgent
 
 class AgentResponse(TypedDict):
     status: str  # e.g., 'success', 'error'
@@ -7,23 +9,39 @@ class AgentResponse(TypedDict):
     source_agent: str
 
 class OrchestrationEngine:
-    def __init__(self, memory_manager_agent_client: Optional[Any] = None):
-        self.memory_manager = memory_manager_agent_client
-        self.agents_map: Dict[str, Any] = {}
+    def __init__(self, memory_manager_client: Optional[MemoryManagerAgent] = None): # Updated type hint
+        if memory_manager_client is None:
+            self.memory_manager = MemoryManagerAgent() # Create a default instance
+        else:
+            self.memory_manager = memory_manager_client
+        # Changed type hint for agents_map to use BaseAgent
+        self.agents_map: Dict[str, BaseAgent] = {}
         self.intent_to_agent_map: Dict[str, str] = {}
 
-    def register_agent(self, agent_name: str, agent_instance: Any, supported_intents: List[str]):
+    # Modified register_agent to use BaseAgent and its supported_intents property
+    def register_agent(self, agent_instance: BaseAgent):
+        # agent_name is now retrieved from the agent instance itself
+        agent_name = agent_instance.name
         self.agents_map[agent_name] = agent_instance
-        for intent in supported_intents:
+        for intent in agent_instance.supported_intents:
             self.intent_to_agent_map[intent] = agent_name
 
     def route_request(self, intent_data: Dict[str, Any], user_id: str) -> AgentResponse:
-        # Mock MemoryManager Interaction (Placeholder)
-        if self.memory_manager and hasattr(self.memory_manager, 'get_context_for_agent'):
-            # MOCK CALL - replace with actual client later
-            # context = self.memory_manager.get_context_for_agent(user_id, "OrchestratorAgent", str(intent_data))
-            # print(f"Retrieved context for {user_id}: {context}") # For logging/debugging
-            pass # Placeholder for now
+        intent = intent_data.get('intent')
+        agent_name = self.intent_to_agent_map.get(intent) # Determine agent_name early
+
+        # Actual MemoryManager Interaction
+        if self.memory_manager: # Check if memory_manager is available
+            current_query_summary = str(intent_data.get('entities', intent_data.get('response_text', '')))
+            # Determine agent_name for context; use "OrchestratorDirect" if no specific agent for intent
+            context_agent_name = agent_name if agent_name else "OrchestratorDirect"
+            context = self.memory_manager.get_context_for_agent(
+                user_id=user_id,
+                agent_name=context_agent_name,
+                query_text=current_query_summary
+            )
+            print(f"OrchestrationEngine: Retrieved context for user '{user_id}', agent '{context_agent_name}': {context}")
+            # TODO: Pass context to agent.process() method or use it in routing decisions
 
         intent = intent_data.get('intent')
         entities = intent_data.get('entities')
@@ -94,39 +112,63 @@ class OrchestrationEngine:
             )
 
 # if __name__ == '__main__':
-#     # Mock agents and memory manager for testing
-#     class MockMemoryManager:
-#         def get_context_for_agent(self, user_id, agent_name, query):
-#             print(f"MockMemoryManager.get_context_for_agent called with: user_id={user_id}, agent_name={agent_name}, query_summary='{str(query)[:50]}...'")
-#             return f"Context for {user_id} from memory for {agent_name} regarding query."
+#     # Using the actual MemoryManagerAgent and updated Mock Agents
+#     # MockMemoryManager class is removed from here, using the actual one.
 
-#     class MockScheduleAgent:
-#         def process(self, entities, user_id):
+#     # Updated Mock Agents to inherit from BaseAgent and implement its abstract properties
+#     class MockScheduleAgent(BaseAgent): # This class should be defined or imported if used. For this example, let's assume it's defined.
+#         @property
+#         def name(self) -> str:
+#             return "schedule_agent_v2"
+
+#         @property
+#         def supported_intents(self) -> List[str]:
+#             return ['extract_schedule_info', 'update_schedule_info']
+
+#         def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
 #             print(f"MockScheduleAgent.process called with entities: {entities}, user_id: {user_id}")
-#             # Simulate processing and return data specific to this agent's handling of the intent
-#             return {"status": "scheduled_by_mock_v2", "details": entities, "user": user_id, "confirmation_id": "sched_abc123"}
+#             # Example add_memory call after processing
+#             # self.memory_manager.add_memory(user_id, {"type": "action_taken", "agent": self.name, "details": entities})
+#             return AgentResponse(
+#                 status='success',
+#                 data={"status": "scheduled_by_mock_v2", "details": entities, "user": user_id, "confirmation_id": "sched_abc123"},
+#                 message='Scheduled by mock.',
+#                 source_agent=self.name
+#             )
 
-#     class MockTaskAgent:
-#         def process(self, entities, user_id):
+#     class MockTaskAgent(BaseAgent): # This class should be defined or imported.
+#         @property
+#         def name(self) -> str:
+#             return "task_agent_v2"
+
+#         @property
+#         def supported_intents(self) -> List[str]:
+#             return ['create_task']
+
+#         def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
 #             print(f"MockTaskAgent.process called with entities: {entities}, user_id: {user_id}")
-#             return {"status": "task_created_by_mock_v2", "details": entities, "user": user_id, "task_id": "task_xyz789"}
+#             return AgentResponse(
+#                 status='success',
+#                 data={"status": "task_created_by_mock_v2", "details": entities, "user": user_id, "task_id": "task_xyz789"},
+#                 message='Task created by mock.',
+#                 source_agent=self.name
+#             )
 
-#     memory_manager_client = MockMemoryManager()
-#     engine = OrchestrationEngine(memory_manager_agent_client=memory_manager_client)
+#     # Use the actual MemoryManagerAgent
+#     memory_manager_client = MemoryManagerAgent()
+#     # Example: Add a persistent memory item for a user to test retrieval
+#     memory_manager_client.add_memory("user123", {"type": "user_preference", "content": "Prefers morning meetings."})
 
-#     schedule_agent_mock = MockScheduleAgent()
+#     engine = OrchestrationEngine(memory_manager_client=memory_manager_client) # Pass the actual MemoryManagerAgent
+
+#     schedule_agent_mock = MockScheduleAgent() # These mocks would need access to memory_manager if they use it
 #     task_agent_mock = MockTaskAgent()
+#     # If agents need memory_manager, it should be passed to their __init__
+#     # e.g., schedule_agent_mock = MockScheduleAgent(memory_manager=memory_manager_client)
 
-#     engine.register_agent(
-#        agent_name='schedule_agent_v2',
-#        agent_instance=schedule_agent_mock,
-#        supported_intents=['extract_schedule_info', 'update_schedule_info']
-#     )
-#     engine.register_agent(
-#        agent_name='task_agent_v2',
-#        agent_instance=task_agent_mock,
-#        supported_intents=['create_task']
-#     )
+#     # Updated register_agent calls
+#     engine.register_agent(agent_instance=schedule_agent_mock)
+#     engine.register_agent(agent_instance=task_agent_mock)
 
 #     print("\n--- Testing OrchestrationEngine with Registered Agents ---")
 
@@ -183,15 +225,21 @@ class OrchestrationEngine:
 
 #     # Test case 7: Agent that fails during processing
 #     print("\nTest Case 7: Agent raises exception during process")
-#     class FailingAgent:
-#         def process(self, entities, user_id):
+#     class FailingAgent(BaseAgent):
+#         @property
+#         def name(self) -> str:
+#             return "failing_agent"
+
+#         @property
+#         def supported_intents(self) -> List[str]:
+#             return ['failing_intent']
+
+#         def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
 #             raise ValueError("Simulated processing error in agent")
-#     failing_agent_mock = FailingAgent()
-#     engine.register_agent(
-#         agent_name='failing_agent',
-#         agent_instance=failing_agent_mock,
-#         supported_intents=['failing_intent']
-#     )
+
+#     failing_agent_mock = FailingAgent() # This class should be defined or imported.
+#     engine.register_agent(agent_instance=failing_agent_mock)
+
 #     failing_intent_data = {'intent': 'failing_intent', 'entities': {'data': 'some_data'}}
 #     response = engine.route_request(failing_intent_data, 'user_fail')
 #     print(f"Response for failing_intent: {response}")
