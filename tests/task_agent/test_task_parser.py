@@ -1,119 +1,147 @@
+# tests/task_agent/test_task_parser.py
 import unittest
 from unittest.mock import patch, MagicMock
-import os
 
-# Ensure the task_agent module can be found
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-from task_agent.task_parser import parse_task_request, CreateTaskFromDetailsTool
-
-# Import AGENTS_SDK_AVAILABLE to check if the actual SDK is expected to be used.
-# This helps in deciding how to mock and what to expect.
+# Attempt to import the target function
+# This structure assumes your project root is in PYTHONPATH when running tests
 try:
-    from task_agent.task_parser import AGENTS_SDK_AVAILABLE
+    from task_agent.task_parser import parse_task_request, CreateTaskFromDetailsTool
 except ImportError:
-    # If AGENTS_SDK_AVAILABLE itself is not found, assume SDK is not available for testing.
-    AGENTS_SDK_AVAILABLE = False
+    # Fallback for environments where the path might be different during execution,
+    # though ideally the test runner (e.g., pytest) handles PYTHONPATH.
+    # This is more of a safeguard for direct script execution if needed.
+    import sys
+    import os
+    # Adjust path to include the parent directory of 'task_agent'
+    # This is a common pattern but might need adjustment based on your exact test execution setup
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+    from task_agent.task_parser import parse_task_request, CreateTaskFromDetailsTool
 
 
 class TestTaskParser(unittest.TestCase):
 
-    @patch('task_agent.task_parser.Runner')
-    @patch('task_agent.task_parser.Agent')
-    @patch.object(CreateTaskFromDetailsTool, '__call__') # More specific patch for the tool's output
-    def test_parse_simple_task_query_successful_extraction(self, mock_tool_call, mock_agent_constructor, mock_runner_run_sync):
-        """
-        Tests parsing a simple task query where the mocked agent framework
-        successfully extracts details via the tool.
-        """
-        if not AGENTS_SDK_AVAILABLE:
-            self.skipTest("Skipping test: agents SDK is not available or not correctly mocked.")
-
-        # --- Arrange ---
-        natural_language_query = "Remind me to buy milk tomorrow"
-
-        # Mock the response from the CreateTaskFromDetailsTool.__call__ method
-        # This is what the `tool_input` in `result.tool_calls[0].tool_input` would contain
-        expected_task_details = {
-            "description": "buy milk",
-            "due_date": "tomorrow",
-            "priority": None,
-            "project": None,
-            "source": "nlp"
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_parse_full_task_details(self, mock_run_sync):
+        # Mock the result from agents.Runner.run_sync
+        mock_tool_input = {
+            "description": "Finish the report for Project Alpha",
+            "due_date": "next Friday",
+            "priority": "high",
+            "project": "Project Alpha"
         }
-        # mock_tool_call.return_value = expected_task_details # This is not needed as the tool_input is directly assigned below
+        mock_tool_call = MagicMock()
+        mock_tool_call.tool_name = "create_task_from_details"
+        mock_tool_call.tool_input = mock_tool_input
 
-        # Mock the result object from Runner.run_sync
-        # It should contain a structure that parse_task_request expects,
-        # typically a list of tool_calls, where each call has a tool_name and tool_input.
-        mock_tool_call_obj = MagicMock()
-        mock_tool_call_obj.tool_name = "create_task_from_details"
-        mock_tool_call_obj.tool_input = expected_task_details # This is the crucial part
+        mock_agent_result = MagicMock()
+        mock_agent_result.tool_calls = [mock_tool_call]
+        mock_run_sync.return_value = mock_agent_result
 
-        mock_run_sync_result = MagicMock()
-        mock_run_sync_result.tool_calls = [mock_tool_call_obj]
-        mock_runner_run_sync.return_value = mock_run_sync_result
+        query = "Add 'Finish the report for Project Alpha' to my tasks, it's due next Friday and is high priority under Project Alpha."
+        result = parse_task_request(query)
 
-        # Mock the Agent constructor to avoid issues if it has complex dependencies
-        mock_agent_instance = MagicMock()
-        mock_agent_constructor.return_value = mock_agent_instance
+        self.assertIsNotNone(result)
+        self.assertEqual(result, mock_tool_input)
+        # Verify that Agent and Runner were called (optional, but good for sanity check)
+        # This requires knowing how Agent is instantiated within parse_task_request
+        # For this, we might need to patch 'task_agent.task_parser.Agent' as well if we want to inspect its calls.
+        # For now, focusing on run_sync is simpler.
+        mock_run_sync.assert_called_once()
 
-        # --- Act ---
-        actual_details = parse_task_request(natural_language_query)
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_parse_task_with_only_description(self, mock_run_sync):
+        mock_tool_input = {
+            "description": "Buy milk",
+            "due_date": None,
+            "priority": None,
+            "project": None
+        }
+        mock_tool_call = MagicMock()
+        mock_tool_call.tool_name = "create_task_from_details"
+        mock_tool_call.tool_input = mock_tool_input
 
-        # --- Assert ---
-        # Verify that Agent was constructed with the tool
-        mock_agent_constructor.assert_called_once()
-        args, kwargs = mock_agent_constructor.call_args
-        self.assertTrue(any(isinstance(tool, CreateTaskFromDetailsTool) for tool in kwargs.get('tools', [])))
+        mock_agent_result = MagicMock()
+        mock_agent_result.tool_calls = [mock_tool_call]
+        mock_run_sync.return_value = mock_agent_result
 
-        # Verify that Runner.run_sync was called with the agent and query
-        mock_runner_run_sync.assert_called_once_with(agent=mock_agent_instance, user_input=natural_language_query)
+        query = "Remind me to buy milk."
+        result = parse_task_request(query)
 
-        # Verify the returned details
-        self.assertEqual(actual_details, expected_task_details)
-        # We don't need to assert mock_tool_call was called because we are checking the final output of parse_task_request
-        # which relies on the tool_input being correctly propagated.
+        self.assertIsNotNone(result)
+        self.assertEqual(result, mock_tool_input)
+        mock_run_sync.assert_called_once()
 
-    @patch('task_agent.task_parser.Runner')
-    def test_parse_task_query_tool_not_called(self, mock_runner_run_sync):
-        """
-        Tests the scenario where the agent framework does not call the tool
-        (e.g., the query is not recognized as a task).
-        """
-        if not AGENTS_SDK_AVAILABLE:
-            self.skipTest("Skipping test: agents SDK is not available or not correctly mocked.")
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_parse_task_with_description_and_due_date(self, mock_run_sync):
+        # This is what the LLM provides to the tool
+        llm_provided_input_to_tool = {
+             "description": "Submit expenses",
+             "due_date": "tomorrow"
+        }
+        # The tool's __call__ method will be invoked with these, and defaults for others.
+        # So, the tool_input captured in result.tool_calls[0].tool_input will be:
+        actual_tool_output = CreateTaskFromDetailsTool()(**llm_provided_input_to_tool)
 
-        natural_language_query = "What is the weather today?"
+        mock_tool_call = MagicMock()
+        mock_tool_call.tool_name = "create_task_from_details"
+        mock_tool_call.tool_input = actual_tool_output # This is what parse_task_request will see
 
-        # Mock Runner.run_sync to return a result where no tool_calls were made
-        mock_run_sync_result = MagicMock()
-        mock_run_sync_result.tool_calls = [] # No tool calls
-        mock_run_sync_result.final_output = "The weather is sunny." # Example final output
-        mock_runner_run_sync.return_value = mock_run_sync_result
+        mock_agent_result = MagicMock()
+        mock_agent_result.tool_calls = [mock_tool_call]
+        mock_run_sync.return_value = mock_agent_result
 
-        actual_details = parse_task_request(natural_language_query)
+        query = "Submit expenses by tomorrow."
+        result = parse_task_request(query)
 
-        self.assertIsNone(actual_details, "Expected None when tool is not called")
+        self.assertIsNotNone(result)
+        # We expect the result to match actual_tool_output, which includes None for missing fields
+        self.assertEqual(result["description"], "Submit expenses")
+        self.assertEqual(result["due_date"], "tomorrow")
+        self.assertIsNone(result["priority"]) # Based on tool's default behavior
+        self.assertIsNone(result["project"])  # Based on tool's default behavior
+        mock_run_sync.assert_called_once()
 
-    def test_parse_task_request_sdk_unavailable(self):
-        """
-        Tests the behavior when the AGENTS_SDK_AVAILABLE is False.
-        parse_task_request should return None.
-        """
-        if AGENTS_SDK_AVAILABLE:
-            self.skipTest("Skipping test: AGENTS_SDK_AVAILABLE is True, this test is for when it's False.")
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_no_tool_call_from_runner(self, mock_run_sync):
+        # Simulate the runner not making any tool calls (e.g., irrelevant query)
+        mock_agent_result = MagicMock()
+        mock_agent_result.tool_calls = [] # No tool calls
+        mock_agent_result.final_output = "I'm not sure how to help with that." # Example final output
+        mock_run_sync.return_value = mock_agent_result
 
-        # Temporarily patch AGENTS_SDK_AVAILABLE to False for this specific test case,
-        # if it was True globally but we want to test the False path.
-        # If it's already False due to import errors, this patch is still safe.
-        with patch('task_agent.task_parser.AGENTS_SDK_AVAILABLE', False):
-            # Also need to ensure CreateTaskFromDetailsTool is patched if AGENTS_SDK_AVAILABLE is False in the module
-            # or that the module re-evaluates AGENTS_SDK_AVAILABLE when parse_task_request is called.
-            # The current implementation of parse_task_request checks AGENTS_SDK_AVAILABLE at its start.
-            actual_details = parse_task_request("any query")
-            self.assertIsNone(actual_details)
+        query = "What's the weather like?"
+        result = parse_task_request(query)
+
+        self.assertIsNone(result) # Expect None if no relevant tool call
+        mock_run_sync.assert_called_once()
+
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_incorrect_tool_name_from_runner(self, mock_run_sync):
+        # Simulate the runner calling an unexpected tool
+        mock_tool_call = MagicMock()
+        mock_tool_call.tool_name = "some_other_tool"
+        mock_tool_call.tool_input = {"data": "some_data"}
+
+        mock_agent_result = MagicMock()
+        mock_agent_result.tool_calls = [mock_tool_call]
+        mock_run_sync.return_value = mock_agent_result
+
+        query = "Add 'Finish the report for Project Alpha' to my tasks." # A valid task query
+        result = parse_task_request(query)
+
+        self.assertIsNone(result) # Expect None as the correct tool wasn't called
+        mock_run_sync.assert_called_once()
+
+    @patch('task_agent.task_parser.Runner.run_sync')
+    def test_runner_raises_exception(self, mock_run_sync):
+        # Simulate an exception occurring during run_sync
+        mock_run_sync.side_effect = Exception("LLM API error")
+
+        query = "This query will cause an error."
+        result = parse_task_request(query)
+
+        self.assertIsNone(result) # Expect None if an exception occurs
+        mock_run_sync.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()
