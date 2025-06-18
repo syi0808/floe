@@ -454,25 +454,33 @@ class TaskAgent(BaseAgent):
             i += 1
 
         try:
-            # Cast status_filter to ensure it matches the expected literal type
-            if status_filter is not None and status_filter not in VALID_STATUS_VALUES:
-                return AgentResponse(
-                    status='error',
-                    data=None,
-                    message=f"Error: Invalid status value '{status_filter}'. Allowed: {', '.join(VALID_STATUS_VALUES)}.",
-                    source_agent=self.name
-                )
-            # Direct status mapping to ensure type safety
-            valid_status = None
-            if status_filter == 'todo':
-                valid_status = 'todo'
-            elif status_filter == 'in-progress':
-                valid_status = 'in-progress'
-            elif status_filter == 'done':
-                valid_status = 'done'
-            elif status_filter == 'archived':
-                valid_status = 'archived'
-            
+             // … earlier in _handle_list_tasks …
+
+-            # Cast status_filter to ensure it matches the expected literal type
+-            if status_filter is not None and status_filter not in VALID_STATUS_VALUES:
+-                return AgentResponse(
+-                    status='error',
+-                    data=None,
+-                    message=f"Error: Invalid status value '{status_filter}'. Allowed: {', '.join(VALID_STATUS_VALUES)}.",
+-                    source_agent=self.name
+-                )
+-            # Direct status mapping to ensure type safety
+-            valid_status = None
+-            if status_filter == 'todo':
+-                valid_status = 'todo'
+-            elif status_filter == 'in-progress':
+-                valid_status = 'in-progress'
+-            elif status_filter == 'done':
+-                valid_status = 'done'
+-            elif status_filter == 'archived':
+-                valid_status = 'archived'
+-            
+-            tasks = core.list_tasks(user_id=user_id, status=valid_status, project_tag=project_tag_filter)
++            tasks = core.list_tasks(
++                user_id=user_id,
++                status=status_filter,
++                project_tag=project_tag_filter
++            )
             tasks = core.list_tasks(user_id=user_id, status=valid_status, project_tag=project_tag_filter)
             if not tasks:
                 return AgentResponse(
