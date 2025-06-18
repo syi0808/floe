@@ -22,7 +22,7 @@ def create_mock_task(
     updated_at=None,
     due_date_utc=None,
     completed_at=None,
-    project_tag=None
+    project_tags=None # Changed from project_tag
 ) -> MagicMock:
     mock_task = MagicMock(spec=TaskItem)
     mock_task.id = id if id else uuid4()
@@ -34,7 +34,7 @@ def create_mock_task(
     mock_task.updated_at = updated_at if updated_at else datetime.now(timezone.utc)
     mock_task.due_date_utc = due_date_utc
     mock_task.completed_at = completed_at
-    mock_task.project_tag = project_tag
+    mock_task.project_tags = project_tags # Changed from project_tag
     return mock_task
 
 # --- Test Cases for Create Task ---
@@ -52,7 +52,7 @@ def test_create_task_simple_description(mock_core, agent):
         description=task_desc,
         priority=2, # Default
         due_date_utc=None,
-        project_tag=None
+        project_tags=None # Changed from project_tag
     )
     assert f"Task '{task_desc}' created with ID: {mock_created_task.id}" in response
 
@@ -67,7 +67,7 @@ def test_create_task_with_all_params_quoted_desc(mock_core, agent):
 
     mock_created_task = create_mock_task(
         id=task_id, description=task_desc, user_id=user_id, priority=1,
-        due_date_utc=due_date_obj, project_tag=project_tag
+        due_date_utc=due_date_obj, project_tags=[project_tag] # Changed from project_tag
     )
     mock_core.create_task.return_value = mock_created_task
 
@@ -79,7 +79,7 @@ def test_create_task_with_all_params_quoted_desc(mock_core, agent):
         description=task_desc,
         priority=1,
         due_date_utc=due_date_obj,
-        project_tag=project_tag
+        project_tags=[project_tag] # Changed from project_tag
     )
     assert f"Task '{task_desc}' created with ID: {task_id}" in response
 
@@ -127,7 +127,7 @@ def test_list_tasks_with_items_and_formatting(mock_core, agent):
     task2_id = uuid4()
     mock_tasks = [
         create_mock_task(id=task1_id, description="Task One", status="todo", priority=1, user_id=user_id, due_date_utc=datetime(2024,1,1, tzinfo=timezone.utc)),
-        create_mock_task(id=task2_id, description="Task Two", status="done", priority=3, user_id=user_id, project_tag="home")
+        create_mock_task(id=task2_id, description="Task Two", status="done", priority=3, user_id=user_id, project_tags=["home"]) # Changed from project_tag
     ]
     mock_core.list_tasks.return_value = mock_tasks
 
@@ -136,7 +136,8 @@ def test_list_tasks_with_items_and_formatting(mock_core, agent):
     mock_core.list_tasks.assert_called_once_with(user_id=user_id, status=None, project_tag=None)
     assert f"Found 2 task(s):" in response
     assert f"- ID: {task1_id}, Desc: \"Task One\", Prio: 1, Due: 2024-01-01, Status: todo" in response
-    assert f"- ID: {task2_id}, Desc: \"Task Two\", Prio: 3, Due: N/A, Status: done, Tag: home" in response
+    # Agent's _handle_list_tasks formats as "Tags: {', '.join(task.project_tags)}"
+    assert f"- ID: {task2_id}, Desc: \"Task Two\", Prio: 3, Due: N/A, Status: done, Tags: home" in response
 
 @patch('task_agent.task_agent.core')
 def test_list_tasks_with_status_filter(mock_core, agent):
@@ -390,7 +391,7 @@ def test_create_task_with_complex_quoted_description(mock_core, agent):
         description=task_desc, # Check if the whole string including keywords was passed
         priority=2, # Default, as "priority 1" was part of desc
         due_date_utc=None, # Default
-        project_tag=None
+        project_tags=None # Changed from project_tag
     )
     assert f"Task '{task_desc}' created with ID: {mock_created_task.id}" in response
 
@@ -424,7 +425,7 @@ def test_create_task_description_then_params(mock_core, agent):
         description=single_word_desc,
         priority=3,
         due_date_utc=due_date_obj,
-        project_tag=None
+        project_tags=None # Changed from project_tag
     )
     assert f"Task '{single_word_desc}' created with ID: {mock_created_task_single_word.id}" in response
 

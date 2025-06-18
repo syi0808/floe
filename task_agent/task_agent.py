@@ -108,8 +108,7 @@ class TaskAgent(BaseAgent):
                     # or the user should quote "tag1 tag2" if that's meant as one tag.
                     # Based on current core.TaskItem, it's `project_tag: Optional[str]`.
                     # So we'll use the provided string as is.
--                    attributes['project_tag'] = args[i+1]
-+                    attributes['project_tags'] = [args[i+1]]
+                    attributes['project_tags'] = [args[i+1]] # Ensure this is a list
                     i += 1
                 else:
                     return {}, "Error: Tags value missing."
@@ -153,9 +152,7 @@ class TaskAgent(BaseAgent):
         # Set defaults if not provided
         priority = attributes.get('priority', 2)
         due_date_utc = attributes.get('due_date_utc', None)
-        project_tag = attributes.get('project_tag', None)
-        # Convert single project_tag to project_tags list if provided
-        project_tags = [project_tag] if project_tag else None
+        project_tags = attributes.get('project_tags', None) # Should already be a list from _parse_common_task_attributes
 
         try:
             task = core.create_task(
@@ -456,34 +453,11 @@ class TaskAgent(BaseAgent):
             i += 1
 
         try:
-             // … earlier in _handle_list_tasks …
-
--            # Cast status_filter to ensure it matches the expected literal type
--            if status_filter is not None and status_filter not in VALID_STATUS_VALUES:
--                return AgentResponse(
--                    status='error',
--                    data=None,
--                    message=f"Error: Invalid status value '{status_filter}'. Allowed: {', '.join(VALID_STATUS_VALUES)}.",
--                    source_agent=self.name
--                )
--            # Direct status mapping to ensure type safety
--            valid_status = None
--            if status_filter == 'todo':
--                valid_status = 'todo'
--            elif status_filter == 'in-progress':
--                valid_status = 'in-progress'
--            elif status_filter == 'done':
--                valid_status = 'done'
--            elif status_filter == 'archived':
--                valid_status = 'archived'
--            
--            tasks = core.list_tasks(user_id=user_id, status=valid_status, project_tag=project_tag_filter)
-+            tasks = core.list_tasks(
-+                user_id=user_id,
-+                status=status_filter,
-+                project_tag=project_tag_filter
-+            )
-            tasks = core.list_tasks(user_id=user_id, status=valid_status, project_tag=project_tag_filter)
+            tasks = core.list_tasks(
+                user_id=user_id,
+                status=status_filter, # status_filter is already validated or None
+                project_tag=project_tag_filter
+            )
             if not tasks:
                 return AgentResponse(
                     status='success',
