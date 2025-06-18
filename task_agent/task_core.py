@@ -26,7 +26,9 @@ class TaskItem(BaseModel):
     model_config = { # Pydantic V2 style
         "json_encoders": {
             UUID: lambda v: str(v),
-            datetime: lambda v: v.isoformat() if v else None
+            # Normalise UTC datetimes to RFC-3339 “Z” for consistency with
+            # most JSON APIs and test expectations.
+            datetime: lambda v: v.isoformat().replace("+00:00", "Z") if v else None
         }
     }
 
