@@ -90,6 +90,7 @@ class TaskAgent(BaseAgent):
                         
                         # Join all words to form complete status value
                         status_val = " ".join(status_words)
+                        status_val = status_val.replace(" ", "-")
                     
                     # Check if the status value is valid
                     if status_val not in VALID_STATUS_VALUES:
