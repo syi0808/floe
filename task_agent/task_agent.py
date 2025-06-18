@@ -6,8 +6,8 @@ from orchestrator_agent.common_types import AgentResponse
 
 # Define TaskStatus type alias based on the literals used in TaskItem.status
 TaskStatus = Literal['todo', 'in-progress', 'done', 'archived']
-# Define valid status values as a list for validation
-VALID_STATUS_VALUES = ['todo', 'in-progress', 'done', 'archived']
+# Single source-of-truth
+VALID_STATUS_VALUES: List[str] = list(TaskStatus.__args__)
 import shlex
 import uuid # For task_id validation
 
