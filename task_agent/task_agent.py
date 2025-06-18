@@ -107,7 +107,8 @@ class TaskAgent(BaseAgent):
                     # or the user should quote "tag1 tag2" if that's meant as one tag.
                     # Based on current core.TaskItem, it's `project_tag: Optional[str]`.
                     # So we'll use the provided string as is.
-                    attributes['project_tag'] = args[i+1]
+-                    attributes['project_tag'] = args[i+1]
++                    attributes['project_tags'] = [args[i+1]]
                     i += 1
                 else:
                     return {}, "Error: Tags value missing."
