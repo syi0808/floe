@@ -61,10 +61,10 @@ def update_task(task_id: str, updates: Dict[str, Any]) -> Optional[TaskItem]:
     if task:
         # Create a dictionary of the existing task's data
         task_data = task.model_dump()
-        # Merge updates into this dictionary
-        # This ensures that only specified fields are updated,
-        # and unspecified fields retain their original values.
-        updated_task_data = {**task_data, **updates}
+        # Prevent overwriting immutable fields
+        IMMUTABLE = {"id", "created_at", "user_id"}
+        filtered_updates = {k: v for k, v in updates.items() if k not in IMMUTABLE}
+        updated_task_data = {**task_data, **filtered_updates}
 
         try:
             # Create a new TaskItem instance from the merged data
@@ -73,7 +73,7 @@ def update_task(task_id: str, updates: Dict[str, Any]) -> Optional[TaskItem]:
             _task_storage[task_id] = updated_task
             return updated_task
         except ValidationError:
-            return None # Invalid data based on model validation rules
+            return None  # Invalid data based on model validation rules
     return None
 
 def delete_task(task_id: str) -> bool:
