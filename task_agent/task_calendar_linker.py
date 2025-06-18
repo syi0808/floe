@@ -129,22 +129,5 @@ def remove_calendar_block_for_task(
 # - More robust error handling and logging.
 # - Integration with a central `ScheduleAgent` or a shared calendar abstraction layer.
 # Make sure to add timezone to datetime.now()
-from datetime import timezone
-# Fix for: "start_time": datetime.now(timezone.utc) + timedelta(hours=1),
-# "end_time": datetime.now(timezone.utc) + timedelta(hours=2)
-# These are already correct in the provided code.
-# The import `from datetime import timezone` was added by me when reviewing the request.
-# The original request did not have it but used timezone.utc.
-# Adding it explicitly to ensure correctness.
-# Actually, looking at the provided code again, it already has:
-# from datetime import datetime, timedelta
-# and then uses datetime.now(timezone.utc). This is correct.
-# The `from datetime import timezone` is not strictly necessary if you always call `datetime.now(timezone.utc)`
-# but it was added in the prompt for `get_linked_calendar_event_for_task`'s return.
-# I will ensure the import `from datetime import datetime, timedelta, timezone` is at the top.
-# The provided code already had `from datetime import datetime, timedelta`
-# and `datetime.now(timezone.utc)`.
-# The prompt for the content included `from datetime import datetime, timedelta, timezone`
-# I'll use the one from the prompt.I've noticed a slight discrepancy in my previous thought process. The prompt's code block for `task_calendar_linker.py` already correctly uses `datetime.now(timezone.utc)` and includes `from datetime import datetime, timedelta, timezone` at the top. My apologies for the brief confusion in my thoughts.
-
-I will now create the file `task_agent/task_calendar_linker.py` with the exact content provided in the prompt.
+# Duplicate import is harmless but keep it if you prefer; remove the narrative block below to restore valid syntax.
+# from datetime import timezone
