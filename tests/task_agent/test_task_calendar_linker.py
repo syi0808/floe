@@ -1,366 +1,177 @@
-# tests/task_agent/test_task_calendar_linker.py
 import pytest
-import datetime
-import logging
-from unittest.mock import AsyncMock, MagicMock, patch # Added AsyncMock and MagicMock
-from task_agent.task_calendar_linker import TaskCalendarLink, TaskCalendarLinker, MockScheduleAgentClient as ActualMockScheduleAgentClient, BaseScheduleAgentClient
+from datetime import datetime, timedelta
+from pydantic import ValidationError
 
-# Keep original fixtures for existing tests that might rely on their simplicity
-@pytest.fixture
-def simple_linker_instance():
-    # Uses the ActualMockScheduleAgentClient by default if no client is passed
-    return TaskCalendarLinker()
+from task_agent.task_calendar_linker import (
+    TaskInput,
+    CalendarEvent,
+    create_calendar_event_from_task,
+    add_event_to_calendar_api,
+    block_time_with_schedule_agent
+)
 
-@pytest.fixture
-def simple_linker_with_mock_client(): # Renamed to avoid clash, uses the original simple mock
-    class OriginalMockScheduleAgentClient(BaseScheduleAgentClient): # Copied from original tests
-        async def create_event(self, *args, **kwargs):
-            return {"id": f"evt_mock_client_{datetime.datetime.now(datetime.timezone.utc).timestamp()}", "status": "confirmed"}
-        async def delete_event(self, event_id: str):
-            logging.info(f"OriginalMockScheduleAgentClient: delete_event({event_id}) called") # Changed print to logging
-            return {"status": "deleted", "deleted_event_id": event_id}
-    return TaskCalendarLinker(schedule_agent_client=OriginalMockScheduleAgentClient())
+# Sample valid task data for reuse
+SAMPLE_START_TIME = datetime.now() + timedelta(days=1)
+VALID_TASK_DATA = {
+    "task_id": "task_001",
+    "description": "This is a detailed description of the task for planning.",
+    "start_time": SAMPLE_START_TIME,
+    "duration_minutes": 60,
+    "summary": "Task Summary"
+}
 
-# New fixture for more detailed mocking using unittest.mock.AsyncMock
-@pytest.fixture
-def linker_with_advanced_mock_client():
-    mock_client = AsyncMock(spec=ActualMockScheduleAgentClient) # Use spec from the actual implementation's mock
-    linker = TaskCalendarLinker(schedule_agent_client=mock_client)
-    return linker, mock_client
+class TestTaskInput:
+    def test_valid_task_input(self):
+        task_input = TaskInput(**VALID_TASK_DATA)
+        assert task_input.task_id == VALID_TASK_DATA["task_id"]
+        assert task_input.description == VALID_TASK_DATA["description"]
+        assert task_input.start_time == VALID_TASK_DATA["start_time"]
+        assert task_input.duration_minutes == VALID_TASK_DATA["duration_minutes"]
+        assert task_input.summary == VALID_TASK_DATA["summary"]
 
+    def test_task_input_missing_required_fields(self):
+        with pytest.raises(ValidationError, match=r".*task_id\s*Field required.*"):
+            TaskInput(description="Only description provided", start_time=SAMPLE_START_TIME, duration_minutes=30)
 
-# --- Original TaskCalendarLink Model Tests (Unchanged) ---
-def test_task_calendar_link_creation_minimal():
-    link = TaskCalendarLink(task_id="task123")
-    assert link.task_id == "task123"
-    assert link.status == "pending_creation"
-    assert link.calendar_event_id is None
+        with pytest.raises(ValidationError, match=r".*description\s*Field required.*"):
+            TaskInput(task_id="t1", start_time=SAMPLE_START_TIME, duration_minutes=30)
 
-def test_task_calendar_link_creation_full():
-    now = datetime.datetime.now(datetime.timezone.utc)
-    link = TaskCalendarLink(
-        task_id="task456",
-        calendar_event_id="event789",
-        calendar_service_provider="google_calendar",
-        event_summary="Team Meeting",
-        start_time=now,
-        end_time=now + datetime.timedelta(hours=1),
-        status="created",
-        error_message=None,
-        metadata={"project": "Floe"}
-    )
-    assert link.task_id == "task456"
-    assert link.calendar_event_id == "event789"
-    assert link.status == "created"
-    assert link.metadata["project"] == "Floe"
+        with pytest.raises(ValidationError, match=r".*start_time\s*Field required.*"):
+            TaskInput(task_id="t1", description="desc", duration_minutes=30)
 
-# --- Original Tests for TaskCalendarLinker (using simple_linker_instance) ---
-@pytest.mark.asyncio
-async def test_create_calendar_event_insufficient_info(simple_linker_instance: TaskCalendarLinker):
-    task_id = "task_no_time"
-    description = "A task with no time"
-    link = await simple_linker_instance.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description
-    )
-    assert link.task_id == task_id
-    assert link.status == "failed"
-    assert link.calendar_event_id is None
-    assert link.error_message is not None
-    assert "Insufficient time information" in link.error_message
-
-@pytest.mark.asyncio
-async def test_create_calendar_event_with_start_and_duration(simple_linker_instance: TaskCalendarLinker):
-    task_id = "task_start_duration"
-    description = "Task with start and duration"
-    start_time = datetime.datetime(2024, 7, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
-    duration_minutes = 60
-    link = await simple_linker_instance.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_start_time=start_time,
-        duration_minutes=duration_minutes
-    )
-    assert link.status == "created"
-    assert link.calendar_event_id is not None
-    assert link.start_time == start_time
-    assert link.end_time == start_time + datetime.timedelta(minutes=duration_minutes)
-    assert link.event_summary == f"Task: {description}"
-
-@pytest.mark.asyncio
-async def test_create_calendar_event_with_end_and_duration(simple_linker_instance: TaskCalendarLinker):
-    task_id = "task_end_duration"
-    description = "Task with end and duration"
-    end_time = datetime.datetime(2024, 7, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
-    duration_minutes = 90
-    link = await simple_linker_instance.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_end_time=end_time,
-        duration_minutes=duration_minutes
-    )
-    assert link.status == "created"
-    assert link.calendar_event_id is not None
-    assert link.end_time == end_time
-    assert link.start_time == end_time - datetime.timedelta(minutes=duration_minutes)
-
-@pytest.mark.asyncio
-async def test_create_calendar_event_with_only_duration_defaults_start_to_now(simple_linker_instance: TaskCalendarLinker):
-    task_id = "task_only_duration"
-    description = "Task with only duration"
-    duration_minutes = 45
-    before_call = datetime.datetime.now(datetime.timezone.utc)
-    link = await simple_linker_instance.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        duration_minutes=duration_minutes
-    )
-    after_call = datetime.datetime.now(datetime.timezone.utc)
-    assert link.status == "created"
-    assert link.calendar_event_id is not None
-    assert link.start_time is not None
-    link_start_time_utc = link.start_time.astimezone(datetime.timezone.utc) if link.start_time.tzinfo else link.start_time.replace(tzinfo=datetime.timezone.utc)
-    assert before_call <= link_start_time_utc <= after_call
-
-@pytest.mark.asyncio
-async def test_create_calendar_event_with_original_mock_client(simple_linker_with_mock_client: TaskCalendarLinker): # Uses original simple mock
-    task_id = "task_mock_client"
-    description = "Task via mock client"
-    start_time = datetime.datetime(2024, 7, 1, 14, 0, 0, tzinfo=datetime.timezone.utc)
-    end_time = start_time + datetime.timedelta(hours=2)
-    link = await simple_linker_with_mock_client.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_start_time=start_time,
-        suggested_end_time=end_time
-    )
-    assert link.status == "created"
-    assert "evt_mock_client" in link.calendar_event_id
-
-@pytest.mark.asyncio
-async def test_get_task_calendar_link_placeholder(simple_linker_instance: TaskCalendarLinker):
-    result = await simple_linker_instance.get_task_calendar_link("some_task_id_not_created")
-    assert result is None
-
-@pytest.mark.asyncio
-async def test_remove_calendar_event_for_task_placeholder(simple_linker_instance: TaskCalendarLinker):
-    # This test relies on the default MockScheduleAgentClient in simple_linker_instance succeeding
-    result = await simple_linker_instance.remove_calendar_event_for_task("task_id_to_remove", "event_id_to_remove")
-    assert result is True
-
-@pytest.mark.asyncio
-async def test_remove_calendar_event_with_original_mock_client(simple_linker_with_mock_client: TaskCalendarLinker): # Uses original simple mock
-    result = await simple_linker_with_mock_client.remove_calendar_event_for_task("task_abc", "event_xyz")
-    assert result is True
+        with pytest.raises(ValidationError, match=r".*duration_minutes\s*Field required.*"):
+            TaskInput(task_id="t1", description="desc", start_time=SAMPLE_START_TIME)
 
 
-# --- Enhanced Tests using linker_with_advanced_mock_client ---
+    def test_task_input_invalid_duration(self):
+        with pytest.raises(ValidationError, match=r".*duration_minutes\s*Input should be greater than 0.*"):
+            TaskInput(**{**VALID_TASK_DATA, "duration_minutes": 0})
 
-@pytest.mark.asyncio
-async def test_create_event_client_called_correctly(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_client_verify"
-    description = "Verify client call"
-    start_time = datetime.datetime(2024, 8, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
-    duration_minutes = 60
-    expected_end_time = start_time + datetime.timedelta(minutes=duration_minutes)
-    mock_client.create_event.return_value = {"id": "evt_123_advanced", "status": "confirmed"}
+        with pytest.raises(ValidationError, match=r".*duration_minutes\s*Input should be greater than 0.*"):
+            TaskInput(**{**VALID_TASK_DATA, "duration_minutes": -30})
 
-    await linker.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_start_time=start_time,
-        duration_minutes=duration_minutes
-    )
-    mock_client.create_event.assert_called_once_with(
-        summary=f"Task: {description}",
-        start_time=start_time,
-        end_time=expected_end_time,
-        description=f"Calendar event for task ID: {task_id}\n\n{description}"
-    )
+    def test_task_input_invalid_types(self):
+        with pytest.raises(ValidationError, match=r".*duration_minutes\s*Input should be a valid integer.*"):
+            TaskInput(**{**VALID_TASK_DATA, "duration_minutes": "60 minutes"})
 
-@pytest.mark.asyncio
-async def test_create_event_client_returns_no_id(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    mock_client.create_event.return_value = {"status": "confirmed"} # No 'id'
-    link = await linker.create_calendar_event_for_task(
-        task_id="task_no_event_id",
-        task_description="Client returns no event ID",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc),
-        duration_minutes=30
-    )
-    assert link.status == "failed"
-    assert "No event ID returned from client" in link.error_message
+        with pytest.raises(ValidationError, match=r".*start_time\s*Input should be a valid datetime.*"):
+            TaskInput(**{**VALID_TASK_DATA, "start_time": "tomorrow"})
 
-@pytest.mark.asyncio
-async def test_create_event_client_raises_exception(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    mock_client.create_event.side_effect = Exception("Calendar API is down")
-    link = await linker.create_calendar_event_for_task(
-        task_id="task_client_exception",
-        task_description="Client throws error",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc),
-        duration_minutes=30
-    )
-    assert link.status == "failed"
-    assert "Exception during calendar event creation: Calendar API is down" in link.error_message
+    def test_task_input_summary_optional(self):
+        task_data_no_summary = VALID_TASK_DATA.copy()
+        del task_data_no_summary["summary"]
+        task_input = TaskInput(**task_data_no_summary)
+        assert task_input.summary is None
 
-@pytest.mark.asyncio
-async def test_create_event_inconsistent_time_params(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_inconsistent_time"
-    description = "Inconsistent time"
-    start_time = datetime.datetime(2024, 8, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
-    # end_time is 11:00, but duration is 90 minutes (so end_time should be 11:30)
-    end_time = start_time + datetime.timedelta(hours=1)
-    duration_minutes = 90
 
-    expected_recalculated_end_time = start_time + datetime.timedelta(minutes=duration_minutes)
-    mock_client.create_event.return_value = {"id": "evt_inconsistent", "status": "confirmed"}
+class TestCalendarEvent:
+    def test_valid_calendar_event(self):
+        start = datetime.now()
+        end = start + timedelta(hours=1)
+        event = CalendarEvent(
+            event_id="evt_001",
+            summary="Valid Event",
+            start_time=start,
+            end_time=end,
+            task_id_ref="task_ref_001"
+        )
+        assert event.start_time == start
+        assert event.end_time == end
 
-    link = await linker.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_start_time=start_time,
-        suggested_end_time=end_time,
-        duration_minutes=duration_minutes
-    )
-    assert link.status == "created"
-    assert link.start_time == start_time
-    assert link.end_time == expected_recalculated_end_time # Verifies end_time was recalculated
-    mock_client.create_event.assert_called_once_with(
-        summary=f"Task: {description}",
-        start_time=start_time,
-        end_time=expected_recalculated_end_time,
-        description=f"Calendar event for task ID: {task_id}\n\n{description}"
-    )
+    def test_calendar_event_end_time_before_start_time(self):
+        start = datetime.now()
+        end_before_start = start - timedelta(hours=1)
+        with pytest.raises(ValidationError, match="End time must be after start time"):
+            CalendarEvent(
+                event_id="evt_002",
+                summary="Invalid Event Times",
+                start_time=start,
+                end_time=end_before_start,
+                task_id_ref="task_ref_002"
+            )
 
-@pytest.mark.asyncio
-async def test_get_created_task_calendar_link(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_get_created"
-    mock_client.create_event.return_value = {"id": "evt_get_this", "status": "confirmed"}
+    def test_calendar_event_end_time_equals_start_time(self):
+        start = datetime.now()
+        with pytest.raises(ValidationError, match="End time must be after start time"):
+            CalendarEvent(
+                event_id="evt_003",
+                summary="Invalid Event Times",
+                start_time=start,
+                end_time=start, # Same as start_time
+                task_id_ref="task_ref_003"
+            )
 
-    created_link = await linker.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description="Test get link",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc),
-        duration_minutes=30
-    )
-    assert created_link.status == "created"
 
-    retrieved_link = await linker.get_task_calendar_link(task_id)
-    assert retrieved_link is not None
-    assert retrieved_link.task_id == task_id
-    assert retrieved_link.calendar_event_id == "evt_get_this"
-    assert retrieved_link.status == "created"
+class TestCreateCalendarEventFromTask:
+    def test_create_event_with_valid_task_input(self):
+        task_input = TaskInput(**VALID_TASK_DATA)
+        calendar_event = create_calendar_event_from_task(task_input)
 
-@pytest.mark.asyncio
-async def test_remove_event_client_called_correctly_and_status_updated(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_remove_ok"
-    event_id = "evt_to_remove_123"
+        assert calendar_event.event_id == f"cal_{VALID_TASK_DATA['task_id']}"
+        assert calendar_event.summary == VALID_TASK_DATA["summary"]
+        assert calendar_event.start_time == VALID_TASK_DATA["start_time"]
+        expected_end_time = VALID_TASK_DATA["start_time"] + timedelta(minutes=VALID_TASK_DATA["duration_minutes"])
+        assert calendar_event.end_time == expected_end_time
+        assert calendar_event.description == VALID_TASK_DATA["description"]
+        assert calendar_event.task_id_ref == VALID_TASK_DATA["task_id"]
 
-    # First, create a link to ensure it's in _links for status update check
-    mock_client.create_event.return_value = {"id": event_id, "status": "confirmed"}
-    await linker.create_calendar_event_for_task(
-        task_id=task_id, task_description="Setup for remove",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc), duration_minutes=10
-    )
+    def test_create_event_task_summary_is_none(self):
+        task_data_no_summary = VALID_TASK_DATA.copy()
+        del task_data_no_summary["summary"]
+        task_input = TaskInput(**task_data_no_summary)
+        calendar_event = create_calendar_event_from_task(task_input)
 
-    mock_client.delete_event.return_value = {"status": "deleted", "deleted_event_id": event_id}
+        expected_summary = task_input.description[:100]
+        assert calendar_event.summary == expected_summary
 
-    result = await linker.remove_calendar_event_for_task(task_id=task_id, event_id=event_id)
-    assert result is True
-    mock_client.delete_event.assert_called_once_with(event_id)
+    def test_create_event_with_long_description_for_summary(self):
+        long_desc = "a" * 150
+        task_data_long_desc = {
+            **VALID_TASK_DATA,
+            "description": long_desc,
+        }
+        del task_data_long_desc["summary"] # Ensure summary is derived
+        task_input = TaskInput(**task_data_long_desc)
+        calendar_event = create_calendar_event_from_task(task_input)
+        assert calendar_event.summary == long_desc[:100]
+        assert len(calendar_event.summary) == 100
 
-    updated_link = await linker.get_task_calendar_link(task_id)
-    assert updated_link is not None
-    assert updated_link.status == "deleted"
 
-@pytest.mark.asyncio
-async def test_remove_event_client_raises_exception(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_remove_fail_client_ex"
-    event_id = "evt_fail_remove"
+    def test_create_event_type_error(self):
+        with pytest.raises(TypeError, match="task_data must be an instance of TaskInput"):
+            create_calendar_event_from_task({"not_a_task_input_object": True})
 
-    mock_client.create_event.return_value = {"id": event_id, "status": "confirmed"}
-    await linker.create_calendar_event_for_task(
-        task_id=task_id, task_description="Setup for remove fail",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc), duration_minutes=10
-    )
 
-    mock_client.delete_event.side_effect = Exception("Calendar API error on delete")
-    result = await linker.remove_calendar_event_for_task(task_id=task_id, event_id=event_id)
-    assert result is False
+class TestPlaceholderFunctions:
+    def test_add_event_to_calendar_api(self, capsys):
+        start = datetime.now()
+        event = CalendarEvent(
+            event_id="evt_placeholder_01",
+            summary="Test API Event",
+            start_time=start,
+            end_time=start + timedelta(hours=1),
+            task_id_ref="task_api_test"
+        )
+        response = add_event_to_calendar_api(event)
 
-    updated_link = await linker.get_task_calendar_link(task_id)
-    assert updated_link is not None
-    assert updated_link.status == "failed_deletion"
-    assert "Calendar API error on delete" in updated_link.error_message
+        captured = capsys.readouterr()
+        assert f"Simulating: Adding event '{event.summary}' to calendar API." in captured.out
+        assert response["status"] == "success"
+        assert response["event_id_api"] == f"api_{event.event_id}"
+        assert "Event hypothetically added" in response["message"]
 
-@pytest.mark.asyncio
-async def test_remove_event_id_from_link_storage(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_remove_from_storage"
-    event_id = "evt_in_storage_for_removal"
+    def test_block_time_with_schedule_agent(self, capsys):
+        task_id = "task_sched_test_01"
+        start_time = datetime.now() + timedelta(days=2)
+        duration_minutes = 90
 
-    mock_client.create_event.return_value = {"id": event_id, "status": "confirmed"}
-    await linker.create_calendar_event_for_task(
-        task_id=task_id, task_description="Event to be removed via stored ID",
-        suggested_start_time=datetime.datetime.now(datetime.timezone.utc), duration_minutes=10
-    )
+        response = block_time_with_schedule_agent(task_id, start_time, duration_minutes)
 
-    mock_client.delete_event.return_value = {"status": "deleted", "deleted_event_id": event_id}
-    # Call remove_calendar_event_for_task WITHOUT event_id, expecting it to be fetched from _links
-    result = await linker.remove_calendar_event_for_task(task_id=task_id)
-    assert result is True
-    mock_client.delete_event.assert_called_once_with(event_id)
+        captured = capsys.readouterr()
+        assert f"Simulating: Requesting ScheduleAgent to block {duration_minutes} min for task {task_id} starting at {start_time}." in captured.out
+        assert response["status"] == "success"
+        assert response["block_id"] == f"sched_{task_id}"
+        assert "Time hypothetically blocked by ScheduleAgent" in response["message"]
 
-    updated_link = await linker.get_task_calendar_link(task_id)
-    assert updated_link.status == "deleted"
-
-@pytest.mark.asyncio
-async def test_remove_event_no_event_id_and_no_link(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_remove_no_info"
-
-    # Ensure no link exists for this task_id
-    assert await linker.get_task_calendar_link(task_id) is None
-
-    result = await linker.remove_calendar_event_for_task(task_id=task_id) # No event_id provided
-    assert result is False
-    mock_client.delete_event.assert_not_called()
-
-@pytest.mark.asyncio
-async def test_create_event_with_naive_datetime_inputs(linker_with_advanced_mock_client):
-    linker, mock_client = linker_with_advanced_mock_client
-    task_id = "task_naive_dt"
-    description = "Naive datetime input"
-    # Naive datetime objects
-    naive_start_time = datetime.datetime(2024, 8, 1, 10, 0, 0)
-    duration_minutes = 60
-
-    # Expected UTC versions
-    expected_utc_start_time = naive_start_time.replace(tzinfo=datetime.timezone.utc)
-    expected_utc_end_time = expected_utc_start_time + datetime.timedelta(minutes=duration_minutes)
-
-    mock_client.create_event.return_value = {"id": "evt_naive_test", "status": "confirmed"}
-
-    link = await linker.create_calendar_event_for_task(
-        task_id=task_id,
-        task_description=description,
-        suggested_start_time=naive_start_time,
-        duration_minutes=duration_minutes
-    )
-
-    assert link.status == "created"
-    assert link.start_time == expected_utc_start_time
-    assert link.end_time == expected_utc_end_time
-
-    mock_client.create_event.assert_called_once_with(
-        summary=f"Task: {description}",
-        start_time=expected_utc_start_time,
-        end_time=expected_utc_end_time,
-        description=f"Calendar event for task ID: {task_id}\n\n{description}"
-    )
+# Example of how to run with pytest from the root directory:
+# PYTHONPATH=. pytest tests/task_agent/test_task_calendar_linker.py
