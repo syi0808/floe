@@ -1,42 +1,89 @@
-# task_agent/task_calendar_linker.py
-
-from typing import Any, Dict, Optional
-from pydantic import BaseModel, Field
 import datetime
+import logging
+from typing import Optional, Any, Dict
+from uuid import uuid4
 
-# Placeholder for potential integration with ScheduleAgent or a calendar API
-# from ..schedule_agent.schedule_models import CalendarEvent  # Example, if such a model exists
+from pydantic import BaseModel, Field
+
+# Assuming TaskItem might be useful for context, though not directly in test signatures
+# from task_agent.task_core import TaskItem # Not strictly needed by current tests but good for future
+
+logger = logging.getLogger(__name__)
 
 class TaskCalendarLink(BaseModel):
-    '''
-    Represents a link between a task and a calendar event.
-    '''
-    task_id: str = Field(..., description="The unique identifier of the task.")
-    calendar_event_id: Optional[str] = Field(None, description="The unique identifier of the corresponding calendar event.")
-    calendar_service_provider: Optional[str] = Field(None, description="e.g., 'google_calendar', 'microsoft_outlook_calendar', 'internal_floe_calendar'")
-    event_summary: Optional[str] = Field(None, description="A brief summary or title for the calendar event.")
-    start_time: Optional[datetime.datetime] = Field(None, description="The start time of the calendar event.")
-    end_time: Optional[datetime.datetime] = Field(None, description="The end time of the calendar event.")
-    status: str = Field("pending_creation", description="Status of the link, e.g., 'pending_creation', 'created', 'failed', 'cancelled'.")
-    error_message: Optional[str] = Field(None, description="Error message if link creation failed.")
-    metadata: Dict[str, Any] = Field({}, description="Any additional metadata for the link.")
+    """
+    Represents the link between a task and a calendar event.
+    """
+    task_id: str
+    calendar_event_id: Optional[str] = None
+    calendar_service_provider: Optional[str] = None # e.g., "google_calendar", "outlook_calendar"
+    event_summary: Optional[str] = None
+    start_time: Optional[datetime.datetime] = None
+    end_time: Optional[datetime.datetime] = None
+    status: str = Field(default="pending_creation") # e.g., "pending_creation", "created", "failed", "deleted"
+    error_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None # For any other relevant info
+
+
+class BaseScheduleAgentClient:
+    """
+    Abstract base class (or interface) for a schedule agent client.
+    This helps in defining a contract for what TaskCalendarLinker expects.
+    A concrete implementation or a mock will be used.
+    """
+    async def create_event(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        description: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        # ... other common calendar event params
+    ) -> Dict[str, Any]:
+        """
+        Creates an event in the calendar.
+        Returns a dictionary with event details, minimally including 'id'.
+        """
+        raise NotImplementedError
+
+    async def delete_event(self, event_id: str) -> Dict[str, Any]:
+        """
+        Deletes an event from the calendar.
+        Returns a dictionary confirming deletion.
+        """
+        raise NotImplementedError
+
+class MockScheduleAgentClient(BaseScheduleAgentClient):
+    """
+    A mock client that simulates interactions with a calendar service.
+    Matches the one used in the tests.
+    """
+    async def create_event(
+        self,
+        summary: str,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        description: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
+        # ... other common calendar event params
+    ) -> Dict[str, Any]:
+        event_id = f"evt_mock_{uuid4()}"
+        logger.info(f"MockScheduleAgentClient: Creating event '{summary}' with id {event_id} from {start_time} to {end_time}")
+        return {"id": event_id, "status": "confirmed", "summary": summary, "start_time": start_time, "end_time": end_time}
+
+    async def delete_event(self, event_id: str) -> Dict[str, Any]:
+        logger.info(f"MockScheduleAgentClient: Deleting event {event_id}")
+        return {"status": "deleted", "deleted_event_id": event_id}
+
 
 class TaskCalendarLinker:
-    '''
-    Handles the creation and management of links between tasks and calendar events.
-    This might involve interacting with a ScheduleAgent or directly with calendar APIs.
-    '''
+    def __init__(self, schedule_agent_client: Optional[BaseScheduleAgentClient] = None):
+        # If no client is provided, use the mock client by default for now.
+        # In a real application, you might want to raise an error or have a more robust fallback.
+        self.client = schedule_agent_client if schedule_agent_client else MockScheduleAgentClient()
+        # This internal storage is a placeholder for a real database or state management solution.
+        self._links: Dict[str, TaskCalendarLink] = {}
 
-    def __init__(self, schedule_agent_client: Optional[Any] = None):
-        '''
-        Initializes the TaskCalendarLinker.
-
-        Args:
-            schedule_agent_client: An optional client or interface to interact with the ScheduleAgent.
-                                   This allows for decoupling and easier testing.
-        '''
-        self.schedule_agent_client = schedule_agent_client
-        # In a real scenario, this might load configurations or connect to services.
 
     async def create_calendar_event_for_task(
         self,
@@ -45,122 +92,169 @@ class TaskCalendarLinker:
         suggested_start_time: Optional[datetime.datetime] = None,
         suggested_end_time: Optional[datetime.datetime] = None,
         duration_minutes: Optional[int] = None,
-        calendar_id: Optional[str] = "primary" # Default calendar
+        # task_due_date: Optional[datetime.datetime] = None, # From TaskItem.due_date_utc
+        calendar_service_provider: str = "default_mock_calendar" # Example
     ) -> TaskCalendarLink:
-        '''
-        Attempts to create a calendar event to block time for a given task.
 
-        This is a placeholder implementation. True implementation would involve:
-        1. Determining the best time slot if not fully specified (potentially using ScheduleAgent).
-        2. Interacting with a calendar service (e.g., Google Calendar, Outlook) via an API
-           or by sending a request to ScheduleAgent.
-        3. Storing and returning the link information.
+        start_time = suggested_start_time
+        end_time = suggested_end_time
 
-        Args:
-            task_id: The ID of the task.
-            task_description: A description of the task to be used for the event summary.
-            suggested_start_time: Optional preferred start time for the event.
-            suggested_end_time: Optional preferred end time for the event.
-            duration_minutes: Optional duration of the event in minutes, used if end_time is not set.
-            calendar_id: Identifier for the target calendar.
-
-        Returns:
-            A TaskCalendarLink object representing the outcome.
-        '''
-        print(f"Attempting to create calendar event for task: {task_id}")
-
-        actual_start_time = suggested_start_time
-        actual_end_time = suggested_end_time
-
-        # Basic time calculation if only duration is provided
-        if suggested_start_time and duration_minutes and not suggested_end_time:
-            actual_end_time = suggested_start_time + datetime.timedelta(minutes=duration_minutes)
-        elif suggested_end_time and duration_minutes and not suggested_start_time:
-             actual_start_time = suggested_end_time - datetime.timedelta(minutes=duration_minutes)
-        #This elif was added to handle the case where suggested_start_time and suggested_end_time are None, but duration_minutes is provided.
-        #In this case, we'll default to now for the start time.
-        elif duration_minutes and not suggested_start_time and not suggested_end_time:
-            actual_start_time = datetime.datetime.now(datetime.timezone.utc)
-            actual_end_time = actual_start_time + datetime.timedelta(minutes=duration_minutes)
-
-
-        # Simulate interaction with a calendar service or ScheduleAgent
-        # In a real implementation, this would be an API call.
-        if self.schedule_agent_client:
-            try:
-                # Ensure all necessary arguments are passed to the client's method
-                response = await self.schedule_agent_client.create_event(
-                    task_id=task_id,
-                    description=task_description,
-                    start_time=actual_start_time,
-                    end_time=actual_end_time,
-                    calendar_id=calendar_id
+        if start_time and duration_minutes and not end_time:
+            end_time = start_time + datetime.timedelta(minutes=duration_minutes)
+        elif end_time and duration_minutes and not start_time:
+            start_time = end_time - datetime.timedelta(minutes=duration_minutes)
+        elif start_time and end_time and duration_minutes:
+            # All three provided, check for consistency or prioritize start+duration
+            calculated_end_time = start_time + datetime.timedelta(minutes=duration_minutes)
+            if end_time != calculated_end_time:
+                logger.warning(
+                    f"Inconsistent end_time and duration provided for task {task_id}. "
+                    f"Prioritizing start_time + duration_minutes. Original end_time: {end_time}, "
+                    f"Calculated end_time: {calculated_end_time}"
                 )
-                # Assuming response is a dict like {"id": "...", "status": "..."}
-                simulated_event_id = response.get("id") if response else None
+                end_time = calculated_end_time
+        elif duration_minutes and not start_time and not end_time:
+            # Only duration provided, default start to now (as per test)
+            start_time = datetime.datetime.now(datetime.timezone.utc)
+            end_time = start_time + datetime.timedelta(minutes=duration_minutes)
+        # elif task_due_date and not start_time and not end_time and not duration_minutes:
+        #     # Fallback to task_due_date: create a 30-min event on that day at a default time (e.g., 9 AM)
+        #     # Or an all-day event. For now, let's assume specific time info is preferred.
+        #     # This part is not explicitly in tests but a logical extension.
+        #     # For now, let's stick to what tests imply: insufficient info if not calculable.
+        #     pass
 
-                if simulated_event_id:
-                    status = "created"
-                    error_message = None
-                    print(f"Event creation via schedule_agent_client for task {task_id}: {simulated_event_id}")
-                else:
-                    status = "failed"
-                    error_message = "Failed to create event via schedule_agent_client or invalid response."
-                    print(f"Failed event creation via schedule_agent_client for task {task_id}: {error_message}")
+        if not start_time or not end_time:
+            error_msg = "Insufficient time information to create a calendar event. Provide start/end, start/duration, or end/duration."
+            logger.error(f"Task {task_id}: {error_msg}")
+            link = TaskCalendarLink(
+                task_id=task_id,
+                status="failed",
+                error_message=error_msg,
+                event_summary=f"Task: {task_description}",
+                calendar_service_provider=calendar_service_provider,
+            )
+            self._links[task_id] = link # Store the failed attempt
+            return link
 
-            except Exception as e:
-                simulated_event_id = None
-                status = "failed"
-                error_message = f"Error calling schedule_agent_client: {str(e)}"
-                print(f"Error during schedule_agent_client interaction for task {task_id}: {error_message}")
+        # Ensure times are timezone-aware (UTC, as per tests and general best practice)
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=datetime.timezone.utc)
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=datetime.timezone.utc)
 
-        elif actual_start_time and actual_end_time : # Basic placeholder if no client
-            simulated_event_id = f"evt_placeholder_{datetime.datetime.now(datetime.timezone.utc).timestamp()}"
-            status = "created" # Assume success for this placeholder
-            error_message = None
-            print(f"Simulated direct event creation for task {task_id}: {simulated_event_id}")
-        else:
-            # If not enough info to create an event
-            simulated_event_id = None
-            status = "failed"
-            error_message = "Insufficient time information (start, end, or duration) to create calendar event."
-            print(f"Failed to create calendar event for task {task_id}: {error_message}")
+        event_summary = f"Task: {task_description}"
 
+        try:
+            event_details = await self.client.create_event(
+                summary=event_summary,
+                start_time=start_time,
+                end_time=end_time,
+                description=f"Calendar event for task ID: {task_id}\n\n{task_description}"
+            )
+            calendar_event_id = event_details.get("id")
+            if calendar_event_id:
+                link = TaskCalendarLink(
+                    task_id=task_id,
+                    calendar_event_id=calendar_event_id,
+                    calendar_service_provider=calendar_service_provider,
+                    event_summary=event_summary,
+                    start_time=start_time,
+                    end_time=end_time,
+                    status="created",
+                )
+                logger.info(f"Successfully created calendar event {calendar_event_id} for task {task_id}")
+                self._links[task_id] = link # Store successful link
+                return link
+            else:
+                error_msg = "Failed to create calendar event: No event ID returned from client."
+                logger.error(f"Task {task_id}: {error_msg} (Client response: {event_details})")
+                link = TaskCalendarLink(
+                    task_id=task_id, status="failed", error_message=error_msg, event_summary=event_summary,
+                    start_time=start_time, end_time=end_time, calendar_service_provider=calendar_service_provider,
+                )
+                self._links[task_id] = link
+                return link
 
-        link = TaskCalendarLink(
-            task_id=task_id,
-            calendar_event_id=simulated_event_id,
-            calendar_service_provider="simulated_internal_calendar" if simulated_event_id else None,
-            event_summary=f"Task: {task_description}",
-            start_time=actual_start_time,
-            end_time=actual_end_time,
-            status=status,
-            error_message=error_message,
-            metadata={"created_by": "TaskCalendarLinker_placeholder"}
-        )
-        return link
+        except Exception as e:
+            error_msg = f"Exception during calendar event creation: {e}"
+            logger.exception(f"Task {task_id}: {error_msg}", exc_info=True)
+            link = TaskCalendarLink(
+                task_id=task_id, status="failed", error_message=error_msg, event_summary=event_summary,
+                start_time=start_time, end_time=end_time, calendar_service_provider=calendar_service_provider,
+            )
+            self._links[task_id] = link
+            return link
 
     async def get_task_calendar_link(self, task_id: str) -> Optional[TaskCalendarLink]:
-        '''
-        Retrieves information about a calendar link for a given task.
-        Placeholder: In a real system, this would query a database or a cache.
-        '''
-        print(f"Attempting to retrieve calendar link for task: {task_id}")
-        # This is a mock. A real implementation would query a persistent store.
-        return None
+        """
+        Retrieves the stored calendar link information for a task.
+        Placeholder: In a real app, this would fetch from a database.
+        """
+        logger.info(f"Attempting to retrieve calendar link for task_id: {task_id}")
+        # The test `test_get_task_calendar_link_placeholder` expects None.
+        # If we want to make it retrievable for other tests, we'd use:
+        # return self._links.get(task_id)
+        # For now, adhering strictly to the placeholder test's expectation.
+        # The specific test `test_get_task_calendar_link_placeholder` calls `linker_instance.get_task_calendar_link("some_task_id")`
+        # without creating a link for "some_task_id" first. So `self._links.get("some_task_id")` will be None.
+        return self._links.get(task_id)
 
-    async def remove_calendar_event_for_task(self, task_id: str, calendar_event_id: str) -> bool:
-        '''
-        Removes/cancels a calendar event associated with a task.
-        Placeholder: In a real system, this would interact with the calendar service.
-        '''
-        print(f"Attempting to remove calendar event {calendar_event_id} for task: {task_id}")
-        # This is a mock.
-        if self.schedule_agent_client:
-            # result = await self.schedule_agent_client.delete_event(calendar_event_id)
-            # return result.success
-            print(f"Simulated event deletion via schedule_agent_client for event {calendar_event_id}")
-            return True # Simulate success
 
-        print(f"Simulated direct event deletion for event {calendar_event_id}")
-        return True # Simulate success
+    async def remove_calendar_event_for_task(self, task_id: str, event_id: Optional[str] = None) -> bool:
+        """
+        Removes a calendar event associated with a task.
+        If event_id is not provided, it tries to find it from stored links.
+        """
+        effective_event_id = event_id
+        if not effective_event_id:
+            link = self._links.get(task_id)
+            if link and link.calendar_event_id:
+                effective_event_id = link.calendar_event_id
+            else:
+                logger.warning(f"No event_id provided and no link found for task {task_id} to determine which event to remove.")
+                # The test `test_remove_calendar_event_for_task_placeholder` passes ("task_id_to_remove", "event_id_to_remove")
+                # and expects True. This means that even if the link is not in self._links, if an event_id is given,
+                # it should proceed to attempt deletion.
+                if not event_id: # Still no event_id after checking link
+                     logger.error(f"Cannot remove event for task {task_id}: event_id is missing and not found in links.")
+                     return False
+
+        if not effective_event_id: # Final check if an event_id could be determined
+            logger.error(f"Event ID for task {task_id} is unknown. Cannot remove.")
+            return False # Should not happen if event_id was passed directly as in tests.
+
+        try:
+            await self.client.delete_event(effective_event_id)
+            logger.info(f"Successfully requested deletion of calendar event {effective_event_id} for task {task_id}")
+            # Update local link status if it exists
+            if task_id in self._links:
+                self._links[task_id].status = "deleted"
+                self._links[task_id].error_message = None # Clear previous errors
+            return True
+        except Exception as e:
+            logger.exception(f"Exception during calendar event deletion for task {task_id}, event {effective_event_id}: {e}", exc_info=True)
+            if task_id in self._links:
+                self._links[task_id].status = "failed_deletion"
+                self._links[task_id].error_message = str(e)
+            return False
+
+# Example of how TaskCalendarLinker could be integrated with TaskItem
+# async def schedule_task(task: TaskItem, linker: TaskCalendarLinker):
+#     if task.due_date_utc:
+#         # Example: schedule it for 1 hour starting at due_date_utc
+#         # This is just illustrative.
+#         link_info = await linker.create_calendar_event_for_task(
+#             task_id=str(task.id),
+#             task_description=task.description,
+#             suggested_start_time=task.due_date_utc,
+#             duration_minutes=60 # Default duration
+#         )
+#         if link_info.status == "created" and link_info.calendar_event_id:
+#             task.linked_schedule_id = link_info.calendar_event_id
+#             # Here you would typically update the task in your task storage (e.g., task_core.update_task)
+#             logger.info(f"Task {task.id} linked to calendar event {task.linked_schedule_id}")
+#         else:
+#             logger.error(f"Failed to schedule task {task.id}: {link_info.error_message}")
+#     else:
+#         logger.info(f"Task {task.id} has no due date, not scheduling.")
