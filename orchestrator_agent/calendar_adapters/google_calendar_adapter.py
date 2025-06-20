@@ -12,16 +12,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-try:
-    from task_agent.task_calendar_linker import CalendarEvent
-except ImportError:
-    import sys
-    project_root_for_import = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    if project_root_for_import not in sys.path:
-        sys.path.insert(0, project_root_for_import)
-    from task_agent.task_calendar_linker import CalendarEvent
-
-from .base_adapter import CalendarAdapter
+# CalendarEvent is imported from .base_adapter below
+from .base_adapter import CalendarAdapter, CalendarEvent
 
 # Default paths, assuming execution from project root or paths are absolute
 DEFAULT_CREDENTIALS_FILE = "credentials.json"
