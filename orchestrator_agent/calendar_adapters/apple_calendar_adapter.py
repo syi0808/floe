@@ -6,17 +6,8 @@ from typing import Tuple, Optional, List, Dict, Any
 import shlex
 import platform # For platform check in connect
 
-try:
-    from task_agent.task_calendar_linker import CalendarEvent
-except ImportError:
-    import sys
-    import os
-    project_root_for_import = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    if project_root_for_import not in sys.path:
-        sys.path.insert(0, project_root_for_import)
-    from task_agent.task_calendar_linker import CalendarEvent
-
-from .base_adapter import CalendarAdapter # Import the protocol
+# CalendarEvent is imported from .base_adapter below
+from .base_adapter import CalendarAdapter, CalendarEvent # Import the protocol
 
 # --- Constants ---
 FLOE_EVENT_ID_KEY = "FLOE_EVENT_ID"
