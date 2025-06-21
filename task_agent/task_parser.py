@@ -3,9 +3,20 @@ from typing import Optional, Dict, Any, List
 # Check if this import is correct based on the actual 'agents' SDK structure
 # It might be 'from agents_sdk import Agent, Runner, Tool' or similar
 # For now, let's assume 'from agents import Agent, Runner, Tool' is correct as per docs
-from agents import Agent, Runner, Tool
+from agents import Agent, Runner
 
-class CreateTaskFromDetailsTool(Tool):
+
+class SimpleTool:
+    """Minimal Tool base class to avoid dependency issues during tests."""
+    def __init__(self, name: str, description: str, parameters: Dict[str, Any]):
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError
+
+class CreateTaskFromDetailsTool(SimpleTool):
     def __init__(self):
         self.name = "create_task_from_details"
         self.description = "Extracts task details like description, due date, and priority from natural language."

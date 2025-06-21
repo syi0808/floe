@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Literal, Dict, Any # Added Any
+from typing import List, Optional, Literal, Dict, Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, ValidationError # Added ValidationError
+from pydantic import BaseModel, Field, ValidationError
+
+# Alias for valid task statuses used across the codebase
+TaskStatus = Literal['todo', 'in-progress', 'done', 'archived']
 
 # In-memory storage for tasks
 _task_storage: Dict[str, 'TaskItem'] = {} # Key: str(task.id), Value: TaskItem instance
@@ -19,7 +22,7 @@ class TaskItem(BaseModel):
     due_date_utc: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     priority: int = Field(default=2, ge=1, le=4)  # 1=Highest, 4=Lowest
-    status: Literal['todo', 'in-progress', 'done', 'archived'] = 'todo'
+    status: TaskStatus = 'todo'
     project_tags: Optional[List[str]] = None
     linked_schedule_id: Optional[str] = None
 
@@ -40,7 +43,7 @@ def create_task(
     due_date_utc: Optional[datetime] = None,
     priority: int = 2, # Default priority from TaskItem
     project_tags: Optional[List[str]] = None,
-    status: Literal['todo', 'in-progress', 'done', 'archived'] = 'todo' # Default status
+    status: TaskStatus = 'todo'
 ) -> TaskItem:
     task = TaskItem(
         user_id=user_id,
@@ -84,7 +87,7 @@ def delete_task(task_id: str) -> bool:
 
 def list_tasks(
     user_id: str,
-    status: Optional[Literal['todo', 'in-progress', 'done', 'archived']] = None,
+    status: Optional[TaskStatus] = None,
     project_tag: Optional[str] = None,
     due_date_start: Optional[datetime] = None,
     due_date_end: Optional[datetime] = None
