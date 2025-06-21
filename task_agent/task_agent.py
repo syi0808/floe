@@ -489,9 +489,20 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-    def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        # Extract the request from entities or use empty string as fallback
-        request = entities.get('request', '')
+    def process(self, entities: Any, user_id: str) -> AgentResponse:
+        """Process a user request.
+
+        Historically this method accepted just the command string. The current
+        version expects a dictionary with a ``request`` key. To maintain
+        backwards compatibility with older callers (and the unit tests) we
+        support both.
+        """
+
+        # Accept both a raw command string or a dictionary containing the request
+        if isinstance(entities, str):
+            request = entities
+        else:
+            request = entities.get('request', '')
         
         try:
             parts = shlex.split(request.strip())
