@@ -18,7 +18,13 @@ class ConversationAgent:
         self.dialogue_manager.add_user_input(user_input)
 
         intent = self.intent_recognizer.recognize_intent(user_input.text)
-        response_text = self.response_generator.generate_response(intent)
+        language = None
+        if user_input.metadata:
+            language = user_input.metadata.get("language")
+
+        response_text = self.response_generator.generate_response(
+            intent, language=language or "en"
+        )
 
         agent_response = AgentResponse(text=response_text)
         self.dialogue_manager.add_agent_response(agent_response)

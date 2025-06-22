@@ -8,6 +8,9 @@ class TestIntentRecognizer(unittest.TestCase):
     def test_greeting(self):
         self.assertEqual(self.recognizer.recognize_intent("Hello there"), "greeting")
 
+    def test_greeting_korean(self):
+        self.assertEqual(self.recognizer.recognize_intent("안녕하세요"), "greeting")
+
     def test_goodbye(self):
         self.assertEqual(self.recognizer.recognize_intent("bye"), "goodbye")
 
