@@ -1,0 +1,36 @@
+import datetime
+from typing import Optional, Dict, Any
+from .common_types import UserInput
+
+class InputHandler:
+    def __init__(self):
+        pass
+
+    def process_input(self, text_input: str, metadata: Optional[Dict[str, Any]] = None) -> UserInput:
+        """
+        Processes raw text input into a UserInput object.
+        Basic implementation, can be expanded for more preprocessing.
+        """
+        # Basic preprocessing: strip leading/trailing whitespace
+        processed_text = text_input.strip()
+
+        return UserInput(
+            text=processed_text,
+            timestamp=datetime.datetime.utcnow(),
+            metadata=metadata
+        )
+
+if __name__ == '__main__':
+    # Example Usage
+    handler = InputHandler()
+    user_query = "  Hello, how are you today?   "
+    parsed_input = handler.process_input(user_query, metadata={"source": "cli"})
+    print(f"Original: '{user_query}'")
+    print(f"Processed Text: '{parsed_input.text}'")
+    print(f"Timestamp: {parsed_input.timestamp}")
+    print(f"Metadata: {parsed_input.metadata}")
+
+    parsed_input_no_meta = handler.process_input("Another query")
+    print(f"Processed Text: '{parsed_input_no_meta.text}'")
+    print(f"Timestamp: {parsed_input_no_meta.timestamp}")
+    print(f"Metadata: {parsed_input_no_meta.metadata}")
