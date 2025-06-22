@@ -101,14 +101,12 @@ class TaskAgent(BaseAgent):
                     return {}, "Error: Status value missing."
             elif arg_lower == "tags" or arg_lower == "tag": # project_tag in TaskItem
                 if i + 1 < len(args):
-                    # Assuming tags are provided as a single string, space-separated
-                    # task_core.create_task and update_task expect project_tag as a single string for now.
-                    # If multiple tags were stored as List[str] in core, this would need adjustment.
-                    # For now, we'll take the first tag if multiple are given in the string,
-                    # or the user should quote "tag1 tag2" if that's meant as one tag.
-                    # Based on current core.TaskItem, it's `project_tag: Optional[str]`.
-                    # So we'll use the provided string as is.
-                    attributes['project_tags'] = [args[i+1]] # Ensure this is a list
+                    # Tags are supplied as a single argument following "tags" or "tag".
+                    # The create_task and update_task functions expect `project_tags`
+                    # to be a list of strings, so we wrap the provided argument in a
+                    # list. Multi-word tags should still be quoted when invoking the
+                    # command so they are treated as a single item.
+                    attributes['project_tags'] = [args[i+1]]  # Ensure this is a list
                     i += 1
                 else:
                     return {}, "Error: Tags value missing."
