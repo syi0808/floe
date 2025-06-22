@@ -327,7 +327,7 @@ async def test_mcp_integration():
 ## 🔧 개발 환경 설정
 
 ### 필수 도구 (MVP)
-- **Python**: 3.13+
+- **Python**: 3.10+
 - **패키지 매니저**: uv
 - **LLM**: OpenAI API (또는 llama-cpp-python)
 - **MCP 서버들**: filesystem, database, browser 등
