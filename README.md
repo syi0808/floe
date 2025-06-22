@@ -93,7 +93,7 @@ The primary entry point for demonstrating the current capabilities is the intera
     *   `base_agent.py`: Defines the `BaseAgent` abstract class for all agents.
 *   `memory_manager_agent/`: Contains the memory management logic.
     *   `memory_manager.py`: Basic `MemoryManagerAgent` implementation.
-*   `docs/`: Contains design documents and plans.
+*   `docs/`: Contains current design documents and plans. Older planning notes and work summaries live in `docs/archive/`.
 *   `tests/`: Contains unit and integration tests.
 *   `README.md`: This file.
 
