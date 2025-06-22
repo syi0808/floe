@@ -3,6 +3,9 @@ from orchestrator_agent.orchestrator_core import OrchestrationEngine, AgentRespo
 from orchestrator_agent.base_agent import BaseAgent
 from memory_manager_agent.memory_manager import MemoryManagerAgent # Import MemoryManagerAgent
 from conversation_agent.orchestrator_wrapper import ConversationAgentWrapper
+from inbox_agent.inbox_agent import InboxAgent
+from health_agent.health_agent import HealthAgent
+from insight_agent.insight_agent import InsightAgent
 from typing import Dict, Any, List
 
 # Refactored Mock agent classes to inherit from BaseAgent
@@ -51,6 +54,18 @@ def mock_task_agent_fixture():
     return MockTaskAgent()
 
 @pytest.fixture
+def inbox_agent_fixture():
+    return InboxAgent()
+
+@pytest.fixture
+def health_agent_fixture():
+    return HealthAgent()
+
+@pytest.fixture
+def insight_agent_fixture():
+    return InsightAgent()
+
+@pytest.fixture
 def mock_memory_manager_fixture(): # Keep name for consistency, but it's the real one
     return MemoryManagerAgent()
 
@@ -68,6 +83,23 @@ def orchestration_engine_with_conv_fixture(mock_schedule_agent_fixture: MockSche
     engine.register_agent(mock_schedule_agent_fixture)
     engine.register_agent(mock_task_agent_fixture)
     engine.register_agent(ConversationAgentWrapper())
+    return engine
+
+@pytest.fixture
+def orchestration_engine_with_all_agents(
+    mock_schedule_agent_fixture: MockScheduleAgent,
+    mock_task_agent_fixture: MockTaskAgent,
+    inbox_agent_fixture: InboxAgent,
+    health_agent_fixture: HealthAgent,
+    insight_agent_fixture: InsightAgent,
+    mock_memory_manager_fixture: MemoryManagerAgent,
+):
+    engine = OrchestrationEngine(memory_manager_client=mock_memory_manager_fixture)
+    engine.register_agent(mock_schedule_agent_fixture)
+    engine.register_agent(mock_task_agent_fixture)
+    engine.register_agent(inbox_agent_fixture)
+    engine.register_agent(health_agent_fixture)
+    engine.register_agent(insight_agent_fixture)
     return engine
 
 def test_route_request_schedule_intent(orchestration_engine_fixture: OrchestrationEngine):
@@ -169,3 +201,39 @@ def test_route_request_missing_agent(mock_memory_manager_fixture: MemoryManagerA
     assert response_task['data'] is None
     assert response_task['message'] == "Unknown intent or no agent available for intent: create_task"
     assert response_task['source_agent'] == 'OrchestratorAgent'
+
+
+def test_inbox_agent_routing(orchestration_engine_with_all_agents: OrchestrationEngine):
+    intent_data = {'intent': 'process_email', 'entities': {'subject': 'Hello'}}
+    user_id = 'inbox_user'
+    response = orchestration_engine_with_all_agents.route_request(intent_data, user_id)
+
+    assert response['status'] == 'success'
+    assert response['data']['message'] == 'Successfully routed to inbox_agent for intent process_email'
+    agent_resp = response['data']['agent_response']
+    assert agent_resp['source_agent'] == 'inbox_agent'
+    assert agent_resp['data']['received']['subject'] == 'Hello'
+
+
+def test_health_agent_routing(orchestration_engine_with_all_agents: OrchestrationEngine):
+    intent_data = {'intent': 'log_health_data', 'entities': {'steps': 1000}}
+    user_id = 'health_user'
+    response = orchestration_engine_with_all_agents.route_request(intent_data, user_id)
+
+    assert response['status'] == 'success'
+    assert response['data']['message'] == 'Successfully routed to health_agent for intent log_health_data'
+    agent_resp = response['data']['agent_response']
+    assert agent_resp['source_agent'] == 'health_agent'
+    assert agent_resp['data']['received']['steps'] == 1000
+
+
+def test_insight_agent_routing(orchestration_engine_with_all_agents: OrchestrationEngine):
+    intent_data = {'intent': 'generate_insight_report', 'entities': {'period': '2025-W20'}}
+    user_id = 'insight_user'
+    response = orchestration_engine_with_all_agents.route_request(intent_data, user_id)
+
+    assert response['status'] == 'success'
+    assert response['data']['message'] == 'Successfully routed to insight_agent for intent generate_insight_report'
+    agent_resp = response['data']['agent_response']
+    assert agent_resp['source_agent'] == 'insight_agent'
+    assert agent_resp['data']['received']['period'] == '2025-W20'
