@@ -1,5 +1,8 @@
 import datetime
 from typing import Optional, Dict, Any
+
+from langdetect import detect, LangDetectException
+
 from .common_types import UserInput
 
 class InputHandler:
@@ -13,6 +16,20 @@ class InputHandler:
         """
         # Basic preprocessing: strip leading/trailing whitespace
         processed_text = text_input.strip()
+
+        language_code = None
+        try:
+            if processed_text:
+                language_code = detect(processed_text)
+        except LangDetectException:
+            language_code = None
+
+        if metadata is None:
+            metadata = {}
+        else:
+            metadata = dict(metadata)
+        if language_code:
+            metadata["language"] = language_code
 
         return UserInput(
             text=processed_text,

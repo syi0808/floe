@@ -7,9 +7,15 @@ class IntentRecognizer:
     def __init__(self):
         # Mapping of intent names to keyword lists
         self._keyword_map = {
-            "greeting": ["hello", "hi", "hey"],
-            "goodbye": ["bye", "goodbye", "see you"],
-            "request_task_creation": ["create task", "add task", "new task"],
+            "greeting": ["hello", "hi", "hey", "안녕하세요", "안녕"],
+            "goodbye": ["bye", "goodbye", "see you", "안녕히 가세요", "잘 가"],
+            "request_task_creation": [
+                "create task",
+                "add task",
+                "new task",
+                "할 일 생성",
+                "할 일 추가",
+            ],
         }
 
     def recognize_intent(self, text: str) -> str:
