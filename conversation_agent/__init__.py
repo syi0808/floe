@@ -3,6 +3,7 @@ from .dialogue_manager import DialogueManager
 from .intent_recognizer import IntentRecognizer
 from .response_generator import ResponseGenerator
 from .conversation_agent import ConversationAgent
+from .orchestrator_wrapper import ConversationAgentWrapper
 
 __all__ = [
     "InputHandler",
@@ -10,4 +11,5 @@ __all__ = [
     "IntentRecognizer",
     "ResponseGenerator",
     "ConversationAgent",
+    "ConversationAgentWrapper",
 ]

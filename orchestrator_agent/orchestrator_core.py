@@ -42,43 +42,26 @@ class OrchestrationEngine:
         intent = intent_data.get('intent')
         entities = intent_data.get('entities')
 
-        # Handle general_conversation first
-        if intent == 'general_conversation':
-            return AgentResponse(
-                status='success',
-                data={'response': intent_data.get('response_text')},
-                message='General conversation handled by orchestrator.',
-                source_agent='OrchestratorAgent'
-            )
-
-        # Dynamic Agent Dispatch
+        # Dynamic Agent Dispatch (including general conversation if registered)
         agent_name = self.intent_to_agent_map.get(intent)
 
         if agent_name:
             agent_instance = self.agents_map.get(agent_name)
             if agent_instance:
-                # Assume the agent instance has a method like process(entities, user_id)
-                # This is a MOCK CALL simulation
                 try:
-                    # mock_agent_response_data = agent_instance.process(
-                    #     entities=entities,
-                    #     user_id=user_id
-                    # )
-                    # For now, we'll just indicate success and pass entities.
-                    # In a real implementation, agent_instance.process would be called.
-                    # If the mock agents provided in the example are used, they do have 'process'.
-                    # To make this runnable with current mocks if __name__ == "__main__": is uncommented,
-                    # we can actually call process if it exists.
+                    call_entities = entities or {}
+                    if intent == 'general_conversation' and 'response_text' in intent_data:
+                        call_entities.setdefault('text', intent_data['response_text'])
                     agent_specific_response = {}
                     if hasattr(agent_instance, 'process') and callable(getattr(agent_instance, 'process')):
-                        agent_specific_response = agent_instance.process(entities=entities, user_id=user_id)
+                        agent_specific_response = agent_instance.process(entities=call_entities, user_id=user_id)
 
                     return AgentResponse(
                         status='success',
                         data={
                             'message': f'Successfully routed to {agent_name} for intent {intent}',
-                            'entities': entities,
-                            'agent_response': agent_specific_response # Contains data from mock agent's process method
+                            'entities': call_entities,
+                            'agent_response': agent_specific_response
                         },
                         message=f'{intent} request processed by orchestrator via {agent_name}.',
                         source_agent='OrchestratorAgent'
@@ -91,15 +74,20 @@ class OrchestrationEngine:
                         source_agent='OrchestratorAgent'
                     )
             else:
-                # This case implies an internal inconsistency
                 return AgentResponse(
                     status='error',
                     data=None,
                     message=f"Internal configuration error: Agent instance not found for agent name '{agent_name}' mapped to intent '{intent}'.",
                     source_agent='OrchestratorAgent'
                 )
+        elif intent == 'general_conversation':
+            return AgentResponse(
+                status='success',
+                data={'response': intent_data.get('response_text')},
+                message='General conversation handled by orchestrator.',
+                source_agent='OrchestratorAgent'
+            )
         else:
-            # No agent is registered for this specific intent
             return AgentResponse(
                 status='error',
                 data=None,
