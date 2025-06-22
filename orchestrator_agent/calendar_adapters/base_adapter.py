@@ -1,8 +1,18 @@
 # orchestrator_agent/calendar_adapters/base_adapter.py
 from __future__ import annotations
 
-from typing import Protocol, Optional, List, runtime_checkable
+from typing import Protocol, Optional, List, runtime_checkable, TYPE_CHECKING
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from task_agent.task_calendar_linker import CalendarEvent
+else:
+    # Runtime import exposes CalendarEvent for consumer modules while avoiding
+    # circular import issues during initialization.
+    try:  # pragma: no cover
+        from task_agent.task_calendar_linker import CalendarEvent
+    except Exception:  # pragma: no cover - fallback if partial initialization fails
+        CalendarEvent = object  # type: ignore
 
 # NOTE:
 # ``CalendarEvent`` is defined in ``task_agent.task_calendar_linker``.  Importing
