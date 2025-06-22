@@ -5,8 +5,6 @@ import platform # For platform check for Apple Calendar
 from typing import Optional # Import Optional
 
 from .base_adapter import CalendarAdapter
-from .google_calendar_adapter import GoogleCalendarAdapter
-from .apple_calendar_adapter import AppleCalendarAdapter
 
 # Environment variable to determine which calendar backend to use
 CALENDAR_BACKEND_ENV_VAR = "CALENDAR_BACKEND"
@@ -37,6 +35,7 @@ def get_calendar_adapter(backend_type: Optional[str] = None) -> CalendarAdapter:
     print(f"Calendar Adapter Factory: Selected backend type: '{backend_type}'")
 
     if backend_type == "google":
+        from .google_calendar_adapter import GoogleCalendarAdapter
         # Credentials/token paths for GoogleCalendarAdapter can be passed here if they
         # are not hardcoded or if they come from a central config.
         # For now, GoogleCalendarAdapter uses defaults like "credentials.json".
@@ -44,6 +43,7 @@ def get_calendar_adapter(backend_type: Optional[str] = None) -> CalendarAdapter:
     elif backend_type == "apple":
         if platform.system() != "Darwin":
             raise RuntimeError("Apple Calendar adapter can only be used on macOS.")
+        from .apple_calendar_adapter import AppleCalendarAdapter
         # Default calendar name for AppleCalendarAdapter can be configured here if needed.
         return AppleCalendarAdapter()
     # Add other adapters here as they are implemented
@@ -52,9 +52,4 @@ def get_calendar_adapter(backend_type: Optional[str] = None) -> CalendarAdapter:
     else:
         raise ValueError(f"Unsupported calendar backend type: {backend_type}")
 
-__all__ = [
-    "CalendarAdapter",
-    "GoogleCalendarAdapter",
-    "AppleCalendarAdapter",
-    "get_calendar_adapter",
-]
+__all__ = ["CalendarAdapter", "get_calendar_adapter"]

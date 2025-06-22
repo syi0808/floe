@@ -7,7 +7,8 @@ import shlex
 import platform # For platform check in connect
 
 # CalendarEvent is imported from .base_adapter below
-from .base_adapter import CalendarAdapter, CalendarEvent # Import the protocol
+from .base_adapter import CalendarAdapter
+from task_agent.task_calendar_linker import CalendarEvent
 
 # --- Constants ---
 FLOE_EVENT_ID_KEY = "FLOE_EVENT_ID"
