@@ -3,8 +3,11 @@ from dotenv import load_dotenv
 from orchestrator_agent.intent_analyzer import extract_intent_and_entities
 from orchestrator_agent.orchestrator_core import OrchestrationEngine, AgentResponse
 from orchestrator_agent.base_agent import BaseAgent
-from schedule_agent.schedule_agent import ScheduleAgent # Import ScheduleAgent
-from memory_manager_agent.memory_manager import MemoryManagerAgent # Assuming this path is correct
+from schedule_agent.schedule_agent import ScheduleAgent
+from memory_manager_agent.memory_manager import MemoryManagerAgent
+from inbox_agent.inbox_agent import InboxAgent
+from health_agent.health_agent import HealthAgent
+from insight_agent.insight_agent import InsightAgent
 
 from typing import Dict, Any, List # Ensure these are imported
 
@@ -83,11 +86,17 @@ def main():
     engine = OrchestrationEngine(memory_manager_client=memory_manager)
 
     # Instantiate and register mock agents
-    schedule_agent = ScheduleAgent() # Use actual ScheduleAgent
+    schedule_agent = ScheduleAgent()
     task_agent = MockMainTaskAgent()
+    inbox_agent = InboxAgent()
+    health_agent = HealthAgent()
+    insight_agent = InsightAgent()
 
     engine.register_agent(schedule_agent)
     engine.register_agent(task_agent)
+    engine.register_agent(inbox_agent)
+    engine.register_agent(health_agent)
+    engine.register_agent(insight_agent)
 
     print("Registered agents:")
     for agent_name, agent_instance in engine.agents_map.items():
