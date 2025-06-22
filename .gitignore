@@ -1,0 +1,14 @@
+# Python bytecode directories
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment files
+.env
+
+# Misc
+.DS_Store
+
