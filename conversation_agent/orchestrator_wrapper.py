@@ -18,12 +18,25 @@ class ConversationAgentWrapper(BaseAgent):
         return ["general_conversation"]
 
     def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        # Expect the text under 'text' or 'response_text'
-        text = entities.get("text") or entities.get("response_text") or ""
-        resp = self.agent.handle_message(text)
-        return AgentResponse(
-            status="success",
-            data={"response": resp.text},
-            message="Conversation handled.",
-            source_agent=self.name,
-        )
+        try:
+            # Expect the text under 'text' or 'response_text'
+            text = entities.get("text") or entities.get("response_text") or ""
+            resp = self.agent.handle_message(text)
+
+            # Validate response has expected attributes
+            if not hasattr(resp, 'text'):
+                raise AttributeError("ConversationAgent response missing 'text' attribute")
+
+            return AgentResponse(
+                status="success",
+                data={"response": resp.text},
+                message="Conversation handled.",
+                source_agent=self.name,
+            )
+        except Exception as e:
+            return AgentResponse(
+                status="error",
+                data=None,
+                message=f"Conversation processing failed: {str(e)}",
+                source_agent=self.name,
+            )
