@@ -48,7 +48,7 @@ Floe는 **멀티 에이전트 기반 개인화된 AI 비서**로, 자연어를 �
 - **역할**: 사용자 의도 분석 및 Agent 라우팅
 - **구현**: OpenAI Agents SDK 기반
 - **MVP 기능**: 기본적인 의도 분류 (일정/태스크/질문)
-- **명세서**: [ochestrator-agent.md](mdc:docs/ochestrator-agent.md)
+ - **명세서**: [orchestrator-agent.md](mdc:docs/orchestrator-agent.md)
 
 ### 2. 🧠 MemoryManagerAgent  
 - **역할**: 기본적인 대화 기록 저장/검색
@@ -97,7 +97,7 @@ Floe는 **멀티 에이전트 기반 개인화된 AI 비서**로, 자연어를 �
 ├── pyproject.toml             # 프로젝트 설정 및 의존성
 ├── docs/                      # Agent 명세서
 │   ├── product-overview.md    # 제품 개요
-│   ├── ochestrator-agent.md   # 오케스트레이터 명세
+│   ├── orchestrator-agent.md  # 오케스트레이터 명세
 │   ├── memory-manager-agent.md # 메모리 관리자 명세
 │   ├── conversation-agent.md  # 대화 에이전트 명세
 │   ├── schedule-agent.md      # 일정 에이전트 명세
