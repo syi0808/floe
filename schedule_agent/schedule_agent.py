@@ -45,7 +45,9 @@ class ScheduleAgent(BaseAgent):
         # 5. Create the event.
         # For now, we'll just confirm processing.
 
-        confirmation_message = f"Event '{title}' with {', '.join(participants)} on {date} at {time} notionally processed."
+        confirmation_message = (
+            f"Event '{title}' with {', '.join(participants)} on {date} at {time} notionally processed."
+        )
         event_id_mock = f"evt_mock_{hash(str(entities))%10000}"
 
         print(f"{self.name}: {confirmation_message}")
