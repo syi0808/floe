@@ -2,6 +2,7 @@ import pytest
 from orchestrator_agent.orchestrator_core import OrchestrationEngine, AgentResponse
 from orchestrator_agent.base_agent import BaseAgent
 from memory_manager_agent.memory_manager import MemoryManagerAgent # Import MemoryManagerAgent
+from conversation_agent.orchestrator_wrapper import ConversationAgentWrapper
 from typing import Dict, Any, List
 
 # Refactored Mock agent classes to inherit from BaseAgent
@@ -61,6 +62,14 @@ def orchestration_engine_fixture(mock_schedule_agent_fixture: MockScheduleAgent,
         engine.register_agent(mock_task_agent_fixture)
         return engine
 
+@pytest.fixture
+def orchestration_engine_with_conv_fixture(mock_schedule_agent_fixture: MockScheduleAgent, mock_task_agent_fixture: MockTaskAgent, mock_memory_manager_fixture: MemoryManagerAgent):
+    engine = OrchestrationEngine(memory_manager_client=mock_memory_manager_fixture)
+    engine.register_agent(mock_schedule_agent_fixture)
+    engine.register_agent(mock_task_agent_fixture)
+    engine.register_agent(ConversationAgentWrapper())
+    return engine
+
 def test_route_request_schedule_intent(orchestration_engine_fixture: OrchestrationEngine):
     intent_data = {'intent': 'extract_schedule_info', 'entities': {'title': 'Meeting', 'date': 'Tomorrow'}}
     user_id = 'user123'
@@ -118,6 +127,17 @@ def test_route_request_general_conversation(orchestration_engine_fixture: Orches
     assert response['data'] == {'response': 'Hello, how are you?'}
     assert response['message'] == 'General conversation handled by orchestrator.'
     assert response['source_agent'] == 'OrchestratorAgent'
+
+def test_general_conversation_routed_to_agent(orchestration_engine_with_conv_fixture: OrchestrationEngine):
+    intent_data = {'intent': 'general_conversation', 'response_text': 'Hi there'}
+    user_id = 'conv_user'
+    response = orchestration_engine_with_conv_fixture.route_request(intent_data, user_id)
+
+    assert response['status'] == 'success'
+    assert 'agent_response' in response['data']
+    agent_resp = response['data']['agent_response']
+    assert agent_resp['source_agent'] == 'conversation_agent'
+    assert agent_resp['data']['response'] == 'Hello! How can I assist you today?'
 
 def test_route_request_unknown_intent(orchestration_engine_fixture: OrchestrationEngine):
     intent_data = {'intent': 'some_unknown_intent', 'entities': {}}
