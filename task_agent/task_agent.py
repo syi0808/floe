@@ -125,7 +125,7 @@ class TaskAgent(BaseAgent):
 
         return attributes, None
 
-    def _handle_create_task(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_create_task(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         """Handles 'add task' or 'create task' commands."""
         if not args:
             return AgentResponse(
@@ -135,8 +135,37 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-        description = args[0] # First argument is always description
-        remaining_args = args[1:]
+        keywords = {"priority", "due", "status", "tags", "tag", "description"}
+
+        if raw_args is not None:
+            # raw_args preserves any quoting from the original request
+            import re
+            pattern = r"\b(?:" + "|".join(keywords) + r")\b"
+            m = re.search(pattern, raw_args)
+            if m:
+                description = raw_args[:m.start()].strip()
+                remaining_args = shlex.split(raw_args[m.start():])
+            else:
+                description = raw_args.strip()
+                remaining_args = []
+            if (description.startswith('"') and description.endswith('"')) or (description.startswith("'") and description.endswith("'")):
+                description = description[1:-1]
+        else:
+            # Fallback to token based parsing
+            desc_tokens: List[str] = []
+            i = 0
+            while i < len(args) and args[i].lower() not in keywords:
+                desc_tokens.append(args[i])
+                i += 1
+            if not desc_tokens:
+                return AgentResponse(
+                    status='error',
+                    data=None,
+                    message="Error: No task description provided. Usage: add task \"<description>\" [priority <num>] [due <date>] [tags <tag>]",
+                    source_agent=self.name
+                )
+            description = " ".join(desc_tokens)
+            remaining_args = args[i:]
 
         attributes, error = self._parse_common_task_attributes(remaining_args)
         if error:
@@ -194,7 +223,7 @@ class TaskAgent(BaseAgent):
         lines.append(f"  Project Tags: {', '.join(task.project_tags) if task.project_tags else 'N/A'}")
         return "\n".join(lines)
 
-    def _handle_get_task(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_get_task(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         if not args:
             return AgentResponse(
                 status='error',
@@ -214,7 +243,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-        task = core.get_task(task_id=task_id_str) # task_core's get_task doesn't take user_id
+        task = core.get_task(task_id=task_id_str, user_id=user_id)
         if task:
             return AgentResponse(
                 status='success',
@@ -230,7 +259,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-    def _handle_update_task(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_update_task(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         if not args:
             return AgentResponse(
                 status='error',
@@ -284,7 +313,7 @@ class TaskAgent(BaseAgent):
                 # If status is changed to something other than 'done', clear completed_at
                 updates['completed_at'] = None
 
-            updated_task = core.update_task(task_id=task_id_str, updates=updates)
+            updated_task = core.update_task(task_id=task_id_str, user_id=user_id, updates=updates)
             if updated_task:
                 return AgentResponse(
                     status='success',
@@ -315,7 +344,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-    def _handle_complete_task(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_complete_task(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         if not args:
             return AgentResponse(
                 status='error',
@@ -339,7 +368,7 @@ class TaskAgent(BaseAgent):
             "completed_at": datetime.now(timezone.utc)
         }
         try:
-            updated_task = core.update_task(task_id=task_id_str, updates=updates)
+            updated_task = core.update_task(task_id=task_id_str, user_id=user_id, updates=updates)
             if updated_task:
                 return AgentResponse(
                     status='success',
@@ -369,7 +398,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-    def _handle_delete_task(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_delete_task(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         if not args:
             return AgentResponse(
                 status='error',
@@ -388,7 +417,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-        if core.delete_task(task_id=task_id_str): # task_core's delete_task doesn't take user_id
+        if core.delete_task(task_id=task_id_str, user_id=user_id):
             return AgentResponse(
                 status='success',
                 data={'task_id': task_id_str},
@@ -404,7 +433,7 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-    def _handle_list_tasks(self, args: List[str], user_id: str) -> AgentResponse:
+    def _handle_list_tasks(self, args: List[str], user_id: str, raw_args: str | None = None) -> AgentResponse:
         """Handles 'list tasks' or 'show tasks' commands."""
         status_filter: Optional[str] = None
         project_tag_filter: Optional[str] = None
@@ -505,20 +534,10 @@ class TaskAgent(BaseAgent):
         try:
             parts = shlex.split(request.strip())
         except ValueError as e:
-            return AgentResponse(
-                status='error',
-                data=None,
-                message=f"Error parsing request: {e}. Ensure quotes are properly matched.",
-                source_agent=self.name
-            )
+            return f"Error parsing request: {e}. Ensure quotes are properly matched."
 
         if not parts:
-            return AgentResponse(
-                status='error',
-                data=None,
-                message="Please provide a command.",
-                source_agent=self.name
-            )
+            return "Please provide a command."
 
         # Normalize command: combine first two parts if they form a known multi-word command
         raw_command = parts[0].lower()
@@ -580,14 +599,11 @@ class TaskAgent(BaseAgent):
              # If "get" or "list" or "show" are typed alone, what should they do?
              # Current map handles "get task <id>", "list tasks".
              # "get" alone is not defined, "list" alone is not defined.
-            return AgentResponse(
-                status='error',
-                data=None,
-                message=f"Sorry, I didn't understand the command '{parts[0]}'. Try commands like 'add task', 'list tasks', 'get task <id>', etc.",
-                source_agent=self.name
-            )
+            return f"Sorry, I didn't understand the command '{parts[0]}'. Try commands like 'add task', 'list tasks', 'get task <id>', etc."
 
         handler_method, needs_id, is_list_alias = command_map[command_to_execute]
+        start_idx = request.lower().index(command_to_execute) + len(command_to_execute)
+        raw_args_str = request[start_idx:].strip()
 
         # Special handling for "get task", "show task", "list tasks", "show tasks", "get tasks"
         # If the command is an alias for list tasks (e.g. "show tasks") AND there are no arguments,
@@ -597,26 +613,16 @@ class TaskAgent(BaseAgent):
         # If it's "get tasks" (is_list_alias=True), it goes to _handle_list_tasks.
 
         if needs_id:
-            if not args_for_handler: # ID is missing
-                return AgentResponse(
-                    status='error',
-                    data=None,
-                    message=f"Error: Task ID missing for command '{command_to_execute}'. Usage: {command_to_execute} <task_id> [options]",
-                    source_agent=self.name
-                )
+            if not args_for_handler:
+                return f"Error: Task ID missing for command '{command_to_execute}'. Usage: {command_to_execute} <task_id> [options]"
             # For commands like "get task <id>", the ID is the first arg. Handler expects all args.
-            return handler_method(args_for_handler, user_id)
+            return handler_method(args_for_handler, user_id, raw_args_str)["message"]
         elif is_list_alias:
             # For commands like "list tasks [filters]", handler expects filter args.
-            return handler_method(args_for_handler, user_id)
+            return handler_method(args_for_handler, user_id, raw_args_str)["message"]
         else: # Create command like "add task <desc> [options]"
             # The first arg is description, not an ID.
-            return handler_method(args_for_handler, user_id)
+            return handler_method(args_for_handler, user_id, raw_args_str)["message"]
 
         # This part should ideally not be reached if the map and logic are correct
-        return AgentResponse(
-            status='error',
-            data=None,
-            message=f"Sorry, I'm having trouble understanding '{request}'. Please try again.",
-            source_agent=self.name
-        )
+        return f"Sorry, I'm having trouble understanding '{request}'. Please try again."

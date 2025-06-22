@@ -13,7 +13,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # CalendarEvent is imported from .base_adapter below
-from .base_adapter import CalendarAdapter, CalendarEvent
+from .base_adapter import CalendarAdapter
+from task_agent.task_calendar_linker import CalendarEvent
 
 # Default paths, assuming execution from project root or paths are absolute
 DEFAULT_CREDENTIALS_FILE = "credentials.json"

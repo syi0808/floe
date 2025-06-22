@@ -1,19 +1,17 @@
 # orchestrator_agent/calendar_adapters/base_adapter.py
-from typing import Protocol, Optional, List, runtime_checkable # Renamed List to avoid conflict, Added runtime_checkable
+from __future__ import annotations
+
+from typing import Protocol, Optional, List, runtime_checkable
 from datetime import datetime
 
-# Assuming CalendarEvent and TaskInput will be accessible from this path.
-# This might move to a common_types module later.
-try:
-    from task_agent.task_calendar_linker import CalendarEvent
-except ImportError:
-    # Fallback for scenarios where the direct import might fail during development/refactoring
-    # This indicates that CalendarEvent might need to be in a more universally accessible location.
-    print("Warning: Could not import CalendarEvent directly from task_agent.task_calendar_linker in base_adapter.py. "
-          "Ensure it's defined or moved to a common types module if issues persist.")
-    # Define a placeholder if not found, to allow protocol definition.
-    # This is not ideal for runtime but helps define the interface.
-    class CalendarEvent: pass
+# NOTE:
+# ``CalendarEvent`` is defined in ``task_agent.task_calendar_linker``.  Importing
+# it here at module load time causes a circular import because that module also
+# imports ``CalendarAdapter`` from this module.  To avoid the cycle while still
+# providing type hints we rely on forward references (the ``"CalendarEvent"``
+# string) instead of importing the class.  Users of the protocol can import the
+# actual ``CalendarEvent`` class from ``task_agent.task_calendar_linker`` when
+# required.
 
 
 @runtime_checkable
