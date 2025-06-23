@@ -34,7 +34,7 @@ Floe는 **멀티 에이전트 기반 개인화된 AI 비서**로, 자연어를 �
 - **캘린더 MCP**: Google Calendar 연동 (추후)
 
 ### 기술 스택
-- **Backend**: Python 3.13+, openai-agents[litellm]
+- **Backend**: Python 3.10+, openai-agents[litellm]
 - **Agent Framework**: OpenAI Agents SDK + Anthropic MCP
 - **MCP 서버**: 기존 MCP 서버들 활용 (파일시스템, 브라우저, 데이터베이스 등)
 - **Database**: SQLite + Chroma (벡터 데이터베이스)
@@ -164,7 +164,7 @@ Floe는 **멀티 에이전트 기반 개인화된 AI 비서**로, 자연어를 �
 
 ## 🔧 개발 시작하기
 
-1. **환경 설정**: Python 3.13+, uv 패키지 매니저
+1. **환경 설정**: Python 3.10+, uv 패키지 매니저
 2. **의존성 설치**: `uv sync`
 3. **설정 파일**: [pyproject.toml](mdc:pyproject.toml) 참조
 4. **MCP 서버**: 기존 MCP 서버들 연동 및 활용
