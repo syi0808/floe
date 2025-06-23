@@ -33,6 +33,10 @@ This project is currently under active development. The `OrchestratorAgent` and 
     ```bash
     pip install -r requirements.txt
     ```
+    This project relies on several key packages including `pydantic`, `langdetect`,
+    `litellm`, and Google's API libraries (`google-api-python-client`,
+    `google-auth-httplib2`, `google-auth-oauthlib`). These are all listed in
+    `requirements.txt` and `pyproject.toml`.
 
 ### Configuration
 
