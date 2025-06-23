@@ -19,6 +19,6 @@ class ConversationTurn(BaseModel):
 
 class ConversationState(BaseModel):
     conversation_id: str
-    history: List[ConversationTurn] = []
-    current_context: Dict[str, Any] = {}
+    history: List[ConversationTurn] = Field(default_factory=list)
+    current_context: Dict[str, Any] = Field(default_factory=dict)
     last_interaction_time: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
