@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
-from orchestrator_agent.base_agent import BaseAgent # For type hinting if MemoryManagerAgent itself becomes an agent
+from orchestrator_agent.base_agent import BaseAgent  # For type hinting if MemoryManagerAgent itself becomes an agent
+from mcp import MCPClient
 # (import removed – not used in this module)
 
 # Forward declaration or import of BaseMemoryModel if it were defined elsewhere
@@ -12,10 +13,11 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
     This is a basic implementation focusing on the interface needed by OrchestratorAgent.
     """
 
-    def __init__(self):
+    def __init__(self, mcp_client: MCPClient | None = None):
         # In a real implementation, this would initialize connections to
         # vector databases, etc.
-        self._memory_storage: Dict[str, List[Dict[str, Any]]] = {} # user_id -> list of memory items
+        self.mcp_client = mcp_client or MCPClient.from_env()
+        self._memory_storage: Dict[str, List[Dict[str, Any]]] = {}
         print("Basic MemoryManagerAgent initialized.")
 
     def get_context_for_agent(self, user_id: str, agent_name: str, query_text: str, top_k: int = 3) -> List[Dict[str, Any]]:
@@ -69,6 +71,35 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
         self._memory_storage[user_id].append(memory_item)
         print(f"MemoryManagerAgent: Added memory for user '{user_id}': {memory_item}")
 
+    # MCP helper methods -------------------------------------------------
+    def invoke_service(self, service_name: str, payload: Dict[str, Any]):
+        return self.mcp_client.invoke_service(service_name, payload)
+
+    def post_memory_to_mcp(self, user_id: str, memory_item: Dict[str, Any]):
+        return self.mcp_client.add_memory(user_id, memory_item)
+
+    def search_memories_via_mcp(self, user_id: str, query: str, top_k: int = 5):
+        return self.mcp_client.search_memories(user_id, query, top_k)
+
+    def send_reply(
+        self,
+        user_id: str,
+        session_id: str,
+        channel_type: str,
+        content: str,
+        target_details: Dict[str, Any] | None = None,
+    ):
+        return self.mcp_client.send_reply(
+            user_id,
+            session_id,
+            channel_type,
+            content,
+            target_details,
+        )
+
+    def send_notification(self, notification: Dict[str, Any]):
+        return self.mcp_client.send_notification(notification)
+      
     def get_user_memories(self, user_id: str) -> List[Dict[str, Any]]:
         """Return all memories stored for ``user_id``."""
         return self._memory_storage.get(user_id, [])
