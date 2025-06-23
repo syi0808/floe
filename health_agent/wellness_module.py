@@ -34,6 +34,6 @@ class WellnessModule:
     def import_wearable_hrv(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[float]:
         if not self.connector:
             return []
-        # Wearable connectors might return ActivityRecord including HRV.
-        activities = self.connector.fetch_activity_data(user_id, start, end)
-        return [a.calories_burned or 0 for a in activities]
+        # TODO: Implement proper HRV data extraction from wearable devices
+        # HRV data should come from heart rate measurements, not activity calories
+        raise NotImplementedError("HRV data import requires proper implementation")
