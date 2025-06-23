@@ -99,6 +99,17 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
 
     def send_notification(self, notification: Dict[str, Any]):
         return self.mcp_client.send_notification(notification)
+      
+    def get_user_memories(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return all memories stored for ``user_id``."""
+        return self._memory_storage.get(user_id, [])
+
+    def clear_memory(self, user_id: Optional[str] = None):
+        """Clear memory for a specific user or all users if ``user_id`` is ``None``."""
+        if user_id:
+            self._memory_storage.pop(user_id, None)
+        else:
+            self._memory_storage.clear()
 
 # Example of how MemoryManagerAgent could itself be a BaseAgent (optional for now)
 # class MemoryManagerAgentAsFloeAgent(BaseAgent, MemoryManagerAgent): # Multiple inheritance

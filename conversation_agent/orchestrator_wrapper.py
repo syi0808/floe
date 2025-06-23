@@ -1,13 +1,14 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from .conversation_agent import ConversationAgent
+from memory_manager_agent.memory_manager import MemoryManagerAgent
 
 class ConversationAgentWrapper(BaseAgent):
     """Adapter to use ConversationAgent with the OrchestrationEngine."""
 
-    def __init__(self) -> None:
-        self.agent = ConversationAgent()
+    def __init__(self, memory_manager: Optional[MemoryManagerAgent] = None) -> None:
+        self.agent = ConversationAgent(memory_manager=memory_manager)
 
     @property
     def name(self) -> str:
@@ -21,7 +22,7 @@ class ConversationAgentWrapper(BaseAgent):
         try:
             # Expect the text under 'text' or 'response_text'
             text = entities.get("text") or entities.get("response_text") or ""
-            resp = self.agent.handle_message(text)
+            resp = self.agent.handle_message(text, user_id=user_id)
 
             # Validate response has expected attributes
             if not hasattr(resp, 'text'):
