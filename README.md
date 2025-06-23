@@ -105,4 +105,8 @@ The primary entry point for demonstrating the current capabilities is the intera
 *   Develop a more robust application entry point (e.g., a web API using FastAPI).
 *   Expand test coverage.
 
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
 Contributions and feedback are welcome!
