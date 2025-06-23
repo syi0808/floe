@@ -6,7 +6,7 @@ import uuid
 from task_agent import task_core
 from task_agent.task_calendar_linker import TaskCalendarLinker, TaskInput, CalendarEvent
 from tests.integration.mocks.mock_calendar_adapter import MockCalendarAdapter
-from tests.integration.mocks.mock_memory_manager_agent import MockMemoryManagerAgent
+from memory_manager_agent.memory_manager import MemoryManagerAgent
 
 USER_ID = "test_user_123"
 
@@ -37,14 +37,14 @@ def task_calendar_linker(mock_calendar_adapter):
 
 @pytest.fixture
 def mock_memory_manager_agent():
-    return MockMemoryManagerAgent()
+    return MemoryManagerAgent()
 
 # --- Test Scenarios ---
 
 def test_scenario_1_create_task_with_calendar_event(
     task_calendar_linker: TaskCalendarLinker,
     mock_calendar_adapter: MockCalendarAdapter,
-    mock_memory_manager_agent: MockMemoryManagerAgent
+    mock_memory_manager_agent: MemoryManagerAgent
 ):
     """
     Scenario 1: Create Task with Calendar Event
@@ -113,7 +113,7 @@ def test_scenario_1_create_task_with_calendar_event(
 def test_scenario_2_update_task_and_calendar_event(
     task_calendar_linker: TaskCalendarLinker,
     mock_calendar_adapter: MockCalendarAdapter,
-    mock_memory_manager_agent: MockMemoryManagerAgent
+    mock_memory_manager_agent: MemoryManagerAgent
 ):
     """
     Scenario 2: Update Task and its Calendar Event
@@ -206,7 +206,7 @@ def test_scenario_2_update_task_and_calendar_event(
 def test_scenario_3_delete_task_and_calendar_event(
     task_calendar_linker: TaskCalendarLinker,
     mock_calendar_adapter: MockCalendarAdapter,
-    mock_memory_manager_agent: MockMemoryManagerAgent
+    mock_memory_manager_agent: MemoryManagerAgent
 ):
     """
     Scenario 3: Delete Task and its Calendar Event
