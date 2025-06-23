@@ -69,6 +69,17 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
         self._memory_storage[user_id].append(memory_item)
         print(f"MemoryManagerAgent: Added memory for user '{user_id}': {memory_item}")
 
+    def get_user_memories(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return all memories stored for ``user_id``."""
+        return self._memory_storage.get(user_id, [])
+
+    def clear_memory(self, user_id: Optional[str] = None):
+        """Clear memory for a specific user or all users if ``user_id`` is ``None``."""
+        if user_id:
+            self._memory_storage.pop(user_id, None)
+        else:
+            self._memory_storage.clear()
+
 # Example of how MemoryManagerAgent could itself be a BaseAgent (optional for now)
 # class MemoryManagerAgentAsFloeAgent(BaseAgent, MemoryManagerAgent): # Multiple inheritance
 #     def __init__(self):

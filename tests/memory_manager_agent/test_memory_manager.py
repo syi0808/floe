@@ -38,3 +38,18 @@ def test_add_memory_missing_keys_raises(agent):
     with pytest.raises(ValueError) as exc:
         agent.add_memory("u1", {"type": "note"})
     assert "memory_item must contain keys" in str(exc.value)
+
+
+def test_get_user_memories_and_clear_memory(populated_agent):
+    agent, user_id = populated_agent
+    memories = agent.get_user_memories(user_id)
+    assert [m["content"] for m in memories] == ["first", "second", "third"]
+
+    agent.clear_memory(user_id)
+    assert agent.get_user_memories(user_id) == []
+
+    # Re-add and clear all
+    agent.add_memory(user_id, {"type": "note", "content": "again"})
+    assert agent.get_user_memories(user_id)
+    agent.clear_memory()
+    assert agent.get_user_memories(user_id) == []
