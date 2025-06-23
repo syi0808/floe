@@ -37,7 +37,8 @@ class OrchestrationEngine:
                 query_text=current_query_summary
             )
             print(f"OrchestrationEngine: Retrieved context for user '{user_id}', agent '{context_agent_name}': {context}")
-            # TODO: Pass context to agent.process() method or use it in routing decisions
+        else:
+            context = []
 
         intent = intent_data.get('intent')
         entities = intent_data.get('entities')
@@ -52,6 +53,7 @@ class OrchestrationEngine:
                     call_entities = entities or {}
                     if intent == 'general_conversation' and 'response_text' in intent_data:
                         call_entities.setdefault('text', intent_data['response_text'])
+                    call_entities['context'] = context
                     agent_specific_response = {}
                     if hasattr(agent_instance, 'process') and callable(getattr(agent_instance, 'process')):
                         agent_specific_response = agent_instance.process(entities=call_entities, user_id=user_id)
