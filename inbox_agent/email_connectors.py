@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+import requests
+
+
+class AbstractEmailConnector(ABC):
+    """Interface for email service connectors."""
+
+    @abstractmethod
+    def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
+        """Return a list of email metadata dictionaries."""
+
+    @abstractmethod
+    def get_email_body(self, email_id: str) -> str:
+        """Fetch the plain text body for the given email."""
+
+    @abstractmethod
+    def get_attachments(self, email_id: str) -> List[Dict[str, Any]]:
+        """Return attachment info dictionaries for an email."""
+
+
+class GmailConnector(AbstractEmailConnector):
+    """Simple Gmail API wrapper using HTTP requests."""
+
+    def __init__(self, access_token: str) -> None:
+        self.access_token = access_token
+        self.base_url = "https://gmail.googleapis.com/gmail/v1/users/me"
+
+    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
+        data = self._get("messages", params={"q": query, "maxResults": limit})
+        return data.get("messages", [])
+
+    def get_email_body(self, email_id: str) -> str:
+        data = self._get(f"messages/{email_id}", params={"format": "full"})
+        parts = data.get("payload", {}).get("parts", [])
+        if parts:
+            import base64
+
+            body_data = parts[0].get("body", {}).get("data", "")
+            try:
+                return base64.urlsafe_b64decode(body_data).decode("utf-8")
+            except Exception:
+                return ""
+        return data.get("snippet", "")
+
+    def get_attachments(self, email_id: str) -> List[Dict[str, Any]]:
+        data = self._get(f"messages/{email_id}", params={"format": "full"})
+        attachments: List[Dict[str, Any]] = []
+        for part in data.get("payload", {}).get("parts", []):
+            if part.get("filename"):
+                attachments.append({"filename": part.get("filename"), "mime_type": part.get("mimeType")})
+        return attachments
+
+
+class OutlookConnector(AbstractEmailConnector):
+    """Microsoft Outlook connector using Graph API."""
+
+    def __init__(self, access_token: str) -> None:
+        self.access_token = access_token
+        self.base_url = "https://graph.microsoft.com/v1.0/me"
+
+    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
+        params = {"$top": limit}
+        if query:
+            params["$search"] = query
+        data = self._get("messages", params=params)
+        return data.get("value", [])
+
+    def get_email_body(self, email_id: str) -> str:
+        data = self._get(f"messages/{email_id}")
+        return data.get("body", {}).get("content", "")
+
+    def get_attachments(self, email_id: str) -> List[Dict[str, Any]]:
+        data = self._get(f"messages/{email_id}/attachments")
+        return data.get("value", [])
