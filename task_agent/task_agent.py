@@ -3,6 +3,7 @@ import task_agent.task_core as core
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple, Literal
 from orchestrator_agent.common_types import AgentResponse
+from mcp import MCPClient
 
 # Define TaskStatus type alias based on the literals used in TaskItem.status
 TaskStatus = Literal['todo', 'in-progress', 'done', 'archived']
@@ -12,9 +13,10 @@ import shlex
 import uuid # For task_id validation
 
 class TaskAgent(BaseAgent):
-    def __init__(self):
+    def __init__(self, mcp_client: MCPClient | None = None):
         super().__init__()
         self._name = "TaskAgent"
+        self.mcp_client = mcp_client or MCPClient.from_env()
 
     @property
     def name(self) -> str:
@@ -626,3 +628,32 @@ class TaskAgent(BaseAgent):
 
         # This part should ideally not be reached if the map and logic are correct
         return f"Sorry, I'm having trouble understanding '{request}'. Please try again."
+
+    # MCP helper methods -------------------------------------------------
+    def invoke_service(self, service_name: str, payload: Dict[str, Any]):
+        return self.mcp_client.invoke_service(service_name, payload)
+
+    def add_memory(self, user_id: str, memory_item: Dict[str, Any]):
+        return self.mcp_client.add_memory(user_id, memory_item)
+
+    def search_memories(self, user_id: str, query: str, top_k: int = 5):
+        return self.mcp_client.search_memories(user_id, query, top_k)
+
+    def send_reply(
+        self,
+        user_id: str,
+        session_id: str,
+        channel_type: str,
+        content: str,
+        target_details: Dict[str, Any] | None = None,
+    ):
+        return self.mcp_client.send_reply(
+            user_id,
+            session_id,
+            channel_type,
+            content,
+            target_details,
+        )
+
+    def send_notification(self, notification: Dict[str, Any]):
+        return self.mcp_client.send_notification(notification)
