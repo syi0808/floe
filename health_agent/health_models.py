@@ -24,7 +24,7 @@ class ActivityRecord(BaseModel):
     user_id: str
     start_time_utc: datetime.datetime
     duration_minutes: float
-    type: str
+    activity_type: str
     intensity: Optional[str] = None
     calories_burned: Optional[float] = None
     source: str = Field(default="manual_entry")
