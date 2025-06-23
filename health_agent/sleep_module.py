@@ -21,7 +21,7 @@ class SleepModule:
         # For now we simply pretend it was stored successfully
         return True
 
-    def calculate_sleep_deficit(self, recent_hours: List[float], target_hours: float = 7.5) -> float:
+    def calculate_sleep_deficit(self, recent_hours: List[float], target_hours: float = 8.0) -> float:
         if not recent_hours:
             return 0.0
         avg = sum(recent_hours) / len(recent_hours)
