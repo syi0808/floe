@@ -30,11 +30,9 @@ This project is currently under active development. The `OrchestratorAgent` and 
     ```
 
 3.  **Install dependencies:**
-    Currently, the primary dependencies are `litellm` and `python-dotenv`. You can install them directly:
     ```bash
-    pip install litellm python-dotenv openai anthropic # Add openai and anthropic as litellm might need them for specific providers
+    pip install -r requirements.txt
     ```
-    *(A `requirements.txt` file will be added in future updates for easier dependency management.)*
 
 ### Configuration
 
