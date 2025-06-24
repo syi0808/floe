@@ -6,7 +6,8 @@ from orchestrator_agent.common_types import AgentResponse
 from mcp import MCPClient
 
 # Define TaskStatus type alias based on the literals used in TaskItem.status
-TaskStatus = Literal['todo', 'in-progress', 'done', 'archived']
+# Accept both hyphenated and space-separated variants for "in progress"
+TaskStatus = Literal['todo', 'in-progress', 'in progress', 'done', 'archived']
 # Single source-of-truth
 VALID_STATUS_VALUES: List[str] = list(TaskStatus.__args__)
 import shlex
@@ -90,9 +91,10 @@ class TaskAgent(BaseAgent):
                             status_words.append(args[i+1].lower())
                             i += 1
                         
-                        # Join all words to form complete status value
+                        # Join all words to form complete status value without
+                        # altering spaces. Validation will handle unsupported
+                        # formats.
                         status_val = " ".join(status_words)
-                        status_val = status_val.replace(" ", "-")
                     
                     # Check if the status value is valid
                     if status_val not in VALID_STATUS_VALUES:

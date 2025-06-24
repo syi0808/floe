@@ -4,8 +4,10 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, ValidationError
 
-# Alias for valid task statuses used across the codebase
-TaskStatus = Literal['todo', 'in-progress', 'done', 'archived']
+# Alias for valid task statuses used across the codebase.
+# Support both "in progress" with a space and the original "in-progress" form
+# for backward compatibility.
+TaskStatus = Literal['todo', 'in-progress', 'in progress', 'done', 'archived']
 
 # In-memory storage for tasks
 _task_storage: Dict[str, 'TaskItem'] = {} # Key: str(task.id), Value: TaskItem instance
