@@ -128,15 +128,11 @@ def extract_intent_and_entities(user_query: str) -> Dict[str, Any]:
             tool_arguments_str = tool_call.function.arguments
 
             try:
-                parsed_arguments = (
-                    json.loads(tool_arguments_str)
-                    if isinstance(tool_arguments_str, str)
-                    else tool_arguments_str
-                )
-                return {"intent": tool_name, "entities": parsed_arguments}
-            except json.JSONDecodeError as e:
-                # print(f"Error decoding tool arguments: {e}") # Debug
-                return {"error": f"Failed to parse arguments for tool {tool_name}: {str(e)}"}
+                parsed_arguments = json.loads(tool_arguments_str)
+            except (json.JSONDecodeError, TypeError) as exc:
+                return {"error": f"Failed to parse arguments for tool {tool_name}: {exc}"}
+
+            return {"intent": tool_name, "entities": parsed_arguments}
         elif message.content: # Check if there's text content
             return {"intent": "general_conversation", "response_text": message.content}
         else:

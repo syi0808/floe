@@ -206,18 +206,5 @@ def test_extract_intent_empty_tool_call_litellm(mock_litellm_completion, mock_os
     mock_litellm_completion.assert_called_once()
     mock_os_getenv.assert_any_call("LITELLM_MODEL_NAME")
 
-    # This assertion depends on how the production code handles tool_call.function.arguments being None.
-    # If json.loads(None) raises an error, it would be caught by the JSONDecodeError handler.
-    # If it's some other path, this test might need adjustment.
-    # Based on current production code: json.loads(None) will raise TypeError, caught by JSONDecodeError's except block.
-    # So the error message would be "Failed to parse arguments..."
-    # Let's adjust the expected error message.
-    if 'error' in result and result['error'].startswith("Failed to parse arguments"):
-         assert "Failed to parse arguments for tool extract_schedule_info" in result['error']
-    else:
-        # If json.loads(None) doesn't cause JSONDecodeError but some other issue,
-        # or if LiteLLM's structure for "empty" arguments is different.
-        # The current production code has a final "LLM responded with a tool call but no valid content or arguments."
-        # if the tool call processing doesn't yield a result and there's no message.content.
-        # This happens if tool_call.function.arguments is not a string (e.g. None)
-        assert result == {'error': "LLM responded with a tool call but no valid content or arguments."}
+    assert 'error' in result
+    assert "Failed to parse arguments for tool extract_schedule_info" in result['error']
