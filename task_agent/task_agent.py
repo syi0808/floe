@@ -140,18 +140,39 @@ class TaskAgent(BaseAgent):
         keywords = {"priority", "due", "status", "tags", "tag", "description"}
 
         if raw_args is not None:
-            # raw_args preserves any quoting from the original request
+            # raw_args preserves the original quoting. If it starts with a quote
+            # we capture everything up to the matching closing quote before
+            # searching for parameter keywords. This prevents keywords embedded
+            # inside the quoted description from being misinterpreted.
+
             import re
-            pattern = r"\b(?:" + "|".join(keywords) + r")\b"
-            m = re.search(pattern, raw_args)
-            if m:
-                description = raw_args[:m.start()].strip()
-                remaining_args = shlex.split(raw_args[m.start():])
+
+            if raw_args and raw_args[0] in {"'", '"'}:
+                quote = raw_args[0]
+                end_idx = raw_args.rfind(quote)
+                if end_idx > 0:
+                    description = raw_args[1:end_idx]
+                    rest = raw_args[end_idx + 1 :].strip()
+                else:
+                    # No closing quote found; treat the entire string as the
+                    # description and let validation elsewhere handle errors.
+                    description = raw_args.lstrip(quote)
+                    rest = ""
             else:
-                description = raw_args.strip()
+                description = ""
+                rest = raw_args
+
+            pattern = r"\b(?:" + "|".join(keywords) + r")\b"
+            m = re.search(pattern, rest)
+            if m:
+                extra_desc = rest[: m.start()].strip()
+                if extra_desc:
+                    description = f"{description} {extra_desc}".strip()
+                remaining_args = shlex.split(rest[m.start() :])
+            else:
+                if rest:
+                    description = f"{description} {rest}".strip()
                 remaining_args = []
-            if (description.startswith('"') and description.endswith('"')) or (description.startswith("'") and description.endswith("'")):
-                description = description[1:-1]
         else:
             # Fallback to token based parsing
             desc_tokens: List[str] = []
