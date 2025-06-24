@@ -17,12 +17,11 @@ class InboxAgent(BaseAgent):
         self,
         gmail_connector: Optional[GmailConnector] = None,
         outlook_connector: Optional[OutlookConnector] = None,
+        mcp_client: MCPClient | None = None,
     ) -> None:
+        super().__init__()
         self.gmail = gmail_connector
         self.outlook = outlook_connector
-
-    def __init__(self, mcp_client: MCPClient | None = None) -> None:
-        super().__init__()
         self.mcp_client = mcp_client or MCPClient.from_env()
 
     @property
