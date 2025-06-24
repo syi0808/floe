@@ -149,10 +149,18 @@ class TaskAgent(BaseAgent):
 
             if raw_args and raw_args[0] in {"'", '"'}:
                 quote = raw_args[0]
-                end_idx = raw_args.rfind(quote)
+                # Find the matching closing quote, handling escaped quotes
+                end_idx = -1
+                i = 1
+                while i < len(raw_args):
+                    if raw_args[i] == quote and (i == 1 or raw_args[i-1] != '\\'):
+                        end_idx = i
+                        break
+                    i += 1
+
                 if end_idx > 0:
                     description = raw_args[1:end_idx]
-                    rest = raw_args[end_idx + 1 :].strip()
+                    rest = raw_args[end_idx + 1:].strip()
                 else:
                     # No closing quote found; treat the entire string as the
                     # description and let validation elsewhere handle errors.
@@ -161,7 +169,6 @@ class TaskAgent(BaseAgent):
             else:
                 description = ""
                 rest = raw_args
-
             pattern = r"\b(?:" + "|".join(keywords) + r")\b"
             m = re.search(pattern, rest)
             if m:
