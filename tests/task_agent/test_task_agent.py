@@ -395,6 +395,57 @@ def test_create_task_with_complex_quoted_description(mock_core, agent):
     )
     assert f"Task '{task_desc}' created with ID: {mock_created_task.id}" in response
 
+
+@patch('task_agent.task_agent.core')
+def test_create_task_nested_quotes_with_params(mock_core, agent):
+    user_id = "user_nested_params"
+    inner_desc = "Fix \"critical\" bug in 'module'"
+    full_desc = f"{inner_desc} after release"
+    priority_val = 1
+    due_date_str = "2025-08-15"
+    due_date_obj = datetime(2025, 8, 15, tzinfo=timezone.utc)
+
+    mock_task = create_mock_task(description=full_desc, user_id=user_id,
+                                 priority=priority_val, due_date_utc=due_date_obj)
+    mock_core.create_task.return_value = mock_task
+
+    request = f"add task \"{inner_desc}\" after release priority {priority_val} due {due_date_str}"
+    response = agent.process(request, user_id)
+
+    mock_core.create_task.assert_called_once_with(
+        user_id=user_id,
+        description=full_desc,
+        priority=priority_val,
+        due_date_utc=due_date_obj,
+        project_tags=None
+    )
+    assert f"Task '{full_desc}' created with ID: {mock_task.id}" in response
+
+
+@patch('task_agent.task_agent.core')
+def test_create_task_embedded_keywords(mock_core, agent):
+    user_id = "user_embedded_keywords"
+    desc = "Investigate priority levels due to bug"
+    priority_val = 3
+    due_date_str = "2025-12-31"
+    due_date_obj = datetime(2025, 12, 31, tzinfo=timezone.utc)
+
+    mock_task = create_mock_task(description=desc, user_id=user_id,
+                                 priority=priority_val, due_date_utc=due_date_obj)
+    mock_core.create_task.return_value = mock_task
+
+    command = f"add task \"{desc}\" priority {priority_val} due {due_date_str}"
+    response = agent.process(command, user_id)
+
+    mock_core.create_task.assert_called_once_with(
+        user_id=user_id,
+        description=desc,
+        priority=priority_val,
+        due_date_utc=due_date_obj,
+        project_tags=None
+    )
+    assert f"Task '{desc}' created with ID: {mock_task.id}" in response
+
 @patch('task_agent.task_agent.core')
 def test_create_task_description_then_params(mock_core, agent):
     user_id = "user_create_desc_params"
