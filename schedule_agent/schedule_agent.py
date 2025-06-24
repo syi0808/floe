@@ -2,12 +2,15 @@ from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from typing import Dict, Any, List
 from mcp import MCPClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ScheduleAgent(BaseAgent):
     def __init__(self, mcp_client: MCPClient | None = None):
         super().__init__()
         self.mcp_client = mcp_client or MCPClient.from_env()
-        print("ScheduleAgent initialized.")
+        logger.info("ScheduleAgent initialized.")
 
     @property
     def name(self) -> str:
@@ -20,9 +23,9 @@ class ScheduleAgent(BaseAgent):
         return ["extract_schedule_info"]
 
     def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        print(f"--- {self.name} processing ---")
-        print(f"User ID: {user_id}")
-        print(f"Received entities: {entities}")
+        logger.debug("--- %s processing ---", self.name)
+        logger.debug("User ID: %s", user_id)
+        logger.debug("Received entities: %s", entities)
 
         # Basic validation of expected entities from ExtractScheduleInfoTool
         title = entities.get("title")
@@ -52,7 +55,7 @@ class ScheduleAgent(BaseAgent):
         )
         event_id_mock = f"evt_mock_{hash(str(entities))%10000}"
 
-        print(f"{self.name}: {confirmation_message}")
+        logger.info("%s: %s", self.name, confirmation_message)
 
         return AgentResponse(
             status='success',
