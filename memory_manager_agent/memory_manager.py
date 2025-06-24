@@ -1,7 +1,11 @@
 from typing import Dict, Any, List, Optional
 from orchestrator_agent.base_agent import BaseAgent  # For type hinting if MemoryManagerAgent itself becomes an agent
 from mcp import MCPClient
+import logging
+
 # (import removed – not used in this module)
+
+logger = logging.getLogger(__name__)
 
 # Forward declaration or import of BaseMemoryModel if it were defined elsewhere
 # For now, we'll use Dict[str, Any] for memory items.
@@ -18,7 +22,7 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
         # vector databases, etc.
         self.mcp_client = mcp_client or MCPClient.from_env()
         self._memory_storage: Dict[str, List[Dict[str, Any]]] = {}
-        print("Basic MemoryManagerAgent initialized.")
+        logger.info("Basic MemoryManagerAgent initialized.")
 
     def get_context_for_agent(self, user_id: str, agent_name: str, query_text: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """
@@ -35,7 +39,12 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
             A list of memory items (dictionaries) deemed relevant.
             Returns an empty list if no relevant context is found or for mock purposes.
         """
-        print(f"MemoryManagerAgent: get_context_for_agent called for user '{user_id}', agent '{agent_name}', query '{query_text[:50]}...'")
+        logger.debug(
+            "MemoryManagerAgent: get_context_for_agent called for user '%s', agent '%s', query '%s...'",
+            user_id,
+            agent_name,
+            query_text[:50],
+        )
 
         # Mock functionality: Return some generic context or context based on user_id
         if user_id in self._memory_storage and self._memory_storage[user_id]:
@@ -69,7 +78,7 @@ class MemoryManagerAgent: # Not inheriting from BaseAgent for now, as its primar
         if user_id not in self._memory_storage:
             self._memory_storage[user_id] = []
         self._memory_storage[user_id].append(memory_item)
-        print(f"MemoryManagerAgent: Added memory for user '{user_id}': {memory_item}")
+        logger.debug("MemoryManagerAgent: Added memory for user '%s': %s", user_id, memory_item)
 
     # MCP helper methods -------------------------------------------------
     def invoke_service(self, service_name: str, payload: Dict[str, Any]):
