@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from conversation_agent.input_handler import InputHandler
 from conversation_agent.dialogue_manager import DialogueManager
@@ -7,6 +7,7 @@ from conversation_agent.intent_recognizer import IntentRecognizer
 from conversation_agent.response_generator import ResponseGenerator
 from conversation_agent.common_types import AgentResponse, UserInput, ConversationTurn
 from memory_manager_agent.memory_manager import MemoryManagerAgent
+from mcp import MCPClient
 
 class ConversationAgent:
     """Simple conversational agent orchestrating input, intent and responses.
@@ -15,11 +16,16 @@ class ConversationAgent:
     history across sessions.
     """
 
-    def __init__(self, memory_manager: Optional[MemoryManagerAgent] = None):
+    def __init__(
+        self,
+        memory_manager: Optional[MemoryManagerAgent] = None,
+        mcp_client: MCPClient | None = None,
+    ):
         self.input_handler = InputHandler()
         self.dialogue_manager = DialogueManager()
         self.intent_recognizer = IntentRecognizer()
         self.response_generator = ResponseGenerator()
+        self.mcp_client = mcp_client or MCPClient.from_env()
         self.memory_manager = memory_manager
 
     def _load_history(self, user_id: str, top_k: int = 20) -> None:
@@ -93,3 +99,32 @@ class ConversationAgent:
             self._store_turn(user_id, user_input, agent_response)
 
         return agent_response
+
+    # MCP helper methods -------------------------------------------------
+    def invoke_service(self, service_name: str, payload: Dict[str, Any]):
+        return self.mcp_client.invoke_service(service_name, payload)
+
+    def add_memory(self, user_id: str, memory_item: Dict[str, Any]):
+        return self.mcp_client.add_memory(user_id, memory_item)
+
+    def search_memories(self, user_id: str, query: str, top_k: int = 5):
+        return self.mcp_client.search_memories(user_id, query, top_k)
+
+    def send_reply(
+        self,
+        user_id: str,
+        session_id: str,
+        channel_type: str,
+        content: str,
+        target_details: Dict[str, Any] | None = None,
+    ):
+        return self.mcp_client.send_reply(
+            user_id,
+            session_id,
+            channel_type,
+            content,
+            target_details,
+        )
+
+    def send_notification(self, notification: Dict[str, Any]):
+        return self.mcp_client.send_notification(notification)
