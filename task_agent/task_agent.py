@@ -14,10 +14,16 @@ import shlex
 import uuid # For task_id validation
 
 class TaskAgent(BaseAgent):
-    def __init__(self, mcp_client: MCPClient | None = None):
+    def __init__(self, mcp_client: MCPClient | None = None, calendar_linker=None):
         super().__init__()
         self._name = "TaskAgent"
         self.mcp_client = mcp_client or MCPClient.from_env()
+        self.calendar_linker = calendar_linker
+        if self.calendar_linker:
+            try:
+                self.calendar_linker.connect_calendar()
+            except Exception as e:
+                print(f"Warning: could not connect calendar linker: {e}")
 
     @property
     def name(self) -> str:
@@ -151,37 +157,48 @@ class TaskAgent(BaseAgent):
 
             if raw_args and raw_args[0] in {"'", '"'}:
                 quote = raw_args[0]
-                # Find the matching closing quote, handling escaped quotes
+                # Find the last unescaped closing quote
                 end_idx = -1
-                i = 1
-                while i < len(raw_args):
-                    if raw_args[i] == quote and (i == 1 or raw_args[i-1] != '\\'):
+                i = len(raw_args) - 1
+                while i > 0:
+                    if raw_args[i] == quote and raw_args[i-1] != '\\':
                         end_idx = i
                         break
-                    i += 1
+                    i -= 1
 
                 if end_idx > 0:
                     description = raw_args[1:end_idx]
+                    description = description.replace('\\"', '"').replace("\\'", "'")
                     rest = raw_args[end_idx + 1:].strip()
                 else:
                     # No closing quote found; treat the entire string as the
                     # description and let validation elsewhere handle errors.
                     description = raw_args.lstrip(quote)
+                    description = description.replace('\\"', '"').replace("\\'", "'")
                     rest = ""
             else:
                 description = ""
                 rest = raw_args
-            pattern = r"\b(?:" + "|".join(keywords) + r")\b"
-            m = re.search(pattern, rest)
-            if m:
-                extra_desc = rest[: m.start()].strip()
-                if extra_desc:
-                    description = f"{description} {extra_desc}".strip()
-                remaining_args = shlex.split(rest[m.start() :])
+            tokens = shlex.split(rest)
+            last_kw_idx = -1
+            for idx, tok in enumerate(tokens):
+                if tok.lower() in keywords:
+                    last_kw_idx = idx
+            if last_kw_idx != -1:
+                desc_tokens = tokens[:last_kw_idx]
+                remaining_args = tokens[last_kw_idx:]
             else:
-                if rest:
-                    description = f"{description} {rest}".strip()
+                desc_tokens = tokens[:1]
                 remaining_args = []
+                if len(tokens) > 1:
+                    return AgentResponse(
+                        status='error',
+                        data=None,
+                        message=f"Error: Unknown parameter or value out of place: '{tokens[1]}'.",
+                        source_agent=self.name
+                    )
+            if desc_tokens:
+                description = f"{description} {' '.join(desc_tokens)}".strip()
         else:
             # Fallback to token based parsing
             desc_tokens: List[str] = []
@@ -221,6 +238,20 @@ class TaskAgent(BaseAgent):
                 due_date_utc=due_date_utc,
                 project_tags=project_tags
             )
+            if self.calendar_linker and due_date_utc:
+                try:
+                    task_input = TaskInput(
+                        task_id=str(task.id),
+                        description=task.description,
+                        start_time=due_date_utc - timedelta(hours=1),
+                        duration_minutes=60,
+                        summary=f"Task: {task.description}"
+                    )
+                    event_id = self.calendar_linker.add_task_to_calendar(task_input)
+                    if event_id:
+                        core.update_task(str(task.id), {"linked_schedule_id": event_id})
+                except Exception as e:
+                    print(f"Warning: failed to link calendar event: {e}")
             return AgentResponse(
                 status='success',
                 data={'task': task.__dict__},
@@ -275,7 +306,10 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-        task = core.get_task(task_id=task_id_str, user_id=user_id)
+        try:
+            task = core.get_task(task_id=task_id_str, user_id=user_id)
+        except Exception:
+            task = None
         if task:
             return AgentResponse(
                 status='success',
@@ -347,6 +381,22 @@ class TaskAgent(BaseAgent):
 
             updated_task = core.update_task(task_id=task_id_str, user_id=user_id, updates=updates)
             if updated_task:
+                if self.calendar_linker and updated_task.linked_schedule_id and (
+                    'due_date_utc' in updates or 'description' in updates
+                ):
+                    try:
+                        task_input = TaskInput(
+                            task_id=str(updated_task.id),
+                            description=updated_task.description,
+                            start_time=updated_task.due_date_utc - timedelta(hours=1) if updated_task.due_date_utc else datetime.now(timezone.utc),
+                            duration_minutes=60,
+                            summary=f"Task: {updated_task.description}"
+                        )
+                        self.calendar_linker.update_linked_event(
+                            updated_task.linked_schedule_id, task_input
+                        )
+                    except Exception as e:
+                        print(f"Warning: failed to update calendar event: {e}")
                 return AgentResponse(
                     status='success',
                     data={'task': updated_task.__dict__},
@@ -449,7 +499,18 @@ class TaskAgent(BaseAgent):
                 source_agent=self.name
             )
 
-        if core.delete_task(task_id=task_id_str, user_id=user_id):
+        task = None
+        try:
+            task = core.get_task(task_id=task_id_str, user_id=user_id)
+            delete_success = core.delete_task(task_id=task_id_str, user_id=user_id)
+        except Exception:
+            delete_success = False
+        if delete_success:
+            if self.calendar_linker and task and task.linked_schedule_id:
+                try:
+                    self.calendar_linker.remove_task_from_calendar(task.linked_schedule_id)
+                except Exception as e:
+                    print(f"Warning: failed to remove calendar event: {e}")
             return AgentResponse(
                 status='success',
                 data={'task_id': task_id_str},
