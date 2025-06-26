@@ -2,6 +2,7 @@ from typing import Dict, Any, List
 from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from mcp import MCPClient
+from .insight_generator import InsightGenerator
 
 class InsightAgent(BaseAgent):
     """Stub agent for generating insights and reports."""
@@ -19,9 +20,22 @@ class InsightAgent(BaseAgent):
         return ["generate_insight_report"]
 
     def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
+        gen = InsightGenerator()
+        agent_data = entities.get("data", {})
+        output_format = entities.get("format", "markdown")
+        try:
+            report = gen.generate_summary(agent_data, format=output_format)
+        except ValueError as exc:
+            return AgentResponse(
+                status="error",
+                data={"received": entities, "user": user_id},
+                message=str(exc),
+                source_agent=self.name,
+            )
+
         return AgentResponse(
             status="success",
-            data={"received": entities, "user": user_id},
+            data={"received": entities, "user": user_id, "report": report},
             message="Insight report generated.",
             source_agent=self.name,
         )
