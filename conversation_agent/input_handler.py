@@ -14,8 +14,11 @@ class InputHandler:
         Processes raw text input into a UserInput object.
         Basic implementation, can be expanded for more preprocessing.
         """
-        # Basic preprocessing: strip leading/trailing whitespace
-        processed_text = text_input.strip()
+        # Normalise unicode and collapse whitespace
+        import unicodedata
+
+        normalised = unicodedata.normalize("NFC", text_input)
+        processed_text = " ".join(normalised.strip().split())
 
         language_code = None
         try:
