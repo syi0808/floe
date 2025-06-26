@@ -117,8 +117,8 @@ def test_get_task_existing():
 
 def test_get_task_non_existent():
     """Test retrieving a non-existent task."""
-    retrieved_task = task_core.get_task(str(uuid4()))
-    assert retrieved_task is None
+    with pytest.raises(ValueError):
+        task_core.get_task(str(uuid4()))
 
 # update_task Tests
 def test_update_task_existing():
@@ -133,7 +133,7 @@ def test_update_task_existing():
         "status": "done",
         "project_tags": ["updated"]
     }
-    updated_task = task_core.update_task(str(task.id), updates)
+    updated_task = task_core.update_task(str(task.id), None, updates)
 
     assert updated_task is not None
     assert updated_task.id == original_id # ID should not change
@@ -148,7 +148,7 @@ def test_update_task_partial():
     """Test partially updating an existing task."""
     task = task_core.create_task("user1", "Partial update task", priority=1)
     updates = {"status": "in-progress"}
-    updated_task = task_core.update_task(str(task.id), updates)
+    updated_task = task_core.update_task(str(task.id), None, updates)
 
     assert updated_task is not None
     assert updated_task.status == "in-progress"
@@ -158,23 +158,23 @@ def test_update_task_partial():
 def test_update_task_non_existent():
     """Test updating a non-existent task."""
     updates = {"description": "Doesn't matter"}
-    updated_task = task_core.update_task(str(uuid4()), updates)
-    assert updated_task is None
+    with pytest.raises(ValueError):
+        task_core.update_task(str(uuid4()), None, updates)
 
 def test_update_task_invalid_data():
     """Test updating with invalid data (e.g., wrong priority value)."""
     task = task_core.create_task("user1", "Task for invalid update")
     updates_invalid_priority = {"priority": 5} # Invalid priority
-    updated_task = task_core.update_task(str(task.id), updates_invalid_priority)
-    assert updated_task is None, "Update should fail if priority is invalid"
+    with pytest.raises(ValueError):
+        task_core.update_task(str(task.id), None, updates_invalid_priority)
 
     # Check that the original task was not modified
     original_task = task_core.get_task(str(task.id))
     assert original_task.priority == 2 # Default priority
 
     updates_invalid_status = {"status": "invalid_status_value"}
-    updated_task_invalid_status = task_core.update_task(str(task.id), updates_invalid_status)
-    assert updated_task_invalid_status is None, "Update should fail if status is invalid"
+    with pytest.raises(ValueError):
+        task_core.update_task(str(task.id), None, updates_invalid_status)
     original_task_after_failed_status_update = task_core.get_task(str(task.id))
     assert original_task_after_failed_status_update.status == "todo"
 
@@ -189,12 +189,13 @@ def test_delete_task_existing():
     delete_result = task_core.delete_task(task_id_str)
     assert delete_result is True
     assert task_id_str not in task_core._task_storage
-    assert task_core.get_task(task_id_str) is None
+    with pytest.raises(ValueError):
+        task_core.get_task(task_id_str)
 
 def test_delete_task_non_existent():
     """Test deleting a non-existent task."""
-    delete_result = task_core.delete_task(str(uuid4()))
-    assert delete_result is False
+    with pytest.raises(ValueError):
+        task_core.delete_task(str(uuid4()))
 
 # list_tasks Tests
 @pytest.fixture
@@ -353,5 +354,18 @@ def test_list_tasks_empty_result():
 
     no_match_date = task_core.list_tasks(user_id="user_with_one_task", due_date_start=datetime.now(timezone.utc) + timedelta(days=100))
     assert len(no_match_date) == 0
+
+
+def test_reminder_scheduling_and_trigger():
+    """Ensure reminders are recorded and triggered."""
+    now = datetime.now(timezone.utc)
+    due = now + timedelta(hours=2)
+    task = task_core.create_task("u1", "Reminder task", due_date_utc=due, reminder_offset_minutes=60)
+    assert str(task.id) in task_core._reminder_schedule
+    # Fast forward past reminder time
+    mock_client = type("MC", (), {"send_notification": lambda self, payload: payload})()
+    triggered = task_core.check_and_trigger_reminders(due - timedelta(minutes=59), mock_client)
+    assert str(task.id) in triggered
+    assert str(task.id) not in task_core._reminder_schedule
 
 # --- End of Tests ---
