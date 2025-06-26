@@ -12,9 +12,20 @@ class StressAssessment(BaseModel):
 class WellnessModule:
     def __init__(self, connector: WearableConnector | None = None):
         self.connector = connector
+        self.wellness_logs: dict[str, List[WellnessLog]] = {}
 
     def log_wellness_checkin(self, user_id: str, wellness_data: WellnessLog) -> bool:
+        logs = self.wellness_logs.setdefault(user_id, [])
+        logs.append(wellness_data)
         return True
+
+    def get_recent_logs(self, user_id: str, days: int = 7) -> List[WellnessLog]:
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+        return [
+            w
+            for w in self.wellness_logs.get(user_id, [])
+            if w.timestamp_utc >= cutoff
+        ]
 
     def analyze_stress_patterns(self, logs: List[WellnessLog]) -> Optional[str]:
         if not logs:
