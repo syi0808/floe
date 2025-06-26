@@ -64,3 +64,14 @@ def test_inbox_agent_summarize_thread(mock_sum):
 
     gmail.get_email_body.assert_called_with('t1')
     assert resp["data"]["summary"] == 'sum'
+
+@patch('inbox_agent.email_connectors.requests.post')
+def test_gmail_refresh_token(mock_post):
+    mock_post.return_value.json.return_value = {"access_token": "new"}
+    mock_post.return_value.raise_for_status.return_value = None
+    conn = GmailConnector(access_token=None, refresh_token='r', client_id='c', client_secret='s')
+    with patch('inbox_agent.email_connectors.requests.get') as mock_get:
+        mock_get.return_value.json.return_value = {"messages": []}
+        mock_get.return_value.raise_for_status.return_value = None
+        conn.list_emails()
+    mock_post.assert_called_once()

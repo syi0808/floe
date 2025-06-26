@@ -24,11 +24,35 @@ class AbstractEmailConnector(ABC):
 class GmailConnector(AbstractEmailConnector):
     """Simple Gmail API wrapper using HTTP requests."""
 
-    def __init__(self, access_token: str) -> None:
+    def __init__(
+        self,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
         self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.base_url = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+    def _refresh_token(self) -> None:
+        if not all([self.refresh_token, self.client_id, self.client_secret]):
+            return
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "refresh_token": self.refresh_token,
+            "grant_type": "refresh_token",
+        }
+        resp = requests.post("https://oauth2.googleapis.com/token", data=data)
+        resp.raise_for_status()
+        self.access_token = resp.json().get("access_token")
+
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.access_token:
+            self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
         resp.raise_for_status()
@@ -63,11 +87,39 @@ class GmailConnector(AbstractEmailConnector):
 class OutlookConnector(AbstractEmailConnector):
     """Microsoft Outlook connector using Graph API."""
 
-    def __init__(self, access_token: str) -> None:
+    def __init__(
+        self,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        tenant: str = "common",
+    ) -> None:
         self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.tenant = tenant
         self.base_url = "https://graph.microsoft.com/v1.0/me"
 
+    def _refresh_token(self) -> None:
+        if not all([self.refresh_token, self.client_id, self.client_secret]):
+            return
+        data = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "refresh_token": self.refresh_token,
+            "grant_type": "refresh_token",
+            "scope": "https://graph.microsoft.com/.default",
+        }
+        token_url = f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
+        resp = requests.post(token_url, data=data)
+        resp.raise_for_status()
+        self.access_token = resp.json().get("access_token")
+
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.access_token:
+            self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
         resp.raise_for_status()
