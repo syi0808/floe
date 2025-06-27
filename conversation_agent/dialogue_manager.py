@@ -12,7 +12,12 @@ class DialogueManager:
 
     def add_user_input(self, user_input: UserInput):
         """Adds user input to the conversation history."""
-        turn = ConversationTurn(user_input=user_input, timestamp=user_input.timestamp)
+        self.state.turn_counter += 1
+        turn = ConversationTurn(
+            turn_id=self.state.turn_counter,
+            user_input=user_input,
+            timestamp=user_input.timestamp,
+        )
         self.state.history.append(turn)
         self.state.last_interaction_time = user_input.timestamp
         # Basic state update: could be more sophisticated
@@ -22,7 +27,12 @@ class DialogueManager:
         """Adds agent response to the most recent turn or a new turn if necessary."""
         if not self.state.history or self.state.history[-1].agent_response is not None:
             # Create a new turn if history is empty or last turn already has a response
-            turn = ConversationTurn(agent_response=agent_response, timestamp=agent_response.timestamp)
+            self.state.turn_counter += 1
+            turn = ConversationTurn(
+                turn_id=self.state.turn_counter,
+                agent_response=agent_response,
+                timestamp=agent_response.timestamp,
+            )
             self.state.history.append(turn)
         else:
             # Add to the last turn
@@ -33,6 +43,27 @@ class DialogueManager:
 
         self.state.last_interaction_time = agent_response.timestamp
         self.state.current_context['last_agent_message'] = agent_response.text
+
+    def check_clarification_needed(
+        self, confidence: float, missing_required_slot: bool, question: str
+    ) -> bool:
+        """Apply clarification policy and record a clarification question if triggered."""
+        if self.state.waiting_for_clarification:
+            return False
+        if confidence < 0.6 or missing_required_slot:
+            self.state.waiting_for_clarification = True
+            self.state.clarification_attempts += 1
+            self.state.pending_question = question
+            return True
+        return False
+
+    def resolve_clarification(self, answer: str) -> None:
+        """Resolve a pending clarification with the provided answer."""
+        if not self.state.waiting_for_clarification:
+            return
+        self.state.current_context['clarification_answer'] = answer
+        self.state.waiting_for_clarification = False
+        self.state.pending_question = None
 
 
     def get_conversation_history(self) -> List[ConversationTurn]:

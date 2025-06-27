@@ -83,10 +83,26 @@ class ConversationAgent:
         user_input = self.input_handler.process_input(text)
         self.dialogue_manager.add_user_input(user_input)
 
+        # Resolve any pending clarification with this input
+        if self.dialogue_manager.state.waiting_for_clarification:
+            self.dialogue_manager.resolve_clarification(user_input.text)
+            # We don't return here; continue to process normally after resolving
+
         intent = self.intent_recognizer.recognize_intent(user_input.text)
         language = None
         if user_input.metadata:
             language = user_input.metadata.get("language")
+
+        confidence = 1.0 if intent != "unknown" else 0.5
+
+        if self.dialogue_manager.check_clarification_needed(
+            confidence, False, "Could you clarify your request?"
+        ):
+            agent_response = AgentResponse(text=self.dialogue_manager.state.pending_question)
+            self.dialogue_manager.add_agent_response(agent_response)
+            if user_id and self.memory_manager:
+                self._store_turn(user_id, user_input, agent_response)
+            return agent_response
 
         response_text = self.response_generator.generate_response(
             intent, language=language or "en"
