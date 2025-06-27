@@ -15,9 +15,19 @@ class MacroBreakdown(BaseModel):
 class NutritionModule:
     def __init__(self, connector: WearableConnector | None = None):
         self.connector = connector
+        self.meal_logs: dict[str, List[MealRecord]] = {}
 
     def log_meal(self, user_id: str, meal_data: MealRecord) -> bool:
+        logs = self.meal_logs.setdefault(user_id, [])
+        logs.append(meal_data)
         return True
+
+    def get_meals_for_date(self, user_id: str, date: datetime.date) -> List[MealRecord]:
+        return [
+            meal
+            for meal in self.meal_logs.get(user_id, [])
+            if meal.timestamp_utc.date() == date
+        ]
 
     def track_daily_nutrients(self, meals: List[MealRecord]) -> MacroBreakdown:
         totals = MacroBreakdown()

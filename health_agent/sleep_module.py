@@ -15,11 +15,20 @@ class SleepModule:
 
     def __init__(self, connector: WearableConnector | None = None):
         self.connector = connector
+        self.sleep_logs: dict[str, List[SleepRecord]] = {}
 
     def log_sleep(self, user_id: str, sleep_data: SleepRecord) -> bool:
-        # Placeholder for persistence logic (e.g., MemoryManager or MCP)
-        # For now we simply pretend it was stored successfully
+        logs = self.sleep_logs.setdefault(user_id, [])
+        logs.append(sleep_data)
         return True
+
+    def get_recent_sleep_hours(self, user_id: str, days: int = 7) -> List[float]:
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+        return [
+            (r.end_time_utc - r.start_time_utc).total_seconds() / 3600
+            for r in self.sleep_logs.get(user_id, [])
+            if r.start_time_utc >= cutoff
+        ]
 
     def calculate_sleep_deficit(self, recent_hours: List[float], target_hours: float = 8.0) -> float:
         if not recent_hours:

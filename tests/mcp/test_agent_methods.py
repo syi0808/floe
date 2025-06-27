@@ -7,6 +7,7 @@ from inbox_agent.inbox_agent import InboxAgent
 from health_agent.health_agent import HealthAgent
 from insight_agent.insight_agent import InsightAgent
 from memory_manager_agent.memory_manager import MemoryManagerAgent
+from conversation_agent.conversation_agent import ConversationAgent
 
 
 @pytest.mark.parametrize(
@@ -17,6 +18,7 @@ from memory_manager_agent.memory_manager import MemoryManagerAgent
         (InboxAgent, "add_memory"),
         (HealthAgent, "add_memory"),
         (InsightAgent, "add_memory"),
+        (ConversationAgent, "add_memory"),
         (MemoryManagerAgent, "post_memory_to_mcp"),
     ],
 )

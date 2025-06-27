@@ -14,14 +14,25 @@ class ActivityMetrics(BaseModel):
 class ActivityModule:
     def __init__(self, connector: WearableConnector | None = None):
         self.connector = connector
+        self.activity_logs: dict[str, List[ActivityRecord]] = {}
 
     def log_activity(self, user_id: str, activity_data: ActivityRecord) -> bool:
+        logs = self.activity_logs.setdefault(user_id, [])
+        logs.append(activity_data)
         return True
+
+    def get_recent_activity(self, user_id: str, days: int = 7) -> List[ActivityRecord]:
+        cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+        return [
+            a
+            for a in self.activity_logs.get(user_id, [])
+            if a.start_time_utc >= cutoff
+        ]
 
     def analyze_activity(self, activities: List[ActivityRecord]) -> ActivityMetrics:
         metrics = ActivityMetrics()
         for act in activities:
-            if act.type == "steps":
+            if act.activity_type == "steps":
                 metrics.total_steps += int(act.duration_minutes)
         return metrics
 

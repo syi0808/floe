@@ -3,12 +3,17 @@ from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from .conversation_agent import ConversationAgent
 from memory_manager_agent.memory_manager import MemoryManagerAgent
+from mcp import MCPClient
 
 class ConversationAgentWrapper(BaseAgent):
     """Adapter to use ConversationAgent with the OrchestrationEngine."""
 
-    def __init__(self, memory_manager: Optional[MemoryManagerAgent] = None) -> None:
-        self.agent = ConversationAgent(memory_manager=memory_manager)
+    def __init__(
+        self,
+        memory_manager: Optional[MemoryManagerAgent] = None,
+        mcp_client: MCPClient | None = None,
+    ) -> None:
+        self.agent = ConversationAgent(memory_manager=memory_manager, mcp_client=mcp_client)
 
     @property
     def name(self) -> str:
@@ -41,3 +46,32 @@ class ConversationAgentWrapper(BaseAgent):
                 message=f"Conversation processing failed: {str(e)}",
                 source_agent=self.name,
             )
+
+    # MCP helper methods -------------------------------------------------
+    def invoke_service(self, service_name: str, payload: Dict[str, Any]):
+        return self.agent.invoke_service(service_name, payload)
+
+    def add_memory(self, user_id: str, memory_item: Dict[str, Any]):
+        return self.agent.add_memory(user_id, memory_item)
+
+    def search_memories(self, user_id: str, query: str, top_k: int = 5):
+        return self.agent.search_memories(user_id, query, top_k)
+
+    def send_reply(
+        self,
+        user_id: str,
+        session_id: str,
+        channel_type: str,
+        content: str,
+        target_details: Dict[str, Any] | None = None,
+    ):
+        return self.agent.send_reply(
+            user_id,
+            session_id,
+            channel_type,
+            content,
+            target_details,
+        )
+
+    def send_notification(self, notification: Dict[str, Any]):
+        return self.agent.send_notification(notification)
