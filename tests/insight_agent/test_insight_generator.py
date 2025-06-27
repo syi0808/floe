@@ -2,31 +2,51 @@ import pytest
 from insight_agent.insight_generator import InsightGenerator
 
 
-def test_compile_counts():
-    gen = InsightGenerator()
-    data = {
-        "schedule_agent": [{"id": 1}, {"id": 2}],
-        "task_agent": [],
+def sample_data():
+    return {
+        "schedule_agent": [
+            {"id": 1, "start": "2025-06-01T09:00:00Z", "end": "2025-06-01T10:00:00Z"},
+            {"id": 2, "duration_hours": 1.5},
+        ],
+        "task_agent": [
+            {"id": "t1", "status": "todo"},
+            {"id": "t2", "status": "done"},
+        ],
+        "health_agent": [
+            {"sleep_score": 80.0},
+            {"sleep_score": 70.0},
+        ],
     }
-    summary = gen.compile(data)
-    assert summary == {
-        "schedule_agent": {"count": 2},
-        "task_agent": {"count": 0},
-    }
 
 
-def test_generate_summary_markdown():
+def test_compile_aggregates():
     gen = InsightGenerator()
-    result = gen.generate_summary({"agent": [{}, {}]}, format="markdown")
-    assert result.startswith("# Insight Report")
-    assert "**agent**" in result
-    assert "2 entries" in result
+    summary = gen.compile(sample_data())
+
+    assert summary["schedule_agent"]["count"] == 2
+    assert summary["schedule_agent"]["total_hours"] == 2.5
+    assert summary["task_agent"]["count"] == 2
+    assert summary["task_agent"]["completed"] == 1
+    assert summary["health_agent"]["count"] == 2
+    assert summary["health_agent"]["avg_sleep_score"] == 75.0
 
 
-def test_generate_summary_json():
+def test_generate_summary_markdown_multi():
     gen = InsightGenerator()
-    result = gen.generate_summary({"a": [{}]}, format="json")
-    assert result == {"summary": {"a": {"count": 1}}}
+    md = gen.generate_summary(sample_data(), format="markdown")
+    assert "# Insight Report" in md
+    assert "**schedule_agent**" in md
+    assert "2 entries" in md
+    assert "completed" in md
+    assert "avg sleep score" in md
+
+
+def test_generate_summary_json_multi():
+    gen = InsightGenerator()
+    js = gen.generate_summary(sample_data(), format="json")
+    assert js["summary"]["task_agent"]["completed"] == 1
+    assert js["summary"]["schedule_agent"]["total_hours"] == 2.5
+    assert js["summary"]["health_agent"]["avg_sleep_score"] == 75.0
 
 
 @pytest.mark.parametrize("fmt", ["bad", "xml"])
