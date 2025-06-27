@@ -67,6 +67,18 @@ This project is currently under active development. The `OrchestratorAgent` and 
     *   Replace `your_..._api_key_here` with your actual API key.
     *   LiteLLM supports many models. Refer to the [LiteLLM documentation](https://docs.litellm.ai/docs/providers) for more provider options and model names. Ensure the chosen `LITELLM_MODEL_NAME` corresponds to the API key you provide.
 
+### MCP Configuration
+
+Agents communicate with the Floe MCP service through the `MCPClient`. Set the following environment variables (for example in your `.env` file) to configure the connection:
+
+```env
+MCP_BASE_URL=http://localhost:8000
+MCP_ACCESS_TOKEN=your_mcp_access_token
+MCP_TOKEN_TYPE=Bearer
+```
+
+`MCP_BASE_URL` specifies the MCP API server, while `MCP_ACCESS_TOKEN` and `MCP_TOKEN_TYPE` configure the authorization header.
+
 ## How to Run
 
 The primary entry point for demonstrating the current capabilities is the interactive orchestrator agent CLI.
