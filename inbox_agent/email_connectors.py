@@ -48,8 +48,10 @@ class GmailConnector(AbstractEmailConnector):
         }
         resp = requests.post("https://oauth2.googleapis.com/token", data=data)
         resp.raise_for_status()
-        self.access_token = resp.json().get("access_token")
-
+        token_data = resp.json()
+        if "access_token" not in token_data:
+            raise ValueError("Token refresh response missing access_token")
+        self.access_token = token_data["access_token"]
     def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self.access_token:
             self._refresh_token()
