@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal, Dict, Any
 from uuid import UUID, uuid4
 
@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field, ValidationError
 TaskStatus = Literal['todo', 'in-progress', 'in progress', 'done', 'archived']
 
 # In-memory storage for tasks
-_task_storage: Dict[str, 'TaskItem'] = {} # Key: str(task.id), Value: TaskItem instance
+_task_storage: Dict[str, 'TaskItem'] = {}  # Key: str(task.id) -> TaskItem
+_reminder_schedule: Dict[str, datetime] = {}
+DEFAULT_REMINDER_MINUTES = 1440  # 24 hours before due date
 
 # Future enhancement: Implement more advanced priority calculation,
 # e.g., based on Eisenhower matrix (Urgent/Important) or due date proximity.
@@ -27,6 +29,7 @@ class TaskItem(BaseModel):
     status: TaskStatus = 'todo'
     project_tags: Optional[List[str]] = None
     linked_schedule_id: Optional[str] = None
+    reminder_time_utc: Optional[datetime] = None
 
     model_config = { # Pydantic V2 style
         "json_encoders": {
@@ -45,7 +48,8 @@ def create_task(
     due_date_utc: Optional[datetime] = None,
     priority: int = 2, # Default priority from TaskItem
     project_tags: Optional[List[str]] = None,
-    status: TaskStatus = 'todo'
+    status: TaskStatus = 'todo',
+    reminder_offset_minutes: Optional[int] = None,
 ) -> TaskItem:
     task = TaskItem(
         user_id=user_id,
@@ -56,36 +60,49 @@ def create_task(
         status=status
     )
     _task_storage[str(task.id)] = task
+
+    # Automatically schedule reminder if due date is set
+    if due_date_utc:
+        offset = (
+            reminder_offset_minutes
+            if reminder_offset_minutes is not None
+            else DEFAULT_REMINDER_MINUTES
+        )
+        schedule_reminder(task, offset)
     return task
 
-def get_task(task_id: str) -> Optional[TaskItem]:
-    return _task_storage.get(task_id)
-
-def update_task(task_id: str, updates: Dict[str, Any]) -> Optional[TaskItem]:
+def get_task(task_id: str, user_id: Optional[str] = None) -> TaskItem:
     task = _task_storage.get(task_id)
-    if task:
-        # Create a dictionary of the existing task's data
-        task_data = task.model_dump()
-        # Prevent overwriting immutable fields
-        IMMUTABLE = {"id", "created_at", "user_id"}
-        filtered_updates = {k: v for k, v in updates.items() if k not in IMMUTABLE}
-        updated_task_data = {**task_data, **filtered_updates}
+    if not task or (user_id is not None and task.user_id != user_id):
+        raise ValueError(f"Task with ID {task_id} not found")
+    return task
 
-        try:
-            # Create a new TaskItem instance from the merged data
-            # This validates all fields, including those not explicitly in 'updates'
-            updated_task = TaskItem(**updated_task_data)
-            _task_storage[task_id] = updated_task
-            return updated_task
-        except ValidationError:
-            return None  # Invalid data based on model validation rules
-    return None
+def update_task(task_id: str, user_id: Optional[str], updates: Dict[str, Any]) -> TaskItem:
+    task = get_task(task_id, user_id)
 
-def delete_task(task_id: str) -> bool:
-    if task_id in _task_storage:
-        del _task_storage[task_id]
-        return True
-    return False
+    task_data = task.model_dump()
+    IMMUTABLE = {"id", "created_at", "user_id"}
+    filtered_updates = {k: v for k, v in updates.items() if k not in IMMUTABLE}
+    updated_task_data = {**task_data, **filtered_updates}
+
+    try:
+        updated_task = TaskItem(**updated_task_data)
+    except ValidationError as e:
+        raise ValueError(str(e))
+
+    _task_storage[task_id] = updated_task
+
+    if updated_task.due_date_utc:
+        offset = updates.get("reminder_offset_minutes", DEFAULT_REMINDER_MINUTES)
+        schedule_reminder(updated_task, offset)
+
+    return updated_task
+
+def delete_task(task_id: str, user_id: Optional[str] = None) -> bool:
+    task = get_task(task_id, user_id)
+    del _task_storage[task_id]
+    _reminder_schedule.pop(task_id, None)
+    return True
 
 def list_tasks(
     user_id: str,
@@ -119,6 +136,42 @@ def list_tasks(
 
     return sorted(user_tasks, key=lambda t: (t.priority, t.created_at))
 
-# Future enhancement: Integrate reminder logic.
-# This would involve scheduling notifications for tasks with due dates,
-# potentially interacting with a central notification service or MCP.
+# --- Reminder Scheduling -------------------------------------------------
+
+def schedule_reminder(task: TaskItem, offset_minutes: int) -> None:
+    """Record a reminder time for ``task``.
+
+    The actual notification dispatch will be integrated with MCP in the future.
+    """
+    if not task.due_date_utc:
+        return
+    reminder_time = task.due_date_utc - timedelta(minutes=offset_minutes)
+    task.reminder_time_utc = reminder_time
+    _reminder_schedule[str(task.id)] = reminder_time
+
+
+def check_and_trigger_reminders(now: datetime, mcp_client: Optional[Any] = None) -> List[str]:
+    """Check for due reminders and optionally notify via ``mcp_client``.
+
+    Returns a list of task IDs for which reminders were triggered.
+    """
+    triggered: List[str] = []
+    for task_id, remind_at in list(_reminder_schedule.items()):
+        if remind_at <= now:
+            task = _task_storage.get(task_id)
+            if task and mcp_client:
+                try:
+                    mcp_client.send_notification(
+                        {
+                            "user_id": task.user_id,
+                            "type": "task_reminder",
+                            "task_id": task_id,
+                            "message": f"Reminder: {task.description} is due soon",
+                        }
+                    )
+                except Exception:
+                    pass
+            triggered.append(task_id)
+            _reminder_schedule.pop(task_id, None)
+    return triggered
+
