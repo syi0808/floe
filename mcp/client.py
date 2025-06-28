@@ -70,6 +70,20 @@ class MCPClient:
             "GET", f"/mcp/memories/{user_id}/search", params=params
         )
 
+    def get_memory(self, user_id: str, memory_id: str) -> Any:
+        """Retrieve a specific memory item by its ID."""
+        return self._request("GET", f"/mcp/memories/{user_id}/{memory_id}")
+
+    def update_memory(
+        self, user_id: str, memory_id: str, data: Dict[str, Any]
+    ) -> Any:
+        """Update an existing memory item by ID."""
+        return self._request("PUT", f"/mcp/memories/{user_id}/{memory_id}", json=data)
+
+    def delete_memory(self, user_id: str, memory_id: str) -> Any:
+        """Delete a memory item by ID."""
+        return self._request("DELETE", f"/mcp/memories/{user_id}/{memory_id}")
+
     def send_reply(
         self,
         user_id: str,

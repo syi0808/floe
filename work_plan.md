@@ -25,6 +25,15 @@
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
 
+
+- Time: 2025-06-27T09:05:50Z
+- Goal: Implement additional MCP memory endpoints and tests.
+- Steps:
+  1. Add get/update/delete memory calls in mcp.client.
+  2. Update integration tests to cover these endpoints.
+  3. Run pytest.
+  4. Commit changes.
+  5. 
 - Time: 2025-06-27T09:11:51Z
 - Goal: Increase test coverage and add deployment configs
 - Steps:
