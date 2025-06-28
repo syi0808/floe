@@ -20,6 +20,9 @@ class TestContextLoading(unittest.TestCase):
         self.assertEqual(len(history), 2)
         self.assertEqual(history[0].user_input.text, "Hi")
         self.assertEqual(history[1].user_input.text, "How are you?")
+        self.assertEqual(history[0].turn_id, 1)
+        self.assertEqual(history[1].turn_id, 2)
+        self.assertEqual(agent.dialogue_manager.state.turn_counter, 2)
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,15 +60,13 @@ def parse_task_request(natural_language_query: str, context_document: Optional[s
         )
 
         agent = Agent(
+            name="task_parser_agent",
             tools=[task_tool],
-            instructions=agent_instructions
-            # Forcing tool usage can also be done by setting tool_choice on the model_settings
-            # or by very specific instructions if the SDK supports it directly.
-            # The current approach relies on strong instructions and a single tool.
+            instructions=agent_instructions,
         )
 
         # The user_input for the Runner should be the natural language query.
-        result = Runner.run_sync(agent=agent, user_input=natural_language_query)
+        result = Runner.run_sync(starting_agent=agent, input=natural_language_query)
 
         if result.tool_calls and len(result.tool_calls) > 0:
             # Assuming the first tool call is the one we're interested in,

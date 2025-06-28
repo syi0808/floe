@@ -4,9 +4,16 @@ import uuid
 
 # Modules to be tested or used
 from task_agent import task_core
-from task_agent.task_calendar_linker import TaskCalendarLinker, TaskInput, CalendarEvent
+from task_agent.task_calendar_linker import (
+    TaskCalendarLinker,
+    TaskInput,
+    CalendarEvent,
+    block_time_for_task_via_schedule_agent,
+)
 from tests.integration.mocks.mock_calendar_adapter import MockCalendarAdapter
 from memory_manager_agent.memory_manager import MemoryManagerAgent
+from schedule_agent.schedule_agent import ScheduleAgent
+from unittest.mock import patch
 
 USER_ID = "test_user_123"
 
@@ -90,7 +97,7 @@ def test_scenario_1_create_task_with_calendar_event(
     assert calendar_event_in_mock.task_id_ref == str(created_task.id)
 
     # 3. Link the event to the task
-    updated_task = task_core.update_task(str(created_task.id), {"linked_schedule_id": floe_event_id})
+    updated_task = task_core.update_task(str(created_task.id), USER_ID, {"linked_schedule_id": floe_event_id})
     assert updated_task is not None
     assert updated_task.linked_schedule_id == floe_event_id
     assert task_core._task_storage[str(created_task.id)].linked_schedule_id == floe_event_id
@@ -148,7 +155,7 @@ def test_scenario_2_update_task_and_calendar_event(
     )
     initial_floe_event_id = task_calendar_linker.add_task_to_calendar(task_input_for_calendar_initial, "primary")
     assert initial_floe_event_id is not None
-    task_core.update_task(task_id_str, {"linked_schedule_id": initial_floe_event_id})
+    task_core.update_task(task_id_str, USER_ID, {"linked_schedule_id": initial_floe_event_id})
 
     # Store initial version in memory
     mock_memory_manager_agent.add_memory(USER_ID, {"type": "task_data", "content": task_to_update.model_dump_json(), "task_id": task_id_str})
@@ -162,7 +169,7 @@ def test_scenario_2_update_task_and_calendar_event(
         "due_date_utc": new_due_date,
         "priority": 1
     }
-    updated_task_from_core = task_core.update_task(task_id_str, updates_for_core)
+    updated_task_from_core = task_core.update_task(task_id_str, USER_ID, updates_for_core)
     assert updated_task_from_core is not None
     assert updated_task_from_core.description == new_description
     assert updated_task_from_core.due_date_utc == new_due_date
@@ -239,7 +246,7 @@ def test_scenario_3_delete_task_and_calendar_event(
     )
     floe_event_id = task_calendar_linker.add_task_to_calendar(task_input_for_calendar, "primary")
     assert floe_event_id is not None
-    task_core.update_task(task_id_str, {"linked_schedule_id": floe_event_id})
+    task_core.update_task(task_id_str, USER_ID, {"linked_schedule_id": floe_event_id})
 
     # Store in memory
     mock_memory_manager_agent.add_memory(USER_ID, {"type": "task_data", "content": task_to_delete.model_dump_json(), "task_id": task_id_str})
@@ -273,3 +280,20 @@ def test_scenario_3_delete_task_and_calendar_event(
     assert len(mock_memory_manager_agent.get_user_memories(USER_ID)) == 0
 
     print(f"Scenario 3 PASSED: Task {task_id_str} and its event {floe_event_id} deleted.")
+
+
+def test_scenario_4_block_time_via_schedule_agent(
+    task_calendar_linker: TaskCalendarLinker,
+    mock_calendar_adapter: MockCalendarAdapter,
+):
+    schedule_agent = ScheduleAgent()
+    task_input = TaskInput(
+        task_id="task-block-1",
+        description="Block via schedule agent",
+        start_time=datetime.now(timezone.utc) + timedelta(days=1),
+        duration_minutes=30,
+    )
+    with patch.object(schedule_agent, "process", return_value={"status": "success", "data": {"event_id": "evt_sched"}}) as mock_proc:
+        event_id = block_time_for_task_via_schedule_agent(schedule_agent, USER_ID, task_input)
+        assert event_id == "evt_sched"
+        mock_proc.assert_called_once()
