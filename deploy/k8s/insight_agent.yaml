@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: insight-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: insight-agent
+  template:
+    metadata:
+      labels:
+        app: insight-agent
+    spec:
+      containers:
+        - name: insight-agent
+          image: insight-agent:latest
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: insight-agent
+spec:
+  selector:
+    app: insight-agent
+  ports:
+    - port: 8000
+      targetPort: 8000

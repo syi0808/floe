@@ -20,3 +20,5 @@ The codebase relies on several external libraries, most notably:
 These packages are enumerated in `requirements.txt` and `pyproject.toml` and
 should be installed before running the application or tests.
 
+For additional notes on local setup quirks see [`environment_notes.md`](environment_notes.md).
+

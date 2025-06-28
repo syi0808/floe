@@ -19,6 +19,7 @@ class ConversationTurn(BaseModel):
     user_input: Optional[UserInput] = None
     agent_response: Optional[AgentResponse] = None
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)
+    is_clarification: bool = False
 
 class ConversationState(BaseModel):
     conversation_id: str
@@ -29,3 +30,4 @@ class ConversationState(BaseModel):
     waiting_for_clarification: bool = False
     clarification_attempts: int = 0
     pending_question: Optional[str] = None
+    pending_clarification_turn_id: Optional[int] = None

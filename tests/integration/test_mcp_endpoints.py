@@ -49,3 +49,33 @@ def test_conversation_agent_add_memory(monkeypatch):
 
     monkeypatch.setattr(agent.mcp_client.session, "request", fake_request)
     agent.add_memory("user42", {"type": "conversation_turn", "content": "hi"})
+
+
+def test_mcp_client_memory_crud(monkeypatch):
+    from mcp import MCPClient
+    client = MCPClient.from_env()
+
+    def fake_get(method, url, headers=None, timeout=5, **kwargs):
+        assert method == "GET"
+        assert url == "http://mcp.test/mcp/memories/u1/m1"
+        return DummyResponse({"id": "m1"})
+
+    monkeypatch.setattr(client.session, "request", fake_get)
+    assert client.get_memory("u1", "m1") == {"id": "m1"}
+
+    def fake_put(method, url, headers=None, timeout=5, **kwargs):
+        assert method == "PUT"
+        assert url == "http://mcp.test/mcp/memories/u1/m1"
+        assert kwargs.get("json") == {"data": "x"}
+        return DummyResponse({"ok": True})
+
+    monkeypatch.setattr(client.session, "request", fake_put)
+    assert client.update_memory("u1", "m1", {"data": "x"}) == {"ok": True}
+
+    def fake_delete(method, url, headers=None, timeout=5, **kwargs):
+        assert method == "DELETE"
+        assert url == "http://mcp.test/mcp/memories/u1/m1"
+        return DummyResponse({})
+
+    monkeypatch.setattr(client.session, "request", fake_delete)
+    assert client.delete_memory("u1", "m1") == {}
