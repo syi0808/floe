@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, validator
 
 # Assuming CalendarAdapter is in this location. Adjust if moved.
 from orchestrator_agent.calendar_adapters.base_adapter import CalendarAdapter
+from schedule_agent.schedule_agent import ScheduleAgent
 # To use the factory (optional, can be done by client code)
 # from orchestrator_agent.calendar_adapters import get_calendar_adapter
 
@@ -87,6 +88,30 @@ def create_calendar_event_from_task(task_data: TaskInput, base_event_id: Optiona
         task_id_ref=task_data.task_id # This links back to the Floe Task
     )
     return event
+
+
+def block_time_for_task_via_schedule_agent(
+    schedule_agent: ScheduleAgent,
+    user_id: str,
+    task_input: TaskInput,
+    participants: Optional[List[str]] | None = None,
+) -> Optional[str]:
+    """Create a calendar event for ``task_input`` using ``ScheduleAgent``.
+
+    Parameters mirror :class:`TaskInput`. ``participants`` defaults to ``user_id``.
+    Returns the event ID on success or ``None`` otherwise.
+    """
+    entities = {
+        "title": task_input.summary or task_input.description[:50],
+        "participants": participants or [user_id],
+        "time": task_input.start_time.strftime("%H:%M"),
+        "date": task_input.start_time.strftime("%Y-%m-%d"),
+        "description": task_input.description,
+    }
+    resp = schedule_agent.process(entities, user_id)
+    if resp.get("status") == "success":
+        return resp["data"].get("event_id")
+    return None
 
 
 class TaskCalendarLinker:
