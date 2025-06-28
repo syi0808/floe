@@ -24,3 +24,12 @@
   3. Add environment variable usage to README if needed.
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
+
+- Time: 2025-06-27T09:06:06Z
+- Goal: Implement wearable HRV import and unit tests.
+- Steps:
+  1. Add fetch_hrv_data method to WearableConnector and connectors.
+  2. Implement import_wearable_hrv in WellnessModule.
+  3. Add unit tests under tests/health_agent.
+  4. Fix HealthAgent indentation error.
+  5. Run pytest and ensure all tests pass.
