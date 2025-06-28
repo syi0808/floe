@@ -23,6 +23,12 @@ class TestInputHandler(unittest.TestCase):
         self.assertEqual(user_input.text, "leading and trailing spaces")
         self.assertIn("language", user_input.metadata)
 
+    def test_process_input_tabs_and_newlines(self):
+        text = "Hello\tworld\n"
+        user_input = self.handler.process_input(text)
+        self.assertEqual(user_input.text, "Hello world")
+        self.assertIn("language", user_input.metadata)
+
     def test_process_input_with_metadata(self):
         text = "Query with metadata"
         metadata = {"source": "test_case", "user_id": 123}
