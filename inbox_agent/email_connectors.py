@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+import datetime
 import requests
 
 
@@ -36,6 +37,7 @@ class GmailConnector(AbstractEmailConnector):
         self.client_id = client_id
         self.client_secret = client_secret
         self.base_url = "https://gmail.googleapis.com/gmail/v1/users/me"
+        self.token_expires_at: Optional[datetime.datetime] = None
 
     def _refresh_token(self) -> None:
         if not all([self.refresh_token, self.client_id, self.client_secret]):
@@ -52,13 +54,30 @@ class GmailConnector(AbstractEmailConnector):
         if "access_token" not in token_data:
             raise ValueError("Token refresh response missing access_token")
         self.access_token = token_data["access_token"]
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if not self.access_token:
+        if "expires_in" in token_data:
+            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=int(token_data["expires_in"]))
+    def _authorized_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not self.access_token or (
+            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+        ):
             self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
-        resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
+        url = f"{self.base_url}/{endpoint}"
+        resp = requests.request(method, url, headers=headers, params=params)
+        if resp.status_code == 401:
+            self._refresh_token()
+            headers["Authorization"] = f"Bearer {self.access_token}"
+            resp = requests.request(method, url, headers=headers, params=params)
         resp.raise_for_status()
         return resp.json()
+
+    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._authorized_request("get", endpoint, params=params)
 
     def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
         data = self._get("messages", params={"q": query, "maxResults": limit})
@@ -103,6 +122,7 @@ class OutlookConnector(AbstractEmailConnector):
         self.client_secret = client_secret
         self.tenant = tenant
         self.base_url = "https://graph.microsoft.com/v1.0/me"
+        self.token_expires_at: Optional[datetime.datetime] = None
 
     def _refresh_token(self) -> None:
         if not all([self.refresh_token, self.client_id, self.client_secret]):
@@ -117,15 +137,33 @@ class OutlookConnector(AbstractEmailConnector):
         token_url = f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
         resp = requests.post(token_url, data=data)
         resp.raise_for_status()
-        self.access_token = resp.json().get("access_token")
+        token_data = resp.json()
+        self.access_token = token_data.get("access_token")
+        if "expires_in" in token_data:
+            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=int(token_data["expires_in"]))
 
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if not self.access_token:
+    def _authorized_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not self.access_token or (
+            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+        ):
             self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
-        resp = requests.get(f"{self.base_url}/{endpoint}", headers=headers, params=params)
+        url = f"{self.base_url}/{endpoint}"
+        resp = requests.request(method, url, headers=headers, params=params)
+        if resp.status_code == 401:
+            self._refresh_token()
+            headers["Authorization"] = f"Bearer {self.access_token}"
+            resp = requests.request(method, url, headers=headers, params=params)
         resp.raise_for_status()
         return resp.json()
+
+    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._authorized_request("get", endpoint, params=params)
 
     def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
         params = {"$top": limit}
