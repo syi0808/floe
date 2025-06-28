@@ -24,3 +24,10 @@
   3. Add environment variable usage to README if needed.
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
+- Time: 2025-06-27T09:06:34Z
+- Goal: Fix duplicated steps handling and indentation in HealthAgent.
+- Steps:
+  1. Remove repeated 'if steps' block in health_agent.py and fix indentation.
+  2. Ensure activity logging occurs once and wellness logging unaffected.
+  3. Run tests under tests/health_agent to confirm.
+  4. Commit changes.
