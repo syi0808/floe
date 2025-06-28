@@ -24,3 +24,12 @@
   3. Add environment variable usage to README if needed.
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
+- Time: 2025-06-27T09:04:40Z
+- Goal: Extend dialogue management and memory features with tests
+- Steps:
+  1. Update ConversationState and ConversationTurn to track clarification events and turn ids.
+  2. Modify DialogueManager methods to set clarification state and handle turn ids properly.
+  3. Ensure ConversationAgent loads previous conversation history and stores new turns using MemoryManagerAgent.
+  4. Improve InputHandler normalization: handle tabs and multiple spaces consistently; check language detection for short texts.
+  5. Add unit tests for context loading with MemoryManagerAgent and for clarification tracking logic.
+  6. Run pytest and commit changes.

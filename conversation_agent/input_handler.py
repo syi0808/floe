@@ -14,15 +14,16 @@ class InputHandler:
         Processes raw text input into a UserInput object.
         Basic implementation, can be expanded for more preprocessing.
         """
-        # Normalise unicode and collapse whitespace
+        # Normalise unicode and collapse whitespace including tabs/newlines
         import unicodedata
 
         normalised = unicodedata.normalize("NFC", text_input)
-        processed_text = " ".join(normalised.strip().split())
+        collapsed = " ".join(normalised.replace("\t", " ").split())
+        processed_text = collapsed.strip()
 
         language_code = None
         try:
-            if processed_text:
+            if processed_text and len(processed_text) >= 2:
                 language_code = detect(processed_text)
         except LangDetectException:
             language_code = None
