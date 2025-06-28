@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inbox-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inbox-agent
+  template:
+    metadata:
+      labels:
+        app: inbox-agent
+    spec:
+      containers:
+        - name: inbox-agent
+          image: inbox-agent:latest
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inbox-agent
+spec:
+  selector:
+    app: inbox-agent
+  ports:
+    - port: 8000
+      targetPort: 8000
