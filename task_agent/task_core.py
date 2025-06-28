@@ -14,9 +14,27 @@ _task_storage: Dict[str, 'TaskItem'] = {}  # Key: str(task.id) -> TaskItem
 _reminder_schedule: Dict[str, datetime] = {}
 DEFAULT_REMINDER_MINUTES = 1440  # 24 hours before due date
 
-# Future enhancement: Implement more advanced priority calculation,
-# e.g., based on Eisenhower matrix (Urgent/Important) or due date proximity.
-# Currently, priority is set directly upon task creation.
+# Basic priority calculation can be improved in the future (e.g. Eisenhower
+# matrix).  For now ``_calculate_priority`` derives a score from the due date if
+# a priority is not explicitly provided.
+
+def _calculate_priority(due_date_utc: Optional[datetime]) -> int:
+    """Return a priority from ``1`` (highest) to ``4`` based on ``due_date_utc``.
+
+    If ``due_date_utc`` is ``None`` the default priority ``2`` is returned.  The
+    closer the due date is, the higher the priority score.
+    """
+    if due_date_utc is None:
+        return 2
+    now = datetime.now(timezone.utc)
+    delta = due_date_utc - now
+    if delta <= timedelta(days=1):
+        return 1
+    if delta <= timedelta(days=3):
+        return 2
+    if delta <= timedelta(days=7):
+        return 3
+    return 4
 
 class TaskItem(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -46,16 +64,17 @@ def create_task(
     user_id: str,
     description: str,
     due_date_utc: Optional[datetime] = None,
-    priority: int = 2, # Default priority from TaskItem
+    priority: Optional[int] = None,
     project_tags: Optional[List[str]] = None,
     status: TaskStatus = 'todo',
     reminder_offset_minutes: Optional[int] = None,
 ) -> TaskItem:
+    computed_priority = priority if priority is not None else _calculate_priority(due_date_utc)
     task = TaskItem(
         user_id=user_id,
         description=description,
         due_date_utc=due_date_utc,
-        priority=priority,
+        priority=computed_priority,
         project_tags=project_tags,
         status=status
     )
@@ -83,10 +102,11 @@ def update_task(task_id: str, user_id: Optional[str], updates: Dict[str, Any]) -
     task_data = task.model_dump()
     IMMUTABLE = {"id", "created_at", "user_id"}
     filtered_updates = {k: v for k, v in updates.items() if k not in IMMUTABLE}
-    updated_task_data = {**task_data, **filtered_updates}
 
     try:
-        updated_task = TaskItem(**updated_task_data)
+        if "priority" not in filtered_updates and "due_date_utc" in filtered_updates:
+            filtered_updates["priority"] = _calculate_priority(filtered_updates["due_date_utc"])
+        updated_task = TaskItem(**{**task_data, **filtered_updates})
     except ValidationError as e:
         raise ValueError(str(e))
 

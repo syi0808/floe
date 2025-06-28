@@ -216,6 +216,15 @@ class TestTaskCalendarLinker(unittest.TestCase):
         self.assertEqual(events, mock_events)
         self.mock_adapter.list_events.assert_called_once_with("primary", start_filter, end_filter, "task123")
 
+    def test_block_time_for_task_via_schedule_agent(self):
+        from task_agent.task_calendar_linker import block_time_for_task_via_schedule_agent
+        mock_schedule = MagicMock()
+        mock_schedule.process.return_value = {"status": "success", "data": {"event_id": "evt123"}}
+        task_input = TaskInput(**VALID_TASK_DATA_DICT)
+        event_id = block_time_for_task_via_schedule_agent(mock_schedule, "user1", task_input)
+        self.assertEqual(event_id, "evt123")
+        mock_schedule.process.assert_called_once()
+
 # Keep TestTaskInput and TestCalendarEvent as they are still relevant for the data models.
 # Remove TestPlaceholderFunctions as those functions are gone.
 
