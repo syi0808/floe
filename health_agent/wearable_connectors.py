@@ -12,6 +12,10 @@ class WearableConnector:
     def fetch_activity_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[ActivityRecord]:
         raise NotImplementedError
 
+    def fetch_hrv_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[float]:
+        """Return heart-rate variability (HRV) measurements between start and end."""
+        raise NotImplementedError
+
 class GarminConnector(WearableConnector):
     """Example Garmin connector."""
 
@@ -22,6 +26,10 @@ class GarminConnector(WearableConnector):
     def fetch_activity_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[ActivityRecord]:
         return []
 
+    def fetch_hrv_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[float]:
+        # Placeholder - integrate Garmin HRV API
+        return []
+
 class FitbitConnector(WearableConnector):
     """Example Fitbit connector."""
 
@@ -29,4 +37,8 @@ class FitbitConnector(WearableConnector):
         return []
 
     def fetch_activity_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[ActivityRecord]:
+        return []
+
+    def fetch_hrv_data(self, user_id: str, start: datetime.datetime, end: datetime.datetime) -> List[float]:
+        # Placeholder - integrate Fitbit HRV API
         return []
