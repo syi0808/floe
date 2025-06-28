@@ -25,6 +25,9 @@
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
 
+\n- Time: 2025-06-27T09:07:14Z\n- Goal: Implement InsightGenerator daily/weekly reports with MCP notifications and tests.\n- Steps:\n  1. Extend insight_agent/insight_generator.py with generate_report and MCP notification methods.\n  2. Create tests for report generation and MCP integration under tests/insight_agent.\n  3. Run pytest for new tests.\n  4. Commit changes.
+
+
 
 - Time: 2025-06-27T09:05:50Z
 - Goal: Implement additional MCP memory endpoints and tests.

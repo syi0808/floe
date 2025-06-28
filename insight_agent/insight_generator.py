@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Any, Union
+import json
 
 
 class InsightGenerator:
@@ -102,3 +103,49 @@ class InsightGenerator:
 
     def _to_json(self, summary: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         return {"summary": summary}
+
+    # ------------------------------------------------------------------
+    def compile_daily(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        """Wrapper for daily compilation. ``agent_data`` is assumed to contain only entries for a single day."""
+        return self.compile(agent_data)
+
+    def compile_weekly(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        """Wrapper for weekly compilation. ``agent_data`` is assumed to contain only entries for the week."""
+        return self.compile(agent_data)
+
+    def generate_report(
+        self,
+        user_id: str,
+        period: str,
+        agent_data: Dict[str, List[Dict[str, Any]]],
+        *,
+        focus: str | None = None,
+        format: str = "markdown",
+        mcp_client: "MCPClient" | None = None,
+    ) -> Union[str, Dict[str, Any]]:
+        """Generate a report for ``user_id`` and optionally send an MCP notification."""
+
+        if period.lower().startswith("week"):
+            compiled = self.compile_weekly(agent_data)
+        else:
+            compiled = self.compile_daily(agent_data)
+
+        if format == "markdown":
+            report = self._to_markdown(compiled)
+        elif format == "json":
+            report = self._to_json(compiled)
+        else:
+            raise ValueError("format must be 'markdown' or 'json'")
+
+        if mcp_client:
+            from mcp import MCPClient  # Local import to avoid heavy dependency for pure usage
+
+            payload = {
+                "user_id": user_id,
+                "period": period,
+                "type": "insight_report",
+                "content": report if format == "markdown" else json.dumps(report),
+            }
+            mcp_client.send_notification(payload)
+
+        return report

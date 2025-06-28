@@ -54,3 +54,32 @@ def test_generate_summary_invalid_format(fmt):
     gen = InsightGenerator()
     with pytest.raises(ValueError):
         gen.generate_summary({}, format=fmt)
+
+
+def test_generate_report_with_notification(monkeypatch):
+    gen = InsightGenerator()
+    sent = {}
+
+    class DummyClient:
+        def send_notification(self, payload):
+            sent.update(payload)
+
+    client = DummyClient()
+    report = gen.generate_report(
+        user_id="u1",
+        period="daily",
+        agent_data=sample_data(),
+        mcp_client=client,
+    )
+
+    assert "# Insight Report" in report
+    assert sent["user_id"] == "u1"
+    assert sent["period"] == "daily"
+    assert sent["type"] == "insight_report"
+
+
+def test_compile_daily_weekly_aliases():
+    gen = InsightGenerator()
+    daily = gen.compile_daily(sample_data())
+    weekly = gen.compile_weekly(sample_data())
+    assert daily == weekly
