@@ -4,9 +4,16 @@ import uuid
 
 # Modules to be tested or used
 from task_agent import task_core
-from task_agent.task_calendar_linker import TaskCalendarLinker, TaskInput, CalendarEvent
+from task_agent.task_calendar_linker import (
+    TaskCalendarLinker,
+    TaskInput,
+    CalendarEvent,
+    block_time_for_task_via_schedule_agent,
+)
 from tests.integration.mocks.mock_calendar_adapter import MockCalendarAdapter
 from memory_manager_agent.memory_manager import MemoryManagerAgent
+from schedule_agent.schedule_agent import ScheduleAgent
+from unittest.mock import patch
 
 USER_ID = "test_user_123"
 
@@ -273,3 +280,20 @@ def test_scenario_3_delete_task_and_calendar_event(
     assert len(mock_memory_manager_agent.get_user_memories(USER_ID)) == 0
 
     print(f"Scenario 3 PASSED: Task {task_id_str} and its event {floe_event_id} deleted.")
+
+
+def test_scenario_4_block_time_via_schedule_agent(
+    task_calendar_linker: TaskCalendarLinker,
+    mock_calendar_adapter: MockCalendarAdapter,
+):
+    schedule_agent = ScheduleAgent()
+    task_input = TaskInput(
+        task_id="task-block-1",
+        description="Block via schedule agent",
+        start_time=datetime.now(timezone.utc) + timedelta(days=1),
+        duration_minutes=30,
+    )
+    with patch.object(schedule_agent, "process", return_value={"status": "success", "data": {"event_id": "evt_sched"}}) as mock_proc:
+        event_id = block_time_for_task_via_schedule_agent(schedule_agent, USER_ID, task_input)
+        assert event_id == "evt_sched"
+        mock_proc.assert_called_once()

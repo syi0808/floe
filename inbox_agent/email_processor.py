@@ -23,8 +23,8 @@ def summarize_email(body_text: str, max_length: int = 150) -> str:
         return body_text[:max_length]
 
 
-def extract_email_actions(email_id: str, subject: str, body_text: str, sender: str) -> List[Dict[str, Any]]:
-    """Use an LLM to extract structured actions from an email."""
+def parse_email_actions(email_id: str, subject: str, body_text: str, sender: str) -> List[Dict[str, Any]]:
+    """Use an LLM to parse structured actions from an email."""
     prompt = (
         "You are an assistant that extracts scheduling requests or tasks from emails. "
         "Return a JSON array of actions with keys 'action' and 'details'."
@@ -47,6 +47,15 @@ def extract_email_actions(email_id: str, subject: str, body_text: str, sender: s
             return actions
     except Exception:
         pass
+
+    return []
+
+
+def extract_email_actions(email_id: str, subject: str, body_text: str, sender: str) -> List[Dict[str, Any]]:
+    """LLM-driven extraction with keyword fallback for backward compatibility."""
+    actions = parse_email_actions(email_id, subject, body_text, sender)
+    if actions:
+        return actions
 
     # Fallback to keyword based extraction
     content = f"{subject} {body_text}".lower()
@@ -85,7 +94,7 @@ def process_new_email(
                 },
             )
 
-    actions = extract_email_actions(
+    actions = parse_email_actions(
         email_id=email_id or "",
         subject=email_data.get("subject", ""),
         body_text=body_text,

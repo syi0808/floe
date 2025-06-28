@@ -49,12 +49,15 @@ class HealthAgent(BaseAgent):
             )
 
         if "steps" in entities:
+
+            steps = int(entities["steps"])
             record = ActivityRecord(
                 user_id=user_id,
                 start_time_utc=datetime.datetime.utcnow(),
-                duration_minutes=1.0,  # Representing a point-in-time measurement
+                duration_minutes=1.0,  # point-in-time measurement
                 activity_type="steps",
-                calories_burned=float(entities["steps"]),  # Store steps count here temporarily
+                intensity=str(steps),     
+                calories_burned=float(entities["steps"]),
             )
             self.activity_module.log_activity(user_id, record)
 
