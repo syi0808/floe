@@ -108,6 +108,12 @@ def test_create_task_with_all_fields():
     assert task.status == "in-progress"
     assert str(task.id) in task_core._task_storage
 
+def test_priority_auto_calculation():
+    """Priority should be computed from due date when not provided."""
+    soon = datetime.now(timezone.utc) + timedelta(hours=12)
+    task = task_core.create_task("user3", "Soon task", due_date_utc=soon)
+    assert task.priority == 1  # due within 1 day -> highest priority
+
 # get_task Tests
 def test_get_task_existing():
     """Test retrieving an existing task."""
@@ -154,6 +160,13 @@ def test_update_task_partial():
     assert updated_task.status == "in-progress"
     assert updated_task.description == "Partial update task" # Unchanged
     assert updated_task.priority == 1 # Unchanged
+
+def test_update_task_due_date_recalculates_priority():
+    task = task_core.create_task("user1", "Update me", due_date_utc=datetime.now(timezone.utc) + timedelta(days=10))
+    new_due = datetime.now(timezone.utc) + timedelta(hours=12)
+    updates = {"due_date_utc": new_due}
+    updated_task = task_core.update_task(str(task.id), None, updates)
+    assert updated_task.priority == 1
 
 def test_update_task_non_existent():
     """Test updating a non-existent task."""

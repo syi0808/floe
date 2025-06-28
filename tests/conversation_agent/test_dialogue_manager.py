@@ -95,5 +95,18 @@ class TestDialogueManager(unittest.TestCase):
         except ValueError:
             self.fail("Generated conversation ID is not a valid UUID")
 
+    def test_clarification_turn_recording(self):
+        user_input = UserInput(text="Hello")
+        self.manager.add_user_input(user_input)
+        needed = self.manager.check_clarification_needed(0.1, False, "Clarify?")
+        self.assertTrue(needed)
+        response = AgentResponse(text=self.manager.state.pending_question)
+        self.manager.add_agent_response(response, is_clarification=True)
+        turn = self.manager.get_conversation_history()[-1]
+        self.assertTrue(turn.is_clarification)
+        self.assertEqual(self.manager.state.pending_clarification_turn_id, turn.turn_id)
+        self.manager.resolve_clarification("done")
+        self.assertIsNone(self.manager.state.pending_clarification_turn_id)
+
 if __name__ == '__main__':
     unittest.main()

@@ -46,25 +46,31 @@ class ConversationAgent:
             content = item.get("content", {})
             user_text = content.get("user")
             agent_text = content.get("agent")
+            is_clarification = item.get("is_clarification", False)
             ts_str = item.get("timestamp")
             try:
                 ts = datetime.datetime.fromisoformat(ts_str) if ts_str else datetime.datetime.utcnow()
             except ValueError:
                 ts = datetime.datetime.utcnow()
 
+            self.dialogue_manager.state.turn_counter += 1
             user_input = UserInput(text=user_text or "", timestamp=ts)
             agent_response = AgentResponse(text=agent_text or "", timestamp=ts)
             turn = ConversationTurn(
+                turn_id=self.dialogue_manager.state.turn_counter,
                 user_input=user_input,
                 agent_response=agent_response,
                 timestamp=ts,
+                is_clarification=is_clarification,
             )
             self.dialogue_manager.state.history.append(turn)
+            self.dialogue_manager.state.last_interaction_time = ts
 
     def _store_turn(self, user_id: str, user_input: UserInput, agent_response: AgentResponse) -> None:
         """Persist a conversation turn to memory."""
         if not self.memory_manager:
             return
+        last_turn = self.dialogue_manager.state.history[-1]
         memory_item = {
             "type": "conversation_turn",
             "content": {
@@ -72,6 +78,8 @@ class ConversationAgent:
                 "agent": agent_response.text,
             },
             "timestamp": agent_response.timestamp.isoformat(),
+            "turn_id": last_turn.turn_id,
+            "is_clarification": last_turn.is_clarification,
         }
         self.memory_manager.add_memory(user_id, memory_item)
 
@@ -99,7 +107,7 @@ class ConversationAgent:
             confidence, False, "Could you clarify your request?"
         ):
             agent_response = AgentResponse(text=self.dialogue_manager.state.pending_question)
-            self.dialogue_manager.add_agent_response(agent_response)
+            self.dialogue_manager.add_agent_response(agent_response, is_clarification=True)
             if user_id and self.memory_manager:
                 self._store_turn(user_id, user_input, agent_response)
             return agent_response

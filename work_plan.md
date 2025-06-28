@@ -24,6 +24,7 @@
   3. Add environment variable usage to README if needed.
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
+
 - Time: 2025-06-27T09:06:34Z
 - Goal: Fix duplicated steps handling and indentation in HealthAgent.
 - Steps:
@@ -31,3 +32,31 @@
   2. Ensure activity logging occurs once and wellness logging unaffected.
   3. Run tests under tests/health_agent to confirm.
   4. Commit changes.
+
+- Time: 2025-06-27T09:12:49Z
+- Goal: Fix health agent indentation errors and ensure task parsing tests pass.
+- Steps:
+  1. Correct indentation in HealthAgent.process.
+  2. Allow update_task to accept calls without user_id.
+  3. Improve TaskAgent create command parsing for quotes and unknown parameters.
+  4. Update task_parser Agent initialization and run_sync call.
+  5. Run full test suite and commit changes.
+
+- Time: 2025-06-27T09:06:06Z
+- Goal: Implement wearable HRV import and unit tests.
+- Steps:
+  1. Add fetch_hrv_data method to WearableConnector and connectors.
+  2. Implement import_wearable_hrv in WellnessModule.
+  3. Add unit tests under tests/health_agent.
+  4. Fix HealthAgent indentation error.
+  5. Run pytest and ensure all tests pass.
+
+- Time: 2025-06-27T09:04:40Z
+- Goal: Extend dialogue management and memory features with tests
+- Steps:
+  1. Update ConversationState and ConversationTurn to track clarification events and turn ids.
+  2. Modify DialogueManager methods to set clarification state and handle turn ids properly.
+  3. Ensure ConversationAgent loads previous conversation history and stores new turns using MemoryManagerAgent.
+  4. Improve InputHandler normalization: handle tabs and multiple spaces consistently; check language detection for short texts.
+  5. Add unit tests for context loading with MemoryManagerAgent and for clarification tracking logic.
+  6. Run pytest and commit changes.

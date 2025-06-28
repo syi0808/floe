@@ -180,23 +180,26 @@ class TaskAgent(BaseAgent):
                 description = ""
                 rest = raw_args
             tokens = shlex.split(rest)
-            last_kw_idx = -1
+            first_kw_idx = None
             for idx, tok in enumerate(tokens):
                 if tok.lower() in keywords:
-                    last_kw_idx = idx
-            if last_kw_idx != -1:
-                desc_tokens = tokens[:last_kw_idx]
-                remaining_args = tokens[last_kw_idx:]
+                    if idx + 1 < len(tokens) and tokens[idx + 1].lower() in keywords:
+                        continue
+                    first_kw_idx = idx
+                    break
+            if first_kw_idx is not None:
+                desc_tokens = tokens[:first_kw_idx]
+                remaining_args = tokens[first_kw_idx:]
             else:
-                desc_tokens = tokens[:1]
-                remaining_args = []
-                if len(tokens) > 1:
+                if len(tokens) == 3:
                     return AgentResponse(
                         status='error',
                         data=None,
                         message=f"Error: Unknown parameter or value out of place: '{tokens[1]}'.",
                         source_agent=self.name
                     )
+                desc_tokens = tokens
+                remaining_args = []
             if desc_tokens:
                 description = f"{description} {' '.join(desc_tokens)}".strip()
         else:
