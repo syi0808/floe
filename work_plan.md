@@ -24,3 +24,11 @@
   3. Add environment variable usage to README if needed.
   4. Write integration tests mocking MCP responses under tests/integration.
   5. Run pytest and commit changes.
+- Time: 2025-06-27T09:11:51Z
+- Goal: Increase test coverage and add deployment configs
+- Steps:
+  1. Fixed indentation in health_agent to allow tests to run.
+  2. Added end-to-end integration test covering multi-agent orchestration.
+  3. Created Dockerfiles and Kubernetes manifests for all agents under deploy/.
+  4. Documented environment setup issues in docs/environment_notes.md.
+  5. Run pytest on relevant tests.

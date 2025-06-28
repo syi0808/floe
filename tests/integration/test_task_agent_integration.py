@@ -90,7 +90,7 @@ def test_scenario_1_create_task_with_calendar_event(
     assert calendar_event_in_mock.task_id_ref == str(created_task.id)
 
     # 3. Link the event to the task
-    updated_task = task_core.update_task(str(created_task.id), {"linked_schedule_id": floe_event_id})
+    updated_task = task_core.update_task(str(created_task.id), USER_ID, {"linked_schedule_id": floe_event_id})
     assert updated_task is not None
     assert updated_task.linked_schedule_id == floe_event_id
     assert task_core._task_storage[str(created_task.id)].linked_schedule_id == floe_event_id
@@ -148,7 +148,7 @@ def test_scenario_2_update_task_and_calendar_event(
     )
     initial_floe_event_id = task_calendar_linker.add_task_to_calendar(task_input_for_calendar_initial, "primary")
     assert initial_floe_event_id is not None
-    task_core.update_task(task_id_str, {"linked_schedule_id": initial_floe_event_id})
+    task_core.update_task(task_id_str, USER_ID, {"linked_schedule_id": initial_floe_event_id})
 
     # Store initial version in memory
     mock_memory_manager_agent.add_memory(USER_ID, {"type": "task_data", "content": task_to_update.model_dump_json(), "task_id": task_id_str})
@@ -162,7 +162,7 @@ def test_scenario_2_update_task_and_calendar_event(
         "due_date_utc": new_due_date,
         "priority": 1
     }
-    updated_task_from_core = task_core.update_task(task_id_str, updates_for_core)
+    updated_task_from_core = task_core.update_task(task_id_str, USER_ID, updates_for_core)
     assert updated_task_from_core is not None
     assert updated_task_from_core.description == new_description
     assert updated_task_from_core.due_date_utc == new_due_date
@@ -239,7 +239,7 @@ def test_scenario_3_delete_task_and_calendar_event(
     )
     floe_event_id = task_calendar_linker.add_task_to_calendar(task_input_for_calendar, "primary")
     assert floe_event_id is not None
-    task_core.update_task(task_id_str, {"linked_schedule_id": floe_event_id})
+    task_core.update_task(task_id_str, USER_ID, {"linked_schedule_id": floe_event_id})
 
     # Store in memory
     mock_memory_manager_agent.add_memory(USER_ID, {"type": "task_data", "content": task_to_delete.model_dump_json(), "task_id": task_id_str})
