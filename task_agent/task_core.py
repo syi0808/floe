@@ -77,7 +77,16 @@ def get_task(task_id: str, user_id: Optional[str] = None) -> TaskItem:
         raise ValueError(f"Task with ID {task_id} not found")
     return task
 
-def update_task(task_id: str, user_id: Optional[str], updates: Dict[str, Any]) -> TaskItem:
+def update_task(
+    task_id: str,
+    user_id: Optional[str] = None,
+    updates: Optional[Dict[str, Any]] = None,
+) -> TaskItem:
+    if updates is None and isinstance(user_id, dict):
+        updates = user_id
+        user_id = None
+    if updates is None:
+        raise TypeError("updates dictionary required")
     task = get_task(task_id, user_id)
 
     task_data = task.model_dump()
