@@ -23,7 +23,7 @@ class DialogueManager:
         # Basic state update: could be more sophisticated
         self.state.current_context['last_user_message'] = user_input.text
 
-    def add_agent_response(self, agent_response: AgentResponse):
+    def add_agent_response(self, agent_response: AgentResponse, *, is_clarification: bool = False):
         """Adds agent response to the most recent turn or a new turn if necessary."""
         if not self.state.history or self.state.history[-1].agent_response is not None:
             # Create a new turn if history is empty or last turn already has a response
@@ -32,6 +32,7 @@ class DialogueManager:
                 turn_id=self.state.turn_counter,
                 agent_response=agent_response,
                 timestamp=agent_response.timestamp,
+                is_clarification=is_clarification,
             )
             self.state.history.append(turn)
         else:
@@ -40,9 +41,12 @@ class DialogueManager:
             # Update timestamp of the turn if it makes sense, or keep separate user/agent timestamps
             # For simplicity, we assume AgentResponse timestamp is the primary for this update
             self.state.history[-1].timestamp = agent_response.timestamp
+            self.state.history[-1].is_clarification = is_clarification
 
         self.state.last_interaction_time = agent_response.timestamp
         self.state.current_context['last_agent_message'] = agent_response.text
+        if is_clarification:
+            self.state.pending_clarification_turn_id = self.state.turn_counter
 
     def check_clarification_needed(
         self, confidence: float, missing_required_slot: bool, question: str
@@ -64,6 +68,7 @@ class DialogueManager:
         self.state.current_context['clarification_answer'] = answer
         self.state.waiting_for_clarification = False
         self.state.pending_question = None
+        self.state.pending_clarification_turn_id = None
 
 
     def get_conversation_history(self) -> List[ConversationTurn]:
