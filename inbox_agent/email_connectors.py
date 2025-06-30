@@ -68,11 +68,17 @@ class GmailConnector(AbstractEmailConnector):
             self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         url = f"{self.base_url}/{endpoint}"
-        resp = requests.request(method, url, headers=headers, params=params)
+        if method.lower() == "get":
+            resp = requests.get(url, headers=headers, params=params)
+        else:
+            resp = requests.post(url, headers=headers, params=params)
         if resp.status_code == 401:
             self._refresh_token()
             headers["Authorization"] = f"Bearer {self.access_token}"
-            resp = requests.request(method, url, headers=headers, params=params)
+            if method.lower() == "get":
+                resp = requests.get(url, headers=headers, params=params)
+            else:
+                resp = requests.post(url, headers=headers, params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -154,11 +160,17 @@ class OutlookConnector(AbstractEmailConnector):
             self._refresh_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         url = f"{self.base_url}/{endpoint}"
-        resp = requests.request(method, url, headers=headers, params=params)
+        if method.lower() == "get":
+            resp = requests.get(url, headers=headers, params=params)
+        else:
+            resp = requests.post(url, headers=headers, params=params)
         if resp.status_code == 401:
             self._refresh_token()
             headers["Authorization"] = f"Bearer {self.access_token}"
-            resp = requests.request(method, url, headers=headers, params=params)
+            if method.lower() == "get":
+                resp = requests.get(url, headers=headers, params=params)
+            else:
+                resp = requests.post(url, headers=headers, params=params)
         resp.raise_for_status()
         return resp.json()
 
