@@ -70,6 +70,10 @@ class GmailConnector(AbstractEmailConnector):
         url = f"{self.base_url}/{endpoint}"
         if method.lower() == "get":
             resp = requests.get(url, headers=headers, params=params)
+            
+        elif method.lower() == "post":
+            resp = requests.post(url, headers=headers, params=params)
+
         else:
             resp = requests.request(method, url, headers=headers, params=params)
         if resp.status_code == 401:
@@ -162,6 +166,10 @@ class OutlookConnector(AbstractEmailConnector):
         url = f"{self.base_url}/{endpoint}"
         if method.lower() == "get":
             resp = requests.get(url, headers=headers, params=params)
+
+        elif method.lower() == "post":
+            resp = requests.post(url, headers=headers, params=params)
+      
         else:
             resp = requests.request(method, url, headers=headers, params=params)
         if resp.status_code == 401:
