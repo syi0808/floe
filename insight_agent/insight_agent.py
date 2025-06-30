@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from mcp import MCPClient
@@ -20,11 +20,21 @@ class InsightAgent(BaseAgent):
         return ["generate_insight_report"]
 
     def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        gen = InsightGenerator()
+        period = entities.get("period", "daily")
         agent_data = entities.get("data", {})
         output_format = entities.get("format", "markdown")
+        focus = entities.get("focus")
+        notify = bool(entities.get("notify", False))
+
         try:
-            report = gen.generate_summary(agent_data, format=output_format)
+            report = self.generate_report(
+                user_id=user_id,
+                period=period,
+                agent_data=agent_data,
+                focus=focus,
+                format=output_format,
+                notify=notify,
+            )
         except ValueError as exc:
             return AgentResponse(
                 status="error",
@@ -38,6 +48,30 @@ class InsightAgent(BaseAgent):
             data={"received": entities, "user": user_id, "report": report},
             message="Insight report generated.",
             source_agent=self.name,
+        )
+
+    def generate_report(
+        self,
+        user_id: str,
+        period: str,
+        agent_data: Dict[str, List[Dict[str, Any]]],
+        *,
+        focus: str | None = None,
+        format: str = "markdown",
+        notify: bool = False,
+    ) -> Union[str, Dict[str, Any]]:
+        """Public helper for report generation using :class:`InsightGenerator`."""
+
+        gen = InsightGenerator()
+        client = self.mcp_client if notify else None
+        return gen.generate_report(
+            user_id=user_id,
+            period=period,
+            agent_data=agent_data,
+            focus=focus,
+            format=format,
+            mcp_client=client,
+            notify=notify,
         )
 
     # MCP helper methods -------------------------------------------------
