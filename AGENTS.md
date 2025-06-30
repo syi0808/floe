@@ -46,9 +46,9 @@ linked\_issues: \["<#123>"]
 * **데이터/API**: `<endpoint>`
 * **예시 프롬프트** *(선택)*:
 
-  ```
-  # 사용자: ...
-  ```
+\`\`\`
+# 사용자: ...
+\`\`\`
 
 ## 3. Expected Output / Success Criteria
 
@@ -68,15 +68,15 @@ linked\_issues: \["<#123>"]
 
 ## 6. Code Skeleton *(필요 시)*
 
-```python
+\`\`\`python
 # 여기에 필요한 함수/클래스 시그니처 작성
-```
+\`\`\`
 
 ## 7. Tests / Assertions
 
-```python
+\`\`\`python
 # pytest 스타일 예시
-```
+\`\`\`
 
 ## 8. Post‑Generation Checks
 
@@ -126,10 +126,10 @@ commit\_range: "<a1b2c3d>..<e4f5g6h>"
 
 ## 4. 테스트 결과(Test Evidence)
 
-```bash
+\`\`\`bash
 <pytest -q 결과>
 <부하 테스트 요약>
-```
+\`\`\`
 
 ## 5. 의사결정(Decisions)
 
