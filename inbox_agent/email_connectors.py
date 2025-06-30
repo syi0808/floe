@@ -171,7 +171,6 @@ class OutlookConnector(AbstractEmailConnector):
         self._ensure_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         url = f"{self.base_url}/{endpoint}"
-
         if method.lower() == "get":
             resp = requests.get(url, headers=headers, params=params)
         elif method.lower() == "post":
