@@ -94,7 +94,7 @@ def process_new_email(
                 },
             )
 
-    actions = parse_email_actions(
+    actions = extract_email_actions(
         email_id=email_id or "",
         subject=email_data.get("subject", ""),
         body_text=body_text,

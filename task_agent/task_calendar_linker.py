@@ -200,6 +200,45 @@ class TaskCalendarLinker:
             raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
         return self.adapter.list_events(calendar_target, time_min, time_max, floe_task_id)
 
+    def block_time_for_task(
+        self,
+        schedule_agent: ScheduleAgent,
+        user_id: str,
+        task_input: TaskInput,
+        participants: Optional[List[str]] | None = None,
+        calendar_target: Optional[str] = None,
+    ) -> Optional[str]:
+        """Use ``ScheduleAgent`` to reserve time for ``task_input`` and record the event.
+
+        The event returned by ``ScheduleAgent`` is created via the connected calendar
+        adapter so that the task appears on the user's calendar. The resulting event
+        ID is returned on success or ``None`` on failure.
+        """
+
+        if not self._connected:
+            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+
+        floe_event_id = block_time_for_task_via_schedule_agent(
+            schedule_agent,
+            user_id,
+            task_input,
+            participants,
+        )
+
+        if not floe_event_id:
+            return None
+
+        event = create_calendar_event_from_task(task_input, base_event_id=floe_event_id)
+        created_id = self.adapter.create_event(event, calendar_target)
+
+        if created_id != floe_event_id:
+            print(
+                f"Warning: Adapter did not confirm creation with expected Floe Event ID. Expected {floe_event_id}, got {created_id}"
+            )
+            return created_id
+
+        return floe_event_id
+
 
 if __name__ == '__main__':
     print("TaskCalendarLinker module - Basic Structure Test")

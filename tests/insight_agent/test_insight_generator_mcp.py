@@ -31,7 +31,7 @@ def test_notification_payload(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     gen = InsightGenerator()
-    gen.generate_report("user", "daily", {}, mcp_client=client)
+    gen.generate_report("user", "daily", {}, mcp_client=client, notify=True)
 
     assert sent['url'] == "http://mcp/mcp/notifications"
     assert sent['json']['user_id'] == 'user'
