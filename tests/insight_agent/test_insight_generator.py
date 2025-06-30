@@ -70,6 +70,7 @@ def test_generate_report_with_notification(monkeypatch):
         period="daily",
         agent_data=sample_data(),
         mcp_client=client,
+        notify=True,
     )
 
     assert "# Insight Report" in report
