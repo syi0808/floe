@@ -88,3 +88,27 @@ def test_gmail_expired_token_triggers_refresh(mock_get):
     with patch.object(conn, '_refresh_token') as mock_refresh:
         conn.list_emails()
         mock_refresh.assert_called_once()
+
+
+@patch('inbox_agent.email_connectors.requests.post')
+def test_outlook_refresh_token(mock_post):
+    mock_post.return_value.json.return_value = {"access_token": "new"}
+    mock_post.return_value.raise_for_status.return_value = None
+    conn = OutlookConnector(access_token=None, refresh_token='r', client_id='c', client_secret='s')
+    with patch('inbox_agent.email_connectors.requests.get') as mock_get:
+        mock_get.return_value.json.return_value = {"value": []}
+        mock_get.return_value.raise_for_status.return_value = None
+        conn.list_emails()
+    mock_post.assert_called_once()
+
+
+@patch('inbox_agent.email_connectors.requests.get')
+def test_outlook_expired_token_triggers_refresh(mock_get):
+    mock_get.return_value.json.return_value = {"value": []}
+    mock_get.return_value.raise_for_status.return_value = None
+
+    conn = OutlookConnector('old', refresh_token='r', client_id='c', client_secret='s')
+    conn.token_expires_at = datetime.utcnow() - timedelta(seconds=10)
+    with patch.object(conn, '_refresh_token') as mock_refresh:
+        conn.list_emails()
+        mock_refresh.assert_called_once()

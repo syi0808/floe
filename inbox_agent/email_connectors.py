@@ -39,6 +39,13 @@ class GmailConnector(AbstractEmailConnector):
         self.base_url = "https://gmail.googleapis.com/gmail/v1/users/me"
         self.token_expires_at: Optional[datetime.datetime] = None
 
+    def _ensure_token(self) -> None:
+        """Refresh the access token if it's missing or expired."""
+        if not self.access_token or (
+            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+        ):
+            self._refresh_token()
+
     def _refresh_token(self) -> None:
         if not all([self.refresh_token, self.client_id, self.client_secret]):
             return
@@ -62,10 +69,7 @@ class GmailConnector(AbstractEmailConnector):
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if not self.access_token or (
-            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
-        ):
-            self._refresh_token()
+        self._ensure_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         url = f"{self.base_url}/{endpoint}"
         # Use method-specific helper so tests can easily mock requests.get/post
@@ -133,6 +137,13 @@ class OutlookConnector(AbstractEmailConnector):
         self.base_url = "https://graph.microsoft.com/v1.0/me"
         self.token_expires_at: Optional[datetime.datetime] = None
 
+    def _ensure_token(self) -> None:
+        """Refresh the access token if it's missing or expired."""
+        if not self.access_token or (
+            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+        ):
+            self._refresh_token()
+
     def _refresh_token(self) -> None:
         if not all([self.refresh_token, self.client_id, self.client_secret]):
             return
@@ -157,10 +168,7 @@ class OutlookConnector(AbstractEmailConnector):
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if not self.access_token or (
-            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
-        ):
-            self._refresh_token()
+        self._ensure_token()
         headers = {"Authorization": f"Bearer {self.access_token}"}
         url = f"{self.base_url}/{endpoint}"
 
