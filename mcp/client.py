@@ -35,6 +35,8 @@ class MCPClient:
 
     # Internal helpers -------------------------------------------------
     def _headers(self) -> Dict[str, str]:
+        if not self.token:
+            raise ValueError("MCP access token not configured")
         return {
             "Authorization": f"{self.token_type} {self.token}",
             "Content-Type": "application/json",
@@ -104,3 +106,8 @@ class MCPClient:
 
     def send_notification(self, notification: Dict[str, Any]) -> Any:
         return self._request("POST", "/mcp/notifications", json=notification)
+
+    def send_command(self, command: Dict[str, Any]) -> Any:
+        """Send a user command to MCP for processing."""
+        return self._request("POST", "/mcp/commands", json=command)
+
