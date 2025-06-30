@@ -5,10 +5,11 @@ from typing import Optional, List, Dict, Any
 from .common_types import UserInput, AgentResponse, ConversationTurn, ConversationState
 
 class DialogueManager:
-    def __init__(self, conversation_id: Optional[str] = None):
+    def __init__(self, conversation_id: Optional[str] = None, context_window: int = 5):
         self.state = ConversationState(
             conversation_id=conversation_id if conversation_id else str(uuid.uuid4())
         )
+        self.context_window = context_window
 
     def add_user_input(self, user_input: UserInput):
         """Adds user input to the conversation history."""
@@ -22,6 +23,10 @@ class DialogueManager:
         self.state.last_interaction_time = user_input.timestamp
         # Basic state update: could be more sophisticated
         self.state.current_context['last_user_message'] = user_input.text
+        recent = self.state.current_context.setdefault('recent_user_messages', [])
+        recent.append(user_input.text)
+        if len(recent) > self.context_window:
+            del recent[0]
 
     def add_agent_response(self, agent_response: AgentResponse, *, is_clarification: bool = False):
         """Adds agent response to the most recent turn or a new turn if necessary."""
@@ -45,6 +50,10 @@ class DialogueManager:
 
         self.state.last_interaction_time = agent_response.timestamp
         self.state.current_context['last_agent_message'] = agent_response.text
+        recent = self.state.current_context.setdefault('recent_agent_messages', [])
+        recent.append(agent_response.text)
+        if len(recent) > self.context_window:
+            del recent[0]
         if is_clarification:
             self.state.pending_clarification_turn_id = self.state.turn_counter
 
@@ -57,6 +66,8 @@ class DialogueManager:
         if confidence < 0.6 or missing_required_slot:
             self.state.waiting_for_clarification = True
             self.state.clarification_attempts += 1
+            if self.state.clarification_attempts > 1:
+                question = "Could you rephrase that?"
             self.state.pending_question = question
             return True
         return False
@@ -66,6 +77,8 @@ class DialogueManager:
         if not self.state.waiting_for_clarification:
             return
         self.state.current_context['clarification_answer'] = answer
+        history = self.state.current_context.setdefault('clarifications', [])
+        history.append(answer)
         self.state.waiting_for_clarification = False
         self.state.pending_question = None
         self.state.pending_clarification_turn_id = None
@@ -74,8 +87,22 @@ class DialogueManager:
     def get_conversation_history(self) -> List[ConversationTurn]:
         return self.state.history
 
+    def get_recent_user_messages(self, n: Optional[int] = None) -> List[str]:
+        msgs = self.state.current_context.get('recent_user_messages', [])
+        return msgs[-n:] if n else list(msgs)
+
+    def get_recent_agent_messages(self, n: Optional[int] = None) -> List[str]:
+        msgs = self.state.current_context.get('recent_agent_messages', [])
+        return msgs[-n:] if n else list(msgs)
+
     def get_current_state(self) -> ConversationState:
         return self.state
+
+    def get_context_window(self) -> Dict[str, List[str]]:
+        return {
+            'user': self.get_recent_user_messages(),
+            'agent': self.get_recent_agent_messages(),
+        }
 
     def reset_conversation(self, conversation_id: Optional[str] = None):
         """Resets the conversation state."""

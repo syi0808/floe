@@ -122,6 +122,7 @@ class InsightGenerator:
         focus: str | None = None,
         format: str = "markdown",
         mcp_client: "MCPClient" | None = None,
+        notify: bool = False,
     ) -> Union[str, Dict[str, Any]]:
         """Generate a report for ``user_id`` and optionally send an MCP notification."""
 
@@ -137,9 +138,7 @@ class InsightGenerator:
         else:
             raise ValueError("format must be 'markdown' or 'json'")
 
-        if mcp_client:
-            from mcp import MCPClient  # Local import to avoid heavy dependency for pure usage
-
+        if notify and mcp_client:
             payload = {
                 "user_id": user_id,
                 "period": period,

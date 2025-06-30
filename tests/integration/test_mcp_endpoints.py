@@ -79,3 +79,33 @@ def test_mcp_client_memory_crud(monkeypatch):
 
     monkeypatch.setattr(client.session, "request", fake_delete)
     assert client.delete_memory("u1", "m1") == {}
+
+
+def test_mcp_client_send_notification(monkeypatch):
+    from mcp import MCPClient
+    client = MCPClient.from_env()
+
+    def fake_post(method, url, headers=None, timeout=5, **kwargs):
+        assert method == "POST"
+        assert url == "http://mcp.test/mcp/notifications"
+        assert headers.get("Authorization") == "Bearer abc123"
+        assert kwargs.get("json") == {"msg": "hi"}
+        return DummyResponse({"ok": True})
+
+    monkeypatch.setattr(client.session, "request", fake_post)
+    assert client.send_notification({"msg": "hi"}) == {"ok": True}
+
+
+def test_mcp_client_send_command(monkeypatch):
+    from mcp import MCPClient
+    client = MCPClient.from_env()
+
+    def fake_post(method, url, headers=None, timeout=5, **kwargs):
+        assert method == "POST"
+        assert url == "http://mcp.test/mcp/commands"
+        assert headers.get("Authorization") == "Bearer abc123"
+        assert kwargs.get("json") == {"cmd": "run"}
+        return DummyResponse({"queued": True})
+
+    monkeypatch.setattr(client.session, "request", fake_post)
+    assert client.send_command({"cmd": "run"}) == {"queued": True}
