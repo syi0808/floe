@@ -2,6 +2,6 @@
 
 지역 테스트 중에 일부 환경 문제가 발생했습니다.
 
-- 리포지토리는`.python-version`를 통해 Python 3.13.0을 지정합니다.이 정확한 버전은 설치되지 않을 수 있습니다.'Pyenv Local 3.10.17'또는 다른 사용 가능한 버전 사용은 테스트 실행에 작동합니다.
-- 테스트 스위트를 실행하기 전에`pip install -r reimpingse.txt`를 사용하여 필수 종속성을 설치해야합니다.
-- 일부 테스트는`pytest-cov`에 의존합니다.커버리지 보고서가 필요한 경우 'PIP 설치 Pytest-Cov'로 설치하십시오.
+- 리포지토리는 `.python-version`을 통해 Python 3.13.0을 지정합니다. 이 버전이 없을 수 있으므로 `pyenv local 3.10.17` 등을 사용해 버전을 맞추어야 합니다.
+- 버전을 변경한 뒤 `pip install -r requirements.txt`를 실행하여 `requests` 같은 패키지를 설치합니다.
+- 일부 테스트는 `pytest-cov`에 의존하므로 커버리지가 필요하면 `pip install pytest-cov`로 설치합니다.
