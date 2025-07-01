@@ -9,6 +9,7 @@ from conversation_agent.common_types import AgentResponse, UserInput, Conversati
 from memory_manager_agent.memory_manager import MemoryManagerAgent
 from mcp import MCPClient
 
+
 class ConversationAgent:
     """Simple conversational agent orchestrating input, intent and responses.
 
@@ -27,6 +28,22 @@ class ConversationAgent:
         self.response_generator = ResponseGenerator()
         self.mcp_client = mcp_client or MCPClient.from_env()
         self.memory_manager = memory_manager
+
+    # ------------------------------------------------------------------
+    # History persistence helpers
+
+    def load_history_from_memory(self, user_id: str, top_k: int = 20) -> None:
+        """Public wrapper to populate history from ``MemoryManagerAgent``."""
+        self._load_history(user_id, top_k)
+
+    def store_last_turn_to_memory(self, user_id: str) -> None:
+        """Public helper to persist the most recent turn via ``MemoryManagerAgent``."""
+        if not self.dialogue_manager.state.history:
+            return
+        last = self.dialogue_manager.state.history[-1]
+        user_input = last.user_input or UserInput(text="")
+        agent_response = last.agent_response or AgentResponse(text="")
+        self._store_turn(user_id, user_input, agent_response)
 
     def _load_history(self, user_id: str, top_k: int = 20) -> None:
         """Populate ``DialogueManager`` history from ``MemoryManagerAgent``."""
@@ -49,7 +66,11 @@ class ConversationAgent:
             is_clarification = item.get("is_clarification", False)
             ts_str = item.get("timestamp")
             try:
-                ts = datetime.datetime.fromisoformat(ts_str) if ts_str else datetime.datetime.utcnow()
+                ts = (
+                    datetime.datetime.fromisoformat(ts_str)
+                    if ts_str
+                    else datetime.datetime.utcnow()
+                )
             except ValueError:
                 ts = datetime.datetime.utcnow()
 
@@ -66,7 +87,9 @@ class ConversationAgent:
             self.dialogue_manager.state.history.append(turn)
             self.dialogue_manager.state.last_interaction_time = ts
 
-    def _store_turn(self, user_id: str, user_input: UserInput, agent_response: AgentResponse) -> None:
+    def _store_turn(
+        self, user_id: str, user_input: UserInput, agent_response: AgentResponse
+    ) -> None:
         """Persist a conversation turn to memory."""
         if not self.memory_manager:
             return
@@ -84,7 +107,11 @@ class ConversationAgent:
         self.memory_manager.add_memory(user_id, memory_item)
 
     def handle_message(self, text: str, user_id: Optional[str] = None) -> AgentResponse:
-        if user_id and self.memory_manager and not self.dialogue_manager.get_conversation_history():
+        if (
+            user_id
+            and self.memory_manager
+            and not self.dialogue_manager.get_conversation_history()
+        ):
             # Populate history if this is a new instance
             self._load_history(user_id)
 
@@ -106,8 +133,12 @@ class ConversationAgent:
         if self.dialogue_manager.check_clarification_needed(
             confidence, False, "Could you clarify your request?"
         ):
-            agent_response = AgentResponse(text=self.dialogue_manager.state.pending_question)
-            self.dialogue_manager.add_agent_response(agent_response, is_clarification=True)
+            agent_response = AgentResponse(
+                text=self.dialogue_manager.state.pending_question
+            )
+            self.dialogue_manager.add_agent_response(
+                agent_response, is_clarification=True
+            )
             if user_id and self.memory_manager:
                 self._store_turn(user_id, user_input, agent_response)
             return agent_response

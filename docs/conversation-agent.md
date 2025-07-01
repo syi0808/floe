@@ -37,3 +37,16 @@ Serve as the single natural‑language interface: collects user inputs (text/voi
 
 User: "Schedule code review tomorrow afternoon"
 → ConversationAgent ➜ Orchestrator ➜ ScheduleAgent ➜ ConversationAgent ✓
+
+## History Persistence
+
+ConversationAgent can persist dialogue history through `MemoryManagerAgent`.
+Two helper methods are available:
+
+```python
+agent.load_history_from_memory(user_id)
+agent.store_last_turn_to_memory(user_id)
+```
+
+These load past turns when a new instance starts and store the latest turn
+after generating a response.
