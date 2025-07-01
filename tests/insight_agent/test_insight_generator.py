@@ -16,6 +16,14 @@ def sample_data():
             {"sleep_score": 80.0},
             {"sleep_score": 70.0},
         ],
+        "goals": [
+            {"id": "g1", "target": 10, "current": 5},
+            {"id": "g2", "target": 3, "current": 3},
+        ],
+        "trend_data": {
+            "tasks_completed": [1, 2, 4],
+            "sleep_score": [70, 75, 80],
+        },
     }
 
 
@@ -29,6 +37,9 @@ def test_compile_aggregates():
     assert summary["task_agent"]["completed"] == 1
     assert summary["health_agent"]["count"] == 2
     assert summary["health_agent"]["avg_sleep_score"] == 75.0
+    assert summary["goals"]["count"] == 2
+    assert summary["goals"]["completed"] == 1
+    assert "tasks_completed" in summary["trends"]
 
 
 def test_generate_summary_markdown_multi():
@@ -39,6 +50,9 @@ def test_generate_summary_markdown_multi():
     assert "2 entries" in md
     assert "completed" in md
     assert "avg sleep score" in md
+    assert "## Goals" in md
+    assert "g1" in md
+    assert "## Trends" in md
 
 
 def test_generate_summary_json_multi():
@@ -47,6 +61,8 @@ def test_generate_summary_json_multi():
     assert js["summary"]["task_agent"]["completed"] == 1
     assert js["summary"]["schedule_agent"]["total_hours"] == 2.5
     assert js["summary"]["health_agent"]["avg_sleep_score"] == 75.0
+    assert js["summary"]["goals"]["completed"] == 1
+    assert "tasks_completed" in js["summary"]["trends"]
 
 
 @pytest.mark.parametrize("fmt", ["bad", "xml"])
