@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, validator
 # Assuming CalendarAdapter is in this location. Adjust if moved.
 from orchestrator_agent.calendar_adapters.base_adapter import CalendarAdapter
 from schedule_agent.schedule_agent import ScheduleAgent
+from task_agent import task_core
 
 # To use the factory (optional, can be done by client code)
 # from orchestrator_agent.calendar_adapters import get_calendar_adapter
@@ -295,6 +296,10 @@ class TaskCalendarLinker:
                 f"Warning: Adapter did not confirm creation with expected Floe Event ID. Expected {floe_event_id}, got {created_id}"
             )
             return created_id
+        try:
+            task_core.update_task(task_input.task_id, {"linked_schedule_id": floe_event_id})
+        except Exception:
+            pass
 
         return floe_event_id
 

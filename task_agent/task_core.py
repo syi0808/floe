@@ -76,6 +76,10 @@ def create_task(
     computed_priority = (
         priority if priority is not None else _calculate_priority(due_date_utc)
     )
+    completed_at = None
+    if status in ("done", "archived"):
+        completed_at = datetime.now(timezone.utc)
+
     task = TaskItem(
         user_id=user_id,
         description=description,
@@ -83,6 +87,7 @@ def create_task(
         priority=computed_priority,
         project_tags=project_tags,
         status=status,
+        completed_at=completed_at,
     )
     _task_storage[str(task.id)] = task
 
@@ -118,7 +123,26 @@ def update_task(
 
     task_data = task.model_dump()
     IMMUTABLE = {"id", "created_at", "user_id"}
-    filtered_updates = {k: v for k, v in updates.items() if k not in IMMUTABLE}
+    offset = updates.get("reminder_offset_minutes", DEFAULT_REMINDER_MINUTES)
+    filtered_updates = {
+        k: v
+        for k, v in updates.items()
+        if k not in IMMUTABLE and k != "reminder_offset_minutes"
+    }
+
+    # Manage completed_at automatically when status changes
+    new_status = filtered_updates.get("status", task.status)
+    if "completed_at" not in filtered_updates:
+        if new_status in ("done", "archived") and task.status not in (
+            "done",
+            "archived",
+        ):
+            filtered_updates["completed_at"] = datetime.now(timezone.utc)
+        elif new_status not in ("done", "archived") and task.status in (
+            "done",
+            "archived",
+        ):
+            filtered_updates["completed_at"] = None
 
     try:
         if "priority" not in filtered_updates and "due_date_utc" in filtered_updates:

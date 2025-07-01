@@ -11,6 +11,7 @@ from task_agent.task_calendar_linker import (
     create_calendar_event_from_task,  # Assuming this is still exported and used
     TaskCalendarLinker,
 )
+from task_agent import task_core
 from orchestrator_agent.calendar_adapters.base_adapter import (
     CalendarAdapter,
 )  # For spec in mock
@@ -297,12 +298,22 @@ class TestTaskCalendarLinker(unittest.TestCase):
         }
         self.mock_adapter.create_event.return_value = "evt321"
 
-        task_input = TaskInput(**VALID_TASK_DATA_DICT)
+        task = task_core.create_task("user1", "cal link task")
+        task_input = TaskInput(
+            task_id=str(task.id),
+            description=task.description,
+            start_time=VALID_TASK_DATA_DICT["start_time"],
+            duration_minutes=VALID_TASK_DATA_DICT["duration_minutes"],
+            summary=VALID_TASK_DATA_DICT["summary"],
+        )
+
         event_id = self.linker.block_time_for_task(mock_schedule, "user1", task_input)
 
         self.assertEqual(event_id, "evt321")
         mock_schedule.process.assert_called_once()
         self.mock_adapter.create_event.assert_called_once()
+        updated_task = task_core.get_task(str(task.id))
+        self.assertEqual(updated_task.linked_schedule_id, "evt321")
 
     def test_create_update_delete_flow(self):
         """Full flow of creating, updating and deleting an event."""
