@@ -135,3 +135,26 @@ def test_compile_cache_reuse():
     gen.clear_cache()
     third = gen.compile(data)
     assert third is not first
+
+
+def test_disk_cache_json_persistence(tmp_path):
+    cache_file = tmp_path / "cache.json"
+    gen = InsightGenerator(cache_path=str(cache_file))
+    summary = gen.compile(sample_data())
+    assert cache_file.exists()
+
+    gen2 = InsightGenerator(cache_path=str(cache_file))
+    key = gen2._cache_key(sample_data())
+    assert key in gen2._cache
+    summary2 = gen2.compile(sample_data())
+    assert summary2 == summary
+
+
+def test_disk_cache_sqlite_persistence(tmp_path):
+    cache_file = tmp_path / "cache.sqlite"
+    gen = InsightGenerator(cache_path=str(cache_file))
+    gen.compile(sample_data())
+
+    gen2 = InsightGenerator(cache_path=str(cache_file))
+    key = gen2._cache_key(sample_data())
+    assert key in gen2._cache
