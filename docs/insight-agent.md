@@ -15,6 +15,8 @@ Generate cross‑domain analytics and digest reports that help the user understa
 | Skill             | Args                   | Returns    |
 | ----------------- | ---------------------- | ---------- |
 | `generate_report` | `period`, `focus?`     | `markdown` |
+| `generate_daily_report` | `focus?` | `markdown` |
+| `generate_weekly_report` | `focus?` | `markdown` |
 | `compare_period`  | `metric`, `from`, `to` | `diff`     |
 | `goal_progress`   | `goalId`               | `status`   |
 
@@ -40,4 +42,12 @@ Generate cross‑domain analytics and digest reports that help the user understa
   "skill": "generate_report",
   "args": { "period": "2025‑W20" }
 }
+```
+
+For convenience, you can also call dedicated helpers:
+
+```python
+gen = InsightGenerator()
+gen.generate_daily_report(user_id, data, mcp_client=client)
+gen.generate_weekly_report(user_id, data, mcp_client=client)
 ```
