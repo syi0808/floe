@@ -108,6 +108,7 @@ The primary entry point for demonstrating the current capabilities is the intera
 *   `memory_manager_agent/`: Contains the memory management logic.
     *   `memory_manager.py`: Basic `MemoryManagerAgent` implementation.
 *   `docs/`: Contains current design documents and plans. Older planning notes and work summaries live in `docs/archive/`.
+*   `docs/ko/`: Korean translations mirroring the contents of `docs/`.
 *   `tests/`: Contains unit and integration tests.
 *   `README.md`: This file.
 
