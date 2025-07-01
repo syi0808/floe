@@ -20,7 +20,11 @@ class InsightAgent(BaseAgent):
         return ["generate_insight_report"]
 
     def process(self, entities: Dict[str, Any], user_id: str) -> AgentResponse:
-        period = entities.get("period", "daily")
+        period = str(entities.get("period", "daily")).lower()
+        if period.startswith("week"):
+            period = "weekly"
+        elif not period.startswith("day"):
+            period = "daily"
         agent_data = entities.get("data", {})
         output_format = entities.get("format", "markdown")
         focus = entities.get("focus")
@@ -60,7 +64,11 @@ class InsightAgent(BaseAgent):
         format: str = "markdown",
         notify: bool = False,
     ) -> Union[str, Dict[str, Any]]:
-        """Public helper for report generation using :class:`InsightGenerator`."""
+        """Public helper for report generation using :class:`InsightGenerator`.
+
+        Supports ``daily`` and ``weekly`` periods and optional MCP
+        notifications via ``notify``.
+        """
 
         gen = InsightGenerator()
         client = self.mcp_client if notify else None

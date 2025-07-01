@@ -9,7 +9,12 @@ class InsightGenerator:
     """Compile data from agents and produce simple reports."""
 
     def compile(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
-        """Aggregate metrics from Schedule, Task and Health agents."""
+        """Aggregate metrics from Schedule, Task and Health agents.
+
+        ``agent_data`` may also contain ``goals`` and ``trend_data`` for goal
+        progress tracking and basic trend calculation.
+        """
+
         summary: Dict[str, Dict[str, Any]] = {}
 
         # ScheduleAgent aggregation ----------------------------------------
@@ -48,6 +53,14 @@ class InsightGenerator:
                 health_summary["avg_sleep_score"] = avg_sleep
             summary["health_agent"] = health_summary
 
+        # Goal tracking ------------------------------------------------------
+        if "goals" in agent_data:
+            summary["goals"] = self.compile_goals(agent_data.get("goals", []))
+
+        # Trend data ---------------------------------------------------------
+        if "trend_data" in agent_data:
+            summary["trends"] = self.compile_trends(agent_data.get("trend_data", {}))
+
         # Generic count for any remaining agents --------------------------
         for agent, records in agent_data.items():
             if agent in summary:
@@ -63,6 +76,46 @@ class InsightGenerator:
             summary["trends"] = trends
 
         return summary
+
+    # ------------------------------------------------------------------
+    def compile_goals(self, goal_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate progress for user-defined goals."""
+        goals: List[Dict[str, Any]] = []
+        completed = 0
+        for g in goal_data:
+            target = g.get("target")
+            current = g.get("current", 0)
+            progress: float | None = None
+            if isinstance(target, (int, float)) and target:
+                progress = current / target
+                if progress >= 1:
+                    completed += 1
+            goals.append(
+                {
+                    "id": g.get("id"),
+                    "current": current,
+                    "target": target,
+                    "progress": round(progress, 2) if progress is not None else None,
+                }
+            )
+
+        return {"count": len(goal_data), "completed": completed, "goals": goals}
+
+    def compile_trends(self, trend_data: Dict[str, List[float]]) -> Dict[str, Any]:
+        """Generate simple change metrics for trend visualisation."""
+        trends: Dict[str, Any] = {}
+        for metric, series in trend_data.items():
+            if not series:
+                continue
+            try:
+                change = float(series[-1]) - float(series[0])
+            except (TypeError, ValueError):
+                continue
+            trends[metric] = {
+                "series": series,
+                "change": round(change, 2),
+            }
+        return trends
 
     def _extract_duration_hours(self, event: Dict[str, Any]) -> float | None:
         """Attempt to derive a duration in hours from an event record."""
@@ -188,14 +241,16 @@ class InsightGenerator:
             lines.append(line)
 
         if "goals" in summary:
-            lines.append("\n## Goal Progress")
-            for gid, pct in summary["goals"].items():
-                lines.append(f"- {gid}: {pct}%")
+            lines.append("\n## Goals")
+            for g in summary["goals"].get("goals", []):
+                prog = g.get("progress")
+                pct = int(prog * 100) if isinstance(prog, float) else "N/A"
+                lines.append(f"- {g.get('id')}: {pct}% complete")
 
         if "trends" in summary:
             lines.append("\n## Trends")
-            for tname, series in summary["trends"].items():
-                lines.append(f"- {tname}: {len(series)} points")
+            for metric, data in summary["trends"].items():
+                lines.append(f"- {metric}: change {data['change']}")
 
         return "\n".join(lines)
 
