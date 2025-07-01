@@ -112,3 +112,35 @@ def test_outlook_expired_token_triggers_refresh(mock_get):
     with patch.object(conn, '_refresh_token') as mock_refresh:
         conn.list_emails()
         mock_refresh.assert_called_once()
+
+
+@patch('inbox_agent.email_connectors.requests.get')
+def test_gmail_refresh_on_401(mock_get):
+    resp_401 = MagicMock()
+    resp_401.status_code = 401
+    resp_401.json.return_value = {}
+    resp_ok = MagicMock()
+    resp_ok.status_code = 200
+    resp_ok.json.return_value = {"messages": []}
+    mock_get.side_effect = [resp_401, resp_ok]
+
+    conn = GmailConnector('old', refresh_token='r', client_id='c', client_secret='s')
+    with patch.object(conn, '_refresh_token') as mock_refresh:
+        conn.list_emails()
+        mock_refresh.assert_called_once()
+
+
+@patch('inbox_agent.email_connectors.requests.get')
+def test_outlook_refresh_on_401(mock_get):
+    resp_401 = MagicMock()
+    resp_401.status_code = 401
+    resp_401.json.return_value = {}
+    resp_ok = MagicMock()
+    resp_ok.status_code = 200
+    resp_ok.json.return_value = {"value": []}
+    mock_get.side_effect = [resp_401, resp_ok]
+
+    conn = OutlookConnector('old', refresh_token='r', client_id='c', client_secret='s')
+    with patch.object(conn, '_refresh_token') as mock_refresh:
+        conn.list_emails()
+        mock_refresh.assert_called_once()
