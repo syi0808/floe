@@ -246,3 +246,57 @@ class InsightGenerator:
             mcp_client.send_notification(payload)
 
         return report
+
+    # ------------------------------------------------------------------
+    def generate_daily_report(
+        self,
+        user_id: str,
+        agent_data: Dict[str, List[Dict[str, Any]]],
+        *,
+        focus: str | None = None,
+        format: str = "markdown",
+        mcp_client: "MCPClient" | None = None,
+        notify: bool = True,
+    ) -> Union[str, Dict[str, Any]]:
+        """Convenience wrapper for generating a daily report.
+
+        This calls :meth:`generate_report` with ``period='daily'``. ``notify``
+        defaults to ``True`` so that a notification is sent when an
+        ``mcp_client`` is provided.
+        """
+
+        return self.generate_report(
+            user_id=user_id,
+            period="daily",
+            agent_data=agent_data,
+            focus=focus,
+            format=format,
+            mcp_client=mcp_client,
+            notify=notify,
+        )
+
+    def generate_weekly_report(
+        self,
+        user_id: str,
+        agent_data: Dict[str, List[Dict[str, Any]]],
+        *,
+        focus: str | None = None,
+        format: str = "markdown",
+        mcp_client: "MCPClient" | None = None,
+        notify: bool = True,
+    ) -> Union[str, Dict[str, Any]]:
+        """Convenience wrapper for generating a weekly report.
+
+        Works the same as :meth:`generate_daily_report` but with
+        ``period='weekly'``.
+        """
+
+        return self.generate_report(
+            user_id=user_id,
+            period="weekly",
+            agent_data=agent_data,
+            focus=focus,
+            format=format,
+            mcp_client=mcp_client,
+            notify=notify,
+        )

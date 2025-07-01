@@ -84,3 +84,25 @@ def test_compile_daily_weekly_aliases():
     daily = gen.compile_daily(sample_data())
     weekly = gen.compile_weekly(sample_data())
     assert daily == weekly
+
+
+def test_generate_daily_weekly_helpers_notify():
+    gen = InsightGenerator()
+    sent = {}
+
+    class DummyClient:
+        def send_notification(self, payload):
+            sent.setdefault(payload["period"], []).append(payload)
+
+    client = DummyClient()
+    daily = gen.generate_daily_report(
+        user_id="u", agent_data=sample_data(), mcp_client=client
+    )
+    weekly = gen.generate_weekly_report(
+        user_id="u", agent_data=sample_data(), mcp_client=client
+    )
+
+    assert "# Insight Report" in daily
+    assert "# Insight Report" in weekly
+    assert sent["daily"][0]["type"] == "insight_report"
+    assert sent["weekly"][0]["period"] == "weekly"

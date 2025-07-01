@@ -31,9 +31,31 @@ def test_notification_payload(monkeypatch):
     monkeypatch.setattr(client.session, "request", fake_request)
 
     gen = InsightGenerator()
-    gen.generate_report("user", "daily", {}, mcp_client=client, notify=True)
+    gen.generate_daily_report("user", {}, mcp_client=client)
 
     assert sent['url'] == "http://mcp/mcp/notifications"
     assert sent['json']['user_id'] == 'user'
     assert sent['json']['type'] == 'insight_report'
+
+
+def test_weekly_helper_payload(monkeypatch):
+    monkeypatch.setenv("MCP_BASE_URL", "http://mcp")
+    monkeypatch.setenv("MCP_ACCESS_TOKEN", "tkn")
+    client = MCPClient.from_env()
+
+    sent = {}
+
+    def fake_request(method, url, headers=None, timeout=5, **kwargs):
+        sent['url'] = url
+        sent['json'] = kwargs.get('json')
+        return DummyResponse({})
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+
+    gen = InsightGenerator()
+    gen.generate_weekly_report("user", {}, mcp_client=client)
+
+    assert sent['url'] == "http://mcp/mcp/notifications"
+    assert sent['json']['user_id'] == 'user'
+    assert sent['json']['period'] == 'weekly'
 
