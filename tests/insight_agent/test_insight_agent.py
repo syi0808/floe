@@ -30,7 +30,7 @@ def test_generate_report_helper():
     assert "# Insight Report" in report
     assert sent["user_id"] == "u1"
     assert sent["period"] == "daily"
-    assert "## Goals" in report
+    assert "## Goal Progress" in report
 
 
 def test_process_invokes_generate_report():
@@ -48,5 +48,5 @@ def test_process_invokes_generate_report():
 
     assert resp["status"] == "success"
     assert client.payload["period"] == "weekly"
-    assert "## Goals" in resp["data"]["report"]
+    assert "## Goal Progress" in resp["data"]["report"]
 

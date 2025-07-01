@@ -33,13 +33,13 @@ def test_compile_aggregates():
 
     assert summary["schedule_agent"]["count"] == 2
     assert summary["schedule_agent"]["total_hours"] == 2.5
+    assert summary["schedule_agent"]["avg_event_hours"] == 1.25
     assert summary["task_agent"]["count"] == 2
     assert summary["task_agent"]["completed"] == 1
+    assert summary["task_agent"]["completion_rate"] == 0.5
     assert summary["health_agent"]["count"] == 2
     assert summary["health_agent"]["avg_sleep_score"] == 75.0
-    assert summary["goals"]["count"] == 2
-    assert summary["goals"]["completed"] == 1
-    assert "tasks_completed" in summary["trends"]
+    assert "schedule_hours" in summary["trends"]
 
 
 def test_generate_summary_markdown_multi():
@@ -50,7 +50,7 @@ def test_generate_summary_markdown_multi():
     assert "2 entries" in md
     assert "completed" in md
     assert "avg sleep score" in md
-    assert "## Goals" in md
+    assert "## Goal Progress" in md
     assert "g1" in md
     assert "## Trends" in md
 
@@ -61,8 +61,8 @@ def test_generate_summary_json_multi():
     assert js["summary"]["task_agent"]["completed"] == 1
     assert js["summary"]["schedule_agent"]["total_hours"] == 2.5
     assert js["summary"]["health_agent"]["avg_sleep_score"] == 75.0
-    assert js["summary"]["goals"]["completed"] == 1
-    assert "tasks_completed" in js["summary"]["trends"]
+    assert "g1" in js["summary"]["goals"]
+    assert "schedule_hours" in js["summary"]["trends"]
 
 
 @pytest.mark.parametrize("fmt", ["bad", "xml"])
@@ -122,3 +122,16 @@ def test_generate_daily_weekly_helpers_notify():
     assert "# Insight Report" in weekly
     assert sent["daily"][0]["type"] == "insight_report"
     assert sent["weekly"][0]["period"] == "weekly"
+
+
+def test_compile_cache_reuse():
+    gen = InsightGenerator()
+    data = sample_data()
+
+    first = gen.compile(data)
+    second = gen.compile(data)
+    assert first is second
+
+    gen.clear_cache()
+    third = gen.compile(data)
+    assert third is not first
