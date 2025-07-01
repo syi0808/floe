@@ -2,18 +2,35 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Any, Union
+import hashlib
 import json
 
 
 class InsightGenerator:
-    """Compile data from agents and produce simple reports."""
+    """Compile data from agents and produce simple reports with caching."""
+
+    def __init__(self) -> None:
+        self._cache: Dict[str, Dict[str, Any]] = {}
+
+    def clear_cache(self) -> None:
+        """Remove all cached summaries."""
+        self._cache.clear()
+
+    def _cache_key(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> str:
+        # json.dumps with sort_keys ensures stable hashing
+        serialized = json.dumps(agent_data, sort_keys=True, default=str)
+        return hashlib.md5(serialized.encode()).hexdigest()
 
     def compile(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
-        """Aggregate metrics from Schedule, Task and Health agents.
+        """Aggregate metrics from Schedule, Task and Health agents with caching.
 
         ``agent_data`` may also contain ``goals`` and ``trend_data`` for goal
         progress tracking and basic trend calculation.
         """
+
+        key = self._cache_key(agent_data)
+        if key in self._cache:
+            return self._cache[key]
 
         summary: Dict[str, Dict[str, Any]] = {}
 
@@ -25,9 +42,11 @@ class InsightGenerator:
                 dur = self._extract_duration_hours(evt)
                 if dur is not None:
                     total_hours += dur
+            avg_hours = round(total_hours / len(events), 2) if events else 0.0
             summary["schedule_agent"] = {
                 "count": len(events),
                 "total_hours": round(total_hours, 2),
+                "avg_event_hours": avg_hours,
             }
 
         # TaskAgent aggregation --------------------------------------------
@@ -38,9 +57,11 @@ class InsightGenerator:
                 for t in tasks
                 if str(t.get("status", "")).lower() in {"done", "completed", "archived"}
             )
+            completion_rate = round(completed / len(tasks), 2) if tasks else 0.0
             summary["task_agent"] = {
                 "count": len(tasks),
                 "completed": completed,
+                "completion_rate": completion_rate,
             }
 
         # HealthAgent aggregation ------------------------------------------
@@ -53,13 +74,6 @@ class InsightGenerator:
                 health_summary["avg_sleep_score"] = avg_sleep
             summary["health_agent"] = health_summary
 
-        # Goal tracking ------------------------------------------------------
-        if "goals" in agent_data:
-            summary["goals"] = self.compile_goals(agent_data.get("goals", []))
-
-        # Trend data ---------------------------------------------------------
-        if "trend_data" in agent_data:
-            summary["trends"] = self.compile_trends(agent_data.get("trend_data", {}))
 
         # Generic count for any remaining agents --------------------------
         for agent, records in agent_data.items():
@@ -75,6 +89,7 @@ class InsightGenerator:
         if trends:
             summary["trends"] = trends
 
+        self._cache[key] = summary
         return summary
 
     # ------------------------------------------------------------------
@@ -234,23 +249,26 @@ class InsightGenerator:
             line = f"- **{agent}**: {stats['count']} entries"
             if agent == "schedule_agent" and "total_hours" in stats:
                 line += f" ({stats['total_hours']}h scheduled)"
+                if "avg_event_hours" in stats:
+                    line += f", avg {stats['avg_event_hours']}h/event"
             if agent == "task_agent" and "completed" in stats:
                 line += f", {stats['completed']} completed"
+                if "completion_rate" in stats:
+                    pct = int(stats['completion_rate'] * 100)
+                    line += f" ({pct}% complete)"
             if agent == "health_agent" and "avg_sleep_score" in stats:
                 line += f", avg sleep score {stats['avg_sleep_score']}"
             lines.append(line)
 
         if "goals" in summary:
-            lines.append("\n## Goals")
-            for g in summary["goals"].get("goals", []):
-                prog = g.get("progress")
-                pct = int(prog * 100) if isinstance(prog, float) else "N/A"
-                lines.append(f"- {g.get('id')}: {pct}% complete")
+            lines.append("\n## Goal Progress")
+            for gid, pct in summary["goals"].items():
+                lines.append(f"- {gid}: {pct}%")
 
         if "trends" in summary:
             lines.append("\n## Trends")
-            for metric, data in summary["trends"].items():
-                lines.append(f"- {metric}: change {data['change']}")
+            for tname, series in summary["trends"].items():
+                lines.append(f"- {tname}: {len(series)} points")
 
         return "\n".join(lines)
 
