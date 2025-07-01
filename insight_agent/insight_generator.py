@@ -54,6 +54,14 @@ class InsightGenerator:
                 continue
             summary[agent] = {"count": len(records)}
 
+        goal_progress = self._goal_progress(agent_data)
+        if goal_progress:
+            summary["goals"] = goal_progress
+
+        trends = self._compute_trends(agent_data)
+        if trends:
+            summary["trends"] = trends
+
         return summary
 
     def _extract_duration_hours(self, event: Dict[str, Any]) -> float | None:
@@ -77,6 +85,83 @@ class InsightGenerator:
             return (end - start).total_seconds() / 3600.0
         return None
 
+    def _goal_progress(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, float]:
+        """Return goal progress percentages keyed by goal id."""
+        goals = agent_data.get("goals") or agent_data.get("goal_agent") or []
+        progress: Dict[str, float] = {}
+        for g in goals:
+            gid = g.get("id") or g.get("goal_id")
+            if not gid:
+                continue
+            if "target" in g and "current" in g:
+                try:
+                    pct = (float(g["current"]) / float(g["target"])) * 100.0
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+            elif "progress" in g:
+                try:
+                    pct = float(g["progress"])
+                except (TypeError, ValueError):
+                    continue
+            else:
+                continue
+            progress[gid] = round(pct, 2)
+        return progress
+
+    def _compute_trends(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+        """Return simple time-series metrics grouped by date."""
+        trends: Dict[str, Dict[str, Any]] = {}
+
+        events = agent_data.get("schedule_agent", [])
+        hours_by_day: Dict[str, float] = {}
+        for evt in events:
+            dt = evt.get("start") or evt.get("date")
+            if not dt:
+                continue
+            try:
+                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+            except ValueError:
+                continue
+            hrs = self._extract_duration_hours(evt) or 0.0
+            hours_by_day[day] = round(hours_by_day.get(day, 0.0) + hrs, 2)
+        if hours_by_day:
+            trends["schedule_hours"] = hours_by_day
+
+        tasks = agent_data.get("task_agent", [])
+        completed_by_day: Dict[str, int] = {}
+        for t in tasks:
+            status = str(t.get("status", "")).lower()
+            if status not in {"done", "completed", "archived"}:
+                continue
+            dt = t.get("completed_at") or t.get("date")
+            if not dt:
+                continue
+            try:
+                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+            except ValueError:
+                continue
+            completed_by_day[day] = completed_by_day.get(day, 0) + 1
+        if completed_by_day:
+            trends["completed_tasks"] = completed_by_day
+
+        health_logs = agent_data.get("health_agent", [])
+        sleep_by_day: Dict[str, List[float]] = {}
+        for h in health_logs:
+            if h.get("sleep_score") is None:
+                continue
+            dt = h.get("date") or h.get("timestamp")
+            if not dt:
+                continue
+            try:
+                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+            except ValueError:
+                continue
+            sleep_by_day.setdefault(day, []).append(float(h["sleep_score"]))
+        if sleep_by_day:
+            trends["avg_sleep_score"] = {d: round(sum(scores) / len(scores), 2) for d, scores in sleep_by_day.items()}
+
+        return trends
+
     def generate_summary(
         self, agent_data: Dict[str, List[Dict[str, Any]]], format: str = "markdown"
     ) -> Union[str, Dict[str, Any]]:
@@ -91,6 +176,8 @@ class InsightGenerator:
     def _to_markdown(self, summary: Dict[str, Dict[str, Any]]) -> str:
         lines = ["# Insight Report", ""]
         for agent, stats in summary.items():
+            if agent in {"goals", "trends"}:
+                continue
             line = f"- **{agent}**: {stats['count']} entries"
             if agent == "schedule_agent" and "total_hours" in stats:
                 line += f" ({stats['total_hours']}h scheduled)"
@@ -99,6 +186,17 @@ class InsightGenerator:
             if agent == "health_agent" and "avg_sleep_score" in stats:
                 line += f", avg sleep score {stats['avg_sleep_score']}"
             lines.append(line)
+
+        if "goals" in summary:
+            lines.append("\n## Goal Progress")
+            for gid, pct in summary["goals"].items():
+                lines.append(f"- {gid}: {pct}%")
+
+        if "trends" in summary:
+            lines.append("\n## Trends")
+            for tname, series in summary["trends"].items():
+                lines.append(f"- {tname}: {len(series)} points")
+
         return "\n".join(lines)
 
     def _to_json(self, summary: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
