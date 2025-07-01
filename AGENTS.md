@@ -2,12 +2,6 @@
 
 이 프로젝트는 **Floe AI** 어시스턴트 코드베이스를 관리합니다. 기여자는 아래 규칙을 준수하여 작업하십시오.
 
-## 환경
-
-- **Python 3.10** 이상 사용  
-- 의존성 목록: `requirements.txt`, `pyproject.toml`  
-- 가상 환경 생성 후 `pip install -r requirements.txt` 실행
-
 ## 테스트
 
 - 변경 사항을 커밋하기 전 **`pytest`** 실행하여 모든 테스트 통과 확인  
@@ -20,6 +14,8 @@
   - 단기 목표: `./short-term-plan/yyyyMMdd_hhmmss.md` 형식 사용
   - 장기 목표: `./long-term-plan/yyyyMMdd_hhmmss.md` 형식 사용
   - 주요 개발 기록: `./records/yyyyMMdd_hhmmss.md` 형식 사용
+ 
+**중요**: `docs/` 하위에는 영어로 된 문서만 작성하고, `docs/` 하위에 작성한 문서를 `docs/ko/` 하위에 한글로 한번 더 작성합니다 
  
 ### 목표 문서화 템플릿
 
@@ -133,7 +129,7 @@ commit\_range: "<a1b2c3d>..<e4f5g6h>"
 
 ## 5. 의사결정(Decisions)
 
-| 번호             | 선택지         | 결정       | 근거      |
+| 번호             | 선택지         | 결정       | 근거 (매우 구체적으로)  |
 | -------------- | ----------- | -------- | ------- |
 | D-<YYYYMMDD>-1 | <옵션 A vs B> | **<선택>** | <근거 요약> |
 
@@ -151,6 +147,8 @@ commit\_range: "<a1b2c3d>..<e4f5g6h>"
 
 * <외부/내부 문서 링크>
 ```
+
+**매우 중요**: 개발 기록은 작업이 끝난 뒤 문서화합니다
 
 ## 커밋 가이드라인
 
