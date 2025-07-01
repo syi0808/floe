@@ -4,17 +4,77 @@ from datetime import datetime
 from typing import Dict, List, Any, Union
 import hashlib
 import json
+import os
+import sqlite3
 
 
 class InsightGenerator:
     """Compile data from agents and produce simple reports with caching."""
 
-    def __init__(self) -> None:
+    def __init__(self, cache_path: str | None = None) -> None:
         self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_path = cache_path
+        self._db: sqlite3.Connection | None = None
+        if cache_path:
+            if cache_path.endswith(".sqlite") or cache_path.endswith(".db"):
+                self._load_sqlite_cache(cache_path)
+            else:
+                self._load_json_cache(cache_path)
 
     def clear_cache(self) -> None:
         """Remove all cached summaries."""
         self._cache.clear()
+        self._flush_cache()
+
+    # ------------------------------------------------------------------
+    def _load_json_cache(self, path: str) -> None:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._cache = {
+                        k: v for k, v in data.items() if isinstance(v, dict)
+                    }
+            except (OSError, json.JSONDecodeError):
+                self._cache = {}
+
+    def _load_sqlite_cache(self, path: str) -> None:
+        self._db = sqlite3.connect(path)
+        cur = self._db.cursor()
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS insight_cache (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        for key, value in cur.execute("SELECT key, value FROM insight_cache"):
+            try:
+                self._cache[key] = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+
+    def _flush_cache(self) -> None:
+        if not self._cache_path:
+            return
+        if self._cache_path.endswith(".sqlite") or self._cache_path.endswith(".db"):
+            if self._db is None:
+                self._db = sqlite3.connect(self._cache_path)
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS insight_cache (key TEXT PRIMARY KEY, value TEXT)"
+                )
+            with self._db:
+                self._db.execute("DELETE FROM insight_cache")
+                self._db.executemany(
+                    "INSERT OR REPLACE INTO insight_cache (key, value) VALUES (?, ?)",
+                    [
+                        (k, json.dumps(v))
+                        for k, v in self._cache.items()
+                    ],
+                )
+        else:
+            try:
+                with open(self._cache_path, "w", encoding="utf-8") as f:
+                    json.dump(self._cache, f)
+            except OSError:
+                pass
 
     def _cache_key(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> str:
         # json.dumps with sort_keys ensures stable hashing
@@ -90,6 +150,7 @@ class InsightGenerator:
             summary["trends"] = trends
 
         self._cache[key] = summary
+        self._flush_cache()
         return summary
 
     # ------------------------------------------------------------------
