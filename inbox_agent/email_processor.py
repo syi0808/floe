@@ -30,8 +30,8 @@ def parse_email_actions(email_id: str, subject: str, body_text: str, sender: str
         "Return a JSON array of actions with keys 'action' and 'details'."
         " Possible actions are PROPOSE_SCHEDULE and CREATE_TASK."
     )
-    client = openai.OpenAI()
     try:
+        client = openai.OpenAI()
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
