@@ -1,3 +1,4 @@
+
 # MemoryManagerAgent 명세
 
 ## 목적
@@ -36,3 +37,4 @@
 대화 기록은 `conversation_turn` 형식으로 저장됩니다.
 `ConversationAgent`의 `load_history_from_memory`와
 `store_last_turn_to_memory` 메서드를 이용해 연동할 수 있습니다.
+
