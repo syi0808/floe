@@ -505,4 +505,37 @@ def test_update_task_clears_reminder_when_due_date_removed():
     assert updated.reminder_time_utc is None
 
 
+def test_create_task_sets_completed_at_when_done():
+    task = task_core.create_task("u1", "done task", status="done")
+    assert task.completed_at is not None
+    assert task.status == "done"
+
+
+def test_update_task_completed_at_transitions():
+    task = task_core.create_task("u1", "toggle status")
+    assert task.completed_at is None
+
+    updated = task_core.update_task(str(task.id), updates={"status": "done"})
+    assert updated.status == "done"
+    assert updated.completed_at is not None
+
+    updated_back = task_core.update_task(
+        str(task.id), updates={"status": "in-progress"}
+    )
+    assert updated_back.completed_at is None
+
+
+def test_update_task_accepts_reminder_offset_minutes():
+    due = datetime.now(timezone.utc) + timedelta(hours=4)
+    task = task_core.create_task("u1", "offset test", due_date_utc=due)
+
+    updated = task_core.update_task(
+        str(task.id),
+        updates={"reminder_offset_minutes": 30, "due_date_utc": due},
+    )
+
+    assert str(task.id) in task_core._reminder_schedule
+    assert updated.reminder_time_utc == due - timedelta(minutes=30)
+
+
 # --- End of Tests ---
