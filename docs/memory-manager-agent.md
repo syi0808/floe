@@ -45,3 +45,9 @@ Store, retrieve, and prune user‑specific memories spanning tasks, chats, healt
 
 * No cloud sync unless user enables end‑to‑end encrypted backup.
 * Forget skill physically deletes row + vector.
+
+## Usage with ConversationAgent
+
+Conversation history can be stored as `conversation_turn` records. The
+`ConversationAgent` exposes `load_history_from_memory` and
+`store_last_turn_to_memory` helpers to integrate with this agent.

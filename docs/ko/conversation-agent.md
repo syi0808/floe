@@ -1,39 +1,52 @@
-# ConversationAgent 사양
+# ConversationAgent 명세
 
 ## 목적
 
-단일 천연 언어 인터페이스 역할 : 사용자 입력 (텍스트/음성)을 수집하고 대화 컨텍스트를 유지하며 설명을 중재합니다.
+사용자의 입력을 수집하고 대화 맥락을 유지하며 필요 시 명확화를 중재하는 자연어 인터페이스 역할을 합니다.
 
-## 대화 스택
+## 대화 흐름
 
-1. ** 입력 정규화 ** - ASR → 텍스트, 언어 감지.
-2. ** 컨텍스트 어셈블리 ** - 마지막 5 사용자 회전 + 관련 기억.
-3. ** LLM 생성 ** - 시스템 + 사용자 + 도구 호출.
-4. ** 응답 전달 ** - 텍스트, 선택적 tts.
+1. **입력 정규화** – 음성→텍스트, 언어 감지
+2. **맥락 조립** – 최근 5회 사용자 발화 + 관련 메모리
+3. **LLM 생성** – 시스템 + 사용자 + 도구 호출
+4. **응답 전달** – 텍스트, 선택적 TTS
 
-## 기술
+## 스킬
 
-|기술 |args |반환 |
-|-------------------------------------------------------------- |
-|`대화 '|`메시지 ',`컨텍스트?`|`답장`|
-|`ask_clarification` |`질문`|`user_response` |
-|`핸드 오프 |`plan` |`Status` |
+| 스킬 | 인자 | 반환 |
+| --- | --- | --- |
+| `converse` | `message`, `context?` | `reply` |
+| `ask_clarification` | `question` | `user_response` |
+| `handoff` | `plan` | `status` |
 
-## 설명 정책
+## 명확화 정책
 
-* 신뢰도 <0.6 또는 필수 슬롯 누락 된 경우 트리거.
-* 먼저 간결한 극성 질문을 사용하십시오.여전히 모호한 경우 개방형으로 확대됩니다.
+* 신뢰도 < 0.6 이거나 필수 슬롯이 없으면 트리거
+* 간단한 예/아니오 질문부터 사용, 계속 모호하면 열린 질문 사용
 
-## 톤 및 스타일
+## 톤과 스타일
 
-* 친절한 전문가;전문 용어를 피하십시오.
-* 사용자의 언어 선호도를 반영합니다.
+* 친근하지만 전문적인 어조
+* 사용자의 언어 선호 반영
 
-## 대기 시간 예산
+## 지연 시간 목표
 
-* 300ms 로컬 추론 (ASR/TTS 제외).
+* ASR/TTS 제외 300 ms 이하
 
-## 샘플 흐름
+## 예시 흐름
 
-사용자 : "내일 오후 일정 코드 검토"
-→ ConversationAgent ent Orchestrator ➜ ScheduleAgent ➜ ConversationAgent ✓
+사용자: "내일 오후 코드 리뷰 일정 잡아줘"
+→ ConversationAgent ➜ Orchestrator ➜ ScheduleAgent ➜ ConversationAgent ✓
+
+## 기록 보존
+
+ConversationAgent는 `MemoryManagerAgent`를 통해 대화 기록을 저장할 수 있습니다.
+사용 가능한 두 가지 헬퍼 메서드는 다음과 같습니다.
+
+```python
+agent.load_history_from_memory(user_id)
+agent.store_last_turn_to_memory(user_id)
+```
+
+새 인스턴스가 시작될 때 이전 턴을 불러오고, 응답 생성 후 마지막 턴을 저장합니다.
+

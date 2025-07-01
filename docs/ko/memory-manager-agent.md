@@ -1,47 +1,40 @@
-# MemoryManageRagent 사양
+
+# MemoryManagerAgent 명세
 
 ## 목적
 
-상황에 맞는 추론을 위해 작업, 채팅, 건강 로그 및 외부 파일에 걸친 사용자 특유의 기억을 저장, 검색 및 고정하십시오.
+사용자별 작업, 대화, 건강 기록 등 다양한 메모리를 저장하고 검색하며 정리합니다.
 
-## 메모리 유형
+## 메모리 종류
 
-|유형 |ttl |벡터화?|암호화 |
-|----------------------------------------------- |---------------- |---------- |
-|단기 대화 |7 일 |✅ |✅ |
-|작업 및 이벤트 |영원히 |✅ (제목 + 노트) |✅ |
-|건강 로그 |30 일이 생고, 영원히 집계 |✅ |✅ |
+| 유형 | TTL | 벡터화 | 암호화 |
+| --- | --- | --- | --- |
+| 단기 대화 | 7일 | ✅ | ✅ |
+| 작업 및 일정 | 영구 | ✅ (제목+노트) | ✅ |
+| 건강 로그 | 원본 30일, 집계는 영구 | ✅ | ✅ |
 
-## 기술
+## 스킬
 
-|기술 |args |반환 |
-|-------- |--------------------------- |------------ |
-|`Store` |`메모리 : {type, payload}`|`memoryId` |
-|`리콜`|`query`,`한계 '|`추억 []`|
-|`잊어 버린 |`memoryId` |'성공'|
-|`검색`|`엠보디팅`,`k` |`추억 []`|
+| 스킬 | 인자 | 반환 |
+| --- | --- | --- |
+| `store` | `memory: {type, payload}` | `memoryId` |
+| `recall` | `query`, `limit` | `memories[]` |
+| `forget` | `memoryId` | `success` |
+| `search` | `embedding`, `k` | `memories[]` |
 
 ## 저장 엔진
 
-* Chroma 벡터 인덱스가있는 사용자 당 sqlite db.
-* Device 키를 사용한 Row -Level AES -GCM 암호화.
+* 사용자별 SQLite DB와 Chroma 벡터 인덱스 사용
+* 행 단위 AES‑GCM 암호화
 
-## 쓰레기 수집
+## 가비지 컬렉션
 
-* 밤마다 달린다.TTL & LRU를 적용합니다.
-* InsightAgent의 경우`memory_pruned` 이벤트를 방출합니다.
+* 매일 실행하여 TTL과 LRU 적용
+* 정리된 내역은 InsightAgent에 이벤트로 전달
 
-## 예제 상호 작용
+## ConversationAgent와 함께 사용하기
 
-```JSONC
-{
-"에이전트": "MemoryManageRagent",
-"기술": "리콜",
-"Args": { "쿼리": "컨퍼런스 콜 노트", "한계": 3}
-}
-```
+대화 기록은 `conversation_turn` 형식으로 저장됩니다.
+`ConversationAgent`의 `load_history_from_memory`와
+`store_last_turn_to_memory` 메서드를 이용해 연동할 수 있습니다.
 
-## 개인 정보 보증
-
-* 사용자가 End -to -end 암호화 백업을 활성화하지 않는 한 클라우드 동기화가 없습니다.
-* 스킬을 잊어 버리십시오. 물리적으로 행 + 벡터를 삭제하십시오.
