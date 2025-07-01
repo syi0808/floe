@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
-from typing import Optional, List # Renamed List
-import uuid # For generating unique event IDs if not using task_id based
+from typing import Optional, List  # Renamed List
+import uuid  # For generating unique event IDs if not using task_id based
 
 from pydantic import BaseModel, Field, validator
 
 # Assuming CalendarAdapter is in this location. Adjust if moved.
 from orchestrator_agent.calendar_adapters.base_adapter import CalendarAdapter
 from schedule_agent.schedule_agent import ScheduleAgent
+
 # To use the factory (optional, can be done by client code)
 # from orchestrator_agent.calendar_adapters import get_calendar_adapter
 
@@ -16,32 +17,48 @@ class TaskInput(BaseModel):
     Represents the input data for a task, which might come from parsing user input
     or from another system.
     """
+
     task_id: str = Field(..., description="Unique identifier for the task.")
     description: str = Field(..., description="Full description of the task.")
     start_time: datetime = Field(..., description="Proposed start time for the task.")
-    duration_minutes: int = Field(..., gt=0, description="Duration of the task in minutes.")
-    summary: Optional[str] = Field(None, description="Optional short summary for the calendar event. If None, derived from description.")
+    duration_minutes: int = Field(
+        ..., gt=0, description="Duration of the task in minutes."
+    )
+    summary: Optional[str] = Field(
+        None,
+        description="Optional short summary for the calendar event. If None, derived from description.",
+    )
 
 
 class CalendarEvent(BaseModel):
     """
     Represents a calendar event derived from a task, used for communication with CalendarAdapters.
     """
-    event_id: str = Field(..., description="Unique Floe internal identifier for the calendar event.")
+
+    event_id: str = Field(
+        ..., description="Unique Floe internal identifier for the calendar event."
+    )
     summary: str = Field(..., description="Summary or title of the calendar event.")
     start_time: datetime = Field(..., description="Start time of the event.")
     end_time: datetime = Field(..., description="End time of the event.")
-    description: Optional[str] = Field(None, description="Detailed description for the calendar event.")
-    task_id_ref: Optional[str] = Field(None, description="Optional reference to the original Floe task ID.")
+    description: Optional[str] = Field(
+        None, description="Detailed description for the calendar event."
+    )
+    task_id_ref: Optional[str] = Field(
+        None, description="Optional reference to the original Floe task ID."
+    )
 
-    @validator('end_time')
+    @validator("end_time")
     def end_time_must_be_after_start_time(cls, v, values):
-        if 'start_time' in values and v <= values['start_time']:
-            raise ValueError('End time must be after start time.')
+        if "start_time" in values and v <= values["start_time"]:
+            raise ValueError("End time must be after start time.")
         return v
 
+
 # This function can remain standalone or be a static method of TaskCalendarLinker
-def create_calendar_event_from_task(task_data: TaskInput, base_event_id: Optional[str] = None) -> CalendarEvent:
+def create_calendar_event_from_task(
+    task_data: TaskInput, base_event_id: Optional[str] = None
+) -> CalendarEvent:
     """
     Creates a CalendarEvent object from task details.
 
@@ -56,8 +73,12 @@ def create_calendar_event_from_task(task_data: TaskInput, base_event_id: Optiona
     if not isinstance(task_data, TaskInput):
         raise TypeError("task_data must be an instance of TaskInput.")
 
-    event_summary = task_data.summary if task_data.summary else task_data.description[:100]
-    calculated_end_time = task_data.start_time + timedelta(minutes=task_data.duration_minutes)
+    event_summary = (
+        task_data.summary if task_data.summary else task_data.description[:100]
+    )
+    calculated_end_time = task_data.start_time + timedelta(
+        minutes=task_data.duration_minutes
+    )
 
     # Use base_event_id if provided (for updates), otherwise generate new one based on task_id.
     # The original pattern was f"cal_{task_data.task_id}".
@@ -78,14 +99,13 @@ def create_calendar_event_from_task(task_data: TaskInput, base_event_id: Optiona
         # For more flexibility, UUID is safer.
         current_event_id = str(uuid.uuid4())
 
-
     event = CalendarEvent(
         event_id=current_event_id,
         summary=event_summary,
         start_time=task_data.start_time,
         end_time=calculated_end_time,
         description=task_data.description,
-        task_id_ref=task_data.task_id # This links back to the Floe Task
+        task_id_ref=task_data.task_id,  # This links back to the Floe Task
     )
     return event
 
@@ -116,10 +136,12 @@ def block_time_for_task_via_schedule_agent(
 
 class TaskCalendarLinker:
     def __init__(self, adapter: CalendarAdapter):
-        if not isinstance(adapter, CalendarAdapter): # Check protocol conformance at runtime if desired
-             raise TypeError("Adapter must conform to the CalendarAdapter protocol.")
+        if not isinstance(
+            adapter, CalendarAdapter
+        ):  # Check protocol conformance at runtime if desired
+            raise TypeError("Adapter must conform to the CalendarAdapter protocol.")
         self.adapter = adapter
-        self._connected = False # Connection status
+        self._connected = False  # Connection status
 
     def connect_calendar(self) -> bool:
         """
@@ -137,7 +159,9 @@ class TaskCalendarLinker:
             self._connected = False
         return self._connected
 
-    def add_task_to_calendar(self, task_input: TaskInput, calendar_target: Optional[str] = None) -> Optional[str]:
+    def add_task_to_calendar(
+        self, task_input: TaskInput, calendar_target: Optional[str] = None
+    ) -> Optional[str]:
         """
         Creates a calendar event from a task and adds it to the calendar.
 
@@ -149,56 +173,89 @@ class TaskCalendarLinker:
             The floe_event_id of the created calendar event, or None if creation failed.
         """
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
 
         # create_calendar_event_from_task generates a new event_id (UUID)
         calendar_event = create_calendar_event_from_task(task_input)
 
-        created_floe_event_id = self.adapter.create_event(calendar_event, calendar_target)
-        if created_floe_event_id == calendar_event.event_id: # Ensure adapter confirmed with our ID
+        created_floe_event_id = self.adapter.create_event(
+            calendar_event, calendar_target
+        )
+        if (
+            created_floe_event_id == calendar_event.event_id
+        ):  # Ensure adapter confirmed with our ID
             return calendar_event.event_id
         else:
             # This case implies an issue with the adapter's create_event implementation
             # if it's supposed to return our ID but doesn't, or returns something else on failure.
             # The protocol specifies it returns our internal floe_event_id.
-            print(f"Warning: Adapter did not confirm creation with expected Floe Event ID. Expected {calendar_event.event_id}, got {created_floe_event_id}")
-            return created_floe_event_id # Return what adapter gave, could be None
+            print(
+                f"Warning: Adapter did not confirm creation with expected Floe Event ID. Expected {calendar_event.event_id}, got {created_floe_event_id}"
+            )
+            return created_floe_event_id  # Return what adapter gave, could be None
 
-    def get_linked_event(self, floe_event_id: str, calendar_target: Optional[str] = None) -> Optional[CalendarEvent]:
+    def get_linked_event(
+        self, floe_event_id: str, calendar_target: Optional[str] = None
+    ) -> Optional[CalendarEvent]:
         """Retrieves a calendar event by its Floe event ID."""
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
         return self.adapter.get_event(floe_event_id, calendar_target)
 
-    def update_linked_event(self, floe_event_id: str, task_input: TaskInput, calendar_target: Optional[str] = None) -> bool:
+    def update_linked_event(
+        self,
+        floe_event_id: str,
+        task_input: TaskInput,
+        calendar_target: Optional[str] = None,
+    ) -> bool:
         """
         Updates an existing calendar event linked to a task.
         The floe_event_id identifies the event to update.
         task_input provides the new data for the event.
         """
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
 
         # Re-create CalendarEvent using the task_input, but ensure it uses the existing floe_event_id
-        calendar_event_update_data = create_calendar_event_from_task(task_input, base_event_id=floe_event_id)
+        calendar_event_update_data = create_calendar_event_from_task(
+            task_input, base_event_id=floe_event_id
+        )
 
-        return self.adapter.update_event(floe_event_id, calendar_event_update_data, calendar_target)
+        return self.adapter.update_event(
+            floe_event_id, calendar_event_update_data, calendar_target
+        )
 
-    def remove_task_from_calendar(self, floe_event_id: str, calendar_target: Optional[str] = None) -> bool:
+    def remove_task_from_calendar(
+        self, floe_event_id: str, calendar_target: Optional[str] = None
+    ) -> bool:
         """Removes a calendar event by its Floe event ID."""
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
         return self.adapter.delete_event(floe_event_id, calendar_target)
 
-    def list_linked_events(self,
-                           calendar_target: Optional[str] = None,
-                           time_min: Optional[datetime] = None,
-                           time_max: Optional[datetime] = None,
-                           floe_task_id: Optional[str] = None) -> List[CalendarEvent]:
+    def list_linked_events(
+        self,
+        calendar_target: Optional[str] = None,
+        time_min: Optional[datetime] = None,
+        time_max: Optional[datetime] = None,
+        floe_task_id: Optional[str] = None,
+    ) -> List[CalendarEvent]:
         """Lists calendar events, with optional filters."""
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
-        return self.adapter.list_events(calendar_target, time_min, time_max, floe_task_id)
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
+        return self.adapter.list_events(
+            calendar_target, time_min, time_max, floe_task_id
+        )
 
     def block_time_for_task(
         self,
@@ -216,7 +273,9 @@ class TaskCalendarLinker:
         """
 
         if not self._connected:
-            raise RuntimeError("Calendar adapter not connected. Call connect_calendar() first.")
+            raise RuntimeError(
+                "Calendar adapter not connected. Call connect_calendar() first."
+            )
 
         floe_event_id = block_time_for_task_via_schedule_agent(
             schedule_agent,
@@ -240,32 +299,61 @@ class TaskCalendarLinker:
         return floe_event_id
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("TaskCalendarLinker module - Basic Structure Test")
-    print("This main block is for demonstrating structure, not full functionality without a real adapter.")
+    print(
+        "This main block is for demonstrating structure, not full functionality without a real adapter."
+    )
 
     # Example of using a dummy adapter that conforms to the protocol
     class DummyCalendarAdapter(CalendarAdapter):
         def connect(self) -> bool:
             print("DummyAdapter: connect() called")
             return True
-        def create_event(self, event_data: CalendarEvent, calendar_target: Optional[str] = None) -> Optional[str]:
-            print(f"DummyAdapter: create_event called for Floe ID {event_data.event_id} in '{calendar_target or 'default'}'")
-            return event_data.event_id # Simulate successful creation
-        def get_event(self, floe_event_id: str, calendar_target: Optional[str] = None) -> Optional[CalendarEvent]:
+
+        def create_event(
+            self, event_data: CalendarEvent, calendar_target: Optional[str] = None
+        ) -> Optional[str]:
+            print(
+                f"DummyAdapter: create_event called for Floe ID {event_data.event_id} in '{calendar_target or 'default'}'"
+            )
+            return event_data.event_id  # Simulate successful creation
+
+        def get_event(
+            self, floe_event_id: str, calendar_target: Optional[str] = None
+        ) -> Optional[CalendarEvent]:
             print(f"DummyAdapter: get_event called for Floe ID {floe_event_id}")
             # Simulate finding an event
-            return CalendarEvent(event_id=floe_event_id, summary="Dummy Event",
-                                 start_time=datetime.now(), end_time=datetime.now() + timedelta(hours=1),
-                                 task_id_ref="dummy_task_001")
-        def update_event(self, floe_event_id: str, event_data: CalendarEvent, calendar_target: Optional[str] = None) -> bool:
+            return CalendarEvent(
+                event_id=floe_event_id,
+                summary="Dummy Event",
+                start_time=datetime.now(),
+                end_time=datetime.now() + timedelta(hours=1),
+                task_id_ref="dummy_task_001",
+            )
+
+        def update_event(
+            self,
+            floe_event_id: str,
+            event_data: CalendarEvent,
+            calendar_target: Optional[str] = None,
+        ) -> bool:
             print(f"DummyAdapter: update_event called for Floe ID {floe_event_id}")
             return True
-        def delete_event(self, floe_event_id: str, calendar_target: Optional[str] = None) -> bool:
+
+        def delete_event(
+            self, floe_event_id: str, calendar_target: Optional[str] = None
+        ) -> bool:
             print(f"DummyAdapter: delete_event called for Floe ID {floe_event_id}")
             return True
-        def list_events(self, calendar_target: Optional[str] = None, time_min: Optional[datetime] = None,
-                        time_max: Optional[datetime] = None, floe_task_id: Optional[str] = None) -> List[CalendarEvent]:
+
+        def list_events(
+            self,
+            calendar_target: Optional[str] = None,
+            time_min: Optional[datetime] = None,
+            time_max: Optional[datetime] = None,
+            floe_task_id: Optional[str] = None,
+        ) -> List[CalendarEvent]:
             print(f"DummyAdapter: list_events called for task ID {floe_task_id}")
             return []
 
@@ -279,7 +367,7 @@ if __name__ == '__main__':
             description="This is a sample task for the dummy linker.",
             summary="Dummy Task Event",
             start_time=datetime.now() + timedelta(days=1),
-            duration_minutes=60
+            duration_minutes=60,
         )
 
         print("\nAttempting to add task to calendar...")
