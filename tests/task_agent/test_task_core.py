@@ -200,6 +200,15 @@ def test_update_task_due_date_recalculates_priority():
     assert updated_task.priority == 1
 
 
+def test_update_task_sets_linked_schedule_id():
+    task = task_core.create_task("userX", "Link me")
+    updates = {"linked_schedule_id": "evt999"}
+    updated_task = task_core.update_task(str(task.id), None, updates)
+    assert updated_task.linked_schedule_id == "evt999"
+    fetched = task_core.get_task(str(task.id))
+    assert fetched.linked_schedule_id == "evt999"
+
+
 def test_update_task_non_existent():
     """Test updating a non-existent task."""
     updates = {"description": "Doesn't matter"}

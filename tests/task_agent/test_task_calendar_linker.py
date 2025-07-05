@@ -315,6 +315,27 @@ class TestTaskCalendarLinker(unittest.TestCase):
         updated_task = task_core.get_task(str(task.id))
         self.assertEqual(updated_task.linked_schedule_id, "evt321")
 
+    def test_block_time_for_task_failure(self):
+        self.linker._connected = True
+        mock_schedule = MagicMock()
+        mock_schedule.process.return_value = {"status": "error"}
+        task = task_core.create_task("user1", "cal link fail")
+        task_input = TaskInput(
+            task_id=str(task.id),
+            description=task.description,
+            start_time=VALID_TASK_DATA_DICT["start_time"],
+            duration_minutes=VALID_TASK_DATA_DICT["duration_minutes"],
+            summary=VALID_TASK_DATA_DICT["summary"],
+        )
+
+        result = self.linker.block_time_for_task(mock_schedule, "user1", task_input)
+
+        self.assertIsNone(result)
+        mock_schedule.process.assert_called_once()
+        self.mock_adapter.create_event.assert_not_called()
+        updated_task = task_core.get_task(str(task.id))
+        self.assertIsNone(updated_task.linked_schedule_id)
+
     def test_create_update_delete_flow(self):
         """Full flow of creating, updating and deleting an event."""
         self.linker._connected = True
