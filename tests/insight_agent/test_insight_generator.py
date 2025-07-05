@@ -158,3 +158,30 @@ def test_disk_cache_sqlite_persistence(tmp_path):
     gen2 = InsightGenerator(cache_path=str(cache_file))
     key = gen2._cache_key(sample_data())
     assert key in gen2._cache
+
+
+def test_cache_pruning_in_memory():
+    gen = InsightGenerator(max_entries=2)
+    gen.compile({"a": []})
+    gen.compile({"b": []})
+    assert len(gen._cache) == 2
+    gen.compile({"c": []})
+    assert len(gen._cache) == 2
+    key_a = gen._cache_key({"a": []})
+    assert key_a not in gen._cache
+
+
+def test_cache_pruning_persisted(tmp_path):
+    cache_file = tmp_path / "cache.json"
+    gen = InsightGenerator(cache_path=str(cache_file), max_entries=2)
+    data_a = {"id": 1}
+    data_b = {"id": 2}
+    data_c = {"id": 3}
+    gen.compile({"a": [data_a]})
+    gen.compile({"b": [data_b]})
+    gen.compile({"c": [data_c]})
+
+    gen2 = InsightGenerator(cache_path=str(cache_file), max_entries=2)
+    key_a = gen2._cache_key({"a": [data_a]})
+    assert key_a not in gen2._cache
+    assert len(gen2._cache) == 2
