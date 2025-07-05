@@ -98,6 +98,22 @@ The primary entry point for demonstrating the current capabilities is the intera
 
     Type `exit` or `quit` to end the interactive session.
 
+### Running the Web UI
+
+An experimental FastAPI UI is available for simple browser-based interaction.
+
+1.  **Install the additional dependencies:**
+    ```bash
+    pip install fastapi uvicorn
+    ```
+
+2.  **Start the server:**
+    ```bash
+    python -m floe_ui.main
+    ```
+
+3.  **Open your browser** to `http://localhost:8001` and send queries using the form.
+
 ## Project Structure (Overview)
 
 *   `orchestrator_agent/`: Contains the core orchestration logic.
