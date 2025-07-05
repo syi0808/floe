@@ -278,12 +278,24 @@ class TaskCalendarLinker:
                 "Calendar adapter not connected. Call connect_calendar() first."
             )
 
-        floe_event_id = block_time_for_task_via_schedule_agent(
-            schedule_agent,
-            user_id,
-            task_input,
-            participants,
-        )
+        entities = {
+            "title": task_input.summary or task_input.description[:50],
+            "participants": participants or [user_id],
+            "time": task_input.start_time.strftime("%H:%M"),
+            "date": task_input.start_time.strftime("%Y-%m-%d"),
+            "description": task_input.description,
+        }
+        resp = schedule_agent.process(entities, user_id)
+        floe_event_id = None
+        if isinstance(resp, dict):
+            if resp.get("status") == "success":
+                floe_event_id = resp.get("data", {}).get("event_id")
+        else:
+            try:
+                if resp.status == "success":
+                    floe_event_id = resp.data.get("event_id")
+            except Exception:
+                pass
 
         if not floe_event_id:
             return None
