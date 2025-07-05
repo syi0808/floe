@@ -1,0 +1,4 @@
+*   `task_agent/task_core.py` 마무리: 완료 - TaskItem 모델과 CRUD 로직, 우선순위 및 알림 기능 구현됨.
+*   `task_agent/task_calendar_linker.py` 구현: 완료 - ScheduleAgent와 연동한 캘린더 블로킹 지원.
+*   단위 테스트 개발: 완료 - core 모듈과 calendar linker 모듈에 대한 테스트 포함.
+*   통합 테스트 진행: TODO - TaskAgent가 ScheduleAgent와 MemoryManagerAgent와 함께 동작하는지 확인 필요.
