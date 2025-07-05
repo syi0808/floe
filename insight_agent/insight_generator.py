@@ -11,15 +11,19 @@ import sqlite3
 class InsightGenerator:
     """Compile data from agents and produce simple reports with caching."""
 
-    def __init__(self, cache_path: str | None = None) -> None:
+    def __init__(
+        self, cache_path: str | None = None, *, max_entries: int | None = None
+    ) -> None:
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_path = cache_path
+        self._max_entries = max_entries
         self._db: sqlite3.Connection | None = None
         if cache_path:
             if cache_path.endswith(".sqlite") or cache_path.endswith(".db"):
                 self._load_sqlite_cache(cache_path)
             else:
                 self._load_json_cache(cache_path)
+            self._enforce_limit()
 
     def clear_cache(self) -> None:
         """Remove all cached summaries."""
@@ -33,9 +37,7 @@ class InsightGenerator:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    self._cache = {
-                        k: v for k, v in data.items() if isinstance(v, dict)
-                    }
+                    self._cache = {k: v for k, v in data.items() if isinstance(v, dict)}
             except (OSError, json.JSONDecodeError):
                 self._cache = {}
 
@@ -51,7 +53,15 @@ class InsightGenerator:
             except json.JSONDecodeError:
                 continue
 
+    def _enforce_limit(self) -> None:
+        """Trim the cache to ``self._max_entries`` most recent items."""
+        if self._max_entries is None:
+            return
+        while len(self._cache) > self._max_entries:
+            self._cache.pop(next(iter(self._cache)))
+
     def _flush_cache(self) -> None:
+        self._enforce_limit()
         if not self._cache_path:
             return
         if self._cache_path.endswith(".sqlite") or self._cache_path.endswith(".db"):
@@ -64,10 +74,7 @@ class InsightGenerator:
                 self._db.execute("DELETE FROM insight_cache")
                 self._db.executemany(
                     "INSERT OR REPLACE INTO insight_cache (key, value) VALUES (?, ?)",
-                    [
-                        (k, json.dumps(v))
-                        for k, v in self._cache.items()
-                    ],
+                    [(k, json.dumps(v)) for k, v in self._cache.items()],
                 )
         else:
             try:
@@ -81,7 +88,9 @@ class InsightGenerator:
         serialized = json.dumps(agent_data, sort_keys=True, default=str)
         return hashlib.md5(serialized.encode()).hexdigest()
 
-    def compile(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    def compile(
+        self, agent_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Aggregate metrics from Schedule, Task and Health agents with caching.
 
         ``agent_data`` may also contain ``goals`` and ``trend_data`` for goal
@@ -127,13 +136,20 @@ class InsightGenerator:
         # HealthAgent aggregation ------------------------------------------
         health_logs = agent_data.get("health_agent", [])
         if health_logs:
-            sleep_scores = [h.get("sleep_score") for h in health_logs if h.get("sleep_score") is not None]
-            avg_sleep = round(sum(sleep_scores) / len(sleep_scores), 2) if sleep_scores else None
+            sleep_scores = [
+                h.get("sleep_score")
+                for h in health_logs
+                if h.get("sleep_score") is not None
+            ]
+            avg_sleep = (
+                round(sum(sleep_scores) / len(sleep_scores), 2)
+                if sleep_scores
+                else None
+            )
             health_summary: Dict[str, Any] = {"count": len(health_logs)}
             if avg_sleep is not None:
                 health_summary["avg_sleep_score"] = avg_sleep
             summary["health_agent"] = health_summary
-
 
         # Generic count for any remaining agents --------------------------
         for agent, records in agent_data.items():
@@ -207,14 +223,18 @@ class InsightGenerator:
                 return None
         if "start" in event and "end" in event:
             try:
-                start = datetime.fromisoformat(str(event["start"]).replace("Z", "+00:00"))
+                start = datetime.fromisoformat(
+                    str(event["start"]).replace("Z", "+00:00")
+                )
                 end = datetime.fromisoformat(str(event["end"]).replace("Z", "+00:00"))
             except ValueError:
                 return None
             return (end - start).total_seconds() / 3600.0
         return None
 
-    def _goal_progress(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, float]:
+    def _goal_progress(
+        self, agent_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, float]:
         """Return goal progress percentages keyed by goal id."""
         goals = agent_data.get("goals") or agent_data.get("goal_agent") or []
         progress: Dict[str, float] = {}
@@ -237,7 +257,9 @@ class InsightGenerator:
             progress[gid] = round(pct, 2)
         return progress
 
-    def _compute_trends(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    def _compute_trends(
+        self, agent_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Return simple time-series metrics grouped by date."""
         trends: Dict[str, Dict[str, Any]] = {}
 
@@ -248,7 +270,11 @@ class InsightGenerator:
             if not dt:
                 continue
             try:
-                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+                day = (
+                    datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
+                    .date()
+                    .isoformat()
+                )
             except ValueError:
                 continue
             hrs = self._extract_duration_hours(evt) or 0.0
@@ -266,7 +292,11 @@ class InsightGenerator:
             if not dt:
                 continue
             try:
-                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+                day = (
+                    datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
+                    .date()
+                    .isoformat()
+                )
             except ValueError:
                 continue
             completed_by_day[day] = completed_by_day.get(day, 0) + 1
@@ -282,12 +312,19 @@ class InsightGenerator:
             if not dt:
                 continue
             try:
-                day = datetime.fromisoformat(str(dt).replace("Z", "+00:00")).date().isoformat()
+                day = (
+                    datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
+                    .date()
+                    .isoformat()
+                )
             except ValueError:
                 continue
             sleep_by_day.setdefault(day, []).append(float(h["sleep_score"]))
         if sleep_by_day:
-            trends["avg_sleep_score"] = {d: round(sum(scores) / len(scores), 2) for d, scores in sleep_by_day.items()}
+            trends["avg_sleep_score"] = {
+                d: round(sum(scores) / len(scores), 2)
+                for d, scores in sleep_by_day.items()
+            }
 
         return trends
 
@@ -315,7 +352,7 @@ class InsightGenerator:
             if agent == "task_agent" and "completed" in stats:
                 line += f", {stats['completed']} completed"
                 if "completion_rate" in stats:
-                    pct = int(stats['completion_rate'] * 100)
+                    pct = int(stats["completion_rate"] * 100)
                     line += f" ({pct}% complete)"
             if agent == "health_agent" and "avg_sleep_score" in stats:
                 line += f", avg sleep score {stats['avg_sleep_score']}"
@@ -337,11 +374,15 @@ class InsightGenerator:
         return {"summary": summary}
 
     # ------------------------------------------------------------------
-    def compile_daily(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    def compile_daily(
+        self, agent_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Wrapper for daily compilation. ``agent_data`` is assumed to contain only entries for a single day."""
         return self.compile(agent_data)
 
-    def compile_weekly(self, agent_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    def compile_weekly(
+        self, agent_data: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Wrapper for weekly compilation. ``agent_data`` is assumed to contain only entries for the week."""
         return self.compile(agent_data)
 
