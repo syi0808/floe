@@ -12,8 +12,13 @@ class ConversationAgentWrapper(BaseAgent):
         self,
         memory_manager: Optional[MemoryManagerAgent] = None,
         mcp_client: MCPClient | None = None,
+        user_id: str | None = None,
     ) -> None:
         self.agent = ConversationAgent(memory_manager=memory_manager, mcp_client=mcp_client)
+
+        # Preload history if a memory manager and user_id are provided
+        if memory_manager is not None and user_id is not None:
+            self.agent.load_history_from_memory(user_id)
 
     @property
     def name(self) -> str:

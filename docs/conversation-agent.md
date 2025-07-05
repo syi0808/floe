@@ -50,3 +50,6 @@ agent.store_last_turn_to_memory(user_id)
 
 These load past turns when a new instance starts and store the latest turn
 after generating a response.
+
+`ConversationAgentWrapper` automatically loads history on creation if a
+`MemoryManagerAgent` and `user_id` are provided.

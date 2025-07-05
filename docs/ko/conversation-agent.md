@@ -50,3 +50,6 @@ agent.store_last_turn_to_memory(user_id)
 
 새 인스턴스가 시작될 때 이전 턴을 불러오고, 응답 생성 후 마지막 턴을 저장합니다.
 
+`ConversationAgentWrapper`는 메모리 매니저와 `user_id`가 주어지면
+초기화 시 자동으로 `load_history_from_memory`를 호출합니다.
+
