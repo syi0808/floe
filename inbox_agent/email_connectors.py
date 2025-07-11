@@ -2,8 +2,33 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+import json
+from pathlib import Path
 import datetime
 import requests
+
+
+class TokenStore:
+    """Simple JSON-based token storage."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def load(self) -> Dict[str, str]:
+        if not self.path.exists():
+            return {}
+        try:
+            with self.path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def save(self, tokens: Dict[str, str]) -> None:
+        try:
+            with self.path.open("w", encoding="utf-8") as f:
+                json.dump(tokens, f)
+        except Exception:
+            pass
 
 
 class AbstractEmailConnector(ABC):
@@ -31,7 +56,14 @@ class GmailConnector(AbstractEmailConnector):
         refresh_token: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
+        token_store: TokenStore | None = None,
     ) -> None:
+        self.token_store = token_store
+        if self.token_store:
+            tokens = self.token_store.load()
+            access_token = access_token or tokens.get("access_token")
+            refresh_token = refresh_token or tokens.get("refresh_token")
+
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.client_id = client_id
@@ -42,7 +74,8 @@ class GmailConnector(AbstractEmailConnector):
     def _ensure_token(self) -> None:
         """Refresh the access token if it's missing or expired."""
         if not self.access_token or (
-            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+            self.token_expires_at
+            and self.token_expires_at <= datetime.datetime.utcnow()
         ):
             self._refresh_token()
 
@@ -61,8 +94,20 @@ class GmailConnector(AbstractEmailConnector):
         if "access_token" not in token_data:
             raise ValueError("Token refresh response missing access_token")
         self.access_token = token_data["access_token"]
+        if "refresh_token" in token_data:
+            self.refresh_token = token_data["refresh_token"]
+        if self.token_store:
+            self.token_store.save(
+                {
+                    "access_token": self.access_token,
+                    "refresh_token": self.refresh_token or "",
+                }
+            )
         if "expires_in" in token_data:
-            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=int(token_data["expires_in"]))
+            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(
+                seconds=int(token_data["expires_in"])
+            )
+
     def _authorized_request(
         self,
         method: str,
@@ -89,7 +134,9 @@ class GmailConnector(AbstractEmailConnector):
         resp.raise_for_status()
         return resp.json()
 
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _get(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         return self._authorized_request("get", endpoint, params=params)
 
     def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
@@ -114,7 +161,12 @@ class GmailConnector(AbstractEmailConnector):
         attachments: List[Dict[str, Any]] = []
         for part in data.get("payload", {}).get("parts", []):
             if part.get("filename"):
-                attachments.append({"filename": part.get("filename"), "mime_type": part.get("mimeType")})
+                attachments.append(
+                    {
+                        "filename": part.get("filename"),
+                        "mime_type": part.get("mimeType"),
+                    }
+                )
         return attachments
 
 
@@ -128,7 +180,14 @@ class OutlookConnector(AbstractEmailConnector):
         client_id: str | None = None,
         client_secret: str | None = None,
         tenant: str = "common",
+        token_store: TokenStore | None = None,
     ) -> None:
+        self.token_store = token_store
+        if self.token_store:
+            tokens = self.token_store.load()
+            access_token = access_token or tokens.get("access_token")
+            refresh_token = refresh_token or tokens.get("refresh_token")
+
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.client_id = client_id
@@ -140,7 +199,8 @@ class OutlookConnector(AbstractEmailConnector):
     def _ensure_token(self) -> None:
         """Refresh the access token if it's missing or expired."""
         if not self.access_token or (
-            self.token_expires_at and self.token_expires_at <= datetime.datetime.utcnow()
+            self.token_expires_at
+            and self.token_expires_at <= datetime.datetime.utcnow()
         ):
             self._refresh_token()
 
@@ -159,8 +219,19 @@ class OutlookConnector(AbstractEmailConnector):
         resp.raise_for_status()
         token_data = resp.json()
         self.access_token = token_data.get("access_token")
+        if "refresh_token" in token_data:
+            self.refresh_token = token_data["refresh_token"]
+        if self.token_store:
+            self.token_store.save(
+                {
+                    "access_token": self.access_token,
+                    "refresh_token": self.refresh_token or "",
+                }
+            )
         if "expires_in" in token_data:
-            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=int(token_data["expires_in"]))
+            self.token_expires_at = datetime.datetime.utcnow() + datetime.timedelta(
+                seconds=int(token_data["expires_in"])
+            )
 
     def _authorized_request(
         self,
@@ -187,11 +258,13 @@ class OutlookConnector(AbstractEmailConnector):
         resp.raise_for_status()
         return resp.json()
 
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _get(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         return self._authorized_request("get", endpoint, params=params)
 
     def list_emails(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
-        params = {"$top": limit}
+        params: Dict[str, Any] = {"$top": limit}
         if query:
             params["$search"] = query
         data = self._get("messages", params=params)

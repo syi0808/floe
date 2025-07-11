@@ -6,7 +6,7 @@ from orchestrator_agent.base_agent import BaseAgent
 from orchestrator_agent.common_types import AgentResponse
 from mcp import MCPClient
 
-from .email_connectors import GmailConnector, OutlookConnector
+from .email_connectors import GmailConnector, OutlookConnector, TokenStore
 from .email_processor import summarize_email
 
 
@@ -17,11 +17,19 @@ class InboxAgent(BaseAgent):
         self,
         gmail_connector: Optional[GmailConnector] = None,
         outlook_connector: Optional[OutlookConnector] = None,
+        gmail_token_store: TokenStore | None = None,
+        outlook_token_store: TokenStore | None = None,
         mcp_client: MCPClient | None = None,
     ) -> None:
         super().__init__()
-        self.gmail = gmail_connector
-        self.outlook = outlook_connector
+        self.gmail = gmail_connector or (
+            GmailConnector(token_store=gmail_token_store) if gmail_token_store else None
+        )
+        self.outlook = outlook_connector or (
+            OutlookConnector(token_store=outlook_token_store)
+            if outlook_token_store
+            else None
+        )
         self.mcp_client = mcp_client or MCPClient.from_env()
 
     @property
