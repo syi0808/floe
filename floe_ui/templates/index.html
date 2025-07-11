@@ -8,6 +8,7 @@
     <form id="query-form">
         <input type="text" id="text" placeholder="Enter your query" size="40" />
         <input type="text" id="user_id" placeholder="User ID" value="user_web" />
+        <input type="password" id="token" placeholder="Token" />
         <button type="submit">Send</button>
     </form>
     <pre id="response"></pre>
@@ -16,9 +17,13 @@
         e.preventDefault();
         const text = document.getElementById('text').value;
         const user_id = document.getElementById('user_id').value;
+        const token = document.getElementById('token').value;
         const resp = await fetch('/query', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
             body: JSON.stringify({ text, user_id })
         });
         const data = await resp.json();

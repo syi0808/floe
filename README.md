@@ -107,12 +107,17 @@ An experimental FastAPI UI is available for simple browser-based interaction.
     pip install fastapi uvicorn
     ```
 
-2.  **Start the server:**
+2.  **Set the token** for the UI (optional but recommended):
+    ```bash
+    export FLOE_UI_TOKEN=mysecret
+    ```
+
+3.  **Start the server:**
     ```bash
     python -m floe_ui.main
     ```
 
-3.  **Open your browser** to `http://localhost:8001` and send queries using the form.
+4.  **Open your browser** to `http://localhost:8001` and use the token field when sending queries.
 
 ## Project Structure (Overview)
 
