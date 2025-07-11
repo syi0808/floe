@@ -11,6 +11,22 @@ class DialogueManager:
         )
         self.context_window = context_window
 
+    def update_state(
+        self,
+        *,
+        intent: Optional[str] = None,
+        slots: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Update tracked dialogue state such as intent and slot values."""
+        if intent is not None:
+            self.state.current_intent = intent
+            history = self.state.current_context.setdefault("intent_history", [])
+            history.append(intent)
+            if len(history) > self.context_window:
+                del history[0]
+        if slots:
+            self.state.slot_values.update(slots)
+
     def add_user_input(self, user_input: UserInput):
         """Adds user input to the conversation history."""
         self.state.turn_counter += 1
@@ -66,9 +82,17 @@ class DialogueManager:
         if confidence < 0.6 or missing_required_slot:
             self.state.waiting_for_clarification = True
             self.state.clarification_attempts += 1
-            if self.state.clarification_attempts > 1:
-                question = "Could you rephrase that?"
-            self.state.pending_question = question
+            if self.state.clarification_attempts == 1:
+                q = question
+            elif self.state.clarification_attempts == 2:
+                q = "Could you rephrase that?"
+            else:
+                q = "I'm still not sure what you mean. Could you clarify further?"
+            self.state.pending_question = q
+            qlist = self.state.current_context.setdefault(
+                "clarification_questions", []
+            )
+            qlist.append(q)
             return True
         return False
 
