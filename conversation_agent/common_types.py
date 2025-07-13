@@ -31,3 +31,5 @@ class ConversationState(BaseModel):
     clarification_attempts: int = 0
     pending_question: Optional[str] = None
     pending_clarification_turn_id: Optional[int] = None
+    current_intent: Optional[str] = None
+    slot_values: Dict[str, Any] = Field(default_factory=dict)

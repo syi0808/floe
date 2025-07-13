@@ -24,5 +24,11 @@ class TestConversationAgent(unittest.TestCase):
         resp = self.agent.handle_message("add task buy milk")
         self.assertIn("create a task", resp.text.lower())
 
+    def test_intent_state_tracking(self):
+        self.agent.handle_message("Hello")
+        state = self.agent.dialogue_manager.get_current_state()
+        self.assertEqual(state.current_intent, "greeting")
+        self.assertIn("greeting", state.current_context.get("intent_history"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,6 +124,7 @@ class ConversationAgent:
             # We don't return here; continue to process normally after resolving
 
         intent = self.intent_recognizer.recognize_intent(user_input.text)
+        self.dialogue_manager.update_state(intent=intent)
         language = None
         if user_input.metadata:
             language = user_input.metadata.get("language")

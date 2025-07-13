@@ -108,5 +108,26 @@ class TestDialogueManager(unittest.TestCase):
         self.manager.resolve_clarification("done")
         self.assertIsNone(self.manager.state.pending_clarification_turn_id)
 
+    def test_update_state_tracks_intent_and_slots(self):
+        self.manager.update_state(intent="greeting", slots={"name": "Sam"})
+        state = self.manager.get_current_state()
+        self.assertEqual(state.current_intent, "greeting")
+        self.assertEqual(state.slot_values.get("name"), "Sam")
+        self.assertIn("greeting", state.current_context.get("intent_history"))
+
+    def test_clarification_escalation(self):
+        user_input = UserInput(text="Hello")
+        self.manager.add_user_input(user_input)
+        self.manager.check_clarification_needed(0.1, False, "Clarify?")
+        first = self.manager.state.pending_question
+        self.manager.resolve_clarification("hi")
+        self.manager.check_clarification_needed(0.1, False, "Clarify?")
+        second = self.manager.state.pending_question
+        self.manager.resolve_clarification("hi")
+        self.manager.check_clarification_needed(0.1, False, "Clarify?")
+        third = self.manager.state.pending_question
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(second, third)
+
 if __name__ == '__main__':
     unittest.main()
