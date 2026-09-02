@@ -48,6 +48,21 @@ Internally, experts may analyze distinct domains. Externally, the user has one a
 5. Core interfaces and domain models are Floe-owned and provider-neutral.
 6. Hosted and self-hosted distributions should share the same core system.
 
+## Core product loops
+
+1. **Plan the day:** events, tasks, notes, commitments, and interventions retain their own semantics but project into one Now/Next-oriented Day Canvas.
+2. **Capture → structure → act:** typed or voiced input is preserved, interpreted into candidates, then updates the timeline/memory or produces an action proposal.
+3. **Observe → understand → intervene:** state and connected data can inform internal experts; one user-facing manager decides whether an interruption is worthwhile.
+4. **Remember safely:** evidence, observations, claims, and inferences stay distinct; durable context has provenance and user controls.
+5. **Propose → authorize → execute:** intelligence only proposes; deterministic policy, validation, permissions, and confirmation gate every external mutation.
+
+## Risks to contain early
+
+- The Day Canvas may not be materially better than separate tools; dogfooding must test it first.
+- Incorrect proactive suggestions cause intervention fatigue and loss of trust.
+- Voice, health data, memory extraction, identity resolution, sync, and connector maintenance are distinct high-risk systems—not features to bundle into the first proof.
+- Durable personal context can be corrupted by transcription error, false inference, or hostile external content; provenance and review cannot be deferred.
+
 ## Evidence
 
-This brief synthesizes the supplied planning bundle: `00-overview/product-vision.md`, `product-principles.md`, `product-boundaries.md`, and `README.md`.
+This brief synthesizes the supplied planning bundle: `README.md`; `00-overview/product-vision.md`, `product-principles.md`, `product-boundaries.md`, and `roadmap.md`; `01-experience/day-canvas.md`, `capture-and-transcription.md`, and `interventions.md`; `02-domain/personal-memory.md`; `03-intelligence/manager-and-experts.md` and `skills-and-actions.md`; and `08-engineering/technical-risks.md`.
