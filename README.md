@@ -28,7 +28,13 @@ Rust 1.93 or newer is required.
 cargo test --workspace
 ```
 
-The Flutter client remains the selected UI baseline, but is deferred until the Flutter SDK is available in the development environment.
+Flutter 3.47 or newer is required for the cross-platform client.
+
+```sh
+cd apps/client
+flutter test
+flutter run -d macos
+```
 
 ## Working rules
 
