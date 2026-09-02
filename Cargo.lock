@@ -671,6 +671,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-protocol"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-domain",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
