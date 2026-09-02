@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 abstract final class FloeMotion {
   static const easeOut = Cubic(0.23, 1, 0.32, 1);
   static const easeInOut = Cubic(0.77, 0, 0.175, 1);
+  static const ease = Cubic(0.25, 0.1, 0.25, 1);
   static const sheetCurve = Cubic(0.32, 0.72, 0, 1);
 
   static const pressDuration = Duration(milliseconds: 120);
@@ -20,7 +21,7 @@ final class PressableScale extends StatefulWidget {
   const PressableScale({
     required this.child,
     this.enabled = true,
-    this.scale = 0.98,
+    this.scale = 0.97,
     this.alignment = Alignment.center,
     super.key,
   });

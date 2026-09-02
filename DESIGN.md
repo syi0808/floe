@@ -58,6 +58,7 @@ colors:
   error-200: "#FFC5BB"
   error-400: "#E97969"
   error-600: "#B8463A"
+  error-700: "#9D3E34"
   error-800: "#7E342D"
   canvas: "{colors.neutral-50}"
   surface: "{colors.neutral-0}"
@@ -311,7 +312,8 @@ The shape language is **architectural softness**: mostly square geometry with ju
 - Primary buttons are filled Glacier Blue. Limit each surface or dialog to one.
 - Secondary buttons are white or transparent with a crisp border.
 - Tertiary actions are text or icon controls with an explicit hover target of at least 36×36px desktop and 44×44px touch.
-- Pressing a pointer-driven button scales it to `0.98` for 120ms, then returns with the strong ease-out curve. Keyboard activation remains instant.
+- Ripple effects are never used. Hover changes only surface, border, icon, or text color; it never creates a spreading ink animation.
+- Pressing an occasional pointer-driven action scales it to `0.97` for 120ms, then returns with the strong ease-out curve. High-frequency navigation uses color feedback only, and keyboard activation remains instant.
 - Disabled controls retain readable labels and lose saturation; do not communicate disabled state through opacity alone.
 
 ### Inputs and Capture

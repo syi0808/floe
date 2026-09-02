@@ -32,6 +32,8 @@ abstract final class FloePalette {
   static const warning600 = Color(0xFF946215);
   static const error50 = Color(0xFFFFF4F2);
   static const error600 = Color(0xFFB8463A);
+  static const error700 = Color(0xFF9D3E34);
+  static const error800 = Color(0xFF7E342D);
 
   static const glacialField = LinearGradient(
     begin: Alignment.topLeft,

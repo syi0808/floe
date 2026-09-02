@@ -1,8 +1,23 @@
 import 'package:flutter/material.dart';
 
 import 'design_tokens.dart';
+import 'floe_motion.dart';
 
 abstract final class FloeTheme {
+  static final destructiveButtonStyle = ButtonStyle(
+    animationDuration: FloeMotion.hoverDuration,
+    backgroundColor: WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.pressed)) return FloePalette.error800;
+      if (states.contains(WidgetState.hovered) ||
+          states.contains(WidgetState.focused)) {
+        return FloePalette.error700;
+      }
+      return FloePalette.error600;
+    }),
+    foregroundColor: const WidgetStatePropertyAll(FloePalette.neutral0),
+    overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+  );
+
   static ThemeData get light {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: FloePalette.primary600,
@@ -12,6 +27,11 @@ abstract final class FloeTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      splashFactory: NoSplash.splashFactory,
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      focusColor: FloePalette.primary50,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: FloePalette.neutral50,
       dividerColor: FloePalette.neutral200,
@@ -42,31 +62,68 @@ abstract final class FloeTheme {
         focusedErrorBorder: _inputBorder(FloePalette.error600, width: 2),
       ),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: FloePalette.primary600,
-          foregroundColor: FloePalette.neutral0,
-          minimumSize: const Size(40, 40),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(FloeRadius.sm),
+        style: ButtonStyle(
+          animationDuration: FloeMotion.hoverDuration,
+          backgroundColor: WidgetStateProperty.resolveWith(_filledBackground),
+          foregroundColor: WidgetStateProperty.resolveWith(_filledForeground),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(FloeRadius.sm),
+            ),
           ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: FloePalette.neutral800,
-          minimumSize: const Size(40, 40),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(FloeRadius.sm),
+        style: ButtonStyle(
+          animationDuration: FloeMotion.hoverDuration,
+          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
+          backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(FloeRadius.sm),
+            ),
           ),
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
-        style: IconButton.styleFrom(
-          foregroundColor: FloePalette.neutral600,
-          minimumSize: const Size.square(40),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(FloeRadius.sm),
+        style: ButtonStyle(
+          animationDuration: FloeMotion.hoverDuration,
+          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
+          backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          minimumSize: const WidgetStatePropertyAll(Size.square(40)),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(FloeRadius.sm),
+            ),
           ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          animationDuration: FloeMotion.hoverDuration,
+          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
+          backgroundColor: WidgetStateProperty.resolveWith(_outlinedBackground),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          side: WidgetStateProperty.resolveWith(_outlinedSide),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(FloeRadius.sm),
+            ),
+          ),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          animationDuration: FloeMotion.hoverDuration,
+          foregroundColor: WidgetStateProperty.resolveWith(_segmentForeground),
+          backgroundColor: WidgetStateProperty.resolveWith(_segmentBackground),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          side: WidgetStateProperty.resolveWith(_segmentSide),
         ),
       ),
       checkboxTheme: CheckboxThemeData(
@@ -74,6 +131,7 @@ abstract final class FloeTheme {
           borderRadius: BorderRadius.circular(FloeRadius.xs),
         ),
         side: const BorderSide(color: FloePalette.neutral400, width: 1.5),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: FloePalette.neutral0,
@@ -92,4 +150,71 @@ abstract final class FloeTheme {
         borderRadius: BorderRadius.circular(FloeRadius.md),
         borderSide: BorderSide(color: color, width: width),
       );
+
+  static Color _filledBackground(Set<WidgetState> states) {
+    if (states.contains(WidgetState.disabled)) return FloePalette.primary200;
+    if (states.contains(WidgetState.pressed)) return FloePalette.primary800;
+    if (states.contains(WidgetState.hovered) ||
+        states.contains(WidgetState.focused)) {
+      return FloePalette.primary700;
+    }
+    return FloePalette.primary600;
+  }
+
+  static Color _filledForeground(Set<WidgetState> states) =>
+      states.contains(WidgetState.disabled)
+      ? FloePalette.neutral600
+      : FloePalette.neutral0;
+
+  static Color _quietForeground(Set<WidgetState> states) {
+    if (states.contains(WidgetState.disabled)) return FloePalette.neutral400;
+    if (states.contains(WidgetState.hovered) ||
+        states.contains(WidgetState.pressed) ||
+        states.contains(WidgetState.focused)) {
+      return FloePalette.neutral950;
+    }
+    return FloePalette.neutral600;
+  }
+
+  static Color _quietBackground(Set<WidgetState> states) {
+    if (states.contains(WidgetState.pressed)) return FloePalette.neutral200;
+    if (states.contains(WidgetState.hovered)) return FloePalette.neutral100;
+    if (states.contains(WidgetState.focused)) return FloePalette.primary50;
+    return Colors.transparent;
+  }
+
+  static Color _outlinedBackground(Set<WidgetState> states) {
+    if (states.contains(WidgetState.pressed)) return FloePalette.neutral100;
+    if (states.contains(WidgetState.hovered)) return FloePalette.neutral50;
+    if (states.contains(WidgetState.focused)) return FloePalette.primary50;
+    return FloePalette.neutral0;
+  }
+
+  static BorderSide _outlinedSide(Set<WidgetState> states) => BorderSide(
+    color: states.contains(WidgetState.focused)
+        ? FloePalette.primary600
+        : states.contains(WidgetState.hovered)
+        ? FloePalette.neutral400
+        : FloePalette.neutral300,
+  );
+
+  static Color _segmentForeground(Set<WidgetState> states) =>
+      states.contains(WidgetState.selected)
+      ? FloePalette.primary800
+      : _quietForeground(states);
+
+  static Color _segmentBackground(Set<WidgetState> states) {
+    if (states.contains(WidgetState.selected)) {
+      return states.contains(WidgetState.pressed)
+          ? FloePalette.primary200
+          : FloePalette.primary100;
+    }
+    return _quietBackground(states);
+  }
+
+  static BorderSide _segmentSide(Set<WidgetState> states) => BorderSide(
+    color: states.contains(WidgetState.focused)
+        ? FloePalette.primary600
+        : FloePalette.neutral300,
+  );
 }

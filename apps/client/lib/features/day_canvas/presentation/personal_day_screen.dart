@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_motion.dart';
+import '../../../app/floe_theme.dart';
 import '../application/day_gateway.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
@@ -90,10 +91,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     }
     if (controller.loadState == DayLoadState.failure) {
       return Center(
-        child: FilledButton.icon(
-          onPressed: controller.load,
-          icon: const Icon(Icons.refresh),
-          label: const Text('다시 불러오기'),
+        child: PressableScale(
+          child: FilledButton.icon(
+            onPressed: controller.load,
+            icon: const Icon(Icons.refresh),
+            label: const Text('다시 불러오기'),
+          ),
         ),
       );
     }
@@ -541,16 +544,18 @@ class _Row extends StatelessWidget {
         title: const Text('항목을 삭제할까요?'),
         content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: FloePalette.error600,
+          PressableScale(
+            child: TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
             ),
-            child: const Text('삭제'),
+          ),
+          PressableScale(
+            child: FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FloeTheme.destructiveButtonStyle,
+              child: const Text('삭제'),
+            ),
           ),
         ],
       ),
@@ -655,13 +660,19 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
       ),
     ),
     actions: [
-      TextButton(
-        onPressed: pending ? null : () => Navigator.pop(context, false),
-        child: const Text('나중에'),
+      PressableScale(
+        enabled: !pending,
+        child: TextButton(
+          onPressed: pending ? null : () => Navigator.pop(context, false),
+          child: const Text('나중에'),
+        ),
       ),
-      FilledButton(
-        onPressed: pending || kind == null ? null : _submit,
-        child: const Text('분류하여 추가'),
+      PressableScale(
+        enabled: !pending && kind != null,
+        child: FilledButton(
+          onPressed: pending || kind == null ? null : _submit,
+          child: const Text('분류하여 추가'),
+        ),
       ),
     ],
   );
