@@ -13,6 +13,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 ## Start here
 
 - [Planning specification v0.8](docs/planning/README.md)
+- [Floe design system](DESIGN.md)
 - [Product brief](docs/product-brief.md)
 - [MVP definition](docs/mvp.md)
 - [v0.8 integration and expert baseline](docs/decisions/0003-native-connectors-and-experts.md)
@@ -44,6 +45,7 @@ flutter run -d macos
 - Sensitive raw data should remain local whenever practical.
 - Platform parity means equivalent assistant experiences, not identical screens or APIs.
 - Third-party Experts are untrusted by default: they receive explicit capability-scoped views and emit structured candidates, never arbitrary direct mutations.
+- Product UI follows the tokens, interaction rules, and guardrails in [`DESIGN.md`](DESIGN.md).
 
 ## Planning source
 
