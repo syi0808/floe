@@ -6,7 +6,7 @@ The product is not an agent framework, automation builder, chat wrapper, or dash
 
 ## Status
 
-Greenfield restart. The previous implementation was intentionally removed; only the repository’s MIT `LICENSE` was retained.
+The first Personal Day vertical slice is in progress. The Rust workspace now contains separate Personal Day domain models, typed core operations, deterministic Day Canvas snapshots, and an embedded Turso persistence PoC.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
@@ -17,7 +17,18 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [MVP definition](docs/mvp.md)
 - [v0.8 integration and expert baseline](docs/decisions/0003-native-connectors-and-experts.md)
 - [v0.5 implementation baseline](docs/decisions/0002-implementation-baseline.md)
+- [First Personal Day vertical slice](docs/decisions/0004-personal-day-first-slice.md)
 - [Open questions](docs/open-questions.md)
+
+## Development
+
+Rust 1.93 or newer is required.
+
+```sh
+cargo test --workspace
+```
+
+The Flutter client remains the selected UI baseline, but is deferred until the Flutter SDK is available in the development environment.
 
 ## Working rules
 
