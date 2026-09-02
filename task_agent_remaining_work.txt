@@ -1,4 +1,0 @@
-*   Finalize `task_agent/task_core.py`: DONE - TaskItem model and CRUD operations implemented with priority and reminder logic.
-*   Implement `task_agent/task_calendar_linker.py`: DONE - Calendar blocking via ScheduleAgent supported.
-*   Develop unit tests: DONE - Tests cover core and calendar linker modules.
-*   Conduct integration testing: TODO - verify TaskAgent works with ScheduleAgent and MemoryManagerAgent together.
