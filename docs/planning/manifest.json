@@ -1,7 +1,7 @@
 {
   "project": "Floe",
-  "version": "planning-v0.5",
-  "document_count": 44,
+  "version": "planning-v0.8",
+  "document_count": 52,
   "structure": [
     "00-overview/product-boundaries.md",
     "00-overview/product-principles.md",
@@ -16,6 +16,7 @@
     "02-domain/personal-memory.md",
     "02-domain/personal-state.md",
     "02-domain/personal-timeline.md",
+    "03-intelligence/expert-extension-model.md",
     "03-intelligence/health-intelligence.md",
     "03-intelligence/manager-and-experts.md",
     "03-intelligence/model-layer.md",
@@ -24,8 +25,11 @@
     "04-platform/apple-platforms.md",
     "04-platform/device-agent.md",
     "05-integrations/connector-contract.md",
+    "05-integrations/connector-data-policy.md",
     "05-integrations/connector-sources.md",
+    "05-integrations/initial-connector-set.md",
     "05-integrations/integration-fabric.md",
+    "06-security/expert-permissions-and-sandbox.md",
     "06-security/privacy-and-data-classification.md",
     "06-security/sensitive-local-compute.md",
     "07-server/account-person-membership.md",
@@ -38,6 +42,7 @@
     "08-engineering/technical-risks.md",
     "09-implementation/client-architecture.md",
     "09-implementation/connector-runtime.md",
+    "09-implementation/expert-runtime.md",
     "09-implementation/local-ai-runtime.md",
     "09-implementation/native-platform-bridges.md",
     "09-implementation/performance-design.md",
@@ -46,7 +51,10 @@
     "09-implementation/server-stack.md",
     "09-implementation/technology-selection.md",
     "09-implementation/turso-storage.md",
+    "10-ecosystem/expert-development.md",
+    "10-ecosystem/expert-marketplace.md",
+    "10-ecosystem/expert-package.md",
     "README.md"
   ],
-  "notes": "Updated server control plane to Go and persistence foundation to Turso Database; added Turso storage architecture."
+  "notes": "Added extensible Expert architecture, capability permissions, sandbox runtime, package format, marketplace, and Expert SDK direction."
 }

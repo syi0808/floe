@@ -29,8 +29,9 @@ Performance & Shared Core
 Native OS Adapters
     Swift / Kotlin / Rust(windows-rs, macOS helper where appropriate)
 
-Connector Runtime
-    TypeScript / Node.js
+Integration
+    Native Rust / Go connectors
+    + declarative ConnectorSpec
 
 Server / Control Plane
     Go
@@ -158,7 +159,7 @@ OS가 lifecycle과 security model을 소유하는 기능은 native layer가 담�
 | Apple native API | Swift |
 | Android native API | Kotlin |
 | Windows low-level integration | Rust + windows-rs |
-| Connector ecosystem runtime | TypeScript + Node.js |
+| Connector execution | Native Rust / Go + declarative ConnectorSpec |
 | Server / API control plane | Go |
 | Database engine | Turso Database |
 | Hosted database | Turso Cloud / self-hosted Turso |
@@ -253,3 +254,19 @@ Floe에는 다음 요구가 추가로 있기 때문이다.
 - server policy
 
 따라서 Turso Sync를 하위 replication primitive로 활용할 수 있는지는 별도 PoC로 검증한다.
+
+## Node.js is not a baseline runtime
+
+The main Floe distribution should not require Node.js.
+
+Activepieces and similar TypeScript connector ecosystems are used as source/reference inputs.
+
+Connector execution is native to the layer that owns it:
+
+```text
+Device connector → Rust/native OS adapter
+Server connector → Go
+Portable connector → ConnectorSpec interpreted/compiled by Go or Rust
+```
+
+An optional JS compatibility host may be added later for unported community integrations.

@@ -24,8 +24,6 @@ Database
 Device Local Database
     Embedded Turso through Rust Core
 
-Connector Host
-    TypeScript / Node.js
 
 Object Storage
     S3-compatible only when required
@@ -192,7 +190,7 @@ Elasticsearch
 separate Vector DB
 ```
 
-Go server + Turso + Connector Host를 최소 baseline으로 한다.
+Go server + Turso를 최소 baseline으로 한다.
 
 background work는 초기에는:
 
@@ -211,9 +209,6 @@ Self-host baseline:
 ```text
 floe-server
     Go
-
-floe-connector-host
-    Node / TypeScript
 
 turso
     embedded / local service depending topology
@@ -234,3 +229,19 @@ docker compose up -d
 ```
 
 수준의 setup이다.
+
+## Native Server Connectors
+
+SaaS connectors that require server-side background/webhook execution are implemented as Go packages/modules inside the server codebase by default.
+
+```text
+floe-server
+├─ connectors/
+│  ├─ gmail
+│  ├─ googlecalendar
+│  └─ ...
+```
+
+Portable ConnectorSpec connectors share a generic Go execution engine.
+
+If third-party connector isolation becomes necessary, native connector workers can later be moved into separate processes without requiring a language runtime such as Node.

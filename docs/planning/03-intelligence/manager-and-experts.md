@@ -82,3 +82,30 @@ Full Personal Memory
 "건강 비서", "일정 비서", "메일 비서"가 각자 notification을 보내는 UX는 피한다.
 
 Manager가 개입 타이밍과 표현을 통합한다.
+
+## Extensible Expert Layer
+
+Health/Schedule/Communication are built-in Experts, but `Expert` itself is a public extensibility boundary.
+
+```text
+Expert Registry
+├─ Built-in
+├─ User-created
+└─ Marketplace
+       ↓
+Manager
+```
+
+Built-in and third-party Experts should share the same semantic concepts:
+
+- trigger
+- domain view
+- capability dependency
+- private state
+- structured output
+- permission declaration
+
+Third-party Experts receive more restrictive execution and data-access policy.
+
+See `expert-extension-model.md`.
+

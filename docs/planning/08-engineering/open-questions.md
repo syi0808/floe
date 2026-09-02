@@ -36,8 +36,10 @@
 
 ## Integration
 
+- optional JavaScript compatibility host가 실제로 필요한가?
+
 - Connector Contract의 실제 언어/runtime은?
-- TypeScript Activepieces connector를 다른 backend language와 어떻게 연결할 것인가?
+- Activepieces Piece 중 어느 subset을 ConnectorSpec으로 자동/반자동 변환할 것인가?
 - connector process isolation이 필요한가?
 - webhook ingress를 central server가 담당하는가?
 - connector update compatibility를 어떻게 보장하는가?
@@ -75,3 +77,16 @@
 - plugin/extension SDK
 - 라이선스
 - hosted service와 OSS 기능 경계
+
+
+## Expert Ecosystem
+
+- Expert API v1의 최소 View/Output contract는 무엇인가?
+- declarative pipeline primitive를 어디까지 제공할 것인가?
+- Wasm Expert를 Go server에 직접 embed할지 Rust worker로 분리할지?
+- Marketplace Expert가 remote model을 요청하는 permission/비용 정책은?
+- network egress permission을 아예 금지할지 allowlist로 지원할지?
+- built-in Expert를 어느 수준까지 동일 runtime에서 dogfood할 것인가?
+- Expert state migration 실패 시 rollback 정책은?
+- Marketplace의 검증/서명 체계는?
+- 유료 Expert와 오픈소스 Expert의 distribution model은?

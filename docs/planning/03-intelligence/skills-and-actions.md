@@ -92,3 +92,20 @@ AI decides
 ↓
 OS schedules deterministic reminder/action
 ```
+
+## Expert Capability Access
+
+Third-party Experts do not receive direct Connector or credential access.
+
+They are granted semantic capability handles such as:
+
+```text
+calendar.read
+mail.search
+task.create.propose
+```
+
+Every invocation is mediated by host policy.
+
+Expert permission to *propose* an action does not bypass Person-level Action Authority.
+

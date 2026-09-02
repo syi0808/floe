@@ -8,15 +8,15 @@ The product is not an agent framework, automation builder, chat wrapper, or dash
 
 Greenfield restart. The previous implementation was intentionally removed; only the repository’s MIT `LICENSE` was retained.
 
-The canonical planning specification is now **floe-planning v0.5** in [`docs/planning/`](docs/planning/README.md).
+The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
 ## Start here
 
-- [Planning specification v0.5](docs/planning/README.md)
+- [Planning specification v0.8](docs/planning/README.md)
 - [Product brief](docs/product-brief.md)
 - [MVP definition](docs/mvp.md)
-- [Implementation baseline](docs/decisions/0002-implementation-baseline.md)
-- [Greenfield reset ADR](docs/decisions/0001-greenfield-reset.md)
+- [v0.8 integration and expert baseline](docs/decisions/0003-native-connectors-and-experts.md)
+- [v0.5 implementation baseline](docs/decisions/0002-implementation-baseline.md)
 - [Open questions](docs/open-questions.md)
 
 ## Working rules
@@ -26,7 +26,8 @@ The canonical planning specification is now **floe-planning v0.5** in [`docs/pla
 - Intelligence may propose; explicit policy and user confirmation govern actions.
 - Sensitive raw data should remain local whenever practical.
 - Platform parity means equivalent assistant experiences, not identical screens or APIs.
+- Third-party Experts are untrusted by default: they receive explicit capability-scoped views and emit structured candidates, never arbitrary direct mutations.
 
 ## Planning source
 
-`docs/planning/` is an in-repository copy of the user-supplied `floe-planning-v0.5` bundle, imported on 2026-09-02. It supersedes the earlier v0.3 planning baseline.
+`docs/planning/` is an in-repository copy of the user-supplied `floe-planning-v0.8` bundle, imported on 2026-09-02. It supersedes v0.5.

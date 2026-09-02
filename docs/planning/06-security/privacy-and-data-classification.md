@@ -87,3 +87,18 @@ speaker recognition과 실제 인증을 분리한다.
 ## Deletion
 
 Memory delete가 derived artifact까지 추적할 수 있도록 provenance가 중요하다.
+
+## Third-party Expert Boundary
+
+Marketplace/User-installed Experts are independent principals for authorization purposes.
+
+A Person granting Floe access to Gmail or Health does **not** imply every installed Expert can access that data.
+
+```text
+Person permission to Floe
+        ≠
+Expert permission to Person data
+```
+
+Expert-specific grants are stored on `ExpertAssignment`.
+

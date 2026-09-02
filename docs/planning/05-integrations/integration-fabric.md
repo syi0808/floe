@@ -84,3 +84,29 @@ Manager
 연결 onboarding은 모든 권한을 한 번에 묻지 않는다.
 
 가치가 필요한 시점에 progressive connection/permission을 요청하는 방향을 선호한다.
+
+## Runtime Placement
+
+Connector semantics are shared, but execution location is selected by data ownership and lifecycle.
+
+```text
+OS / Sensitive / Local
+→ Device-native connector
+→ Rust + Swift/Kotlin/native API
+
+Always-online SaaS
+→ Server-native connector
+→ Go
+
+Portable REST/OAuth connector
+→ Floe ConnectorSpec
+→ Go and/or Rust implementation
+```
+
+Flutter is not a connector execution runtime by default. It owns connection and permission UX, while credentials and execution remain in the appropriate secure/native layer.
+
+## No Mandatory JavaScript Runtime
+
+Production Floe does not require Node merely to reuse third-party connector ecosystems.
+
+A JavaScript compatibility host may exist later as an optional extension, but is not part of the baseline self-host or client runtime.

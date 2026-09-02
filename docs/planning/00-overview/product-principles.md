@@ -105,3 +105,10 @@ AI가 행동을 판단하는 것과 실제 실행 권한은 분리한다.
 어떤 휴리스틱, 어떤 크기의 모델, 어떤 provider를 쓸지는 중앙 Router가 추론해서 정하지 않는다.
 
 그 판단을 가장 잘 이해하는 도메인 컴포넌트가 명시적으로 소유한다.
+
+## 13. Extensible Expertise, Stable Experience
+
+Users can extend what Floe knows how to monitor and advise on without turning Floe into a collection of competing apps.
+
+Third-party Experts integrate through stable data/action contracts while the Manager and Calm UI remain in control of the user experience.
+

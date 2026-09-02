@@ -13,7 +13,6 @@ floe/
 ├─ apps/
 │  ├─ client/                  # Flutter main app
 │  ├─ server/                  # Go server / control plane
-│  └─ connector-host/          # TypeScript/Node runtime
 │
 ├─ server/
 │  ├─ internal/
@@ -39,9 +38,11 @@ floe/
 │  └─ windows/
 │
 ├─ connectors/
-│  ├─ core/
-│  ├─ activepieces-adapter/
-│  └─ ...
+│  ├─ spec/                    # declarative connector definitions
+│  ├─ importers/
+│  │  └─ activepieces/         # build-time source importer
+│  └─ native/
+│     └─ ...
 │
 ├─ models/
 │  ├─ manifests/
@@ -98,3 +99,21 @@ source-of-truth는:
 에 대해 shared Rust/Flutter build를 검증한다.
 
 Native platform integration test는 별도 lane으로 둔다.
+
+## Connector Placement
+
+```text
+server/internal/connectors/
+    Go server-native SaaS connectors
+
+crates/floe-core/
+    Rust connector traits/runtime for device-native connectors
+
+connectors/spec/
+    portable declarative connector definitions
+
+connectors/importers/
+    development/build-time import tools
+```
+
+No Node runtime is required by the default repository/runtime topology.

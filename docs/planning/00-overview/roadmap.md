@@ -15,6 +15,7 @@
 - LLM → Action Proposal → deterministic executor
 - encrypted personal store
 - basic multi-device sync assumptions
+- Expert contract + permission/sandbox PoC
 
 ## Phase 1 — Personal Day
 
@@ -64,6 +65,19 @@
 검증 질문:
 
 > Floe를 오래 사용할수록 비서의 품질이 실제로 누적되는가?
+
+## Phase 3.5 — Expert Ecosystem
+
+- public Expert contract
+- declarative Expert format
+- Expert assignment per Person
+- capability permissions
+- private Expert state
+- local package install
+- Expert SDK/testing harness
+- sandboxed code Expert PoC
+
+Marketplace discovery/commerce itself can come later; the runtime contract should stabilize earlier.
 
 ## Phase 4 — Cross-device
 

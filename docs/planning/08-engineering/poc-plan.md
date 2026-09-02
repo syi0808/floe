@@ -149,3 +149,24 @@ macOS에서 실제 사용하며:
 - native vector retrieval
 
 결과에 따라 Turso Sync를 Floe sync의 하위 primitive로 채택할지 결정한다.
+
+## P0-H — Native ConnectorSpec / Activepieces Port
+
+대상:
+
+- API key 기반 단순 REST connector
+- OAuth2 connector
+- polling connector
+- webhook connector
+
+검증:
+
+1. Floe ConnectorSpec로 표현
+2. Go runtime에서 실행
+3. 필요한 경우 Rust runtime에서 동일 spec 실행
+4. Activepieces Piece 하나를 AST 기반으로 spec에 반자동 변환
+5. unsupported arbitrary TypeScript를 명확히 감지
+
+목표:
+
+Node 없이도 핵심 connector 구현 비용을 충분히 낮출 수 있는지 확인한다.

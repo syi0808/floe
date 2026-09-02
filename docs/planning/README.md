@@ -86,6 +86,11 @@ floe-planning/
     ├── local-ai-runtime.md
     ├── performance-design.md
     └── repository-layout.md
+
+├── 10-ecosystem/
+│   ├── expert-package.md
+│   ├── expert-marketplace.md
+│   └── expert-development.md
 ```
 
 ## 문서 관리 규칙
@@ -118,3 +123,17 @@ floe-planning/
 4. `07-server/account-person-membership.md`
 5. `03-intelligence/model-layer.md`
 6. `08-engineering/technical-risks.md`
+
+## Runtime Note
+
+Default Floe runtime does not require Node.js. Third-party TypeScript connector ecosystems are treated as port/import sources; connector execution is native Rust/Go or declarative ConnectorSpec.
+
+
+## Expert Ecosystem Reading
+
+1. `03-intelligence/expert-extension-model.md`
+2. `06-security/expert-permissions-and-sandbox.md`
+3. `09-implementation/expert-runtime.md`
+4. `10-ecosystem/expert-package.md`
+5. `10-ecosystem/expert-marketplace.md`
+6. `10-ecosystem/expert-development.md`

@@ -2,68 +2,78 @@
 
 > Status: Accepted direction
 
-## 목표
+## Goal
 
-Floe가 수십~수백 SaaS connector를 처음부터 직접 구현하지 않는다.
+Floe does not implement every third-party integration from zero.
 
-대신 검증된 connector ecosystem의 implementation을 재사용한다.
+It reuses mature open-source integration ecosystems as implementation references, edge-case catalogs, auth/API knowledge, and potential build-time conversion sources. It does **not** require their workflow/runtime architecture.
 
 ## Activepieces
 
-현재 가장 관심 있는 source.
+Activepieces is the primary connector corpus currently under consideration.
 
-관심 있는 것은 workflow engine이 아니라:
+Activepieces Pieces are TypeScript/npm packages and may contain arbitrary `run()` logic and npm dependencies.
 
-- OAuth/authentication 구현
-- API client
-- actions/triggers
-- 다양한 서비스 connector package
+Therefore Floe distinguishes:
 
-이다.
+```text
+Source reuse
+≠
+Runtime compatibility
+```
 
-개념:
+Preferred reuse:
 
 ```text
 Activepieces Piece
       ↓
-Floe Adapter
+Inspect / Import / Port
       ↓
-Floe Connector Contract
+Floe ConnectorSpec or Native Connector
+      ↓
+Rust / Go
 ```
 
-## n8n
+Node is not required in production merely because the original source was TypeScript.
 
-같은 이유로 connector source는 유용할 수 있지만 전체 workflow runtime을 Floe architecture로 채택할 의도는 없다.
+## Reuse Levels
 
-라이선스/embedding 제약이 있으므로 code reuse는 별도 검토가 필요하다.
+### Level 1 — ConnectorSpec Import
 
-## Vendor-neutral
+For standard HTTP/OAuth/pagination/webhook Pieces, attempt mechanical or assisted conversion into Floe's portable declarative connector format.
+
+### Level 2 — Native Port
+
+Port provider-specific logic to Go or Rust while preserving attribution/license requirements.
+
+### Level 3 — Reference Only
+
+Use Activepieces implementation as behavioral reference and implement independently when its framework/runtime assumptions are too strong.
+
+## Build-time Importer
+
+Potential tooling:
 
 ```text
-Floe Connector Contract
-├─ Floe Native
-├─ Activepieces Adapter
-├─ Other OSS Adapter
-└─ External Runtime Adapter
+TypeScript Piece Source
+      ↓
+OXC-based AST analysis
+      ↓
+Activepieces pattern recognizer
+      ↓
+Portable connector subset
+      ↓
+Floe ConnectorSpec
 ```
 
-## 중요 원칙
+The converter should be conservative. If semantics cannot be represented safely, it reports unsupported behavior instead of attempting magical transpilation.
 
-외부 connector ecosystem을 교체하더라도 다음이 바뀌지 않아야 한다.
+## Other Sources
 
-- Timeline
-- Memory
-- Manager
-- Expert
-- Skill semantics
-- Connection UX
+The same strategy can apply to n8n connectors, official OpenAPI specifications, provider SDKs, and other permissively licensed connector catalogs.
 
-## 향후 가능성
+Floe Connector Contract remains the canonical target.
 
-반복 가능한 mapping이 충분하다면:
+## Licensing
 
-- connector adapter SDK
-- source-to-Floe adapter generator
-- 독립 `floe-connectors` repository
-
-등을 검토할 수 있다.
+Connector source reuse is evaluated per source/package. Activepieces Community Edition is MIT-licensed, while enterprise portions use a commercial license. Floe should preserve required copyright/license notices for ported code and avoid assuming every third-party dependency inside a Piece has the same license.

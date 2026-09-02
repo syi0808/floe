@@ -101,5 +101,28 @@ Swift / Kotlin / OS-native adapters
 
 Server: Go
 Database: Turso
-Connector Host: TypeScript / Node.js
+Connectors: Native Rust / Go + ConnectorSpec
 ```
+
+## Expert Ecosystem Boundary
+
+```text
+                     Expert Registry
+             ┌────────────┼────────────┐
+             │            │            │
+          Built-in    User-created  Marketplace
+             │            │            │
+             └────────────┼────────────┘
+                          ↓
+                    Expert Runtime
+                          │
+             granted Views / Capabilities
+                          │
+                          ↓
+                       Manager
+```
+
+Third-party Experts do not receive direct DB, credential, or unrestricted network access.
+
+The runtime boundary is designed around semantic capabilities and structured outputs.
+
