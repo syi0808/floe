@@ -12,6 +12,13 @@ pub struct DayQueryDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LoadDayRequestDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub day: DayQueryDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DaySnapshotDto {
     pub schema_version: u32,
     pub person_id: String,

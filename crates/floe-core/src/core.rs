@@ -41,6 +41,42 @@ impl FloeCore {
         Ok(capture)
     }
 
+    pub async fn create_event(
+        &self,
+        person_id: PersonId,
+        title: impl Into<String>,
+        schedule: EventSchedule,
+        now: DateTime<Utc>,
+    ) -> Result<Event, CoreError> {
+        let event = Event::new(person_id, title, schedule, SourceRef::Manual, now)?;
+        self.store.put_event(&event).await?;
+        Ok(event)
+    }
+
+    pub async fn create_task(
+        &self,
+        person_id: PersonId,
+        title: impl Into<String>,
+        deadline: Option<DateTime<Utc>>,
+        priority: Priority,
+        now: DateTime<Utc>,
+    ) -> Result<Task, CoreError> {
+        let task = Task::new(person_id, title, deadline, priority, SourceRef::Manual, now)?;
+        self.store.put_task(&task).await?;
+        Ok(task)
+    }
+
+    pub async fn create_note(
+        &self,
+        person_id: PersonId,
+        content: impl Into<String>,
+        now: DateTime<Utc>,
+    ) -> Result<Note, CoreError> {
+        let note = Note::new(person_id, content, SourceRef::Manual, now)?;
+        self.store.put_note(&note).await?;
+        Ok(note)
+    }
+
     pub async fn classify_capture(
         &self,
         capture_id: CaptureId,
@@ -91,10 +127,11 @@ impl FloeCore {
         Ok(item)
     }
 
-    pub async fn complete_task(
+    pub async fn set_task_completed(
         &self,
         task_id: TaskId,
         expected_revision: Revision,
+        completed: bool,
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
         let mut task = self
@@ -103,9 +140,23 @@ impl FloeCore {
             .await?
             .ok_or_else(|| not_found("task", task_id))?;
         ensure_revision(task.revision, expected_revision)?;
-        task.complete(now);
+        if completed {
+            task.complete(now);
+        } else {
+            task.reopen(now);
+        }
         self.store.put_task(&task).await?;
         Ok(task)
+    }
+
+    pub async fn complete_task(
+        &self,
+        task_id: TaskId,
+        expected_revision: Revision,
+        now: DateTime<Utc>,
+    ) -> Result<Task, CoreError> {
+        self.set_task_completed(task_id, expected_revision, true, now)
+            .await
     }
 
     pub async fn update_event(

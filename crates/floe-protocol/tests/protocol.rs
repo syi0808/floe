@@ -123,6 +123,32 @@ fn command_and_nested_union_tags_are_stable() {
 }
 
 #[test]
+fn load_day_request_has_a_stable_wire_shape() {
+    let request = LoadDayRequestDto {
+        schema_version: PROTOCOL_VERSION,
+        person_id: "00000000-0000-0000-0000-000000000001".into(),
+        day: DayQueryDto {
+            date: "2026-09-02".into(),
+            timezone_offset_seconds: 32_400,
+            now: "2026-09-02T10:30:00Z".into(),
+        },
+    };
+
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        json!({
+            "schema_version": 1,
+            "person_id": "00000000-0000-0000-0000-000000000001",
+            "day": {
+                "date": "2026-09-02",
+                "timezone_offset_seconds": 32400,
+                "now": "2026-09-02T10:30:00Z"
+            }
+        })
+    );
+}
+
+#[test]
 fn capture_and_error_envelopes_have_explicit_tags() {
     let processing = CaptureProcessingDto::Classified {
         target: DomainRefDto::Task {

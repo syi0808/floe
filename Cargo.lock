@@ -671,6 +671,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-ffi"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-core",
+ "floe-domain",
+ "floe-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "floe-protocol"
 version = "0.1.0"
 dependencies = [
