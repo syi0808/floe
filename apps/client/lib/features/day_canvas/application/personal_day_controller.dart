@@ -74,6 +74,17 @@ final class PersonalDayController extends ChangeNotifier {
     load();
   }
 
+  void goToday() {
+    final now = DateTime.now();
+    _query = DayQuery(
+      personId: _query.personId,
+      date: DateTime(now.year, now.month, now.day),
+      now: now,
+      timezoneOffsetSeconds: now.timeZoneOffset.inSeconds,
+    );
+    load();
+  }
+
   void clearError() {
     errorMessage = null;
     notifyListeners();

@@ -1,62 +1,95 @@
 import 'package:flutter/material.dart';
 
-abstract final class FloeColors {
-  static const canvas = Color(0xFFFAFAF8);
-  static const surface = Color(0xFFFFFFFF);
-  static const text = Color(0xFF1D1C1A);
-  static const secondary = Color(0xFF77736B);
-  static const divider = Color(0xFFE7E5DF);
-  static const sage = Color(0xFF4D805A);
-  static const sageSoft = Color(0xFFF2F7F3);
-  static const overdue = Color(0xFFA66B16);
-  static const error = Color(0xFFA64239);
-}
+import 'design_tokens.dart';
 
 abstract final class FloeTheme {
-  static ThemeData get light => ThemeData(
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: FloeColors.sage,
-      surface: FloeColors.surface,
-      error: FloeColors.error,
-    ),
-    scaffoldBackgroundColor: FloeColors.canvas,
-    fontFamily: '.AppleSystemUIFont',
-    dividerColor: FloeColors.divider,
-    textTheme: const TextTheme(
-      headlineMedium: TextStyle(
-        fontSize: 28,
-        height: 1.2,
-        fontWeight: FontWeight.w600,
-        color: FloeColors.text,
+  static ThemeData get light {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: FloePalette.primary600,
+      primary: FloePalette.primary600,
+      surface: FloePalette.neutral0,
+      error: FloePalette.error600,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: FloePalette.neutral50,
+      dividerColor: FloePalette.neutral200,
+      textTheme: const TextTheme(
+        headlineMedium: FloeType.display,
+        titleLarge: FloeType.headline,
+        bodyLarge: FloeType.bodyLarge,
+        bodyMedium: FloeType.body,
+        labelLarge: TextStyle(
+          fontSize: 14,
+          height: 1.35,
+          fontWeight: FontWeight.w600,
+        ),
+        labelMedium: FloeType.label,
       ),
-      titleLarge: TextStyle(
-        fontSize: 20,
-        height: 1.3,
-        fontWeight: FontWeight.w600,
-        color: FloeColors.text,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: FloePalette.neutral0,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: FloeSpace.base,
+          vertical: FloeSpace.md,
+        ),
+        border: _inputBorder(FloePalette.neutral200),
+        enabledBorder: _inputBorder(FloePalette.neutral200),
+        hoverColor: FloePalette.neutral50,
+        focusedBorder: _inputBorder(FloePalette.primary600, width: 2),
+        errorBorder: _inputBorder(FloePalette.error600),
+        focusedErrorBorder: _inputBorder(FloePalette.error600, width: 2),
       ),
-      bodyLarge: TextStyle(fontSize: 15, height: 1.45, color: FloeColors.text),
-      bodyMedium: TextStyle(
-        fontSize: 13,
-        height: 1.4,
-        color: FloeColors.secondary,
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: FloePalette.primary600,
+          foregroundColor: FloePalette.neutral0,
+          minimumSize: const Size(40, 40),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(FloeRadius.sm),
+          ),
+        ),
       ),
-    ),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: FloeColors.surface,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: FloeColors.divider),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: FloePalette.neutral800,
+          minimumSize: const Size(40, 40),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(FloeRadius.sm),
+          ),
+        ),
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: FloeColors.divider),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(
+          foregroundColor: FloePalette.neutral600,
+          minimumSize: const Size.square(40),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(FloeRadius.sm),
+          ),
+        ),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: FloeColors.sage, width: 2),
+      checkboxTheme: CheckboxThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(FloeRadius.xs),
+        ),
+        side: const BorderSide(color: FloePalette.neutral400, width: 1.5),
       ),
-    ),
-  );
+      dialogTheme: DialogThemeData(
+        backgroundColor: FloePalette.neutral0,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(FloeRadius.lg),
+          side: const BorderSide(color: FloePalette.neutral200),
+        ),
+      ),
+    );
+  }
+
+  static OutlineInputBorder _inputBorder(Color color, {double width = 1}) =>
+      OutlineInputBorder(
+        borderRadius: BorderRadius.circular(FloeRadius.md),
+        borderSide: BorderSide(color: color, width: width),
+      );
 }
