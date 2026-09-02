@@ -137,7 +137,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       pageBuilder: (context, animation, secondaryAnimation) => Center(
         child: _ClassificationDialog(
           capture: controller.pendingCapture!,
-          now: controller.query.now,
+          now: controller.pendingCapture!.capturedAt,
           classify: controller.classify,
         ),
       ),

@@ -6,7 +6,7 @@ The product is not an agent framework, automation builder, chat wrapper, or dash
 
 ## Status
 
-The first Personal Day vertical slice is in progress. The Rust workspace now contains separate Personal Day domain models, typed core operations, deterministic Day Canvas snapshots, and an embedded Turso persistence PoC.
+The first Personal Day vertical slice is in progress. The macOS Flutter client now reaches the Rust core through a versioned JSON/C ABI, while Rust owns typed operations, deterministic Day Canvas snapshots, and embedded Turso persistence.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
@@ -19,6 +19,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [v0.8 integration and expert baseline](docs/decisions/0003-native-connectors-and-experts.md)
 - [v0.5 implementation baseline](docs/decisions/0002-implementation-baseline.md)
 - [First Personal Day vertical slice](docs/decisions/0004-personal-day-first-slice.md)
+- [Flutter ↔ Rust JSON/C ABI bridge](docs/decisions/0005-json-c-abi-flutter-bridge.md)
 - [Open questions](docs/open-questions.md)
 
 ## Development

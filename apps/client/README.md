@@ -9,7 +9,10 @@ flutter pub get
 flutter run -d macos
 ```
 
-The current adapter is `FakeDayGateway`, which exercises the complete capture and explicit-classification UI without bypassing the planned Rust gateway boundary. Replace it with the versioned FFI adapter in the next integration slice.
+The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
+dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
+the Rust core, which owns all Turso reads and writes. Local data is stored under
+the app's Application Support directory.
 
 ## Validate
 
@@ -17,4 +20,13 @@ The current adapter is `FakeDayGateway`, which exercises the complete capture an
 flutter analyze
 flutter test
 flutter build macos
+```
+
+The native gateway integration test needs a debug library before `flutter test`:
+
+```sh
+cd ../..
+cargo build -p floe-ffi
+cd apps/client
+flutter test
 ```
