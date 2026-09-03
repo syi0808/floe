@@ -72,9 +72,9 @@ abstract final class FloeRadius {
   static const xs = 8.0;
   static const sm = 12.0;
   static const md = 16.0;
-  static const lg = 20.0;
-  static const xl = 28.0;
-  static const frame = 32.0;
+  static const lg = 28.0;
+  static const xl = 34.0;
+  static const frame = 40.0;
 }
 
 abstract final class FloeType {

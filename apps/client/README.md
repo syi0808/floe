@@ -2,6 +2,8 @@
 
 Flutter client for Floe's Personal Day experience.
 
+The production UI follows the squircle-first HTML reference: a compact desktop rail becomes a floating bottom navigation below `780px`, the calendar uses a real time-grid with a timeline-anchored Floe suggestion, and Tasks, Notes, and Task Detail share the same adaptive shell.
+
 ## Run on macOS
 
 ```sh

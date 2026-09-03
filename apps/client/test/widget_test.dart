@@ -84,14 +84,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('$title 삭제').last);
+    final deleteButton = find.byTooltip('$title 삭제').last;
+    await tester.ensureVisible(deleteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(deleteButton);
     await tester.pumpAndSettle();
     expect(find.text('항목을 삭제할까요?'), findsOneWidget);
     await tester.tap(find.text('취소'));
     await tester.pumpAndSettle();
-    expect(find.text(title), findsNWidgets(2));
+    expect(find.text(title), findsOneWidget);
 
-    await tester.tap(find.byTooltip('$title 삭제').last);
+    await tester.ensureVisible(deleteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(deleteButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('삭제'));
     await tester.pumpAndSettle();
@@ -123,6 +128,53 @@ void main() {
 
     expect(find.text('지금'), findsOneWidget);
     expect(find.text('다음'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('adapts the timeline and Floe suggestion to a phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final now = DateTime.utc(2026, 9, 2, 9, 15);
+    await tester.pumpWidget(
+      FloeApp(
+        gateway: FakeDayGateway(
+          initialItems: [
+            EventItem(
+              id: 'event-1',
+              title: '디자인 리뷰',
+              revision: 0,
+              createdAt: now,
+              startsAt: DateTime.utc(2026, 9, 2, 9),
+              endsAt: DateTime.utc(2026, 9, 2, 10),
+            ),
+          ],
+        ),
+        query: DayQuery(
+          personId: 'person-1',
+          date: now,
+          now: now,
+          timezoneOffsetSeconds: 0,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Today'), findsOneWidget);
+    expect(find.text('Tasks'), findsOneWidget);
+    expect(find.text('Notes'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byTooltip('Floe 제안 열기'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byTooltip('Floe 제안 열기'));
+    await tester.pumpAndSettle();
+    expect(find.text('20분의 여유를 확보할까요?'), findsOneWidget);
+    expect(find.text('휴식 추가'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

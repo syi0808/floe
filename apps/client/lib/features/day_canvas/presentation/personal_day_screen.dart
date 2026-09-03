@@ -50,61 +50,90 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     animation: controller,
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
-        final narrow = constraints.maxWidth < 720;
+        final narrow = constraints.maxWidth < 780;
         return Scaffold(
-          bottomNavigationBar: narrow
-              ? _MobileDestinations(
-                  selected: destination,
-                  onSelected: _selectDestination,
-                )
-              : null,
           body: SafeArea(
-            child: Column(
-              children: [
-                _ApplicationHeader(
-                  narrow: narrow,
-                  selected: destination,
-                  onSelected: _selectDestination,
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1240),
-                        child: Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            narrow ? FloeSpace.base : FloeSpace.xl,
-                            FloeSpace.lg,
-                            narrow ? FloeSpace.base : FloeSpace.xl,
-                            FloeSpace.xxxl,
+            minimum: EdgeInsets.all(narrow ? 0 : FloeSpace.base),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1500),
+                child: FloeSquircle(
+                  size: FloeSquircleSize.frame,
+                  fill: FloePalette.neutral25,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: EdgeInsets.fromLTRB(
+                                  narrow ? FloeSpace.md : 100,
+                                  narrow ? 64 : 72,
+                                  narrow ? FloeSpace.md : 36,
+                                  FloeSpace.lg,
+                                ),
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 1240,
+                                    ),
+                                    child: _workspace(narrow),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (destination == _DestinationView.today &&
+                                selectedTaskId == null)
+                              Padding(
+                                padding: EdgeInsets.fromLTRB(
+                                  narrow ? FloeSpace.md : 100,
+                                  FloeSpace.sm,
+                                  narrow ? FloeSpace.md : 36,
+                                  narrow ? 88 : FloeSpace.base,
+                                ),
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 1240,
+                                    ),
+                                    child: _CaptureBar(
+                                      textController: captureController,
+                                      pending: controller.commandPending,
+                                      submit: _capture,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      _AdaptiveNavigation(
+                        narrow: narrow,
+                        selected: destination,
+                        onSelected: _selectDestination,
+                      ),
+                      Positioned(
+                        top: narrow ? 8 : 22,
+                        right: narrow ? 8 : 24,
+                        child: IconButton(
+                          tooltip: '설정',
+                          style: const ButtonStyle(
+                            backgroundColor: WidgetStatePropertyAll(
+                              Colors.transparent,
+                            ),
+                            overlayColor: WidgetStatePropertyAll(
+                              Colors.transparent,
+                            ),
                           ),
-                          child: _workspace(narrow),
+                          onPressed: () => _showComingSoon(context),
+                          icon: const Icon(Icons.settings_outlined),
                         ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
-                if (destination == _DestinationView.today &&
-                    selectedTaskId == null)
-                  Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1240),
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          narrow ? FloeSpace.base : FloeSpace.xl,
-                          FloeSpace.sm,
-                          narrow ? FloeSpace.base : FloeSpace.xl,
-                          FloeSpace.base,
-                        ),
-                        child: _CaptureBar(
-                          textController: captureController,
-                          pending: controller.commandPending,
-                          submit: _capture,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         );
@@ -163,9 +192,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final primary = _PrimaryDay(
       snapshot: snapshot,
-      disabled: controller.commandPending,
-      complete: _setTaskCompleted,
-      delete: controller.deleteItem,
       onOpenTask: (task) => setState(() => selectedTaskId = task.id),
     );
     final rail = _ContextRail(
@@ -175,23 +201,27 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       delete: controller.deleteItem,
       onOpenTask: (task) => setState(() => selectedTaskId = task.id),
     );
-    if (narrow) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          primary,
-          const SizedBox(height: FloeSpace.lg),
-          rail,
-        ],
-      );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(flex: 7, child: primary),
-        const SizedBox(width: FloeSpace.xl),
-        SizedBox(width: 320, child: rail),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (narrow || constraints.maxWidth < 900) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              primary,
+              const SizedBox(height: FloeSpace.lg),
+              rail,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 7, child: primary),
+            const SizedBox(width: FloeSpace.xl),
+            SizedBox(width: 320, child: rail),
+          ],
+        );
+      },
     );
   }
 
@@ -253,8 +283,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 }
 
-class _ApplicationHeader extends StatelessWidget {
-  const _ApplicationHeader({
+class _AdaptiveNavigation extends StatelessWidget {
+  const _AdaptiveNavigation({
     required this.narrow,
     required this.selected,
     required this.onSelected,
@@ -262,106 +292,118 @@ class _ApplicationHeader extends StatelessWidget {
   final bool narrow;
   final _DestinationView selected;
   final ValueChanged<_DestinationView> onSelected;
+
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: const BoxDecoration(
-      color: FloePalette.neutral0,
-      border: Border(bottom: BorderSide(color: FloePalette.neutral200)),
-    ),
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1240),
-        child: SizedBox(
-          height: narrow ? 64 : 76,
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: narrow ? FloeSpace.base : FloeSpace.xl,
-            ),
-            child: Row(
-              children: [
-                const FloeMascot(size: 44),
-                const SizedBox(width: FloeSpace.md),
-                const Text(
-                  'Floe',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+  Widget build(BuildContext context) {
+    if (narrow) {
+      return Positioned(
+        right: FloeSpace.md,
+        bottom: FloeSpace.sm,
+        left: FloeSpace.md,
+        child: FloeSquircle(
+          size: FloeSquircleSize.xl,
+          elevation: 4,
+          padding: const EdgeInsets.all(FloeSpace.xs),
+          child: Row(
+            children: [
+              for (final view in _DestinationView.values)
+                Expanded(
+                  child: _DestinationButton(
+                    view: view,
+                    selected: selected == view,
+                    onPressed: () => onSelected(view),
+                  ),
                 ),
-                if (!narrow) ...[
-                  const SizedBox(width: FloeSpace.xxl),
-                  _Destination(
-                    label: 'Today',
-                    selected: selected == _DestinationView.today,
-                    onPressed: () => onSelected(_DestinationView.today),
-                  ),
-                  _Destination(
-                    label: 'Tasks',
-                    selected: selected == _DestinationView.tasks,
-                    onPressed: () => onSelected(_DestinationView.tasks),
-                  ),
-                  _Destination(
-                    label: 'Notes',
-                    selected: selected == _DestinationView.notes,
-                    onPressed: () => onSelected(_DestinationView.notes),
-                  ),
-                ],
-                const Spacer(),
-                IconButton(
-                  tooltip: '설정',
-                  onPressed: () => _showComingSoon(context),
-                  icon: const Icon(Icons.settings_outlined),
-                ),
-              ],
-            ),
+            ],
           ),
         ),
+      );
+    }
+    return Positioned(
+      top: 22,
+      bottom: 22,
+      left: 14,
+      width: 68,
+      child: Column(
+        children: [
+          const SizedBox(height: 4),
+          const FloeMascot(size: 40),
+          const SizedBox(height: FloeSpace.lg),
+          for (final view in _DestinationView.values) ...[
+            _DestinationButton(
+              view: view,
+              selected: selected == view,
+              onPressed: () => onSelected(view),
+            ),
+            const SizedBox(height: FloeSpace.sm),
+          ],
+        ],
       ),
-    ),
-  );
+    );
+  }
 }
 
-class _Destination extends StatelessWidget {
-  const _Destination({
-    required this.label,
+class _DestinationButton extends StatelessWidget {
+  const _DestinationButton({
+    required this.view,
     required this.selected,
     required this.onPressed,
   });
-  final String label;
+
+  final _DestinationView view;
   final bool selected;
   final VoidCallback onPressed;
+
+  String get label => switch (view) {
+    _DestinationView.today => 'Today',
+    _DestinationView.tasks => 'Tasks',
+    _DestinationView.notes => 'Notes',
+  };
+
+  IconData get icon => switch (view) {
+    _DestinationView.today => Icons.calendar_today_outlined,
+    _DestinationView.tasks => Icons.checklist_rounded,
+    _DestinationView.notes => Icons.edit_note_outlined,
+  };
+
   @override
   Widget build(BuildContext context) => Semantics(
     selected: selected,
     button: true,
-    child: TextButton(
-      onPressed: selected ? null : onPressed,
-      style: TextButton.styleFrom(
-        foregroundColor: selected
-            ? FloePalette.primary700
-            : FloePalette.neutral600,
-        disabledForegroundColor: FloePalette.primary700,
-        backgroundColor: selected ? FloePalette.primary50 : Colors.transparent,
+    child: FloeSquircle(
+      size: FloeSquircleSize.md,
+      fill: selected ? FloePalette.primary100 : Colors.transparent,
+      borderWidth: 0,
+      child: InkWell(
+        onTap: selected ? null : onPressed,
+        customBorder: floeSquircleBorder(FloeSquircleSize.md),
+        child: SizedBox(
+          height: 58,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 19,
+                color: selected
+                    ? FloePalette.primary700
+                    : FloePalette.neutral600,
+              ),
+              const SizedBox(height: FloeSpace.xs),
+              Text(
+                label,
+                style: FloeType.label.copyWith(
+                  fontSize: 10,
+                  color: selected
+                      ? FloePalette.primary700
+                      : FloePalette.neutral600,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-      child: Text(label),
     ),
-  );
-}
-
-class _MobileDestinations extends StatelessWidget {
-  const _MobileDestinations({required this.selected, required this.onSelected});
-  final _DestinationView selected;
-  final ValueChanged<_DestinationView> onSelected;
-  @override
-  Widget build(BuildContext context) => NavigationBar(
-    selectedIndex: selected.index,
-    height: 68,
-    backgroundColor: FloePalette.neutral0,
-    indicatorColor: FloePalette.primary100,
-    onDestinationSelected: (index) =>
-        onSelected(_DestinationView.values[index]),
-    destinations: const [
-      NavigationDestination(icon: Icon(Icons.today_outlined), label: '오늘'),
-      NavigationDestination(icon: Icon(Icons.check_box_outlined), label: '할 일'),
-      NavigationDestination(icon: Icon(Icons.notes_outlined), label: '노트'),
-    ],
   );
 }
 
@@ -371,11 +413,7 @@ class _DayToolbar extends StatelessWidget {
   final bool narrow;
   @override
   Widget build(BuildContext context) {
-    final date = Text(
-      _date(controller.query.date),
-      style: FloeType.headlineLarge,
-    );
-    final movement = Row(
+    final leading = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
@@ -383,47 +421,82 @@ class _DayToolbar extends StatelessWidget {
           onPressed: () => controller.moveDay(-1),
           icon: const Icon(Icons.chevron_left),
         ),
-        TextButton(onPressed: controller.goToday, child: const Text('오늘')),
+        const SizedBox(width: FloeSpace.xs),
         IconButton(
           tooltip: '다음 날',
           onPressed: () => controller.moveDay(1),
           icon: const Icon(Icons.chevron_right),
         ),
+        const SizedBox(width: FloeSpace.md),
+        Flexible(
+          child: Text(
+            _date(controller.query.date),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: FloeType.headline,
+          ),
+        ),
+        const SizedBox(width: FloeSpace.sm),
+        TextButton(onPressed: controller.goToday, child: const Text('오늘')),
       ],
     );
-    final views = SegmentedButton<int>(
-      showSelectedIcon: false,
-      segments: const [
-        ButtonSegment(value: 0, label: Text('일')),
-        ButtonSegment(value: 1, label: Text('주')),
-        ButtonSegment(value: 2, label: Text('월')),
-      ],
-      selected: const {0},
-      onSelectionChanged: (value) {
-        if (value.first != 0) _showComingSoon(context);
-      },
+    final views = _CalendarViewSelector(
+      onUnavailable: () => _showComingSoon(context),
     );
     if (narrow) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          date,
+          leading,
           const SizedBox(height: FloeSpace.md),
-          Align(alignment: Alignment.centerLeft, child: movement),
-          const SizedBox(height: FloeSpace.sm),
-          Align(alignment: Alignment.centerLeft, child: views),
+          views,
         ],
       );
     }
     return Row(
       children: [
-        Expanded(child: date),
-        movement,
-        const SizedBox(width: FloeSpace.md),
-        views,
+        Expanded(child: leading),
+        const SizedBox(width: FloeSpace.lg),
+        SizedBox(width: 300, child: views),
       ],
     );
   }
+}
+
+class _CalendarViewSelector extends StatelessWidget {
+  const _CalendarViewSelector({required this.onUnavailable});
+
+  final VoidCallback onUnavailable;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.md,
+    padding: const EdgeInsets.all(FloeSpace.xs),
+    child: Row(
+      children: [
+        for (final (index, label) in ['일', '주', '월'].indexed)
+          Expanded(
+            child: FloeSquircle(
+              size: FloeSquircleSize.sm,
+              fill: index == 0 ? FloePalette.primary100 : Colors.transparent,
+              borderWidth: 0,
+              child: TextButton(
+                onPressed: index == 0 ? null : onUnavailable,
+                style: TextButton.styleFrom(
+                  foregroundColor: index == 0
+                      ? FloePalette.primary700
+                      : FloePalette.neutral600,
+                  disabledForegroundColor: FloePalette.primary700,
+                  backgroundColor: Colors.transparent,
+                  minimumSize: const Size(44, 40),
+                ),
+                child: Text(label),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class _TasksScreen extends StatelessWidget {
@@ -804,19 +877,33 @@ class _TaskDetailScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: FloeSpace.lg),
-        if (narrow) ...[
-          primary,
-          const SizedBox(height: FloeSpace.xl),
-          rail,
-        ] else
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(flex: 7, child: primary),
-              const SizedBox(width: FloeSpace.xl),
-              SizedBox(width: 320, child: rail),
-            ],
-          ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final primaryPanel = FloeSquircle(
+              size: FloeSquircleSize.lg,
+              padding: EdgeInsets.all(narrow ? FloeSpace.lg : FloeSpace.xl),
+              child: primary,
+            );
+            if (narrow || constraints.maxWidth < 900) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  primaryPanel,
+                  const SizedBox(height: FloeSpace.xl),
+                  rail,
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 7, child: primaryPanel),
+                const SizedBox(width: FloeSpace.xl),
+                SizedBox(width: 320, child: rail),
+              ],
+            );
+          },
+        ),
       ],
     );
   }
@@ -960,55 +1047,25 @@ Future<void> _showSuggestionProposal(
 }
 
 class _PrimaryDay extends StatelessWidget {
-  const _PrimaryDay({
-    required this.snapshot,
-    required this.disabled,
-    required this.complete,
-    required this.delete,
-    required this.onOpenTask,
-  });
+  const _PrimaryDay({required this.snapshot, required this.onOpenTask});
   final DaySnapshot snapshot;
-  final bool disabled;
-  final Future<void> Function(TaskItem, bool) complete;
-  final Future<void> Function(DayItem) delete;
   final ValueChanged<TaskItem> onOpenTask;
   @override
   Widget build(BuildContext context) {
-    final timelineItems = snapshot.items;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _NowNext(snapshot),
-        const SizedBox(height: FloeSpace.xl),
-        Row(
-          children: [
-            const Expanded(
-              child: Text('오늘의 흐름', style: FloeType.headlineLarge),
-            ),
-            Text('${snapshot.items.length}개 항목', style: FloeType.body),
-          ],
-        ),
-        const SizedBox(height: FloeSpace.base),
-        if (snapshot.items.isEmpty)
-          const _EmptyState()
-        else ...[
-          _CurrentTimeMarker(now: snapshot.generatedAt),
-          if (timelineItems.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: FloeSpace.xl),
-              child: Text('시간이 정해진 일정이나 노트가 없어요.', style: FloeType.body),
-            )
-          else
-            _Timeline(
-              items: timelineItems,
-              snapshot: snapshot,
-              disabled: disabled,
-              complete: complete,
-              delete: delete,
-              onOpenTask: onOpenTask,
-            ),
+    if (snapshot.items.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _NowNext(snapshot),
+          const SizedBox(height: FloeSpace.lg),
+          const _EmptyState(),
         ],
-      ],
+      );
+    }
+    return _Timeline(
+      items: snapshot.items,
+      snapshot: snapshot,
+      onOpenTask: onOpenTask,
     );
   }
 }
@@ -1099,43 +1156,9 @@ class _ContextRail extends StatelessWidget {
             ),
           ),
         ],
-        const SizedBox(height: FloeSpace.base),
-        const _FloePresence(),
       ],
     );
   }
-}
-
-class _FloePresence extends StatelessWidget {
-  const _FloePresence();
-  @override
-  Widget build(BuildContext context) => FloeSquircle(
-    fill: FloePalette.primary50,
-    borderColor: FloePalette.primary100,
-    padding: const EdgeInsets.all(FloeSpace.lg),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const FloeMascot(size: 36),
-        const SizedBox(width: FloeSpace.md),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Floe가 도와드릴게요', style: FloeType.bodyLarge),
-              const SizedBox(height: FloeSpace.xs),
-              const Text('필요할 때 오늘의 흐름을 함께 정리해요.', style: FloeType.body),
-              const SizedBox(height: FloeSpace.sm),
-              TextButton(
-                onPressed: () => _showComingSoon(context),
-                child: const Text('Floe 열기'),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
 }
 
 class _NowNext extends StatelessWidget {
@@ -1241,246 +1264,497 @@ class _Timeline extends StatelessWidget {
   const _Timeline({
     required this.items,
     required this.snapshot,
-    required this.disabled,
-    required this.complete,
-    required this.delete,
     required this.onOpenTask,
   });
 
+  static const firstHour = 8;
+  static const lastHour = 19;
+  static const hourExtent = 64.0;
+
   final List<DayItem> items;
   final DaySnapshot snapshot;
-  final bool disabled;
-  final Future<void> Function(TaskItem, bool) complete;
-  final Future<void> Function(DayItem) delete;
   final ValueChanged<TaskItem> onOpenTask;
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      for (final (index, item) in items.indexed)
-        _TimelineEntry(
-          item: item,
-          snapshot: snapshot,
-          first: index == 0,
-          last: index == items.length - 1,
-          disabled: disabled,
-          complete: complete,
-          delete: delete,
-          onOpenTask: onOpenTask,
+  Widget build(BuildContext context) {
+    final allDayEvents = items
+        .whereType<EventItem>()
+        .where((event) => event.isAllDay)
+        .toList();
+    final scheduled = items.where((item) => _startOf(item) != null).toList()
+      ..sort((left, right) => _startOf(left)!.compareTo(_startOf(right)!));
+    final suggestionItem = _suggestionItem(scheduled);
+    const stageHeight = (lastHour - firstHour) * hourExtent;
+    return FloeSquircle(
+      size: FloeSquircleSize.lg,
+      clipBehavior: Clip.none,
+      child: Column(
+        children: [
+          _AllDayStrip(events: allDayEvents),
+          SizedBox(
+            height: stageHeight,
+            child: LayoutBuilder(
+              builder: (context, constraints) => Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (var hour = firstHour; hour <= lastHour; hour++)
+                    _HourGuide(
+                      hour: hour,
+                      top: (hour - firstHour) * hourExtent,
+                    ),
+                  if (scheduled.isEmpty)
+                    const Positioned(
+                      top: 108,
+                      right: FloeSpace.lg,
+                      left: 76,
+                      child: Text(
+                        '시간이 지정된 일정이 없어요.',
+                        style: FloeType.body,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  for (final item in scheduled)
+                    _TimelineBlock(
+                      item: item,
+                      top: _topFor(item),
+                      height: _heightFor(item),
+                      showSuggestion: identical(item, suggestionItem),
+                      onOpenTask: onOpenTask,
+                    ),
+                  if (_showsCurrentTime)
+                    _TimelineNowMarker(
+                      now: snapshot.generatedAt,
+                      top:
+                          _minutesFromStart(snapshot.generatedAt) /
+                          60 *
+                          hourExtent,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool get _showsCurrentTime {
+    final now = snapshot.generatedAt;
+    final date = snapshot.date;
+    return now.year == date.year &&
+        now.month == date.month &&
+        now.day == date.day &&
+        now.hour >= firstHour &&
+        now.hour < lastHour;
+  }
+
+  DayItem? _suggestionItem(List<DayItem> scheduled) {
+    final now = snapshot.generatedAt;
+    for (final event in scheduled.whereType<EventItem>()) {
+      if (!event.startsAt.isAfter(now) && event.endsAt.isAfter(now)) {
+        return event;
+      }
+    }
+    for (final item in scheduled) {
+      if (item.id == snapshot.nowEventId || item.id == snapshot.nextEventId) {
+        return item;
+      }
+    }
+    return scheduled.whereType<EventItem>().firstOrNull;
+  }
+
+  static DateTime? _startOf(DayItem item) => switch (item) {
+    EventItem(:final startsAt, :final isAllDay) => isAllDay ? null : startsAt,
+    TaskItem(:final deadline) => deadline,
+    NoteItem() => null,
+  };
+
+  static int _minutesFromStart(DateTime value) =>
+      value.hour * 60 + value.minute - firstHour * 60;
+
+  static double _topFor(DayItem item) {
+    final minutes = _minutesFromStart(_startOf(item)!);
+    return (minutes / 60 * hourExtent).clamp(
+      4,
+      (lastHour - firstHour) * hourExtent - 44,
+    );
+  }
+
+  static double _heightFor(DayItem item) {
+    final minutes = switch (item) {
+      EventItem(:final startsAt, :final endsAt) =>
+        endsAt.difference(startsAt).inMinutes,
+      TaskItem() => 45,
+      NoteItem() => 45,
+    };
+    return (minutes / 60 * hourExtent - 8).clamp(42, 88);
+  }
+}
+
+extension<T> on Iterable<T> {
+  T? get firstOrNull {
+    final iterator = this.iterator;
+    return iterator.moveNext() ? iterator.current : null;
+  }
+}
+
+class _AllDayStrip extends StatelessWidget {
+  const _AllDayStrip({required this.events});
+
+  final List<EventItem> events;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minHeight: 50),
+    padding: const EdgeInsets.symmetric(
+      horizontal: FloeSpace.base,
+      vertical: FloeSpace.sm,
+    ),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: FloePalette.neutral200)),
+    ),
+    child: Row(
+      children: [
+        const SizedBox(
+          width: 68,
+          child: Text('하루 종일', style: FloeType.numeric),
         ),
-    ],
+        Expanded(
+          child: events.isEmpty
+              ? const SizedBox.shrink()
+              : FloeSquircle(
+                  size: FloeSquircleSize.md,
+                  fill: FloePalette.mint50,
+                  borderColor: FloePalette.mint100,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: FloeSpace.md,
+                    vertical: FloeSpace.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      const _ToneDot(color: FloePalette.mint700),
+                      const SizedBox(width: FloeSpace.sm),
+                      Flexible(
+                        child: Text(
+                          events.first.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: FloeType.label.copyWith(
+                            color: FloePalette.neutral950,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    ),
   );
 }
 
-class _TimelineEntry extends StatelessWidget {
-  const _TimelineEntry({
+class _HourGuide extends StatelessWidget {
+  const _HourGuide({required this.hour, required this.top});
+
+  final int hour;
+  final double top;
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+    top: top,
+    right: FloeSpace.md,
+    left: FloeSpace.md,
+    child: Row(
+      children: [
+        SizedBox(
+          width: 58,
+          child: Text(_hourLabel(hour), style: FloeType.numeric),
+        ),
+        const Expanded(child: Divider(height: 1)),
+      ],
+    ),
+  );
+}
+
+class _TimelineBlock extends StatelessWidget {
+  const _TimelineBlock({
     required this.item,
-    required this.snapshot,
-    required this.first,
-    required this.last,
-    required this.disabled,
-    required this.complete,
-    required this.delete,
+    required this.top,
+    required this.height,
+    required this.showSuggestion,
     required this.onOpenTask,
   });
 
   final DayItem item;
-  final DaySnapshot snapshot;
-  final bool first;
-  final bool last;
-  final bool disabled;
-  final Future<void> Function(TaskItem, bool) complete;
-  final Future<void> Function(DayItem) delete;
+  final double top;
+  final double height;
+  final bool showSuggestion;
   final ValueChanged<TaskItem> onOpenTask;
 
   @override
   Widget build(BuildContext context) {
     final task = item is TaskItem ? item as TaskItem : null;
+    final (fill, border, accent) = switch (item) {
+      EventItem() => (
+        FloePalette.blue50,
+        FloePalette.blue100,
+        FloePalette.blue500,
+      ),
+      TaskItem() => (
+        FloePalette.primary50,
+        FloePalette.primary100,
+        FloePalette.primary500,
+      ),
+      NoteItem() => (
+        FloePalette.mint50,
+        FloePalette.mint100,
+        FloePalette.mint700,
+      ),
+    };
     final time = switch (item) {
-      EventItem(:final startsAt) => _time(startsAt),
-      TaskItem(:final deadline) => deadline == null ? '—' : _time(deadline),
+      EventItem(:final startsAt, :final endsAt) =>
+        '${_time(startsAt)} – ${_time(endsAt)}',
+      TaskItem(:final deadline) =>
+        deadline == null ? '시간 미정' : '마감 ${_time(deadline)}',
       NoteItem() => '노트',
     };
-    final meta = switch (item) {
-      EventItem(:final startsAt, :final endsAt) =>
-        '${_time(startsAt)}–${_time(endsAt)} · 일정',
-      TaskItem(:final deadline) =>
-        deadline == null ? '시간 미정 · 할 일' : '마감 ${_time(deadline)} · 할 일',
-      NoteItem() => '오늘의 생각 · 노트',
-    };
-    final accent = switch (item) {
-      EventItem() => FloePalette.blue500,
-      TaskItem() => FloePalette.primary500,
-      NoteItem() => FloePalette.mint700,
-    };
-    final content = Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: FloeSpace.base,
-        vertical: FloeSpace.md,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Positioned(
+      top: top,
+      right: 18,
+      left: 76,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          if (task != null)
-            SizedBox.square(
-              dimension: 44,
-              child: Checkbox(
-                value: task.isCompleted,
-                onChanged: disabled
-                    ? null
-                    : (value) => complete(task, value ?? false),
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(
-                top: FloeSpace.xs,
-                right: FloeSpace.md,
-              ),
-              child: Icon(
-                item is EventItem
-                    ? Icons.calendar_today_outlined
-                    : Icons.notes_outlined,
-                size: 18,
-                color: accent,
-              ),
-            ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  style: FloeType.bodyLarge.copyWith(
-                    decoration: task?.isCompleted == true
-                        ? TextDecoration.lineThrough
-                        : null,
+          Positioned.fill(
+            child: FloeSquircle(
+              size: FloeSquircleSize.md,
+              fill: fill,
+              borderColor: border,
+              child: InkWell(
+                onTap: task == null ? null : () => onOpenTask(task),
+                customBorder: floeSquircleBorder(FloeSquircleSize.md),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: FloeSpace.md,
+                    vertical: FloeSpace.sm,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: FloeSpace.xs),
+                        child: _ToneDot(color: accent),
+                      ),
+                      const SizedBox(width: FloeSpace.sm),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: FloeType.label.copyWith(
+                                color: FloePalette.neutral950,
+                              ),
+                            ),
+                            Text(time, style: FloeType.numeric),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: FloeSpace.xs),
-                Text(meta, style: FloeType.numeric),
-              ],
+              ),
             ),
           ),
-          IconButton(
-            tooltip: '${item.title} 삭제',
-            onPressed: disabled ? null : () => _confirmTimelineDelete(context),
-            icon: const Icon(Icons.more_horiz, size: 20),
-          ),
+          if (showSuggestion)
+            Positioned(
+              right: -8,
+              bottom: -8,
+              child: _TimelineSuggestionButton(item: item),
+            ),
         ],
       ),
     );
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            width: 60,
-            child: Padding(
-              padding: const EdgeInsets.only(top: FloeSpace.base),
-              child: Text(
-                time,
-                style: FloeType.numeric,
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ),
-          const SizedBox(width: FloeSpace.md),
-          SizedBox(
-            width: 12,
-            child: Stack(
-              alignment: Alignment.topCenter,
-              children: [
-                Positioned.fill(
-                  top: first ? 20 : 0,
-                  bottom: last ? 20 : 0,
-                  child: const Center(
-                    child: VerticalDivider(width: 1, thickness: 1),
-                  ),
-                ),
-                Positioned(
-                  top: 20,
-                  child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: FloePalette.neutral0,
-                      border: Border.all(color: accent, width: 2),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: FloeSpace.md),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: FloeSpace.sm),
-              child: item is EventItem
-                  ? FloeSquircle(
-                      size: FloeSquircleSize.md,
-                      fill: FloePalette.blue50,
-                      borderColor: FloePalette.blue100,
-                      child: content,
-                    )
-                  : InkWell(
-                      onTap: task == null ? null : () => onOpenTask(task),
-                      customBorder: floeSquircleBorder(FloeSquircleSize.md),
-                      child: content,
-                    ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _confirmTimelineDelete(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('항목을 삭제할까요?'),
-        content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FloeTheme.destructiveButtonStyle,
-            child: const Text('삭제'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) await delete(item);
   }
 }
 
-class _CurrentTimeMarker extends StatelessWidget {
-  const _CurrentTimeMarker({required this.now});
-  final DateTime now;
+class _ToneDot extends StatelessWidget {
+  const _ToneDot({required this.color});
+
+  final Color color;
+
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: '현재 시간 ${_time(now)}',
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: FloeSpace.md),
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    child: const SizedBox.square(dimension: 9),
+  );
+}
+
+class _TimelineSuggestionButton extends StatelessWidget {
+  const _TimelineSuggestionButton({required this.item});
+
+  final DayItem item;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Floe 제안 열기',
+    child: FloeSquircle(
+      size: FloeSquircleSize.xl,
+      elevation: 4,
+      child: InkWell(
+        onTap: () => _showTimelineSuggestion(context, item),
+        customBorder: floeSquircleBorder(FloeSquircleSize.xl),
+        child: const SizedBox.square(
+          dimension: 48,
+          child: Center(child: FloeMascot(size: 32)),
+        ),
+      ),
+    ),
+  );
+}
+
+class _TimelineNowMarker extends StatelessWidget {
+  const _TimelineNowMarker({required this.now, required this.top});
+
+  final DateTime now;
+  final double top;
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+    top: top,
+    right: FloeSpace.md,
+    left: FloeSpace.sm,
+    child: Semantics(
+      label: '현재 시간 ${_time(now)}',
       child: Row(
         children: [
-          Text(
-            '현재 ${_time(now)}',
-            style: FloeType.numeric.copyWith(color: FloePalette.primary700),
+          SizedBox(
+            width: 64,
+            child: Text(
+              _time(now),
+              style: FloeType.numeric.copyWith(
+                color: FloePalette.primary700,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-          const SizedBox(width: FloeSpace.md),
+          const _ToneDot(color: FloePalette.primary600),
+          const SizedBox(width: FloeSpace.sm),
           const Expanded(
-            child: Divider(color: FloePalette.primary400, thickness: 1.5),
+            child: Divider(color: FloePalette.primary600, thickness: 1.5),
           ),
         ],
       ),
     ),
   );
+}
+
+Future<void> _showTimelineSuggestion(BuildContext context, DayItem item) async {
+  final panel = _TimelineSuggestionPanel(item: item);
+  if (MediaQuery.sizeOf(context).width < 780) {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => panel,
+    );
+    return;
+  }
+  await showDialog<void>(
+    context: context,
+    barrierColor: FloePalette.neutral950.withValues(alpha: 0.18),
+    builder: (context) =>
+        Dialog(backgroundColor: Colors.transparent, elevation: 0, child: panel),
+  );
+}
+
+class _TimelineSuggestionPanel extends StatelessWidget {
+  const _TimelineSuggestionPanel({required this.item});
+
+  final DayItem item;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.xl,
+    padding: const EdgeInsets.all(FloeSpace.lg),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const FloeMascot(size: 32),
+              const SizedBox(width: FloeSpace.sm),
+              Text(
+                'Floe suggestion',
+                style: FloeType.label.copyWith(color: FloePalette.primary700),
+              ),
+              const Spacer(),
+              IconButton(
+                tooltip: '닫기',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          const SizedBox(height: FloeSpace.base),
+          const Text('20분의 여유를 확보할까요?', style: FloeType.headlineLarge),
+          const SizedBox(height: FloeSpace.sm),
+          Text(
+            '“${item.title}” 이후 일정 사이에 짧은 휴식 시간을 제안해요.',
+            style: FloeType.body,
+          ),
+          const SizedBox(height: FloeSpace.base),
+          FloeSquircle(
+            size: FloeSquircleSize.md,
+            padding: const EdgeInsets.symmetric(
+              horizontal: FloeSpace.md,
+              vertical: FloeSpace.sm,
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.schedule_outlined, size: 18),
+                SizedBox(width: FloeSpace.sm),
+                Text('20분 휴식', style: FloeType.label),
+              ],
+            ),
+          ),
+          const SizedBox(height: FloeSpace.base),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('휴식 추가'),
+                ),
+              ),
+              const SizedBox(width: FloeSpace.sm),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('현재대로'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+String _hourLabel(int hour) {
+  final suffix = hour < 12 ? 'AM' : 'PM';
+  final normalized = hour % 12 == 0 ? 12 : hour % 12;
+  return '$normalized $suffix';
 }
 
 class _DayRow extends StatelessWidget {
