@@ -66,7 +66,12 @@ export function App() {
 
 function GlobalSidebar({ screen, onNavigate }) {
   return (
-    <aside className="global-sidebar" aria-label="Floe navigation">
+    <SquircleSurface
+      radius={SQUIRCLE_RADIUS.card}
+      className="sidebar-shell"
+      contentClassName="global-sidebar"
+      as="aside"
+    >
       <button
         className="brand"
         type="button"
@@ -96,7 +101,7 @@ function GlobalSidebar({ screen, onNavigate }) {
           );
         })}
       </nav>
-    </aside>
+    </SquircleSurface>
   );
 }
 
