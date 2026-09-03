@@ -12,10 +12,13 @@ The first Personal Day vertical slice is in progress. The macOS Flutter client r
 
 That vertical slice successfully validated the technical boundary, but the initial `Now / Next` hero + generic list presentation is **not the target Day Canvas**. ADR 0006 adopts a calendar-first redesign with a day time grid, current-time indicator, real Event geometry, secondary Today Tasks/Notes, and Floe proposals attached to relevant times or objects.
 
+The implementation update is specified in [`docs/implementation/calendar-first-day-canvas-update.md`](docs/implementation/calendar-first-day-canvas-update.md). It defines the concrete domain, Turso, protocol, Flutter, capture, and first EventKit changes required to reach the new product direction.
+
 The canonical planning specification is **floe-planning v0.8 plus accepted in-repository ADRs** in [`docs/planning/`](docs/planning/README.md) and [`docs/decisions/`](docs/decisions/).
 
 ## Start here
 
+- [Calendar-first implementation update](docs/implementation/calendar-first-day-canvas-update.md)
 - [Calendar-first Day Canvas decision](docs/decisions/0006-calendar-first-day-canvas.md)
 - [Floe design system](DESIGN.md)
 - [Product brief](docs/product-brief.md)
