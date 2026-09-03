@@ -33,6 +33,17 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | [Task Detail](screens/task-detail.md) | Task fields, subtasks, related context, and suggestions |
 | [Reference analysis](reference-analysis.md) | What the September 2026 mockups contributed or did not decide |
 
+## Production UI renders
+
+The following images translate the specifications into coherent desktop product screens. They are implementation references rather than pixel contracts; the written tokens, semantics, responsive rules, and accessibility requirements remain authoritative.
+
+| Screen | Render | Governing specification |
+| --- | --- | --- |
+| Day Canvas | [day-canvas.png](renders/day-canvas.png) | [Day Canvas](screens/day-canvas.md) |
+| Task Detail | [task-detail.png](renders/task-detail.png) | [Task Detail](screens/task-detail.md) |
+| Notes | [notes.png](renders/notes.png) | [Notes](screens/notes.md) |
+| Assistant confirmation | [assistant-confirmation.png](renders/assistant-confirmation.png) | [Assistant and interventions](assistant-and-interventions.md) |
+
 ## Product-wide invariants
 
 - Day Canvas is the primary experience; collection views support it.
