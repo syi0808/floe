@@ -18,6 +18,18 @@ Floe의 제품 중심은 Agent Framework나 채팅 UI가 아니다.
 
 LLM, Agent Runtime, MCP, 특정 inference provider는 이 위에서 교체 가능한 구현 요소로 취급한다.
 
+## Current experience baseline
+
+현재 controlling Day Canvas 방향은:
+
+> **Calendar is the canvas. Tasks, notes, and Floe are layers on top of it.**
+
+이다.
+
+`01-experience/day-canvas.md`와 root `DESIGN.md`, 그리고 ADR `docs/decisions/0006-calendar-first-day-canvas.md`를 함께 읽는다.
+
+이 방향에서는 Calendar day grid가 primary surface이며 `Now / Next`는 대형 hero panel이 아니라 current-time/current-event/next-navigation semantics로 표현한다.
+
 ---
 
 ## 문서 구조
@@ -68,66 +80,83 @@ floe-planning/
 │   ├── account-person-membership.md
 │   └── sync-and-multi-device.md
 │
-└── 08-engineering/
-    ├── architecture-map.md
-    ├── technical-risks.md
-    ├── poc-plan.md
-    ├── decisions.md
-    └── open-questions.md
+├── 08-engineering/
+│   ├── architecture-map.md
+│   ├── technical-risks.md
+│   ├── poc-plan.md
+│   ├── decisions.md
+│   └── open-questions.md
 │
-└── 09-implementation/
-    ├── technology-selection.md
-    ├── client-architecture.md
-    ├── rust-core.md
-    ├── native-platform-bridges.md
-    ├── server-stack.md
-    ├── turso-storage.md
-    ├── connector-runtime.md
-    ├── local-ai-runtime.md
-    ├── performance-design.md
-    └── repository-layout.md
-
-├── 10-ecosystem/
-│   ├── expert-package.md
-│   ├── expert-marketplace.md
-│   └── expert-development.md
+├── 09-implementation/
+│   ├── technology-selection.md
+│   ├── client-architecture.md
+│   ├── rust-core.md
+│   ├── native-platform-bridges.md
+│   ├── server-stack.md
+│   ├── turso-storage.md
+│   ├── connector-runtime.md
+│   ├── local-ai-runtime.md
+│   ├── performance-design.md
+│   └── repository-layout.md
+│
+└── 10-ecosystem/
+    ├── expert-package.md
+    ├── expert-marketplace.md
+    └── expert-development.md
 ```
+
+## Source precedence
+
+이 directory는 원래 imported planning bundle에서 시작했지만 repository 안에서 계속 살아 있는 working specification이다.
+
+의도적으로 다음 우선순위를 사용한다.
+
+1. **Accepted ADR under `docs/decisions/`** — 특정 결정을 명시적으로 supersede/refine할 수 있음
+2. **Current product/design docs** — `DESIGN.md`, `docs/product-brief.md`, `docs/mvp.md`
+3. **Topical planning docs under this directory**
+4. historical/imported wording that has not yet been reconciled
+
+충돌을 발견하면 조용히 한쪽을 추측하지 말고 ADR 또는 문서 수정으로 reconciliation을 남긴다.
 
 ## 문서 관리 규칙
 
 - 제품 의미와 기술 구현을 한 문서에 섞지 않는다.
 - 공통 abstraction은 하위 도메인 세부 구현을 숨길 만큼만 둔다.
 - 아직 결정되지 않은 것은 `Open Questions`에 남기고 확정된 것처럼 쓰지 않는다.
-- 중요한 설계 변경은 `08-engineering/decisions.md`에도 기록한다.
+- 중요한 설계 변경은 repository ADR로 기록한다.
 - 플랫폼별 feature parity가 아니라 **experience parity**를 목표로 한다.
 - 보안과 privacy는 사후 제약이 아니라 제품 요구사항이다.
+- 구현 PoC가 성공해도 제품 UX 가설이 검증된 것으로 간주하지 않는다.
 
 ## 추천 읽기 순서
 
 처음 보는 경우:
 
-1. `00-overview/product-vision.md`
-2. `00-overview/product-principles.md`
-3. `01-experience/day-canvas.md`
-4. `02-domain/personal-memory.md`
-5. `03-intelligence/manager-and-experts.md`
-6. `05-integrations/integration-fabric.md`
-7. `06-security/privacy-and-data-classification.md`
-8. `08-engineering/architecture-map.md`
+1. root `docs/product-brief.md`
+2. `00-overview/product-vision.md`
+3. `00-overview/product-principles.md`
+4. `01-experience/day-canvas.md`
+5. root `DESIGN.md`
+6. `02-domain/personal-memory.md`
+7. `03-intelligence/manager-and-experts.md`
+8. `05-integrations/integration-fabric.md`
+9. `06-security/privacy-and-data-classification.md`
+10. `08-engineering/architecture-map.md`
 
 구현을 시작하는 경우:
 
-1. `08-engineering/poc-plan.md`
-2. `04-platform/device-agent.md`
-3. `05-integrations/connector-contract.md`
-4. `07-server/account-person-membership.md`
-5. `03-intelligence/model-layer.md`
-6. `08-engineering/technical-risks.md`
+1. root `docs/decisions/0006-calendar-first-day-canvas.md`
+2. root `docs/mvp.md`
+3. `08-engineering/poc-plan.md`
+4. `04-platform/device-agent.md`
+5. `05-integrations/connector-contract.md`
+6. `07-server/account-person-membership.md`
+7. `03-intelligence/model-layer.md`
+8. `08-engineering/technical-risks.md`
 
 ## Runtime Note
 
 Default Floe runtime does not require Node.js. Third-party TypeScript connector ecosystems are treated as port/import sources; connector execution is native Rust/Go or declarative ConnectorSpec.
-
 
 ## Expert Ecosystem Reading
 
