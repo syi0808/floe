@@ -254,10 +254,10 @@ Desktop uses a stable application shell: brand and global destinations in the he
 Floe has three presentation levels:
 
 1. **Passive:** one persistent assistant entry in the contextual rail or platform-appropriate command surface.
-2. **Suggestion:** one structured `Floe suggests` card in the contextual rail or a reserved inline slot on narrow screens.
+2. **Suggestion:** one structured `Floe suggests` card in the contextual rail, or one Floe-icon squircle button anchored to a relevant time block. Activating a timeline button opens one anchored suggestion popover.
 3. **Active:** a panel, sheet, or confirmation dialog opened by the user or by accepting a suggestion.
 
-Do not place conversational bubbles over calendar events or note cards. Do not automatically cover primary content with a modal. A suggestion can lead to an action confirmation, but intelligence only proposes and the user remains in control.
+Do not place conversational bubbles over calendar events or note cards. A timeline may use exactly one icon-only Floe squircle button, slightly overlapping the relevant time block; it replaces the passive rail entry while visible. Do not automatically cover primary content with a modal. A suggestion can lead to an action confirmation, but intelligence only proposes and the user remains in control.
 
 ## Surface and depth
 

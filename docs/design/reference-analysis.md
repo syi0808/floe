@@ -21,7 +21,7 @@ Four shared mockups depicted a calendar overview, task detail, notes collection,
 - Strong card gradients become flat white or step-50/100 tints.
 - The desktop content/rail split becomes responsive stacking on narrow screens.
 - `Calendar / Tasks / Notes` becomes `Today / Tasks / Notes` to preserve Day Canvas as the product center.
-- Assistant suggestion visuals become one shared rail component rather than a floating special case.
+- Assistant suggestion content uses one shared component. Time-specific suggestions begin as a standardized Floe squircle button anchored to the relevant block; general suggestions use the rail.
 
 ## Rejected
 

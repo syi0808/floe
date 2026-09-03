@@ -12,8 +12,8 @@ Help the user orient to Now and Next, act on today's tasks, recover relevant not
 Local toolbar: date · Today · Day/Week/Month
 ┌ Timeline / Now and Next ─────────┬ Today's tasks ┐
 │ Event, task, note projections    │ Related note  │
-│ Current-time marker              │ Floe entry or │
-│                                  │ suggestion    │
+│ Current-time marker              │ Related note  │
+│ Optional anchored Floe button    │               │
 └──────────────────────────────────┴───────────────┘
 Universal Capture
 ```
@@ -31,7 +31,11 @@ The timeline is primary. The rail order is tasks, related note/context, then Flo
 
 ## Contextual rail
 
-Today's tasks support quick completion and `View all`. A related note is shown only when it has current value; the sparkle appears only if its content or action is Floe-generated. The final region is either passive Floe presence or one suggestion, never both.
+Today's tasks support quick completion and `View all`. A related note is shown only when it has current value; the sparkle appears only if its content or action is Floe-generated. The rail may end with passive Floe presence only when no timeline Floe button or suggestion is visible.
+
+## Timeline suggestion
+
+A time-specific suggestion appears first as one 52×52 white `sq-md` button with a 30px Floe mascot. It sits on the right edge of the relevant time block and overlaps it slightly without hiding title or time. It contains no text or notification badge. Activation opens a non-modal `sq-xl` popover anchored above or beside the button; the underlying timeline remains readable and undimmed.
 
 ## Narrow composition
 
@@ -43,7 +47,7 @@ Order content as toolbar, Now/Next, timeline, high-priority tasks, optional sugg
 - Selecting an item opens semantic detail without losing timeline position.
 - Completing a task updates locally and offers undo.
 - Capture preserves original input and uses the classification flow.
-- Accepting a suggestion opens a proposal or confirmation; it does not silently edit the calendar.
+- Activating the Floe button opens its anchored proposal; accepting the proposal performs only the explicitly named, policy-approved action.
 
 ## Empty and exceptional states
 
@@ -55,4 +59,4 @@ Order content as toolbar, Now/Next, timeline, high-priority tasks, optional sugg
 
 ## Prohibited
 
-No speech bubbles or mascot heads over the timeline. No automatic assistant modal. No productivity score, streak, celebratory completion, or full-card categorical gradient.
+No speech bubbles or free-floating mascot heads over the timeline; the single standardized Floe squircle button is the only exception. No automatic assistant modal. No productivity score, streak, celebratory completion, or full-card categorical gradient.

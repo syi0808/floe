@@ -16,7 +16,7 @@ Passive presence never overlays content and does not animate to solicit attentio
 
 ### Suggestion
 
-Show one structured `Floe suggests` card when an intervention passes policy. Required anatomy:
+Show one structured `Floe suggests` card when an intervention passes policy. A suggestion tied to a precise timeline block starts as one icon-only Floe squircle button anchored to that block and reveals the same structured content in an anchored popover after activation. Required anatomy:
 
 1. 32px mascot or Floe attribution;
 2. concise proposition with relevant evidence or time context;
@@ -36,7 +36,8 @@ Before an external or consequential mutation, state the proposed action, target,
 
 ## Placement
 
-- Wide Day Canvas: bottom region of the contextual rail, after tasks and notes.
+- Wide Day Canvas, general suggestion: bottom region of the contextual rail, after tasks and notes.
+- Wide Day Canvas, time-specific suggestion: one 52×52 Floe-icon squircle button slightly overlapping the relevant time block; activation opens a non-modal anchored popover.
 - Wide Task Detail: first or second rail card when directly relevant to the task.
 - Notes collection: no suggestion inside individual cards; invoke Floe after selection or in detail.
 - Narrow layout: a reserved inline suggestion after Now/Next or object summary, never between title and required controls.
@@ -44,7 +45,7 @@ Before an external or consequential mutation, state the proposed action, target,
 ## Attention rules
 
 - At most one proactive suggestion is expanded in a viewport.
-- Passive entry and suggestion collapse into one component; do not show both.
+- Passive entry, timeline Floe button, and expanded suggestion are mutually exclusive entry states; do not duplicate them.
 - Do not use speech bubbles, bouncing mascots, unread badges, or pulsing sparkle.
 - Do not open a modal merely because a suggestion exists.
 - Dismissal removes the suggestion without leaving an empty card shell.

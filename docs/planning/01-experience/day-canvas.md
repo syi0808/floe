@@ -34,7 +34,7 @@ Wednesday, Sep 2
 - Now / Next가 가장 강하다.
 - 먼 미래는 시각적으로 약하게 한다.
 - Event / Task / Note는 의미가 구분되지만 서로 경쟁하지 않는다.
-- Floe Intervention은 별도 dashboard가 아니다. 데스크톱에서는 contextual rail, 좁은 화면에서는 예약된 inline slot을 사용하며 timeline 위에 떠 있는 말풍선으로 표현하지 않는다.
+- Floe Intervention은 별도 dashboard가 아니다. 일반 제안은 contextual rail, 좁은 화면에서는 예약된 inline slot을 사용한다. 특정 time block과 직접 관련된 제안은 해당 block 가장자리에 표준 Floe squircle button 하나를 둘 수 있지만 timeline 위의 말풍선으로 표현하지 않는다.
 - 데이터 원본의 모든 metadata를 기본 화면에서 보여주지 않는다.
 - 검색/입력은 최대한 하나로 유지한다.
 

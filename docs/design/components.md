@@ -50,7 +50,9 @@ Cards use `sq-lg`, 20–24px padding, and flat white or a step-50 tint. A card e
 
 Calendar blocks use `sq-sm` or `sq-md` depending on height. Each block exposes title and time; color is supplemental. Current time uses a labeled line with sufficient contrast and an accessible current-time description.
 
-Floe content never floats over an event block. Suggestions appear in the contextual rail or a reserved inline slot on a narrow layout.
+Floe text content never floats over an event block. A timeline may show exactly one 52×52 `sq-md` Floe-icon button, vertically centered and slightly overlapping the right edge of the relevant time block. The button uses a white surface, primary-200 border, restrained popover shadow, and a 30px mascot. It contains no text, badge, sparkle, or speech bubble.
+
+Activating the button keeps it visible with an active focus border and opens a single `sq-xl` popover anchored above or beside it. The popover must avoid obscuring the event that supplied the context. When this button is present, omit the passive Floe entry from the rail.
 
 ## Task rows and checkboxes
 
