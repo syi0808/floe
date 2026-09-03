@@ -69,8 +69,8 @@ abstract final class FloeSpace {
 }
 
 abstract final class FloeRadius {
-  static const xs = 8.0;
-  static const sm = 12.0;
+  static const xs = 6.0;
+  static const sm = 8.0;
   static const md = 16.0;
   static const lg = 28.0;
   static const xl = 34.0;
@@ -114,6 +114,7 @@ abstract final class FloeType {
   );
   static const body = TextStyle(
     fontSize: 14,
+    letterSpacing: 0,
     height: 1.5,
     color: FloePalette.neutral600,
   );
@@ -121,11 +122,12 @@ abstract final class FloeType {
     fontSize: 12,
     fontWeight: FontWeight.w600,
     height: 1.35,
-    letterSpacing: 0.12,
+    letterSpacing: 0,
     color: FloePalette.neutral600,
   );
   static const numeric = TextStyle(
     fontSize: 13,
+    letterSpacing: 0,
     fontWeight: FontWeight.w500,
     height: 1.35,
     color: FloePalette.neutral600,

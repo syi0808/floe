@@ -1,27 +1,35 @@
 import 'package:flutter/material.dart';
+import 'package:figma_squircle/figma_squircle.dart';
 
 import 'design_tokens.dart';
 
-enum FloeSquircleSize { xs, sm, md, lg, xl, frame }
+enum FloeSquircleSize { xs, sm, md, field, lg, xl, floating, frame }
 
 extension on FloeSquircleSize {
   double get extent => switch (this) {
     FloeSquircleSize.xs => FloeRadius.xs,
     FloeSquircleSize.sm => FloeRadius.sm,
     FloeSquircleSize.md => FloeRadius.md,
+    FloeSquircleSize.field => 22,
     FloeSquircleSize.lg => FloeRadius.lg,
     FloeSquircleSize.xl => FloeRadius.xl,
+    FloeSquircleSize.floating => 25,
     FloeSquircleSize.frame => FloeRadius.frame,
   };
 }
 
-ContinuousRectangleBorder floeSquircleBorder(
+SmoothRectangleBorder floeSquircleBorder(
   FloeSquircleSize size, {
   Color borderColor = Colors.transparent,
   double borderWidth = 0,
-}) => ContinuousRectangleBorder(
-  borderRadius: BorderRadius.circular(size.extent),
-  side: BorderSide(color: borderColor, width: borderWidth),
+}) => SmoothRectangleBorder(
+  borderRadius: SmoothBorderRadius(
+    cornerRadius: size.extent,
+    cornerSmoothing: 0.82,
+  ),
+  side: borderWidth == 0
+      ? BorderSide.none
+      : BorderSide(color: borderColor, width: borderWidth),
 );
 
 final class FloeSquircle extends StatelessWidget {

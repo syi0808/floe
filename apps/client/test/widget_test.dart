@@ -4,6 +4,7 @@ import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dar
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 void main() {
   testWidgets('renders empty day and classifies a typed capture', (
@@ -24,6 +25,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('오늘은 아직 비어 있어요'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('capture-field')));
     await tester.enterText(find.byKey(const Key('capture-field')), '우유 사기');
     await tester.pump();
     await tester.tap(find.byTooltip('캡처 저장'));
@@ -35,7 +37,7 @@ void main() {
     expect(find.text('마감 설정'), findsOneWidget);
     await tester.tap(find.text('분류하여 추가'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ListTile, '우유 사기'), findsOneWidget);
+    expect(find.text('우유 사기'), findsOneWidget);
     expect(find.byType(Checkbox), findsAtLeastNWidgets(1));
   });
 
@@ -56,9 +58,9 @@ void main() {
 
     await tester.tap(find.byTooltip('다음 날'));
     await tester.pumpAndSettle();
-    expect(find.text('9월 3일 목요일'), findsOneWidget);
+    expect(find.text('Thu, Sep 3'), findsOneWidget);
 
-    await tester.tap(find.text('오늘'));
+    await tester.tap(find.text('Today').first);
     await tester.pumpAndSettle();
     final today = DateTime.now();
     expect(find.text(_dateLabel(today)), findsOneWidget);
@@ -84,6 +86,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('Tasks'));
+    await tester.pumpAndSettle();
     final deleteButton = find.byTooltip('$title 삭제').last;
     await tester.ensureVisible(deleteButton);
     await tester.pumpAndSettle();
@@ -101,7 +105,7 @@ void main() {
     await tester.tap(find.text('삭제'));
     await tester.pumpAndSettle();
     expect(find.text(title), findsNothing);
-    expect(find.text('오늘은 아직 비어 있어요'), findsOneWidget);
+    expect(find.text('아직 할 일이 없어요.'), findsOneWidget);
   });
 
   testWidgets('supports a narrow viewport and enlarged text', (tester) async {
@@ -126,8 +130,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('지금'), findsOneWidget);
-    expect(find.text('다음'), findsOneWidget);
+    expect(find.byKey(const Key('timeline-card')), findsOneWidget);
+    expect(find.text('오늘은 아직 비어 있어요'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -164,7 +168,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Today'), findsOneWidget);
+    expect(find.text('Today'), findsNWidgets(2));
     expect(find.text('Tasks'), findsOneWidget);
     expect(find.text('Notes'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
@@ -173,8 +177,8 @@ void main() {
 
     await tester.tap(find.byTooltip('Floe 제안 열기'));
     await tester.pumpAndSettle();
-    expect(find.text('20분의 여유를 확보할까요?'), findsOneWidget);
-    expect(find.text('휴식 추가'), findsOneWidget);
+    expect(find.text('Reserve a 20-minute break?'), findsOneWidget);
+    expect(find.text('Add break'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -210,12 +214,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final mascot = tester.widget<Image>(find.byType(Image).first);
-    expect((mascot.image as AssetImage).assetName, FloeMascot.assetPath);
+    final mascot = tester.widget<SvgPicture>(find.byType(SvgPicture).first);
+    expect(
+      (mascot.bytesLoader as SvgAssetLoader).assetName,
+      FloeMascot.assetPath,
+    );
 
     await tester.tap(find.text('Notes'));
     await tester.pumpAndSettle();
-    expect(find.text('모든 노트'), findsOneWidget);
+    expect(find.text('All notes · 1'), findsOneWidget);
     expect(find.text('출시 회고 메모'), findsOneWidget);
     expect(find.text('일'), findsNothing);
 
@@ -223,11 +230,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ListTile, '출시 체크리스트 검토'));
     await tester.pumpAndSettle();
-    expect(find.text('오늘로 돌아가기'), findsOneWidget);
-    expect(find.text('세부 정보'), findsOneWidget);
-    expect(find.text('Floe가 제안해요'), findsOneWidget);
+    expect(find.text('Back to today'), findsOneWidget);
+    expect(find.text('Subtasks'), findsOneWidget);
+    expect(find.text('Floe suggests'), findsOneWidget);
   });
 }
 
 String _dateLabel(DateTime value) =>
-    '${value.month}월 ${value.day}일 ${['월', '화', '수', '목', '금', '토', '일'][value.weekday - 1]}요일';
+    '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value.month - 1]} ${value.day}';

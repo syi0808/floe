@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 final class FloeMascot extends StatelessWidget {
   const FloeMascot({this.size = 44, super.key});
 
-  static const assetPath = 'assets/floe-mascot.png';
+  static const assetPath = 'assets/floe-mascot.svg';
 
   final double size;
 
@@ -12,12 +13,11 @@ final class FloeMascot extends StatelessWidget {
     label: 'Floe',
     image: true,
     child: ExcludeSemantics(
-      child: Image.asset(
+      child: SvgPicture.asset(
         assetPath,
         width: size,
         height: size,
         fit: BoxFit.contain,
-        filterQuality: FilterQuality.high,
       ),
     ),
   );

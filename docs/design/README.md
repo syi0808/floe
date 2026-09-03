@@ -32,6 +32,7 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | [Notes](screens/notes.md) | Note collection and detail transitions |
 | [Task Detail](screens/task-detail.md) | Task fields, subtasks, related context, and suggestions |
 | [Reference analysis](reference-analysis.md) | What the September 2026 mockups contributed or did not decide |
+| [Flutter visual parity](flutter-visual-parity.md) | Paired HTML/Flutter captures, measured geometry, reproduction, and remaining differences |
 
 ## Production UI renders
 
@@ -58,3 +59,5 @@ The interactive [`prototypes/floe-ui/`](../../prototypes/floe-ui/README.md) HTML
 ## Implementation status
 
 The Flutter client implements the shared squircle primitive, semantic tokens, responsive application shell, Day Canvas, Notes collection, and Task Detail baseline. Current domain data limits editing, note excerpts, subtasks, and live suggestions; those controls must stay explicit about unavailable behavior until their application services are connected.
+
+The September 4 parity pass compares the actual HTML and Flutter widget renders at desktop and phone sizes. See the [comparison gallery](renders/flutter-parity/index.html); the preview fixture is isolated from the production database.

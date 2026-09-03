@@ -28,6 +28,7 @@ abstract final class FloeTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      fontFamily: 'Pretendard',
       splashFactory: NoSplash.splashFactory,
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
@@ -36,20 +37,25 @@ abstract final class FloeTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: FloePalette.neutral25,
       dividerColor: FloePalette.neutral200,
-      textTheme: const TextTheme(
-        displayLarge: FloeType.displayLarge,
-        headlineMedium: FloeType.display,
-        headlineSmall: FloeType.headlineLarge,
-        titleLarge: FloeType.headline,
-        bodyLarge: FloeType.bodyLarge,
-        bodyMedium: FloeType.body,
-        labelLarge: TextStyle(
-          fontSize: 14,
-          height: 1.35,
-          fontWeight: FontWeight.w600,
-        ),
-        labelMedium: FloeType.label,
-      ),
+      textTheme:
+          const TextTheme(
+            displayLarge: FloeType.displayLarge,
+            headlineMedium: FloeType.display,
+            headlineSmall: FloeType.headlineLarge,
+            titleLarge: FloeType.headline,
+            bodyLarge: FloeType.bodyLarge,
+            bodyMedium: FloeType.body,
+            labelLarge: TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+            labelMedium: FloeType.label,
+          ).apply(
+            fontFamily: 'Pretendard',
+            bodyColor: FloePalette.neutral950,
+            displayColor: FloePalette.neutral950,
+          ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: FloePalette.neutral0,
@@ -66,25 +72,40 @@ abstract final class FloeTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: const WidgetStatePropertyAll(
+            TextStyle(
+              fontFamily: 'Pretendard',
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           animationDuration: FloeMotion.hoverDuration,
           backgroundColor: WidgetStateProperty.resolveWith(_filledBackground),
           foregroundColor: WidgetStateProperty.resolveWith(_filledForeground),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
           minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.sm),
+            floeSquircleBorder(FloeSquircleSize.md),
           ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
+          textStyle: const WidgetStatePropertyAll(
+            TextStyle(
+              fontFamily: 'Pretendard',
+              fontSize: 14,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
           backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
           minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.sm),
+            floeSquircleBorder(FloeSquircleSize.md),
           ),
         ),
       ),
@@ -96,12 +117,20 @@ abstract final class FloeTheme {
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
           minimumSize: const WidgetStatePropertyAll(Size.square(44)),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.sm),
+            floeSquircleBorder(FloeSquircleSize.md),
           ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: const WidgetStatePropertyAll(
+            TextStyle(
+              fontFamily: 'Pretendard',
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
           backgroundColor: WidgetStateProperty.resolveWith(_outlinedBackground),
@@ -109,7 +138,7 @@ abstract final class FloeTheme {
           side: WidgetStateProperty.resolveWith(_outlinedSide),
           minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.sm),
+            floeSquircleBorder(FloeSquircleSize.md),
           ),
         ),
       ),
@@ -122,13 +151,13 @@ abstract final class FloeTheme {
           side: WidgetStateProperty.resolveWith(_segmentSide),
           minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.sm),
+            floeSquircleBorder(FloeSquircleSize.md),
           ),
         ),
       ),
       checkboxTheme: CheckboxThemeData(
         shape: floeSquircleBorder(FloeSquircleSize.xs),
-        side: const BorderSide(color: FloePalette.neutral400, width: 1.5),
+        side: const BorderSide(color: FloePalette.neutral300, width: 1.5),
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       ),
       dialogTheme: DialogThemeData(

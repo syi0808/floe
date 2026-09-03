@@ -5,6 +5,7 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:figma_squircle/figma_squircle.dart';
 
 void main() {
   test('theme removes ripple and resolves quiet hover states', () {
@@ -32,7 +33,7 @@ void main() {
     );
     expect(
       theme.filledButtonTheme.style!.shape!.resolve({}),
-      isA<ContinuousRectangleBorder>(),
+      isA<SmoothRectangleBorder>(),
     );
   });
 
@@ -54,7 +55,10 @@ void main() {
         matching: find.byType(Material),
       ),
     );
-    expect(material.shape, isA<ContinuousRectangleBorder>());
+    expect(material.shape, isA<SmoothRectangleBorder>());
+    final shape = material.shape! as SmoothRectangleBorder;
+    expect(shape.borderRadius.topLeft.cornerSmoothing, .82);
+    expect(floeSquircleBorder(FloeSquircleSize.md).side, BorderSide.none);
     expect(material.clipBehavior, Clip.antiAlias);
   });
 
