@@ -44,4 +44,4 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 
 ## Implementation status
 
-The repository's existing Flutter tokens and widgets were created before this specification. Migration should start with a shared squircle primitive and semantic token update, then move through the application shell and shared components before individual screens. Do not partially restyle isolated screens with local constants.
+The Flutter client implements the shared squircle primitive, semantic tokens, responsive application shell, Day Canvas, Notes collection, and Task Detail baseline. Current domain data limits editing, note excerpts, subtasks, and live suggestions; those controls must stay explicit about unavailable behavior until their application services are connected.
