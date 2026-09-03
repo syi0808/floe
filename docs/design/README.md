@@ -37,6 +37,8 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 
 The following images translate the specifications into coherent desktop product screens. They are implementation references rather than pixel contracts; the written tokens, semantics, responsive rules, and accessibility requirements remain authoritative.
 
+The interactive [`prototypes/floe-ui/`](../../prototypes/floe-ui/README.md) HTML implementation is now the primary visual validation surface. Use the PNG files below only as composition history and comparison material.
+
 | Screen | Render | Governing specification |
 | --- | --- | --- |
 | Day Canvas | [day-canvas.png](renders/day-canvas.png) | [Day Canvas](screens/day-canvas.md) |
