@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clock3,
   Filter,
+  ListTodo,
   MoreHorizontal,
   NotebookPen,
   Plus,
@@ -27,9 +28,9 @@ import {
 } from './primitives.jsx';
 
 const navigationItems = [
-  { id: 'today', label: 'Today' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'notes', label: 'Notes' },
+  { id: 'today', label: 'Today', icon: CalendarDays },
+  { id: 'tasks', label: 'Tasks', icon: ListTodo },
+  { id: 'notes', label: 'Notes', icon: NotebookPen },
 ];
 
 const hourHeight = 64;
@@ -45,7 +46,14 @@ export function App() {
         className="app-frame"
         contentClassName="app-window"
       >
-        <GlobalHeader screen={screen} onNavigate={setScreen} />
+        <GlobalSidebar screen={screen} onNavigate={setScreen} />
+        <SquircleButton
+          className="settings-action"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings size={20} strokeWidth={1.8} />
+        </SquircleButton>
         <div className="screen-region" key={screen}>
           {screen === 'today' && <TodayScreen onNavigate={setScreen} />}
           {screen === 'tasks' && <TaskDetail onBack={() => setScreen('today')} />}
@@ -56,34 +64,39 @@ export function App() {
   );
 }
 
-function GlobalHeader({ screen, onNavigate }) {
+function GlobalSidebar({ screen, onNavigate }) {
   return (
-    <header className="global-header">
-      <button className="brand" type="button" onClick={() => onNavigate('today')}>
+    <aside className="global-sidebar" aria-label="Floe navigation">
+      <button
+        className="brand"
+        type="button"
+        aria-label="Floe home"
+        title="Floe"
+        onClick={() => onNavigate('today')}
+      >
         <img src={mascotUrl} alt="" />
-        <span>Floe</span>
       </button>
 
       <nav className="global-nav" aria-label="Primary navigation">
-        {navigationItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={screen === item.id ? 'nav-link active' : 'nav-link'}
-            aria-current={screen === item.id ? 'page' : undefined}
-            onClick={() => onNavigate(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+        {navigationItems.map((item) => {
+          const Icon = item.icon;
 
-      <div className="header-actions">
-        <SquircleButton className="header-utility" aria-label="Settings">
-          <Settings size={20} strokeWidth={1.8} />
-        </SquircleButton>
-      </div>
-    </header>
+          return (
+            <SquircleButton
+              key={item.id}
+              radius={SQUIRCLE_RADIUS.control}
+              className={screen === item.id ? 'nav-link active' : 'nav-link'}
+              aria-current={screen === item.id ? 'page' : undefined}
+              title={item.label}
+              onClick={() => onNavigate(item.id)}
+            >
+              <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
+              <span>{item.label}</span>
+            </SquircleButton>
+          );
+        })}
+      </nav>
+    </aside>
   );
 }
 

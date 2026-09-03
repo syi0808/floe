@@ -124,101 +124,72 @@ p {
 }
 
 .app-window {
+  position: relative;
   min-height: calc(100vh - 34px);
   overflow: visible;
   background: var(--canvas);
 }
 
-.global-header {
-  position: relative;
+.global-sidebar {
+  position: absolute;
+  top: 28px;
+  bottom: 28px;
+  left: 18px;
   z-index: 20;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
+  width: 64px;
+  flex-direction: column;
   align-items: center;
-  height: 96px;
-  padding: 0 36px;
-  border-bottom: 1px solid var(--border);
-  background: rgb(255 255 255 / 80%);
-  backdrop-filter: blur(20px);
 }
 
 .brand {
-  display: inline-flex;
-  align-items: center;
-  justify-self: start;
-  gap: 14px;
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
   padding: 0;
   background: transparent;
-  color: var(--ink);
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.025em;
 }
 
 .brand img {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
 }
 
 .global-nav {
   display: flex;
-  align-items: stretch;
-  align-self: stretch;
-  gap: 28px;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
 }
 
-.nav-link {
-  position: relative;
-  min-width: 48px;
-  padding: 3px 0 0;
+.sq-button.nav-link {
+  width: 58px;
+  min-width: 58px;
+  min-height: 56px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
   background: transparent;
+  box-shadow: none;
   color: var(--ink-secondary);
-  font-size: 15px;
+  font-size: 10px;
   font-weight: 580;
 }
 
-.nav-link::after {
-  position: absolute;
-  right: 0;
-  bottom: 17px;
-  left: 0;
-  height: 2px;
-  background: transparent;
-  content: "";
-  transform: scaleX(0.5);
-  transition: background 140ms ease, transform 180ms var(--ease-out);
-}
-
-.nav-link:hover {
+.sq-button.nav-link:hover:not(:disabled) {
+  background: var(--surface-subtle);
+  box-shadow: none;
   color: var(--ink);
 }
 
-.nav-link.active {
+.sq-button.nav-link.active,
+.sq-button.nav-link.active:hover:not(:disabled) {
+  background: var(--primary-100);
+  box-shadow: none;
   color: var(--primary-600);
-}
-
-.nav-link.active::after {
-  background: var(--primary-600);
-  transform: scaleX(1);
-}
-
-.header-actions {
-  display: flex;
-  justify-self: end;
-}
-
-.header-utility {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--ink-secondary);
-}
-
-.header-utility:hover:not(:disabled) {
-  background: var(--surface-subtle);
-  box-shadow: none;
 }
 
 .sq-button {
@@ -245,6 +216,25 @@ p {
   transform: scale(0.98);
 }
 
+.sq-button.settings-action {
+  position: absolute;
+  top: 30px;
+  right: 36px;
+  z-index: 20;
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-secondary);
+}
+
+.sq-button.settings-action:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+}
+
 .icon-button {
   width: 44px;
   min-width: 44px;
@@ -253,6 +243,8 @@ p {
 }
 
 .screen-region {
+  padding-top: 72px;
+  padding-left: 84px;
   animation: screen-enter 180ms var(--ease-out);
 }
 
@@ -1150,33 +1142,37 @@ p {
     min-height: 100vh;
   }
 
-  .global-header {
-    grid-template-columns: 1fr auto;
-    height: auto;
-    min-height: 88px;
-    padding: 14px 20px 0;
+  .global-sidebar {
+    top: 18px;
+    bottom: 18px;
+    left: 4px;
+    width: 58px;
   }
 
   .brand img {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
   }
 
   .global-nav {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: space-between;
-    width: 100%;
-    height: 54px;
-    gap: 16px;
+    gap: 6px;
+    margin-top: 20px;
   }
 
-  .nav-link {
-    flex: 1;
+  .sq-button.nav-link {
+    width: 52px;
+    min-width: 52px;
+    min-height: 52px;
   }
 
-  .nav-link::after {
-    bottom: 0;
+  .sq-button.settings-action {
+    top: 18px;
+    right: 20px;
+  }
+
+  .screen-region {
+    padding-top: 64px;
+    padding-left: 58px;
   }
 
   .local-toolbar {
