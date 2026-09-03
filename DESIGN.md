@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: Floe — Quiet Current
-description: Calm architectural clarity, softened by glacial light and precise motion.
+description: Calm temporal clarity, softened by glacial light and precise motion.
 colors:
   primary: "#4B64D8"
   on-primary: "#FFFFFF"
@@ -195,64 +195,94 @@ components:
 
 ## Overview
 
-Floe should feel like a precise workspace lit by soft glacial daylight: calm, spacious, and quietly capable. It combines the architectural black-and-white structure and selective atmospheric gradients seen in Krepling with the airy blue confidence, generous whitespace, and clean product framing seen in Letters. The result must be recognizably Floe rather than a reproduction of either reference.
+Floe should feel like a precise personal calendar lit by soft glacial daylight: calm, spacious, familiar, and quietly capable.
 
-The visual character is **simple, modern, square-clean, and spacious**. Surfaces are mostly flat. Corners are controlled rather than bubbly. Strong hierarchy comes from scale, alignment, whitespace, borders, and tonal contrast—not from a pile of cards, badges, shadows, or colors.
+The primary application metaphor is **time**, not cards and not an AI dashboard. The main Day Canvas begins with a calendar time grid that a user can understand before learning anything about Floe. Tasks, notes, assistant proposals, and connected context are progressively layered onto that familiar temporal structure.
 
-Floe is a personal assistant, not enterprise analytics software. The interface should make the user's day feel lighter. `Now` and `Next` are obvious at a glance, while distant or secondary information recedes. Empty space is functional: it separates moments, reduces cognitive competition, and makes a calm default possible.
+The visual character is **simple, modern, square-clean, and spacious**. Surfaces are mostly flat. Corners are controlled rather than bubbly. Strong hierarchy comes first from time, position, scale, alignment, whitespace, borders, and tonal contrast—not from a pile of cards, badges, shadows, hero panels, or category colors.
+
+Floe is a personal assistant, not enterprise analytics software. The interface should make the user's day feel lighter. The current time and nearby schedule are obvious at a glance. Unscheduled work and notes remain available without competing with the calendar. Assistant intelligence should usually appear as a subtle proposal attached to the relevant moment rather than as a permanent AI section.
 
 This file follows the [Google Labs DESIGN.md alpha format](https://github.com/google-labs-code/design.md/blob/main/docs/spec.md). YAML tokens are normative; the prose explains how and why to apply them.
 
+## Controlling Product Rule
+
+> **Calendar is the canvas. Tasks, notes, and Floe are layers on top of it.**
+
+This rule supersedes the earlier interpretation where a large `Now / Next` hero panel and a generic Event/Task/Note feed defined the main Day Canvas.
+
+`Now / Next` remains important, but it is expressed through the time grid:
+
+- current-time line;
+- subtle current-event emphasis;
+- optional compact navigation to the next off-screen event.
+
+Do not duplicate the same information in a large summary hero above the calendar.
+
 ### Signature Motifs
 
-- **Quiet Current:** One clear vertical or horizontal flow guides the eye. Avoid equal-weight dashboard grids.
-- **Glacial Light:** Large, low-contrast fields may use a restrained blue, aqua, or violet atmospheric gradient.
-- **Dark Instrument:** A focused dark surface may appear for a high-attention mode such as voice capture or review, but never as decorative visual noise.
-- **Structured Float:** Small product previews or context panels may overlap a gradient field with crisp borders and very soft shadow. They must still align to the underlying grid.
-- **One Vivid Moment:** Most screens are neutral. One primary action or one focused state receives saturated color.
+- **Temporal Spine:** A clear calendar grid or chronological axis gives the product its primary structure. Time should organize the screen before containers do.
+- **Quiet Current:** One continuous reading flow guides the eye. Avoid equal-weight dashboard grids and disconnected widget collections.
+- **Glacial Light:** Restrained blue, aqua, or violet atmosphere is reserved for rare framing moments, onboarding, empty states, voice focus, or other non-routine surfaces. It is not the default Day Canvas background treatment.
+- **Ghost Proposal:** Floe suggestions appear as lightweight proposed states attached to the time or object they affect. They should feel reversible before acceptance.
+- **One Vivid Moment:** Most screens are neutral. One primary action, current state, or explicit focus may receive saturated color.
 
 ### Reference Interpretation
 
-- [Krepling's public reference](https://getdesign.md/design-md/krepling?category=productivity-saas) contributes contrast, modular product framing, selective spectral gradients, and confident square geometry.
-- [Letters' public reference](https://getdesign.md/design-md/letters?category=productivity-saas) contributes pale sky color, white space, approachable precision, and large soft fields around crisp product UI.
-- [Emil Kowalski's design-engineering skill](https://emilkowal.ski/skill) contributes purposeful, responsive, interruptible micro-interactions. Motion is judged by frequency and function, never added merely because it looks impressive.
-- Floe's existing product principles remain controlling: calm by default, Now/Next first, progressive disclosure, and no scoreboards, streaks, or noisy dashboards.
+- Native calendar applications contribute immediate temporal legibility, clear event geometry, current-time affordances, and familiar navigation.
+- Krepling's public reference contributes contrast, selective atmospheric gradients, and confident square geometry, but not its dashboard/product-panel composition.
+- Letters' public reference contributes pale sky color, whitespace, approachable precision, and calm framing.
+- Emil Kowalski's design-engineering principles contribute purposeful, responsive, interruptible micro-interactions. Motion is judged by frequency and function.
+- Floe's product principles remain controlling: calm by default, calendar-first, progressive disclosure, and no scoreboards, streaks, or noisy dashboards.
 
 ## Colors
 
-Neutral colors carry most of the interface. `neutral-50` is the default canvas and pure white is reserved for focused surfaces, inputs, and raised panels. `neutral-950`, not true black, is the strongest text color.
+Neutral colors carry most of the interface. `neutral-50` is the default canvas and pure white is reserved for focused surfaces, calendar event fills, inputs, sheets, and raised overlays. `neutral-950`, not true black, is the strongest text color.
 
-**Glacier Blue** is Floe's primary family. Use `primary-600` for the single highest-priority action, focus rings, selected navigation, and small moments of assistant presence. Pale primary shades can fill broad surfaces. Do not tint every control blue.
+**Glacier Blue** is Floe's primary family. Use `primary-600` for the single highest-priority action, focus rings, selected navigation, the current-time marker when appropriate, and small moments of assistant presence. Do not tint every event or control blue.
 
-**Aqua** expresses local processing, capture, continuity, and positive system presence. **Violet** is reserved for rare intelligence or memory moments. They may meet primary blue in atmospheric gradients, but should not become competing category colors.
+**Aqua** expresses local processing, capture, continuity, and positive system presence. **Violet** is reserved for rare intelligence or memory moments. They must not become category colors for every Expert or data type.
 
 Semantic families retain stable meanings:
 
 - Success is green and confirms completion or a safe finished state.
 - Warning is amber and signals overdue or attention-required states without alarm.
 - Error is red and is limited to destructive actions, failures, and unsafe states.
-- Event, Task, and Note are never distinguished by color alone; use label, icon, shape, and language.
+- Event, Task, Note, and Floe proposal are never distinguished by color alone.
+
+### Calendar Source Colors
+
+Calendar source color is useful information and may be preserved in a restrained form.
+
+Prefer:
+
+- 2–3px leading accent;
+- a very pale tint derived from the source color;
+- explicit text/icon/source labels where necessary.
+
+Avoid full-saturation event blocks across the entire calendar. Floe should remain calm even when several calendar sources are visible.
 
 ### Gradients
 
-Gradients are environmental light, not decoration applied to every component.
+Gradients are environmental light, not structural application chrome.
 
 - **Glacial Field:** `linear-gradient(135deg, #F3F6FF 0%, #D5F5F2 52%, #F8F4FF 100%)`.
 - **Blue Hour:** `linear-gradient(145deg, #AAB9FF 0%, #78D8D2 48%, #C4A8FF 100%)`.
 - **Deep Current:** `linear-gradient(145deg, #111317 0%, #20263B 55%, #303C75 100%)`.
-- Keep saturation low behind text. Text over a gradient must have a stable local contrast of at least WCAG AA.
 - Never use gradient text, rainbow borders, gradient-filled body copy, or gradient primary buttons.
-- At most one meaningful gradient field is visible in a standard application viewport.
+- The routine Day Canvas calendar grid should normally remain neutral, not sit inside a large gradient hero.
+- A gradient may appear in onboarding, empty states, voice focus, or a rare non-routine framing surface where it does not compete with temporal information.
 
 ## Typography
 
-Typography is modern and neutral, with enough geometric discipline to support the square-clean visual language. Use Inter for Latin text and Pretendard for Korean, followed by the platform system font. Ship the selected fonts or use the native system stack consistently; do not silently mix unrelated sans-serifs.
+Typography is modern and neutral, with enough geometric discipline to support the square-clean visual language. Use Inter for Latin text and Pretendard for Korean, followed by the platform system font.
 
-- Display styles are compact and confident, with tight tracking. Reserve them for dates, major empty states, and marketing-level statements.
-- Headlines use medium-to-semi-bold weight. Avoid extra-bold typography, which makes the interface feel promotional.
+- Display styles are compact and confident. Reserve them for dates, onboarding, major empty states, and marketing-level statements—not routine `Now` cards.
+- Headlines use medium-to-semi-bold weight. Avoid extra-bold typography.
 - Body text favors legibility and generous line height.
 - Labels should be short, sentence case, and never broadly letter-spaced uppercase.
 - Times and changing numeric values use tabular figures through the `numeric` token.
+- Calendar event typography must stay legible in compact blocks without becoming visually dominant.
 - Use no more than three type sizes and two weights in one compact product region.
 - Korean line breaks must be reviewed manually; do not create orphaned particles or single-character final lines.
 
@@ -262,48 +292,82 @@ The base rhythm is 4px, with 8px and 16px as the most common intervals. Large sp
 
 ### Application Frame
 
-- Desktop minimum target: 760×560. Default content canvas: 960–1120px wide.
-- Reading and Day Canvas columns should generally stay between 680px and 780px.
-- Desktop side padding is 32px; reduce to 20px below 800px window width.
-- Mobile side padding is 20px, with 16px allowed for dense timeline rows.
-- Align titles, timeline content, and capture controls to the same dominant edge.
-- Prefer one continuous canvas with deliberate sections over a dashboard of equally weighted cards.
+- Desktop minimum target remains approximately 760×560, but the full Day Canvas should make productive use of wider windows.
+- The calendar grid is the dominant flexible region.
+- A desktop Today rail, when visible, should generally stay compact at roughly 240–280px and never receive equal visual weight with the calendar.
+- Do not constrain the full calendar-first Day Canvas to the former 680–780px reading-column width. That width remains appropriate for prose, settings, memory detail, and other reading surfaces.
+- Desktop outer padding should normally be 20–32px. Internal calendar grid geometry may use smaller, regular gutters.
+- Align the date/navigation header, all-day region, time grid, and capture affordance to a stable application frame.
+- Prefer one continuous canvas over a dashboard of equally weighted cards.
+
+### Calendar Geometry
+
+- Time labels occupy a narrow, stable gutter.
+- The current-time line crosses the meaningful schedule area and remains visible without overpowering event text.
+- Event vertical geometry reflects actual duration when the selected zoom makes that practical.
+- All-day events live in a dedicated strip instead of pretending to occupy `00:00–24:00`.
+- Overlapping events use lanes or controlled overlap rather than destroying time geometry.
+- Short events may use a compact representation, but their time relationship remains understandable.
+
+### Today Rail
+
+The Today rail exists only for context that does not naturally occupy a time slot.
+
+Typical contents:
+
+- unscheduled Tasks due or intended today;
+- short Today Notes.
+
+Do not put the following in the rail by default:
+
+- productivity statistics;
+- health metrics dashboard;
+- per-Expert widgets;
+- AI insight feed;
+- duplicate calendar summary.
+
+If the rail is empty, allow whitespace. Do not invent content to fill it.
 
 ### Whitespace
 
-- Whitespace must express hierarchy: 8–12px within a control, 16–24px within a component, 32–48px between functional sections, and 64–96px between major narrative regions.
-- Empty states may occupy substantial space. Do not fill them with suggestions, statistics, or decorative widgets merely to avoid emptiness.
-- Dense days should fold or progressively disclose secondary details before reducing the base rhythm.
+- Whitespace expresses hierarchy: 8–12px within a control, 16–24px within a component, and larger spatial breaks between independent regions.
+- Calendar hour spacing is a functional zoom variable, not ordinary component padding.
+- Dense days should first use zoom, overlap lanes, compact short-event treatment, folding, and progressive disclosure before reducing typography or touch targets.
+- Empty time in the calendar is valuable information. Do not decorate every gap.
 
 ### Responsive Behavior
 
 - Preserve experience parity, not identical composition.
-- On narrow screens, stack Now and Next rather than shrinking their text or padding.
-- Sheets replace centered dialogs on mobile. Their information and action order remain identical.
-- Never introduce horizontal scrolling for primary Day Canvas content.
+- Narrow desktop/tablet hides or overlays the Today rail before shrinking the calendar below comfortable legibility.
+- Mobile keeps the time/day mental model but may move Tasks and Notes into a sheet, secondary surface, or mode switch.
+- Sheets replace centered dialogs on mobile where appropriate.
+- Never introduce horizontal scrolling for the primary single-day mobile timeline.
 
 ## Elevation & Depth
 
 Floe is primarily flat. Depth comes from tonal layers, precise borders, overlap, and local contrast.
 
+- Calendar events use flat or nearly-flat surfaces. Avoid treating every event as a floating card.
 - Default surfaces use a 1px `border` on white or no border on a contrasting canvas.
-- Hover may strengthen a border to `border-strong` or change the surface tone. It should not suddenly add a large shadow.
+- Hover may strengthen a border or change the surface tone. It should not suddenly add a large shadow.
 - Floating popovers use `0 8px 24px #11131714` with a 1px border.
-- Modal sheets use `0 20px 60px #1113171F`. No other standard surface may use this depth.
-- Inner highlights may use a single 1px near-white edge on dark or gradient fields.
-- Avoid glassmorphism as a default. Blur is allowed only when it clarifies overlay hierarchy and does not harm legibility or performance.
+- Modal sheets use `0 20px 60px #1113171F`. No ordinary calendar item uses this depth.
+- Ghost Floe proposals should look proposed through border style, tint, iconography, or reduced material certainty—not through blur-heavy glassmorphism.
+- Avoid glassmorphism as a default.
 
 ## Shapes
 
 The shape language is **architectural softness**: mostly square geometry with just enough rounding to avoid feeling severe.
 
-- Tiny controls, icon containers, and compact buttons use 4–6px radius.
-- Inputs and ordinary cards use 10px radius.
-- Hero fields and large sheets use 14px radius.
-- 20px is exceptional and limited to large atmospheric or onboarding surfaces.
-- Pills are allowed only for status, tags, avatars, and segmented selection—not ordinary buttons, inputs, or cards.
-- Nested radii decrease toward the inside: a 14px outer panel contains 10px cards and 6px controls.
-- Icons use a consistent 1.5–2px stroke and a simple geometric family. Filled icons indicate selection, not decoration.
+- Tiny controls, event accents, icon containers, and compact buttons use 4–6px radius.
+- Inputs and ordinary surfaces use 10px radius.
+- Sheets and rare large atmospheric surfaces use 14px radius.
+- 20px is exceptional and limited to large onboarding or atmospheric surfaces.
+- Pills are allowed only for status, tags, avatars, and segmented selection—not ordinary buttons, inputs, or events.
+- Calendar event blocks should generally use smaller radii than onboarding/hero surfaces.
+- Icons use a consistent 1.5–2px stroke and a simple geometric family.
+
+The `hero-panel` token remains for onboarding, empty, promotional, or rare focused surfaces. **Do not use it as the recurring top section of Day Canvas.**
 
 ## Components
 
@@ -312,24 +376,62 @@ The shape language is **architectural softness**: mostly square geometry with ju
 - Primary buttons are filled Glacier Blue. Limit each surface or dialog to one.
 - Secondary buttons are white or transparent with a crisp border.
 - Tertiary actions are text or icon controls with an explicit hover target of at least 36×36px desktop and 44×44px touch.
-- Ripple effects are never used. Hover changes only surface, border, icon, or text color; it never creates a spreading ink animation.
-- Pressing an occasional pointer-driven action scales it to `0.97` for 120ms, then returns with the strong ease-out curve. High-frequency navigation uses color feedback only, and keyboard activation remains instant.
+- Ripple effects are never used. Hover changes only surface, border, icon, or text color.
+- Pressing an occasional pointer-driven action scales it to `0.97` for 120ms, then returns with the strong ease-out curve. High-frequency calendar navigation uses color feedback only.
 - Disabled controls retain readable labels and lose saturation; do not communicate disabled state through opacity alone.
 
-### Inputs and Capture
+### Inputs and Universal Capture
 
 - Inputs are clean white fields with a 1px border. Focus uses a 2px `focus` ring without changing layout size.
-- Universal Capture is visually anchored and always easy to find, but it must not resemble a chat composer with a stream of assistant messages.
-- Preserve draft text on recoverable errors. Submission feedback begins immediately.
-- Classification starts unselected. Event, Task, and Note require explicit user choice until a separately approved trustworthy suggestion policy exists.
+- Universal Capture is easy to reach but must not resemble a chat composer with a stream of assistant messages.
+- Preserve original input and draft text on recoverable errors.
+- Capture should minimize context switching. The long-term product does not require every capture to immediately complete a blocking Event/Task/Note classification dialog.
+- Explicit classification is acceptable as an early trust-building PoC. The mature UX must support immediate classification, Floe suggestion acceptance, and deferred organization.
+- Pending captures need a discoverable recovery/review path; `나중에` must not mean disappearing from the UI forever.
 
 ### Day Canvas
 
-- `Now` is the strongest local element. `Next` is clear but quieter. Distant items recede through typography and spacing, not reduced accessibility contrast.
-- Event, Task, and Note share alignment and rhythm while preserving semantic differences.
-- Timeline rows are open list structures by default, separated with whitespace or hairlines rather than individual raised cards.
-- Overdue state uses amber text plus explicit language or icon; never red alone.
-- Conflicts are calm but unmistakable. Explain the conflict before offering an action.
+The Day Canvas is a **calendar view first**.
+
+#### Current Time
+
+- Use a clear current-time line and marker.
+- Subtly emphasize the Event containing the current instant.
+- Do not repeat the same information in a large `Now` hero card.
+
+#### Next Event
+
+- The next Event normally remains visible in the calendar itself.
+- If it is outside the viewport, a compact sticky navigation affordance may show its time/title and scroll toward it.
+- Do not reserve a permanent large `Next` panel.
+
+#### Events
+
+- Timed Events occupy time-space according to their interval.
+- All-day Events use a dedicated all-day strip.
+- Calendar source may appear as a thin accent and pale tint.
+- Event metadata is progressively disclosed; the block should stay scannable.
+
+#### Tasks
+
+- A Task with a planned execution time may appear in the time grid as a light checkbox-oriented item.
+- An unscheduled Today Task belongs in the Today rail or equivalent secondary surface.
+- Deadline and planned execution time are separate semantics and must not be visually conflated.
+- Completed Tasks recede or fold before calendar readability is sacrificed.
+
+#### Notes
+
+- Notes are normally quiet context, not equal timeline rows.
+- A Today Note may live in the rail.
+- A Note associated with an Event/Task/Person may appear as a compact annotation or affordance attached to that object.
+
+#### Floe Proposals
+
+- Floe has no permanent `AI Insights` region on the home canvas.
+- Interventions attach to the time/object they affect.
+- Proposed schedule changes use ghost blocks or other clearly reversible states.
+- Accept converts a proposal into canonical state; dismiss removes it; details reveal rationale progressively.
+- Raw Health, Memory, and Expert state are not exposed merely to prove that Floe used them.
 
 ### Dialogs, Sheets, and Popovers
 
@@ -337,19 +439,20 @@ The shape language is **architectural softness**: mostly square geometry with ju
 - Centered modals transform from their center. Popovers and menus transform from the edge closest to their trigger.
 - Preserve the user's input and focus context after closing or reversing an interaction.
 - Destructive confirmations name the affected object and action. Never rely on color alone.
+- Frequent calendar editing should prefer lightweight inline/popover/sheet editing over a procession of modal dialogs.
 
 ### Feedback and Progress
 
-- Prefer local progress on the affected control or row over a global blocking spinner.
-- A successful capture should settle into the timeline with a short spatial transition; do not celebrate routine actions with confetti.
+- Prefer local progress on the affected control, event, task, or proposal over a global blocking spinner.
+- A successful capture or event creation should settle into the appropriate surface with a short spatial transition.
 - Toasts are for transient confirmation, not required reading. Errors that need action remain near the source.
-- Loading placeholders preserve the final geometry to prevent layout jumps.
+- Loading placeholders preserve final geometry to prevent layout jumps.
 
-### Motion System
+## Motion System
 
 Motion is a hierarchy of feedback, not a layer of spectacle.
 
-**Decision rule:** first ask how frequently the interaction occurs. Keyboard-driven or 100-times-per-day actions do not animate. Frequent hover and navigation receive only subtle color or border feedback. Occasional dialogs, sheets, and toasts may use standard motion. Rare onboarding moments may carry restrained delight.
+**Decision rule:** first ask how frequently the interaction occurs. Keyboard-driven or 100-times-per-day actions do not animate. Frequent calendar navigation receives subtle color or direct-position feedback. Occasional dialogs, sheets, proposal acceptance, and toasts may use standard motion.
 
 **Purpose rule:** every animation must provide feedback, preserve spatial continuity, explain a state change, or prevent a jarring replacement. If its only purpose is to look impressive, remove it.
 
@@ -370,30 +473,43 @@ Motion is a hierarchy of feedback, not a layer of spectacle.
 - Constant determinate motion only: linear.
 - Never use ease-in for direct UI feedback.
 
-Animate transform and opacity where practical. Avoid animating layout dimensions in frequently updated lists. Transitions should be interruptible and reverse naturally from their current state. Use springs only for gesture momentum or directly manipulated objects; keep bounce between 0.1 and 0.2 and avoid bounce in ordinary controls.
+Animate transform and opacity where practical. Avoid expensive layout animation in dense calendar regions. Direct manipulation of an Event/Task may animate position because the movement itself communicates schedule change.
 
 Respect reduced-motion settings. Remove translation, scaling, parallax, and spring movement while keeping short opacity or color transitions that preserve comprehension. Touch devices must not inherit hover-only motion.
+
+## Accessibility
+
+- Current time, Event duration, task completion, and proposal state must be available to screen readers without relying on geometry alone.
+- Calendar source color never carries unique meaning by itself.
+- Keyboard users can navigate dates, focus events/tasks, invoke capture, and return to the current time.
+- Touch targets remain at least 44×44px where users directly interact even if visual event geometry is smaller; use accessible hit regions when necessary.
+- Verify WCAG AA contrast, focus visibility, 200% text scaling, reduced motion, and Korean text wrapping.
 
 ## Do's and Don'ts
 
 ### Do
 
-- Do make one thing obviously important and let everything else support it.
-- Do use neutral space, alignment, and typography before adding containers.
-- Do use one restrained atmospheric gradient to establish a signature moment.
-- Do keep Event, Task, and Note semantically distinct without turning them into competing color categories.
+- Do let **time** create the primary hierarchy of Day Canvas.
+- Do make the current time and nearby schedule immediately legible.
+- Do keep Event, scheduled Task, unscheduled Task, and Note visually distinct by role.
+- Do let empty calendar time remain empty.
+- Do attach Floe suggestions to the moment or object they affect.
+- Do use neutral space, alignment, hairlines, and typography before adding containers.
+- Do use calendar source colors as restrained accents when they improve scanning.
+- Do keep Universal Capture low-friction and recoverable.
+- Do preserve explicit provenance and user control behind AI-derived structure.
 - Do provide immediate press, focus, loading, success, and error feedback.
-- Do preserve input during errors and make transitions interruptible.
-- Do verify WCAG AA contrast, keyboard navigation, focus visibility, screen reader labels, 200% text scaling, and reduced motion.
-- Do use the exact tokens in this file; create a reviewed token rather than an untracked color or spacing value.
 
 ### Don't
 
+- Don't use a large permanent `Now / Next` hero panel above Day Canvas.
+- Don't render Event, Task, and Note as one equal-weight generic feed.
 - Don't build a dense analytics dashboard, scorecard, streak system, badge wall, or chat-first home screen.
-- Don't make every section a floating rounded card.
+- Don't add a permanent `Floe Insights` or per-Expert dashboard to the home canvas.
+- Don't make every event, task, note, and section a floating rounded card.
 - Don't use excessive pills, bubbly 20px radii, heavy shadows, glass blur, or neon glow.
-- Don't use gradients on buttons, borders, text, small controls, or more than one major field per viewport.
-- Don't animate keyboard actions, routine list navigation, or anything without a functional reason.
-- Don't animate from `scale(0)`, use slow ease-in feedback, or exceed 300ms for routine interaction.
+- Don't place a large atmospheric gradient behind routine calendar content.
+- Don't force every captured thought through a blocking classification workflow forever.
+- Don't animate keyboard actions, routine calendar navigation, or anything without a functional reason.
 - Don't distinguish meaning by color alone or use low-contrast gray for required information.
-- Don't copy Krepling, Letters, or any individual designer literally; translate their strengths through Floe's calm personal-assistant purpose.
+- Don't copy native Calendar, Krepling, Letters, or any individual designer literally; use familiar temporal grammar and translate it through Floe's calm personal-assistant purpose.
