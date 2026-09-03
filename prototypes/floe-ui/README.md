@@ -1,6 +1,6 @@
 # Floe HTML UI Prototype
 
-Interactive browser prototype for the squircle-first Floe interface. It implements the shared application shell, Today timeline, timeline-anchored Floe suggestion, Task Detail, and Notes collection.
+Interactive browser prototype for the squircle-first Floe interface. It implements the shared application shell, Today timeline, timeline-anchored Floe suggestion, Task Detail, Notes collection, and a one-page implementation progress dashboard.
 
 ## Run
 

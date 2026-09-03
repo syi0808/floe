@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   ArrowUp,
+  BarChart3,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
 
 import mascotUrl from '../../../assets/floe-mascot.svg?url';
 import { events, initialNotes, initialSubtasks, initialTasks } from './data.js';
+import { ProgressScreen } from './ProgressScreen.jsx';
 import {
   SQUIRCLE_RADIUS,
   SquircleBlock,
@@ -31,6 +33,7 @@ const navigationItems = [
   { id: 'today', label: 'Today', icon: CalendarDays },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
   { id: 'notes', label: 'Notes', icon: NotebookPen },
+  { id: 'progress', label: 'Progress', icon: BarChart3 },
 ];
 
 const hourHeight = 64;
@@ -58,6 +61,7 @@ export function App() {
           {screen === 'today' && <TodayScreen onNavigate={setScreen} />}
           {screen === 'tasks' && <TaskDetail onBack={() => setScreen('today')} />}
           {screen === 'notes' && <NotesCollection />}
+          {screen === 'progress' && <ProgressScreen />}
         </div>
       </SquircleSurface>
     </main>
