@@ -1,5 +1,6 @@
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +26,36 @@ void main() {
       textStyle.overlayColor!.resolve({WidgetState.pressed}),
       Colors.transparent,
     );
+    expect(
+      theme.filledButtonTheme.style!.minimumSize!.resolve({}),
+      const Size(44, 44),
+    );
+    expect(
+      theme.filledButtonTheme.style!.shape!.resolve({}),
+      isA<ContinuousRectangleBorder>(),
+    );
+  });
+
+  testWidgets('shared squircle owns continuous fill and clipping', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: FloeSquircle(
+          size: FloeSquircleSize.lg,
+          child: SizedBox.square(dimension: 80),
+        ),
+      ),
+    );
+
+    final material = tester.widget<Material>(
+      find.descendant(
+        of: find.byType(FloeSquircle),
+        matching: find.byType(Material),
+      ),
+    );
+    expect(material.shape, isA<ContinuousRectangleBorder>());
+    expect(material.clipBehavior, Clip.antiAlias);
   });
 
   testWidgets('pointer press scales and releases with no lasting transform', (

@@ -30,7 +30,7 @@ acceptance criteria and required dogfood validation are complete.
 - [x] Explicit Event, Task, and Note classification
 - [x] Task completion/reopen and item deletion
 - [x] macOS dylib build, embedding, signing, and persistence verification
-- [x] Floe design system and interaction baseline
+- [x] Squircle-first Floe design system, responsive shell, and interaction baseline
 - [ ] Event, Task, and Note editing UI
 - [ ] Explicit conflict recovery UI
 - [ ] Dense-day folding and complete timeline treatment
@@ -62,7 +62,7 @@ acceptance criteria and required dogfood validation are complete.
 ## Validation Baseline
 
 - Rust: 15 tests passing
-- Flutter: 10 tests passing
+- Flutter: 11 tests passing
 - Rust workspace: Clippy clean with warnings denied
 - Flutter: analyzer clean
 - macOS: signed release app contains the expected six C ABI symbols
