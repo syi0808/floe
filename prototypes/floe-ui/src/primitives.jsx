@@ -2,11 +2,22 @@ import { Squircle } from '@squircle-js/react';
 
 const smoothing = 0.82;
 
+export const SQUIRCLE_RADIUS = Object.freeze({
+  micro: 6,
+  compact: 8,
+  control: 16,
+  field: 22,
+  card: 28,
+  overlay: 34,
+  floating: 25,
+  frame: 40,
+});
+
 export function SquircleSurface({
   children,
   className = '',
   contentClassName = '',
-  radius = 20,
+  radius = SQUIRCLE_RADIUS.card,
   as = 'div',
 }) {
   const Content = as;
@@ -32,7 +43,7 @@ export function SquircleSurface({
 export function SquircleButton({
   children,
   className = '',
-  radius = 12,
+  radius = SQUIRCLE_RADIUS.control,
   type = 'button',
   ...buttonProps
 }) {
@@ -53,7 +64,7 @@ export function SquircleButton({
 export function SquircleBlock({
   children,
   className = '',
-  radius = 12,
+  radius = SQUIRCLE_RADIUS.control,
   style,
   ...props
 }) {
