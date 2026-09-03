@@ -25,6 +25,39 @@ Floe는 **사용자의 하루와 삶의 맥락을 장기적으로 이해하고 �
 
 그리고 필요할 때는 먼저 제안하고, 필요하지 않을 때는 조용히 있는다.
 
+## Calendar is the Canvas
+
+Floe의 메인 visual surface는 **calendar-first Day Canvas**다.
+
+Calendar는 단순한 connected data source가 아니라 사용자의 일정, 할 일, 메모, 이동, 건강 기반 제안과 비서의 intervention이 만나는 공통 좌표다.
+
+```text
+Calendar time
+├─ Events
+├─ scheduled Tasks
+├─ current time
+└─ Floe proposals
+
+Today context
+├─ unscheduled Tasks
+└─ Notes
+```
+
+Todo와 Note를 Calendar와 합친다는 것은 모든 것을 동일한 timeline row로 만드는 것을 뜻하지 않는다.
+
+- Event는 시간 구조를 만든다.
+- Task는 해야 할 일을 표현하고 필요하면 시간에 배치된다.
+- Note는 하루나 일정에 붙는 맥락이다.
+- Floe는 별도 AI dashboard가 아니라 관련 시간과 object 위에서 조용히 제안한다.
+
+사용자가 Floe를 열었을 때 가장 먼저 답을 얻어야 하는 질문은:
+
+> **오늘 내 시간이 어떻게 흘러가는가?**
+
+이다.
+
+그 다음에 오늘 해야 할 일과 기억할 맥락이 자연스럽게 따라온다.
+
 ## 제품 중심
 
 Floe의 중심은 다음이 아니다.
@@ -34,14 +67,17 @@ Floe의 중심은 다음이 아니다.
 - ChatGPT 형태의 채팅창
 - Health dashboard
 - Productivity dashboard
+- AI-generated daily summary dashboard
 
 사용자가 주로 보는 것은:
 
-- **Day Canvas**
+- **Calendar-first Day Canvas**
 - **Voice / 빠른 호출**
 - **필요한 순간의 Intervention**
 
 이다.
+
+`Now / Next`는 중요하지만 독립적인 대형 hero dashboard가 아니라 current-time line, current Event emphasis, 필요할 때의 compact next navigation처럼 Calendar를 더 쉽게 읽기 위한 intelligence로 표현한다.
 
 ## 장기적 제품 이미지
 
@@ -70,3 +106,5 @@ JARVIS 같은 표현은 시각적 화려함이나 TTS 스타일을 의미하기�
 - macOS/iOS뿐 아니라 Windows/Android도 1급이어야 한다.
 - 기본 Hosted 경험은 서버나 모델 지식 없이 사용할 수 있어야 한다.
 - 고급 사용자는 동일한 제품을 self-host할 수 있어야 한다.
+
+익숙한 Calendar mental model을 출발점으로 삼는 것은 비개발자 사용자에게도 Floe를 설명하고 학습시키는 비용을 줄이는 중요한 제품 선택이다.
