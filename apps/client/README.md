@@ -36,7 +36,7 @@ The Tasks destination retains the working task collection. Open a task to compar
 - Capture retains the real classification flow, then shows dismissible, screen-reader-announced success feedback only after saving.
 - Week/Month and the previous timeline suggestion bubble are removed, matching the current calendar prototype. Unsupported domain actions are not simulated as successful native operations.
 
-Run `flutter test test/visual_interaction_test.dart test/floe_interaction_test.dart test/widget_test.dart test/visual_capture_test.dart` for interaction and responsive-layout regression coverage.
+Flutter automated tests cover controller loading, data processing and native gateway integration only. Design, layout and interaction are reviewed manually in the preview; widget, geometry and visual-capture regression suites are not maintained.
 
 ### Shared button press motion
 
@@ -46,13 +46,7 @@ For custom controls, use `PressableScale(builder: (states) => InkWell(statesCont
 
 This uses Flutter's paint-transform rendering path, not a separate GPU-acceleration switch. No blanket `RepaintBoundary` or raster-cache hints are added; verify raster performance with a profile build on the target device before adding them.
 
-See `../../docs/design/flutter-visual-parity.md` for the paired screenshots, measured layout contract, and reproduction steps.
-
-```sh
-flutter test test/visual_capture_test.dart --dart-define=VISUAL_OUTPUT=build/visual-parity
-```
-
-The capture suite loads the bundled fonts and SVG, renders at 1440×1100 and 390×844 at DPR 1, and exports Today, Event Detail, Connections, Notes, and Task Detail. Normal test runs also assert calendar geometry and capture placement without writing images.
+Use `flutter run -d macos -t lib/main_preview.dart` to review design and interaction manually at desktop and narrow window sizes. `../../docs/design/flutter-visual-parity.md` retains historical comparison notes, not an automated layout contract.
 
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
 dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with

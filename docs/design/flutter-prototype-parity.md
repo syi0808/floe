@@ -51,8 +51,7 @@ The preview does not request calendar permissions or touch the user's database.
 ## Verification
 
 `flutter analyze`, `flutter test`, and `flutter build macos --debug`.
-Geometry tests cover short/adjacent/overlapping/overnight/offset intervals. Widget
-tests cover zoom anchoring, short-event detail and 120 ms close, empty navigation,
-connector back navigation, native gateway failures, capture/task/note persistence,
-hover, keyboard press, narrow screens and enlarged text. Visual captures render
-desktop and phone layouts using the bundled font, icons and mascot.
+Automated tests cover controller load ordering/retry/disposal and data/native gateway
+behavior. Flutter design, layout, geometry, interaction and visual-capture tests are
+not maintained. Review those manually using `lib/main_preview.dart`, including zoom,
+overlap, short-event detail, dialog dismissal, navigation and narrow-window layouts.

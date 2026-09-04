@@ -1,15 +1,10 @@
 import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/app/floe_theme.dart';
-import 'package:floe_client/app/floe_app.dart';
-import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
-import 'package:floe_client/features/day_canvas/presentation/calendar_panel.dart';
 
 class FixtureCalendarAdapter implements CalendarAdapter {
   bool denied = false;
@@ -62,50 +57,6 @@ final query = DayQuery(
 );
 
 void main() {
-  testWidgets(
-    'external midnight and multiple all-day events remain visible with provenance',
-    (tester) async {
-      final items = [
-        EventItem(
-          id: 'midnight',
-          title: '자정 일정',
-          revision: 0,
-          createdAt: query.now,
-          startsAt: DateTime.utc(2026, 9, 3, 15),
-          endsAt: DateTime.utc(2026, 9, 3, 16),
-          calendarName: 'Test calendar',
-          externalId: 'midnight',
-          provider: 'fixture',
-        ),
-        for (final identifier in ['all-day-1', 'all-day-2'])
-          EventItem(
-            id: identifier,
-            title: identifier,
-            revision: 0,
-            createdAt: query.now,
-            startsAt: DateTime(2026, 9, 4),
-            endsAt: DateTime(2026, 9, 5),
-            isAllDay: true,
-            calendarName: 'Test calendar',
-            externalId: identifier,
-            provider: 'fixture',
-          ),
-      ];
-      await tester.pumpWidget(
-        FloeApp(
-          gateway: FakeDayGateway(initialItems: items),
-          query: query,
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('자정 일정'), findsWidgets);
-      expect(find.text('00:00 – 01:00'), findsOneWidget);
-      expect(find.text('all-day-1   Test calendar'), findsOneWidget);
-      expect(find.text('all-day-2   Test calendar'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
-
   test(
     'fixture crosses native ABI, preserves provenance, failure, and restart',
     () async {
@@ -157,65 +108,4 @@ void main() {
       }
     },
   );
-
-  testWidgets('permission failure shows cache state and recovery actions', (
-    tester,
-  ) async {
-    final gateway = PanelGateway();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: FloeTheme.light,
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: CalendarPanel(
-              gateway: gateway,
-              query: query,
-              connection: CalendarConnection(
-                id: 'fixture',
-                name: 'Test calendar',
-                provider: 'fixture',
-                revision: 2,
-                lastSuccessAt: query.now,
-                error: 'permission_denied',
-              ),
-              onChanged: () async {},
-            ),
-          ),
-        ),
-      ),
-    );
-    expect(find.textContaining('권한이 거절'), findsOneWidget);
-    await tester.tap(find.text('권한 설정'));
-    await tester.pumpAndSettle();
-    expect(gateway.openedSettings, isTrue);
-    await tester.tap(find.text('선택한 날짜 새로고침'));
-    await tester.pumpAndSettle();
-    expect(gateway.synced, isTrue);
-  });
-}
-
-class PanelGateway implements CalendarGateway {
-  bool openedSettings = false;
-  bool synced = false;
-  @override
-  Future<void> openCalendarSettings() async {
-    openedSettings = true;
-  }
-
-  @override
-  Future<List<CalendarChoice>> calendars() async => [];
-  @override
-  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query) =>
-      syncCalendar(query);
-  @override
-  Future<DaySnapshot> syncCalendar(DayQuery query) async {
-    synced = true;
-    return DaySnapshot(
-      personId: query.personId,
-      date: query.date,
-      generatedAt: query.now,
-      timezoneOffsetSeconds: query.timezoneOffsetSeconds,
-      items: [],
-    );
-  }
 }

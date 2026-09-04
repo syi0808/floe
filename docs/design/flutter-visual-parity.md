@@ -40,7 +40,7 @@
 | all-day / hour step | 50 / 64 | 50 / 64 |
 | mobile event inset | 68 / 18 | 68 / 18 |
 
-이 값은 `visual_capture_test.dart`에서 검증한다. 픽셀 단위 완전 일치나 임의의 일치율을 주장하지 않는다. Chromium과 Flutter의 글꼴 rasterization, native scrollbar, 그림자에는 차이가 남을 수 있다.
+이 값은 이전 구현 시점의 비교 기록이다. 현재 Flutter 디자인·인터랙션 자동 테스트는 유지하지 않으며 프리뷰에서 수동으로 검토한다. 최신 구현 기준은 `flutter-prototype-parity.md`를 참고한다. 픽셀 단위 완전 일치나 임의의 일치율을 주장하지 않는다.
 
 ## 의도적으로 유지한 차이와 데이터 경계
 
@@ -69,7 +69,6 @@ npm run dev -- --host 127.0.0.1
 ```sh
 node apps/client/tool/capture_prototype.mjs /tmp/floe-parity
 cd apps/client
-flutter test test/visual_capture_test.dart --dart-define=VISUAL_OUTPUT=/tmp/floe-parity
 flutter run -d macos -t lib/main_preview.dart
 ```
 
