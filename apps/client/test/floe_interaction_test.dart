@@ -1,9 +1,11 @@
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:figma_squircle/figma_squircle.dart';
 
 void main() {
   test('theme removes ripple and resolves quiet hover states', () {
@@ -25,6 +27,39 @@ void main() {
       textStyle.overlayColor!.resolve({WidgetState.pressed}),
       Colors.transparent,
     );
+    expect(
+      theme.filledButtonTheme.style!.minimumSize!.resolve({}),
+      const Size(44, 44),
+    );
+    expect(
+      theme.filledButtonTheme.style!.shape!.resolve({}),
+      isA<SmoothRectangleBorder>(),
+    );
+  });
+
+  testWidgets('shared squircle owns continuous fill and clipping', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: FloeSquircle(
+          size: FloeSquircleSize.lg,
+          child: SizedBox.square(dimension: 80),
+        ),
+      ),
+    );
+
+    final material = tester.widget<Material>(
+      find.descendant(
+        of: find.byType(FloeSquircle),
+        matching: find.byType(Material),
+      ),
+    );
+    expect(material.shape, isA<SmoothRectangleBorder>());
+    final shape = material.shape! as SmoothRectangleBorder;
+    expect(shape.borderRadius.topLeft.cornerSmoothing, .82);
+    expect(floeSquircleBorder(FloeSquircleSize.md).side, BorderSide.none);
+    expect(material.clipBehavior, Clip.antiAlias);
   });
 
   testWidgets('pointer press scales and releases with no lasting transform', (

@@ -34,9 +34,11 @@ Wednesday, Sep 2
 - Now / Next가 가장 강하다.
 - 먼 미래는 시각적으로 약하게 한다.
 - Event / Task / Note는 의미가 구분되지만 서로 경쟁하지 않는다.
-- Floe Intervention도 하나의 별도 dashboard가 아니라 하루 흐름 안에 배치한다.
+- Floe Intervention은 별도 dashboard가 아니다. 일반 제안은 contextual rail, 좁은 화면에서는 예약된 inline slot을 사용한다. 특정 time block과 직접 관련된 제안은 해당 block 가장자리에 표준 Floe squircle button 하나를 둘 수 있지만 timeline 위의 말풍선으로 표현하지 않는다.
 - 데이터 원본의 모든 metadata를 기본 화면에서 보여주지 않는다.
 - 검색/입력은 최대한 하나로 유지한다.
+
+상세한 화면 구성과 반응형 동작은 [`docs/design/screens/day-canvas.md`](../../design/screens/day-canvas.md)를 따른다.
 
 ## 내부 모델과 UI projection 분리
 

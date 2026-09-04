@@ -1,74 +1,67 @@
 ---
 version: alpha
-name: Floe — Quiet Current
-description: Calm architectural clarity, softened by glacial light and precise motion.
+name: Floe — Calm Flow
+description: A quiet, contextual personal workspace shaped by continuous squircles, soft light, and restrained violet.
 colors:
-  primary: "#4B64D8"
-  on-primary: "#FFFFFF"
-  primary-50: "#F3F6FF"
-  primary-100: "#E7ECFF"
-  primary-200: "#CED8FF"
-  primary-300: "#AAB9FF"
-  primary-400: "#7E94F4"
-  primary-500: "#6078E8"
-  primary-600: "#4B64D8"
-  primary-700: "#3F50B5"
-  primary-800: "#354493"
-  primary-900: "#303C75"
+  primary-50: "#F7F5FF"
+  primary-100: "#EFEBFF"
+  primary-200: "#DED6FF"
+  primary-300: "#C4B5FD"
+  primary-400: "#9B86F7"
+  primary-500: "#7C63EE"
+  primary-600: "#654BE0"
+  primary-700: "#5138BF"
+  primary-800: "#432F98"
+  primary-900: "#372878"
   neutral-0: "#FFFFFF"
-  neutral-50: "#F8F9FB"
-  neutral-100: "#F1F3F6"
-  neutral-200: "#E3E6EB"
-  neutral-300: "#CCD1D9"
-  neutral-400: "#9DA4AF"
-  neutral-500: "#707884"
-  neutral-600: "#505761"
-  neutral-800: "#272B31"
-  neutral-950: "#111317"
-  aqua-50: "#EFFBFA"
-  aqua-100: "#D5F5F2"
-  aqua-200: "#AEEBE6"
-  aqua-300: "#78D8D2"
-  aqua-400: "#49BDB8"
-  aqua-500: "#2F9D99"
-  aqua-600: "#267D7A"
-  aqua-700: "#246461"
-  violet-50: "#F8F4FF"
-  violet-100: "#EEE5FF"
-  violet-200: "#DDCEFF"
-  violet-300: "#C4A8FF"
-  violet-400: "#A67BF6"
-  violet-500: "#8B5DE0"
-  violet-600: "#7045BB"
-  violet-700: "#5A3895"
-  success-50: "#F0FAF4"
-  success-100: "#DDF4E5"
-  success-200: "#BDE8CB"
-  success-400: "#59B879"
-  success-600: "#2D7D49"
-  success-800: "#245D39"
-  warning-50: "#FFF9EB"
-  warning-100: "#FFF0C7"
-  warning-200: "#FBD981"
-  warning-400: "#DDAA36"
-  warning-600: "#946215"
-  warning-800: "#654313"
-  error-50: "#FFF4F2"
-  error-100: "#FFE2DD"
-  error-200: "#FFC5BB"
-  error-400: "#E97969"
-  error-600: "#B8463A"
-  error-700: "#9D3E34"
-  error-800: "#7E342D"
-  canvas: "{colors.neutral-50}"
+  neutral-25: "#FBFAFF"
+  neutral-50: "#F8F7FB"
+  neutral-100: "#F1EFF6"
+  neutral-200: "#E8E6F0"
+  neutral-300: "#D2CEDC"
+  neutral-400: "#A8A2B4"
+  neutral-500: "#777184"
+  neutral-600: "#5B5668"
+  neutral-700: "#403C4A"
+  neutral-800: "#292632"
+  neutral-900: "#1B1922"
+  neutral-950: "#15182B"
+  blue-50: "#F1F6FF"
+  blue-100: "#E4EEFF"
+  blue-300: "#A9C8FA"
+  blue-500: "#3D86EC"
+  blue-700: "#225EBC"
+  blue-900: "#173B71"
+  mint-50: "#F0FAF7"
+  mint-100: "#DDF5ED"
+  mint-300: "#8DDCC2"
+  mint-500: "#43B590"
+  mint-700: "#267B62"
+  mint-900: "#194D3F"
+  amber-50: "#FFF8ED"
+  amber-100: "#FFEBCB"
+  amber-300: "#F8C66B"
+  amber-500: "#E99B20"
+  amber-700: "#A55E0D"
+  amber-900: "#663909"
+  coral-50: "#FFF4F2"
+  coral-100: "#FFE2DD"
+  coral-300: "#F6A69C"
+  coral-500: "#E7675D"
+  coral-700: "#A63D37"
+  coral-900: "#652A27"
+  canvas: "{colors.neutral-25}"
   surface: "{colors.neutral-0}"
-  surface-subtle: "{colors.neutral-100}"
+  surface-subtle: "{colors.neutral-50}"
   text-primary: "{colors.neutral-950}"
   text-secondary: "{colors.neutral-600}"
   text-tertiary: "{colors.neutral-500}"
   border: "{colors.neutral-200}"
   border-strong: "{colors.neutral-300}"
   focus: "{colors.primary-600}"
+  success: "{colors.mint-700}"
+  warning: "{colors.amber-700}"
+  error: "{colors.coral-700}"
 typography:
   display-lg:
     fontFamily: Inter, Pretendard, system-ui, sans-serif
@@ -127,12 +120,12 @@ typography:
     fontFeature: "tnum"
 rounded:
   none: 0px
-  xs: 4px
-  sm: 6px
-  md: 10px
-  lg: 14px
-  xl: 20px
-  full: 9999px
+  sq-xs: 8px
+  sq-sm: 12px
+  sq-md: 16px
+  sq-lg: 20px
+  sq-xl: 28px
+  sq-frame: 32px
 spacing:
   none: 0px
   xxs: 2px
@@ -148,252 +141,174 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.primary-600}"
-    textColor: "{colors.on-primary}"
+    textColor: "{colors.neutral-0}"
     typography: "{typography.label-lg}"
-    rounded: "{rounded.sm}"
-    padding: 12px
-    height: 40px
-  button-primary-hover:
-    backgroundColor: "{colors.primary-700}"
-    textColor: "{colors.on-primary}"
-  button-primary-pressed:
-    backgroundColor: "{colors.primary-800}"
-    textColor: "{colors.on-primary}"
+    rounded: "{rounded.sq-sm}"
+    padding: 12px 16px
+    height: 44px
   button-secondary:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text-primary}"
+    borderColor: "{colors.border}"
     typography: "{typography.label-lg}"
-    rounded: "{rounded.sm}"
-    padding: 12px
-    height: 40px
+    rounded: "{rounded.sq-sm}"
+    padding: 12px 16px
+    height: 44px
   input:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text-primary}"
+    borderColor: "{colors.border}"
     typography: "{typography.body-md}"
-    rounded: "{rounded.md}"
-    padding: 12px
-    height: 44px
+    rounded: "{rounded.sq-md}"
+    padding: 12px 16px
+    height: 48px
   card:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text-primary}"
-    rounded: "{rounded.md}"
+    borderColor: "{colors.border}"
+    rounded: "{rounded.sq-lg}"
     padding: 20px
-  hero-panel:
-    backgroundColor: "{colors.primary-50}"
+  dialog:
+    backgroundColor: "{colors.surface}"
     textColor: "{colors.text-primary}"
-    rounded: "{rounded.lg}"
-    padding: 24px
-  status-chip:
-    backgroundColor: "{colors.surface-subtle}"
-    textColor: "{colors.text-secondary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.full}"
-    padding: 8px
+    borderColor: "{colors.border}"
+    rounded: "{rounded.sq-xl}"
+    padding: 28px
+  focus-ring:
+    color: "{colors.focus}"
+    width: 2px
+    offset: 2px
 ---
 
-# Floe Design System: Quiet Current
+# Floe Design System: Calm Flow
 
-## Overview
+## Status and authority
 
-Floe should feel like a precise workspace lit by soft glacial daylight: calm, spacious, and quietly capable. It combines the architectural black-and-white structure and selective atmospheric gradients seen in Krepling with the airy blue confidence, generous whitespace, and clean product framing seen in Letters. The result must be recognizably Floe rather than a reproduction of either reference.
+This file is Floe's normative design-system entry point. The token block is the target contract; prose defines usage. Detailed specifications live in [`docs/design/`](docs/design/README.md).
 
-The visual character is **simple, modern, square-clean, and spacious**. Surfaces are mostly flat. Corners are controlled rather than bubbly. Strong hierarchy comes from scale, alignment, whitespace, borders, and tonal contrast—not from a pile of cards, badges, shadows, or colors.
+The September 2026 mockups and their accompanying design discussion are **reference material, not a source of truth**. Floe's accepted product principles, domain semantics, accessibility requirements, and tested implementation behavior take precedence. The current Flutter client predates parts of this specification; differences are migration work, not permission to create more one-off styles.
 
-Floe is a personal assistant, not enterprise analytics software. The interface should make the user's day feel lighter. `Now` and `Next` are obvious at a glance, while distant or secondary information recedes. Empty space is functional: it separates moments, reduces cognitive competition, and makes a calm default possible.
+## Experience character
 
-This file follows the [Google Labs DESIGN.md alpha format](https://github.com/google-labs-code/design.md/blob/main/docs/spec.md). YAML tokens are normative; the prose explains how and why to apply them.
+Floe is **calm, contextual, and unobtrusive**. The user's calendar, task, or note is always the protagonist. Floe remains available without constantly speaking.
 
-### Signature Motifs
+Five rules control the visual system:
 
-- **Quiet Current:** One clear vertical or horizontal flow guides the eye. Avoid equal-weight dashboard grids.
-- **Glacial Light:** Large, low-contrast fields may use a restrained blue, aqua, or violet atmospheric gradient.
-- **Dark Instrument:** A focused dark surface may appear for a high-attention mode such as voice capture or review, but never as decorative visual noise.
-- **Structured Float:** Small product previews or context panels may overlap a gradient field with crisp borders and very soft shadow. They must still align to the underlying grid.
-- **One Vivid Moment:** Most screens are neutral. One primary action or one focused state receives saturated color.
+1. **Content first.** Now and Next lead; assistant presence supports them.
+2. **Squircle first.** Shared continuous-corner geometry unifies frames, cards, controls, events, fields, and overlays.
+3. **Soft flat surfaces.** Hierarchy comes from spacing, type, borders, and faint tint before shadow.
+4. **Purple has a job.** Violet identifies Floe, primary actions, focus, and selection—not arbitrary content categories.
+5. **Quiet intervention.** Overview canvases do not accumulate mascots, speech bubbles, or unsolicited modals.
 
-### Reference Interpretation
+## Squircle language
 
-- [Krepling's public reference](https://getdesign.md/design-md/krepling?category=productivity-saas) contributes contrast, modular product framing, selective spectral gradients, and confident square geometry.
-- [Letters' public reference](https://getdesign.md/design-md/letters?category=productivity-saas) contributes pale sky color, white space, approachable precision, and large soft fields around crisp product UI.
-- [Emil Kowalski's design-engineering skill](https://emilkowal.ski/skill) contributes purposeful, responsive, interruptible micro-interactions. Motion is judged by frequency and function, never added merely because it looks impressive.
-- Floe's existing product principles remain controlling: calm by default, Now/Next first, progressive disclosure, and no scoreboards, streaks, or noisy dashboards.
+A Floe squircle is a continuous-corner shape, not a conventional rounded rectangle with a large `border-radius`. Every standard container and control must use the shared `FloeSquircle` primitive or a platform-native continuous-corner equivalent.
 
-## Colors
+- `sq-xs`: compact checkboxes, icon targets, and dense inline controls.
+- `sq-sm`: buttons, segmented items, compact event blocks, and menu rows.
+- `sq-md`: inputs, capture controls, and small cards.
+- `sq-lg`: standard cards, right-rail surfaces, and note cards.
+- `sq-xl`: dialogs, sheets, assistant panels, and large feature surfaces.
+- `sq-frame`: the outer desktop workspace when the operating-system window treatment does not already provide the frame.
 
-Neutral colors carry most of the interface. `neutral-50` is the default canvas and pure white is reserved for focused surfaces, inputs, and raised panels. `neutral-950`, not true black, is the strongest text color.
+Nested shapes step down at least one level. Do not specify per-screen corner values. Pills are exceptional: short status labels, progress tracks, and system-provided text selections may use them. Ordinary buttons, tabs, fields, filters, events, and cards do not.
 
-**Glacier Blue** is Floe's primary family. Use `primary-600` for the single highest-priority action, focus rings, selected navigation, and small moments of assistant presence. Pale primary shades can fill broad surfaces. Do not tint every control blue.
+The mascot is an organic brand mark and is not forced into a squircle container.
 
-**Aqua** expresses local processing, capture, continuity, and positive system presence. **Violet** is reserved for rare intelligence or memory moments. They may meet primary blue in atmospheric gradients, but should not become competing category colors.
+## Color roles
 
-Semantic families retain stable meanings:
+Neutral surfaces carry most of the product. `canvas` is the page ground, white is the focused surface, and `neutral-950` is the strongest ink. Broad tinted surfaces use only the `50` or `100` steps.
 
-- Success is green and confirms completion or a safe finished state.
-- Warning is amber and signals overdue or attention-required states without alarm.
-- Error is red and is limited to destructive actions, failures, and unsafe states.
-- Event, Task, and Note are never distinguished by color alone; use label, icon, shape, and language.
+Violet is reserved for:
 
-### Gradients
+- Floe identity and assistant-originated content;
+- the primary action on a surface;
+- keyboard focus and selected navigation;
+- explicit AI affordances such as the sparkle mark.
 
-Gradients are environmental light, not decoration applied to every component.
+Blue, mint, amber, and coral may distinguish user content categories, but color is always paired with a label, icon, or position. Semantic state wins over category: error is coral, warning is amber, and success is mint.
 
-- **Glacial Field:** `linear-gradient(135deg, #F3F6FF 0%, #D5F5F2 52%, #F8F4FF 100%)`.
-- **Blue Hour:** `linear-gradient(145deg, #AAB9FF 0%, #78D8D2 48%, #C4A8FF 100%)`.
-- **Deep Current:** `linear-gradient(145deg, #111317 0%, #20263B 55%, #303C75 100%)`.
-- Keep saturation low behind text. Text over a gradient must have a stable local contrast of at least WCAG AA.
-- Never use gradient text, rainbow borders, gradient-filled body copy, or gradient primary buttons.
-- At most one meaningful gradient field is visible in a standard application viewport.
+Gradients are limited to the Floe mascot and one optional, low-contrast ambient field per viewport. Do not use gradients on body text, borders, ordinary cards, event blocks, note cards, or primary buttons.
 
-## Typography
+## Typography and content
 
-Typography is modern and neutral, with enough geometric discipline to support the square-clean visual language. Use Inter for Latin text and Pretendard for Korean, followed by the platform system font. Ship the selected fonts or use the native system stack consistently; do not silently mix unrelated sans-serifs.
+- Use Inter for Latin, Pretendard for Korean, then the platform system stack.
+- Keep one compact region to at most three type sizes and two weights.
+- Use sentence case. Avoid broadly tracked uppercase labels.
+- Use tabular figures for times and changing numeric values.
+- Prefer direct, calm copy. Never manufacture urgency or praise routine completion.
+- Review Korean line breaks manually and preserve user-authored text exactly where meaning matters.
 
-- Display styles are compact and confident, with tight tracking. Reserve them for dates, major empty states, and marketing-level statements.
-- Headlines use medium-to-semi-bold weight. Avoid extra-bold typography, which makes the interface feel promotional.
-- Body text favors legibility and generous line height.
-- Labels should be short, sentence case, and never broadly letter-spaced uppercase.
-- Times and changing numeric values use tabular figures through the `numeric` token.
-- Use no more than three type sizes and two weights in one compact product region.
-- Korean line breaks must be reviewed manually; do not create orphaned particles or single-character final lines.
+## Layout hierarchy
 
-## Layout
+Desktop uses a stable application shell: brand and global destinations in the header, a screen-specific toolbar below it, primary content on the left, and an optional contextual rail on the right. The rail supports the current object; it never becomes an equal-weight dashboard column.
 
-The base rhythm is 4px, with 8px and 16px as the most common intervals. Large spatial breaks use 24, 32, 48, 64, or 96px. Avoid arbitrary one-off spacing unless optical alignment requires a documented exception.
+- Standard desktop split: primary content `minmax(0, 7fr)`, rail `minmax(280px, 3fr)`.
+- Collapse the rail below the primary content before reducing readable spacing.
+- Use 32px desktop side padding, 20px below 800px, and 16–20px on narrow touch layouts.
+- `Day / Week / Month` is a Calendar or Day Canvas view control only. It never appears as global navigation on Notes or Task Detail.
+- The home destination is `Today`/Day Canvas. Tasks and Notes are supporting collections, not separate competing products.
 
-### Application Frame
+## Floe presence
 
-- Desktop minimum target: 760×560. Default content canvas: 960–1120px wide.
-- Reading and Day Canvas columns should generally stay between 680px and 780px.
-- Desktop side padding is 32px; reduce to 20px below 800px window width.
-- Mobile side padding is 20px, with 16px allowed for dense timeline rows.
-- Align titles, timeline content, and capture controls to the same dominant edge.
-- Prefer one continuous canvas with deliberate sections over a dashboard of equally weighted cards.
+Floe has three presentation levels:
 
-### Whitespace
+1. **Passive:** one persistent assistant entry in the contextual rail or platform-appropriate command surface.
+2. **Suggestion:** one structured `Floe suggests` card in the contextual rail, or one Floe-icon squircle button anchored to a relevant time block. Activating a timeline button opens one anchored suggestion popover.
+3. **Active:** a panel, sheet, or confirmation dialog opened by the user or by accepting a suggestion.
 
-- Whitespace must express hierarchy: 8–12px within a control, 16–24px within a component, 32–48px between functional sections, and 64–96px between major narrative regions.
-- Empty states may occupy substantial space. Do not fill them with suggestions, statistics, or decorative widgets merely to avoid emptiness.
-- Dense days should fold or progressively disclose secondary details before reducing the base rhythm.
+Do not place conversational bubbles over calendar events or note cards. A timeline may use exactly one icon-only Floe squircle button, slightly overlapping the relevant time block; it replaces the passive rail entry while visible. Do not automatically cover primary content with a modal. A suggestion can lead to an action confirmation, but intelligence only proposes and the user remains in control.
 
-### Responsive Behavior
+## Surface and depth
 
-- Preserve experience parity, not identical composition.
-- On narrow screens, stack Now and Next rather than shrinking their text or padding.
-- Sheets replace centered dialogs on mobile. Their information and action order remain identical.
-- Never introduce horizontal scrolling for primary Day Canvas content.
+- Default surfaces use a 1px border or tonal separation, not both plus a shadow.
+- Hover strengthens the border or adjusts the surface tone.
+- Floating popovers may use `0 8px 24px #15182B14`.
+- Dialogs and sheets may use `0 20px 60px #15182B1F`.
+- Large shadows, glass blur, neon glow, and stacked translucent panels are not Floe patterns.
 
-## Elevation & Depth
+## Interaction and motion
 
-Floe is primarily flat. Depth comes from tonal layers, precise borders, overlap, and local contrast.
-
-- Default surfaces use a 1px `border` on white or no border on a contrasting canvas.
-- Hover may strengthen a border to `border-strong` or change the surface tone. It should not suddenly add a large shadow.
-- Floating popovers use `0 8px 24px #11131714` with a 1px border.
-- Modal sheets use `0 20px 60px #1113171F`. No other standard surface may use this depth.
-- Inner highlights may use a single 1px near-white edge on dark or gradient fields.
-- Avoid glassmorphism as a default. Blur is allowed only when it clarifies overlay hierarchy and does not harm legibility or performance.
-
-## Shapes
-
-The shape language is **architectural softness**: mostly square geometry with just enough rounding to avoid feeling severe.
-
-- Tiny controls, icon containers, and compact buttons use 4–6px radius.
-- Inputs and ordinary cards use 10px radius.
-- Hero fields and large sheets use 14px radius.
-- 20px is exceptional and limited to large atmospheric or onboarding surfaces.
-- Pills are allowed only for status, tags, avatars, and segmented selection—not ordinary buttons, inputs, or cards.
-- Nested radii decrease toward the inside: a 14px outer panel contains 10px cards and 6px controls.
-- Icons use a consistent 1.5–2px stroke and a simple geometric family. Filled icons indicate selection, not decoration.
-
-## Components
-
-### Buttons
-
-- Primary buttons are filled Glacier Blue. Limit each surface or dialog to one.
-- Secondary buttons are white or transparent with a crisp border.
-- Tertiary actions are text or icon controls with an explicit hover target of at least 36×36px desktop and 44×44px touch.
-- Ripple effects are never used. Hover changes only surface, border, icon, or text color; it never creates a spreading ink animation.
-- Pressing an occasional pointer-driven action scales it to `0.97` for 120ms, then returns with the strong ease-out curve. High-frequency navigation uses color feedback only, and keyboard activation remains instant.
-- Disabled controls retain readable labels and lose saturation; do not communicate disabled state through opacity alone.
-
-### Inputs and Capture
-
-- Inputs are clean white fields with a 1px border. Focus uses a 2px `focus` ring without changing layout size.
-- Universal Capture is visually anchored and always easy to find, but it must not resemble a chat composer with a stream of assistant messages.
-- Preserve draft text on recoverable errors. Submission feedback begins immediately.
-- Classification starts unselected. Event, Task, and Note require explicit user choice until a separately approved trustworthy suggestion policy exists.
-
-### Day Canvas
-
-- `Now` is the strongest local element. `Next` is clear but quieter. Distant items recede through typography and spacing, not reduced accessibility contrast.
-- Event, Task, and Note share alignment and rhythm while preserving semantic differences.
-- Timeline rows are open list structures by default, separated with whitespace or hairlines rather than individual raised cards.
-- Overdue state uses amber text plus explicit language or icon; never red alone.
-- Conflicts are calm but unmistakable. Explain the conflict before offering an action.
-
-### Dialogs, Sheets, and Popovers
-
-- Dialogs enter from `scale(0.96)` and opacity 0, never `scale(0)`.
-- Centered modals transform from their center. Popovers and menus transform from the edge closest to their trigger.
-- Preserve the user's input and focus context after closing or reversing an interaction.
-- Destructive confirmations name the affected object and action. Never rely on color alone.
-
-### Feedback and Progress
-
-- Prefer local progress on the affected control or row over a global blocking spinner.
-- A successful capture should settle into the timeline with a short spatial transition; do not celebrate routine actions with confetti.
-- Toasts are for transient confirmation, not required reading. Errors that need action remain near the source.
-- Loading placeholders preserve the final geometry to prevent layout jumps.
-
-### Motion System
-
-Motion is a hierarchy of feedback, not a layer of spectacle.
-
-**Decision rule:** first ask how frequently the interaction occurs. Keyboard-driven or 100-times-per-day actions do not animate. Frequent hover and navigation receive only subtle color or border feedback. Occasional dialogs, sheets, and toasts may use standard motion. Rare onboarding moments may carry restrained delight.
-
-**Purpose rule:** every animation must provide feedback, preserve spatial continuity, explain a state change, or prevent a jarring replacement. If its only purpose is to look impressive, remove it.
-
-**Timing:**
+Motion provides feedback or spatial continuity. It is never decorative.
 
 - Press feedback: 100–140ms.
-- Hover, color, and border transitions: 120–160ms.
-- Tooltip and compact popover: 140–180ms.
-- Dropdown and segmented selection: 160–220ms.
-- Dialog and sheet: 200–280ms.
-- Routine product animations should remain below 300ms.
+- Color and border transitions: 120–160ms.
+- Popovers: 140–180ms.
+- Segmented selection: 160–220ms.
+- Dialogs and sheets: 200–280ms.
+- Enter/exit easing: `cubic-bezier(0.23, 1, 0.32, 1)`.
 
-**Easing:**
+Frequent keyboard navigation does not animate. Reduced-motion mode removes translation, scale, parallax, and springs while retaining brief opacity or color changes that preserve comprehension.
 
-- Enter and exit: strong ease-out, `cubic-bezier(0.23, 1, 0.32, 1)`; Flutter `Cubic(0.23, 1, 0.32, 1)`.
-- Movement or morph already on screen: ease-in-out, `cubic-bezier(0.77, 0, 0.175, 1)`.
-- Gesture-driven sheet: `cubic-bezier(0.32, 0.72, 0, 1)` or an interruptible low-bounce spring.
-- Constant determinate motion only: linear.
-- Never use ease-in for direct UI feedback.
+## Accessibility baseline
 
-Animate transform and opacity where practical. Avoid animating layout dimensions in frequently updated lists. Transitions should be interruptible and reverse naturally from their current state. Use springs only for gesture momentum or directly manipulated objects; keep bounce between 0.1 and 0.2 and avoid bounce in ordinary controls.
+- Meet WCAG 2.2 AA contrast for text, controls, focus, and meaningful graphics.
+- Provide a visible 2px focus ring with 2px separation.
+- Use at least 44×44px touch targets and 36×36px pointer targets.
+- Preserve semantics and reading order when the rail stacks.
+- Support keyboard operation, screen readers, reduced motion, high contrast, and 200% text scaling.
+- Never communicate type, selection, completion, warning, or Floe authorship by color alone.
 
-Respect reduced-motion settings. Remove translation, scaling, parallax, and spring movement while keeping short opacity or color transitions that preserve comprehension. Touch devices must not inherit hover-only motion.
+## Prohibited patterns
 
-## Do's and Don'ts
+- Dense productivity dashboards, scores, streaks, or badge walls.
+- Chat-first home screens or multiple competing assistant entry points.
+- Floating mascot speech bubbles on overview content.
+- Unsolicited centered assistant modals.
+- Per-screen radii or direct `border-radius: 9999px` for ordinary controls.
+- Full-card categorical gradients or saturated tinted card grids.
+- Sparkle icons on non-Floe content.
+- More than one saturated primary action in a surface.
 
-### Do
+## Detailed specifications
 
-- Do make one thing obviously important and let everything else support it.
-- Do use neutral space, alignment, and typography before adding containers.
-- Do use one restrained atmospheric gradient to establish a signature moment.
-- Do keep Event, Task, and Note semantically distinct without turning them into competing color categories.
-- Do provide immediate press, focus, loading, success, and error feedback.
-- Do preserve input during errors and make transitions interruptible.
-- Do verify WCAG AA contrast, keyboard navigation, focus visibility, screen reader labels, 200% text scaling, and reduced motion.
-- Do use the exact tokens in this file; create a reviewed token rather than an untracked color or spacing value.
-
-### Don't
-
-- Don't build a dense analytics dashboard, scorecard, streak system, badge wall, or chat-first home screen.
-- Don't make every section a floating rounded card.
-- Don't use excessive pills, bubbly 20px radii, heavy shadows, glass blur, or neon glow.
-- Don't use gradients on buttons, borders, text, small controls, or more than one major field per viewport.
-- Don't animate keyboard actions, routine list navigation, or anything without a functional reason.
-- Don't animate from `scale(0)`, use slow ease-in feedback, or exceed 300ms for routine interaction.
-- Don't distinguish meaning by color alone or use low-contrast gray for required information.
-- Don't copy Krepling, Letters, or any individual designer literally; translate their strengths through Floe's calm personal-assistant purpose.
+- [Design documentation map](docs/design/README.md)
+- [Foundations](docs/design/foundations.md)
+- [Components](docs/design/components.md)
+- [Application shell](docs/design/screens/application-shell.md)
+- [Day Canvas](docs/design/screens/day-canvas.md)
+- [Notes](docs/design/screens/notes.md)
+- [Task Detail](docs/design/screens/task-detail.md)
+- [Assistant and interventions](docs/design/assistant-and-interventions.md)
+- [Accessibility and motion](docs/design/accessibility-and-motion.md)
+- [Reference analysis](docs/design/reference-analysis.md)

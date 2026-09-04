@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_mascot.dart';
 import '../../../app/floe_motion.dart';
+import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
 import '../application/day_gateway.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
+import 'day_appearance.dart';
+
+enum _DestinationView { today, tasks, notes }
 
 class PersonalDayScreen extends StatefulWidget {
   const PersonalDayScreen({
@@ -22,6 +28,8 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen> {
   late final PersonalDayController controller;
   final captureController = TextEditingController();
+  _DestinationView destination = _DestinationView.today;
+  String? selectedTaskId;
 
   @override
   void initState() {
@@ -42,431 +50,2099 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
-    builder: (context, _) => Scaffold(
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) => Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 860),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  constraints.maxWidth < 800 ? FloeSpace.lg : FloeSpace.xl,
-                  FloeSpace.base,
-                  constraints.maxWidth < 800 ? FloeSpace.lg : FloeSpace.xl,
-                  FloeSpace.lg,
-                ),
-                child: Column(
-                  children: [
-                    _Toolbar(controller),
-                    if (controller.errorMessage case final message?)
-                      MaterialBanner(
-                        content: Text(message),
-                        actions: [
-                          TextButton(
-                            onPressed: controller.clearError,
-                            child: const Text('닫기'),
+    builder: (context, _) => LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth <= 780;
+        return Scaffold(
+          backgroundColor: narrow
+              ? FloePalette.neutral25
+              : const Color(0xFFF5F3FA),
+          body: SafeArea(
+            minimum: EdgeInsets.all(narrow ? 0 : FloeSpace.base),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1500),
+                child: FloeSquircle(
+                  size: FloeSquircleSize.frame,
+                  fill: FloePalette.neutral25,
+                  borderWidth: narrow ? 0 : 1,
+                  clipBehavior: narrow ? Clip.none : Clip.antiAlias,
+                  padding: EdgeInsets.all(narrow ? 0 : 1),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: SingleChildScrollView(
+                          padding: EdgeInsets.fromLTRB(
+                            narrow ? FloeSpace.md : 120,
+                            narrow
+                                ? (constraints.maxWidth <= 430 ? 52 : 58)
+                                : 72,
+                            narrow ? FloeSpace.md : 36,
+                            narrow ? 112 : 28,
                           ),
-                        ],
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _workspace(narrow),
+                              if (destination == _DestinationView.today &&
+                                  selectedTaskId == null)
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    top: narrow ? 16 : 22,
+                                  ),
+                                  child: _CaptureBar(
+                                    textController: captureController,
+                                    pending: controller.commandPending,
+                                    submit: _capture,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
-                    Expanded(child: _body()),
-                    const SizedBox(height: FloeSpace.base),
-                    _CaptureBar(
-                      textController: captureController,
-                      pending: controller.commandPending,
-                      submit: _capture,
-                    ),
-                  ],
+                      _AdaptiveNavigation(
+                        narrow: narrow,
+                        selected: destination,
+                        onSelected: _selectDestination,
+                      ),
+                      Positioned(
+                        top: narrow ? 10 : 30,
+                        right: narrow ? 8 : 36,
+                        child: IconButton(
+                          tooltip: '설정',
+                          style: const ButtonStyle(
+                            backgroundColor: WidgetStatePropertyAll(
+                              Colors.transparent,
+                            ),
+                            overlayColor: WidgetStatePropertyAll(
+                              Colors.transparent,
+                            ),
+                          ),
+                          onPressed: () => _showComingSoon(context),
+                          icon: const Icon(LucideIcons.settings, size: 20),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     ),
   );
 
-  Widget _body() {
+  Widget _workspace(bool narrow) {
     if (controller.loadState == DayLoadState.loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const _LoadingDay();
     }
     if (controller.loadState == DayLoadState.failure) {
-      return Center(
-        child: PressableScale(
-          child: FilledButton.icon(
-            onPressed: controller.load,
-            icon: const Icon(Icons.refresh),
-            label: const Text('다시 불러오기'),
+      return _FailureDay(retry: controller.load);
+    }
+    final snapshot = controller.snapshot!;
+    final selectedTask = _taskById(snapshot, selectedTaskId);
+    if (selectedTask != null) {
+      return _TaskDetailScreen(
+        task: selectedTask,
+        snapshot: snapshot,
+        narrow: narrow,
+        onBack: () => setState(() => selectedTaskId = null),
+        onComplete: _setTaskCompleted,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (controller.errorMessage case final message?)
+          _ErrorNotice(message: message, dismiss: controller.clearError),
+        switch (destination) {
+          _DestinationView.today => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _DayToolbar(controller, narrow: narrow),
+              _content(narrow, snapshot),
+            ],
+          ),
+          _DestinationView.tasks => _TasksScreen(
+            snapshot: snapshot,
+            disabled: controller.commandPending,
+            onComplete: _setTaskCompleted,
+            onOpen: (task) => setState(() => selectedTaskId = task.id),
+            onDelete: controller.deleteItem,
+          ),
+          _DestinationView.notes => _NotesScreen(
+            notes: snapshot.items.whereType<NoteItem>().toList(),
+            narrow: narrow,
+          ),
+        },
+      ],
+    );
+  }
+
+  Widget _content(bool narrow, DaySnapshot snapshot) {
+    final primary = _PrimaryDay(
+      snapshot: snapshot,
+      onOpenTask: (task) => setState(() => selectedTaskId = task.id),
+    );
+    final rail = _ContextRail(
+      snapshot: snapshot,
+      disabled: controller.commandPending,
+      complete: _setTaskCompleted,
+      delete: controller.deleteItem,
+      onOpenTask: (task) => setState(() => selectedTaskId = task.id),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (MediaQuery.sizeOf(context).width <= 1080) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              primary,
+              SizedBox(height: narrow ? 16 : 24),
+              rail,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 7, child: primary),
+            const SizedBox(width: 24),
+            SizedBox(
+              width: ((constraints.maxWidth - 24) * 0.3).clamp(
+                288,
+                double.infinity,
+              ),
+              child: rail,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _selectDestination(_DestinationView value) {
+    setState(() {
+      destination = value;
+      selectedTaskId = null;
+    });
+  }
+
+  Future<void> _setTaskCompleted(TaskItem task, bool completed) async {
+    await controller.setTaskCompleted(task, completed);
+    if (!mounted || controller.errorMessage != null) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(completed ? '할 일을 완료했어요.' : '완료를 취소했어요.'),
+          action: SnackBarAction(
+            label: '실행 취소',
+            onPressed: () => controller.setTaskCompleted(task, !completed),
           ),
         ),
       );
-    }
-    final snapshot = controller.snapshot!;
-    return ListView(
-      children: [
-        _NowNext(snapshot),
-        const SizedBox(height: 20),
-        if (snapshot.items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: FloeSpace.xxxl),
-            child: _EmptyState(),
-          )
-        else
-          for (final (index, item) in snapshot.items.indexed) ...[
-            _Row(
-              item: item,
-              snapshot: snapshot,
-              disabled: controller.commandPending,
-              complete: controller.setTaskCompleted,
-              delete: controller.deleteItem,
-            ),
-            if (index < snapshot.items.length - 1) const Divider(height: 1),
-          ],
-      ],
-    );
   }
 
   Future<void> _capture() async {
     if (!await controller.submitCapture(captureController.text) || !mounted) {
       return;
     }
-    final saved = await showGeneralDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: FloePalette.neutral950.withValues(alpha: 0.28),
-      transitionDuration: FloeMotion.dialogDuration,
-      pageBuilder: (context, animation, secondaryAnimation) => Center(
-        child: _ClassificationDialog(
-          capture: controller.pendingCapture!,
-          now: controller.pendingCapture!.capturedAt,
-          classify: controller.classify,
-        ),
-      ),
-      transitionBuilder: (context, animation, secondaryAnimation, child) =>
-          FloeFadeScaleTransition(animation: animation, child: child),
+    final dialog = _ClassificationDialog(
+      capture: controller.pendingCapture!,
+      now: controller.pendingCapture!.capturedAt,
+      classify: controller.classify,
     );
-    if (saved == true) {
-      captureController.clear();
+    final saved = MediaQuery.sizeOf(context).width < 720
+        ? await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            backgroundColor: Colors.transparent,
+            builder: (context) => dialog,
+          )
+        : await showGeneralDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            barrierColor: FloePalette.neutral950.withValues(alpha: 0.28),
+            transitionDuration: FloeMotion.dialogDuration,
+            pageBuilder: (context, animation, secondaryAnimation) =>
+                Center(child: dialog),
+            transitionBuilder: (
+              context,
+              animation,
+              secondaryAnimation,
+              child,
+            ) => FloeFadeScaleTransition(animation: animation, child: child),
+          );
+    if (saved == true) captureController.clear();
+  }
+
+  Future<void> _reserveBreak(EventItem event) async {
+    if (controller.commandPending) return;
+    final end = event.endsAt.add(const Duration(minutes: 20));
+    final conflict = controller.snapshot!.items.whereType<EventItem>().any(
+      (candidate) =>
+          !candidate.isAllDay &&
+          candidate.startsAt.isBefore(end) &&
+          candidate.endsAt.isAfter(event.endsAt),
+    );
+    if (conflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This time overlaps another event.')),
+      );
+      return;
     }
+    if (!await controller.submitCapture('Reserved break')) return;
+    await controller.classify(
+      EventDraft(title: 'Reserved break', startsAt: event.endsAt, endsAt: end),
+    );
   }
 }
 
-class _Toolbar extends StatelessWidget {
-  const _Toolbar(this.controller);
-  final PersonalDayController controller;
+class _AdaptiveNavigation extends StatelessWidget {
+  const _AdaptiveNavigation({
+    required this.narrow,
+    required this.selected,
+    required this.onSelected,
+  });
+  final bool narrow;
+  final _DestinationView selected;
+  final ValueChanged<_DestinationView> onSelected;
+
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final brand = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: FloePalette.neutral950,
-              borderRadius: BorderRadius.circular(FloeRadius.sm),
-            ),
-            alignment: Alignment.center,
-            child: const Text(
-              'F',
-              style: TextStyle(
-                color: FloePalette.neutral0,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: FloeSpace.md),
-          Flexible(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Floe', style: FloeType.label),
-                Text(
-                  _date(controller.query.date),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-      final navigation = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: '이전 날',
-            onPressed: () => controller.moveDay(-1),
-            icon: const Icon(Icons.chevron_left),
-          ),
-          TextButton(onPressed: controller.goToday, child: const Text('오늘')),
-          IconButton(
-            tooltip: '다음 날',
-            onPressed: () => controller.moveDay(1),
-            icon: const Icon(Icons.chevron_right),
-          ),
-        ],
-      );
-      if (constraints.maxWidth < 520) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: FloeSpace.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) {
+    if (narrow) {
+      return Positioned(
+        right: FloeSpace.md,
+        bottom: 10,
+        left: FloeSpace.md,
+        child: FloeSquircle(
+          size: FloeSquircleSize.lg,
+          elevation: 4,
+          padding: const EdgeInsets.all(7),
+          child: Row(
             children: [
-              brand,
-              const SizedBox(height: FloeSpace.sm),
-              Align(alignment: Alignment.centerRight, child: navigation),
+              for (final view in _DestinationView.values)
+                Expanded(
+                  child: _DestinationButton(
+                    view: view,
+                    selected: selected == view,
+                    onPressed: () => onSelected(view),
+                  ),
+                ),
             ],
           ),
-        );
-      }
-      return SizedBox(
-        height: 72,
-        child: Row(
-          children: [
-            Expanded(child: brand),
-            navigation,
-          ],
         ),
       );
-    },
+    }
+    return Positioned(
+      top: 28,
+      bottom: 28,
+      left: 18,
+      width: 64,
+      child: Column(
+        children: [
+          const SizedBox(height: 4),
+          const FloeMascot(size: 40),
+          const SizedBox(height: 32),
+          for (final view in _DestinationView.values) ...[
+            _DestinationButton(
+              view: view,
+              selected: selected == view,
+              onPressed: () => onSelected(view),
+            ),
+            const SizedBox(height: FloeSpace.sm),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DestinationButton extends StatelessWidget {
+  const _DestinationButton({
+    required this.view,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final _DestinationView view;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  String get label => switch (view) {
+    _DestinationView.today => 'Today',
+    _DestinationView.tasks => 'Tasks',
+    _DestinationView.notes => 'Notes',
+  };
+
+  IconData get icon => switch (view) {
+    _DestinationView.today => LucideIcons.calendarDays,
+    _DestinationView.tasks => LucideIcons.listTodo,
+    _DestinationView.notes => LucideIcons.notebookPen,
+  };
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    selected: selected,
+    button: true,
+    child: FloeSquircle(
+      size: FloeSquircleSize.md,
+      fill: selected ? FloePalette.primary100 : Colors.transparent,
+      borderWidth: 0,
+      child: InkWell(
+        onTap: selected ? null : onPressed,
+        customBorder: floeSquircleBorder(FloeSquircleSize.md),
+        child: SizedBox(
+          width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
+          height: MediaQuery.sizeOf(context).width <= 780 ? 58 : 56,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 19,
+                color: selected
+                    ? FloePalette.primary700
+                    : FloePalette.neutral600,
+              ),
+              const SizedBox(height: FloeSpace.xs),
+              Text(
+                label,
+                style: FloeType.label.copyWith(
+                  fontSize: 10,
+                  color: selected
+                      ? FloePalette.primary700
+                      : FloePalette.neutral600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 
-class _CaptureBar extends StatelessWidget {
-  const _CaptureBar({
-    required this.textController,
-    required this.pending,
-    required this.submit,
-  });
-
-  final TextEditingController textController;
-  final bool pending;
-  final VoidCallback submit;
+class _DayToolbar extends StatelessWidget {
+  const _DayToolbar(this.controller, {required this.narrow});
+  final PersonalDayController controller;
+  final bool narrow;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(FloeSpace.md),
-    decoration: BoxDecoration(
-      color: FloePalette.neutral0,
-      border: Border.all(color: FloePalette.neutral200),
-      borderRadius: BorderRadius.circular(FloeRadius.lg),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x0F111317),
-          blurRadius: 24,
-          offset: Offset(0, 8),
-        ),
-      ],
-    ),
-    child: Row(
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 430;
+    final leading = Row(
       children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: FloeSpace.xs),
-          child: Icon(Icons.add_circle_outline, color: FloePalette.primary600),
-        ),
-        const SizedBox(width: FloeSpace.sm),
-        Expanded(
-          child: TextField(
-            key: const Key('capture-field'),
-            controller: textController,
-            enabled: !pending,
-            onSubmitted: (value) {
-              if (!pending && value.trim().isNotEmpty) submit();
-            },
-            decoration: const InputDecoration(
-              labelText: '빠른 캡처',
-              hintText: '일정, 할 일, 생각을 담아보세요',
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
+        for (final direction in [-1, 1]) ...[
+          FloeSquircle(
+            size: FloeSquircleSize.md,
+            child: IconButton(
+              tooltip: direction == -1 ? '이전 날' : '다음 날',
+              constraints: BoxConstraints.tightFor(
+                width: compact ? 40 : 44,
+                height: compact ? 40 : 44,
+              ),
+              style: IconButton.styleFrom(
+                fixedSize: Size.square(compact ? 40 : 44),
+                minimumSize: Size.square(compact ? 40 : 44),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              padding: EdgeInsets.zero,
+              onPressed: () => controller.moveDay(direction),
+              icon: Icon(
+                direction == -1
+                    ? LucideIcons.chevronLeft
+                    : LucideIcons.chevronRight,
+                size: 20,
+              ),
+            ),
+          ),
+          SizedBox(width: compact ? 6 : 12),
+        ],
+        SizedBox(width: narrow ? 2 : 14),
+        Flexible(
+          child: Text(
+            _date(controller.query.date),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: FloeType.headline.copyWith(
+              fontSize: compact ? 17 : 20,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
-        const SizedBox(width: FloeSpace.md),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: textController,
-          builder: (context, value, _) {
-            final enabled = !pending && value.text.trim().isNotEmpty;
-            return Tooltip(
-              message: '캡처 저장',
-              child: PressableScale(
-                enabled: enabled,
-                child: FilledButton(
-                  onPressed: enabled ? submit : null,
-                  child: pending
-                      ? const SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: FloePalette.neutral0,
-                          ),
-                        )
-                      : const Text('담기'),
-                ),
-              ),
-            );
-          },
+        SizedBox(width: narrow ? 8 : 12),
+        TextButton(
+          style: TextButton.styleFrom(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(0, 40),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: TextStyle(
+              fontFamily: 'Pretendard',
+              fontSize: compact ? 12 : 16,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+          onPressed: controller.goToday,
+          child: const Text('Today'),
         ),
+      ],
+    );
+    final views = _CalendarViewSelector(
+      onUnavailable: () => _showComingSoon(context),
+    );
+    return Padding(
+      padding: EdgeInsets.only(top: 12, bottom: narrow ? 16 : 12),
+      child: narrow
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                leading,
+                SizedBox(height: compact ? 14 : 12),
+                views,
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(child: leading),
+                const SizedBox(width: 24),
+                SizedBox(width: 300, child: views),
+              ],
+            ),
+    );
+  }
+}
+
+class _CalendarViewSelector extends StatelessWidget {
+  const _CalendarViewSelector({required this.onUnavailable});
+  final VoidCallback onUnavailable;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.field,
+    padding: const EdgeInsets.all(5),
+    child: Row(
+      spacing: 4,
+      children: [
+        for (final (index, label) in ['Day', 'Week', 'Month'].indexed)
+          Expanded(
+            child: FloeSquircle(
+              size: FloeSquircleSize.md,
+              fill: index == 0 ? FloePalette.primary100 : Colors.transparent,
+              borderWidth: 0,
+              child: TextButton(
+                onPressed: index == 0 ? null : onUnavailable,
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  foregroundColor: FloePalette.neutral600,
+                  disabledForegroundColor: FloePalette.primary700,
+                  minimumSize: Size(
+                    0,
+                    MediaQuery.sizeOf(context).width <= 430 ? 38 : 40,
+                  ),
+                  textStyle: const TextStyle(
+                    fontFamily: 'Pretendard',
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                child: Text(label),
+              ),
+            ),
+          ),
       ],
     ),
   );
 }
 
-class _NowNext extends StatelessWidget {
-  const _NowNext(this.snapshot);
+class _TasksScreen extends StatelessWidget {
+  const _TasksScreen({
+    required this.snapshot,
+    required this.disabled,
+    required this.onComplete,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
   final DaySnapshot snapshot;
-  EventItem? _find(String? id) {
-    for (final event in snapshot.items.whereType<EventItem>()) {
-      if (event.id == id) {
-        return event;
-      }
-    }
-    return null;
+  final bool disabled;
+  final Future<void> Function(TaskItem, bool) onComplete;
+  final ValueChanged<TaskItem> onOpen;
+  final Future<void> Function(DayItem) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final tasks = snapshot.items.whereType<TaskItem>().toList();
+    final remaining = tasks.where((task) => !task.isCompleted).length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('할 일', style: FloeType.display),
+                  const SizedBox(height: FloeSpace.xs),
+                  Text(
+                    '남은 할 일 $remaining개 · 전체 ${tasks.length}개',
+                    style: FloeType.body,
+                  ),
+                ],
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () => _showComingSoon(context),
+              icon: const Icon(Icons.add),
+              label: const Text('새 할 일'),
+            ),
+          ],
+        ),
+        const SizedBox(height: FloeSpace.xl),
+        FloeSquircle(
+          padding: const EdgeInsets.symmetric(
+            horizontal: FloeSpace.lg,
+            vertical: FloeSpace.sm,
+          ),
+          child: tasks.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(vertical: FloeSpace.xxxl),
+                  child: Center(
+                    child: Text('아직 할 일이 없어요.', style: FloeType.body),
+                  ),
+                )
+              : Column(
+                  children: [
+                    for (final (index, task) in tasks.indexed) ...[
+                      _DayRow(
+                        item: task,
+                        snapshot: snapshot,
+                        disabled: disabled,
+                        complete: onComplete,
+                        delete: onDelete,
+                        onOpen: () => onOpen(task),
+                      ),
+                      if (index < tasks.length - 1)
+                        const Divider(height: 1, indent: 56),
+                    ],
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NotesScreen extends StatefulWidget {
+  const _NotesScreen({required this.notes, required this.narrow});
+  final List<NoteItem> notes;
+  final bool narrow;
+  @override
+  State<_NotesScreen> createState() => _NotesScreenState();
+}
+
+class _NotesScreenState extends State<_NotesScreen> {
+  final search = TextEditingController();
+  bool personalOnly = false;
+  @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final current = _find(snapshot.nowEventId);
-    final next = _find(snapshot.nextEventId);
-    final now = _Hero(
-      label: '지금',
-      title: current?.title ?? '여유로운 시간',
-      meta: current == null ? '진행 중인 일정이 없어요' : '${_time(current.endsAt)}까지',
-      primary: true,
-    );
-    final upcoming = _Hero(
-      label: '다음',
-      title: next?.title ?? '예정된 일정 없음',
-      meta: next == null ? '하루를 가볍게 계획해 보세요' : _time(next.startsAt),
-    );
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(FloeSpace.lg),
-      decoration: BoxDecoration(
-        gradient: FloePalette.glacialField,
-        border: Border.all(color: FloePalette.primary100),
-        borderRadius: BorderRadius.circular(FloeRadius.lg),
+    final query = search.text.trim().toLowerCase();
+    final appearances = DayAppearance.of(context)?.notes ?? {};
+    final notes = widget.notes.where((note) {
+      final appearance = appearances[note.id];
+      return (!personalOnly ||
+              (appearance?.category ?? 'Personal') == 'Personal') &&
+          [
+            note.title,
+            appearance?.excerpt ?? '',
+            appearance?.category ?? '',
+          ].any((text) => text.toLowerCase().contains(query));
+    }).toList();
+    final heading = Text(
+      'All notes · ${widget.notes.length}',
+      style: const TextStyle(
+        fontSize: 18,
+        height: 1.2,
+        fontWeight: FontWeight.w600,
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < 520) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                now,
-                const SizedBox(height: FloeSpace.base),
-                _NextSurface(child: upcoming),
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(flex: 6, child: now),
-              const SizedBox(width: FloeSpace.lg),
-              Expanded(flex: 4, child: _NextSurface(child: upcoming)),
-            ],
-          );
-        },
+    );
+    final searchField = FloeSquircle(
+      size: FloeSquircleSize.field,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: SizedBox(
+        height: 50,
+        child: Row(
+          children: [
+            const Icon(
+              LucideIcons.search,
+              size: 19,
+              color: FloePalette.neutral600,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: search,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(fontSize: 16),
+                decoration: const InputDecoration(
+                  hintText: 'Search notes',
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    final filter = OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        shape: floeSquircleBorder(FloeSquircleSize.md),
+        backgroundColor: personalOnly
+            ? FloePalette.primary100
+            : FloePalette.neutral0,
+        side: const BorderSide(color: FloePalette.neutral200),
+      ),
+      onPressed: () => setState(() => personalOnly = !personalOnly),
+      icon: const Icon(LucideIcons.filter, size: 18),
+      label: const Text('Filter'),
+    );
+    final create = FilledButton.icon(
+      style: FilledButton.styleFrom(
+        shape: floeSquircleBorder(FloeSquircleSize.md),
+      ),
+      onPressed: () => _showComingSoon(context),
+      icon: const Icon(LucideIcons.plus, size: 18),
+      label: const Text('New note'),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(top: 12, bottom: widget.narrow ? 16 : 12),
+          child: widget.narrow || MediaQuery.sizeOf(context).width < 1000
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    heading,
+                    const SizedBox(height: 12),
+                    searchField,
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(child: filter),
+                        const SizedBox(width: 10),
+                        Expanded(child: create),
+                      ],
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: heading),
+                    SizedBox(width: 240, child: searchField),
+                    const SizedBox(width: 10),
+                    filter,
+                    const SizedBox(width: 10),
+                    create,
+                  ],
+                ),
+        ),
+        SizedBox(height: widget.narrow ? 4 : 8),
+        if (notes.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 120),
+            child: Center(
+              child: Text('No notes found', style: FloeType.headline),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = widget.narrow
+                  ? 1
+                  : MediaQuery.sizeOf(context).width > 1080
+                  ? 3
+                  : 2;
+              final gap = widget.narrow ? 14.0 : 22.0;
+              final width =
+                  (constraints.maxWidth - gap * (columns - 1)) / columns;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final note in notes)
+                    SizedBox(
+                      width: width,
+                      child: _NotePreviewCard(
+                        note: note,
+                        onOpen: () => _openNote(context, note, widget.narrow),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _NotePreviewCard extends StatelessWidget {
+  const _NotePreviewCard({required this.note, required this.onOpen});
+  final NoteItem note;
+  final VoidCallback onOpen;
+  @override
+  Widget build(BuildContext context) {
+    final appearance = DayAppearance.of(context)?.notes[note.id];
+    final tone = appearance?.tone ?? ItemTone.violet;
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    return FloeSquircle(
+      fill: Color.lerp(Colors.white, tone.fill, .4)!,
+      borderColor: tone.border,
+      child: InkWell(
+        onTap: onOpen,
+        customBorder: floeSquircleBorder(FloeSquircleSize.lg),
+        child: Padding(
+          padding: EdgeInsets.all(mobile ? 25 : 29),
+          child: IntrinsicHeight(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: mobile ? 160 : 187),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      _ToneDot(color: tone.accent),
+                      const SizedBox(width: 10),
+                      Text(
+                        appearance?.category ?? 'Personal',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          height: 1.2,
+                          fontWeight: FontWeight.w600,
+                          color: FloePalette.neutral600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    note.title,
+                    style: FloeType.headline.copyWith(
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    appearance?.excerpt ?? '',
+                    style: FloeType.body.copyWith(height: 1.65),
+                  ),
+                  const Spacer(),
+                  const SizedBox(height: 24),
+                  Text(
+                    appearance?.timestamp ?? _date(note.createdAt),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.2,
+                      color: FloePalette.neutral500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _Hero extends StatelessWidget {
-  const _Hero({
+class _TaskDetailScreen extends StatefulWidget {
+  const _TaskDetailScreen({
+    required this.task,
+    required this.snapshot,
+    required this.narrow,
+    required this.onBack,
+    required this.onComplete,
+  });
+  final TaskItem task;
+  final DaySnapshot snapshot;
+  final bool narrow;
+  final VoidCallback onBack;
+  final Future<void> Function(TaskItem, bool) onComplete;
+  @override
+  State<_TaskDetailScreen> createState() => _TaskDetailScreenState();
+}
+
+class _TaskDetailScreenState extends State<_TaskDetailScreen> {
+  final Map<String, bool> subtaskChecks = {};
+  bool suggestionVisible = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final appearance = DayAppearance.of(context)?.tasks[widget.task.id];
+    final primary = FloeSquircle(
+      padding: widget.narrow
+          ? EdgeInsets.symmetric(
+              horizontal: MediaQuery.sizeOf(context).width <= 430 ? 21 : 23,
+              vertical: MediaQuery.sizeOf(context).width <= 430 ? 25 : 27,
+            )
+          : const EdgeInsets.all(43),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: widget.narrow ? 0 : 634),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const _ToneDot(color: FloePalette.blue500),
+                const SizedBox(width: 12),
+                Text('Task', style: FloeType.body.copyWith(height: 1.15)),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Text(
+              widget.task.title,
+              style: TextStyle(
+                fontSize: widget.narrow ? 39 : 48,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -1.6,
+                height: 1.2,
+                color: FloePalette.neutral950,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              appearance?.description ?? '아직 설명이 없어요.',
+              style: FloeType.body.copyWith(fontSize: 16, height: 1.65),
+            ),
+            const SizedBox(height: 34),
+            _LabeledValue(
+              label: 'Due',
+              value: widget.task.deadline == null ? 'No due date' : 'Today',
+              color: FloePalette.primary600,
+            ),
+            const SizedBox(height: 16),
+            _LabeledValue(
+              label: 'Time context',
+              value: appearance?.timeContext ?? 'Not scheduled',
+            ),
+            const SizedBox(height: 16),
+            _LabeledValue(
+              label: 'Calendar',
+              value: appearance?.project ?? 'Personal',
+              color: FloePalette.mint700,
+            ),
+            const SizedBox(height: 32),
+            const Divider(height: 1, color: FloePalette.neutral200),
+            const SizedBox(height: 26),
+            const Text(
+              'Subtasks',
+              style: TextStyle(
+                fontSize: 17,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (appearance == null || appearance.subtasks.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Text('아직 하위 작업이 없어요.', style: FloeType.body),
+              ),
+            for (final subtask
+                in appearance?.subtasks ??
+                    <({String title, String duration, bool done})>[])
+              Container(
+                constraints: const BoxConstraints(minHeight: 62),
+                decoration: const BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: FloePalette.neutral200),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      child: Checkbox(
+                        value: subtaskChecks[subtask.title] ?? subtask.done,
+                        onChanged: (value) => setState(
+                          () => subtaskChecks[subtask.title] = value ?? false,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        subtask.title,
+                        style: FloeType.body.copyWith(
+                          color: (subtaskChecks[subtask.title] ?? subtask.done)
+                              ? FloePalette.neutral500
+                              : FloePalette.neutral950,
+                          decoration:
+                              (subtaskChecks[subtask.title] ?? subtask.done)
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      subtask.duration,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: FloePalette.neutral600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _showComingSoon(context),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  foregroundColor: FloePalette.primary600,
+                ),
+                icon: const Icon(LucideIcons.plus, size: 18),
+                label: const Text('Add a subtask'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    final rail = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (suggestionVisible) ...[
+          FloeSquircle(
+            padding: EdgeInsets.all(widget.narrow ? 23 : 27),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const FloeMascot(size: 38),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Floe suggests',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: FloePalette.primary600,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    FloeSquircle(
+                      size: FloeSquircleSize.md,
+                      child: IconButton(
+                        tooltip: 'Dismiss suggestion',
+                        style: IconButton.styleFrom(
+                          fixedSize: const Size.square(36),
+                          minimumSize: const Size.square(36),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        onPressed: () =>
+                            setState(() => suggestionVisible = false),
+                        icon: const Icon(LucideIcons.x, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  appearance?.suggestion ??
+                      'Review the context before starting this task?',
+                  style: FloeType.body.copyWith(height: 1.55),
+                ),
+                const SizedBox(height: 18),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 28,
+                  children: [
+                    TextButton(
+                      onPressed: () => _showComingSoon(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: FloePalette.primary600,
+                        minimumSize: const Size(0, 40),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: const TextStyle(
+                          fontFamily: 'Pretendard',
+                          fontSize: 13,
+                        ),
+                      ),
+                      child: const Text('Review now'),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 40),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: const TextStyle(
+                          fontFamily: 'Pretendard',
+                          fontSize: 13,
+                        ),
+                      ),
+                      onPressed: () =>
+                          setState(() => suggestionVisible = false),
+                      child: const Text('Snooze'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: widget.narrow ? 16 : 20),
+        ],
+        FloeSquircle(
+          fill: FloePalette.primary50,
+          borderColor: FloePalette.primary100,
+          padding: EdgeInsets.all(widget.narrow ? 23 : 27),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 196),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Notes',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  appearance?.note ?? '연결된 노트가 없어요.',
+                  style: FloeType.body.copyWith(height: 1.7),
+                ),
+                const SizedBox(height: 48),
+                const Text(
+                  'Updated this morning',
+                  style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            children: [
+              TextButton.icon(
+                onPressed: widget.onBack,
+                style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                icon: const Icon(LucideIcons.arrowLeft, size: 19),
+                label: const Text('Back to today'),
+              ),
+              const Spacer(),
+              FloeSquircle(
+                size: FloeSquircleSize.md,
+                child: PopupMenuButton<bool>(
+                  tooltip: 'Task options',
+                  onSelected: (completed) =>
+                      widget.onComplete(widget.task, completed),
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: !widget.task.isCompleted,
+                      child: Text(
+                        widget.task.isCompleted
+                            ? 'Mark incomplete'
+                            : 'Complete task',
+                      ),
+                    ),
+                  ],
+                  shape: floeSquircleBorder(FloeSquircleSize.md),
+                  icon: const Icon(LucideIcons.ellipsis, size: 21),
+                ),
+              ),
+            ],
+          ),
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (MediaQuery.sizeOf(context).width <= 1080) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  primary,
+                  SizedBox(height: widget.narrow ? 16 : 24),
+                  rail,
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: primary),
+                const SizedBox(width: 24),
+                SizedBox(
+                  width: ((constraints.maxWidth - 24) * .3).clamp(
+                    288,
+                    double.infinity,
+                  ),
+                  child: rail,
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _LabeledValue extends StatelessWidget {
+  const _LabeledValue({
     required this.label,
-    required this.title,
-    required this.meta,
-    this.primary = false,
+    required this.value,
+    this.color = FloePalette.neutral950,
   });
   final String label;
-  final String title;
-  final String meta;
-  final bool primary;
+  final String value;
+  final Color color;
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisAlignment: MainAxisAlignment.center,
+  Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(
-        label,
-        style: FloeType.label.copyWith(color: FloePalette.primary700),
+      SizedBox(
+        width: MediaQuery.sizeOf(context).width <= 430
+            ? 92
+            : MediaQuery.sizeOf(context).width <= 780
+            ? 110
+            : 150,
+        child: Text(label, style: FloeType.body.copyWith(height: 1.15)),
       ),
-      const SizedBox(height: FloeSpace.sm),
-      Text(
-        title,
-        maxLines: 2,
-        overflow: TextOverflow.fade,
-        style: primary ? FloeType.display : FloeType.headline,
+      Expanded(
+        child: Text(
+          value,
+          style: FloeType.body.copyWith(color: color, height: 1.15),
+        ),
       ),
-      const SizedBox(height: FloeSpace.xs),
-      Text(meta, style: FloeType.body),
     ],
   );
 }
 
-class _NextSurface extends StatelessWidget {
-  const _NextSurface({required this.child});
-  final Widget child;
+Future<void> _openNote(BuildContext context, NoteItem note, bool narrow) async {
+  final detail = _NoteDetail(note: note);
+  if (narrow) {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => detail,
+    );
+  } else {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(child: detail),
+    );
+  }
+}
+
+class _NoteDetail extends StatelessWidget {
+  const _NoteDetail({required this.note});
+  final NoteItem note;
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(FloeSpace.base),
-    decoration: BoxDecoration(
-      color: FloePalette.neutral0,
-      border: Border.all(color: FloePalette.neutral200),
-      borderRadius: BorderRadius.circular(FloeRadius.md),
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.xl,
+    padding: const EdgeInsets.all(FloeSpace.xl),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 640),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('개인 노트', style: FloeType.label),
+              const Spacer(),
+              IconButton(
+                tooltip: '닫기',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          const SizedBox(height: FloeSpace.base),
+          Text(note.title, style: FloeType.display),
+          const SizedBox(height: FloeSpace.sm),
+          Text(_date(note.createdAt), style: FloeType.numeric),
+          const SizedBox(height: FloeSpace.xl),
+          const Text(
+            '사용자가 남긴 원문입니다. 편집 기능은 다음 단계에서 연결됩니다.',
+            style: FloeType.bodyLarge,
+          ),
+          const SizedBox(height: FloeSpace.xl),
+          OutlinedButton.icon(
+            onPressed: () => _showComingSoon(context),
+            icon: const FloeMascot(size: 24),
+            label: const Text('Floe와 함께 보기'),
+          ),
+        ],
+      ),
     ),
-    child: child,
   );
 }
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+class _PrimaryDay extends StatelessWidget {
+  const _PrimaryDay({required this.snapshot, required this.onOpenTask});
+  final DaySnapshot snapshot;
+  final ValueChanged<TaskItem> onOpenTask;
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: FloePalette.primary50,
-            borderRadius: BorderRadius.circular(FloeRadius.md),
+  Widget build(BuildContext context) {
+    return _Timeline(
+      items: snapshot.items,
+      snapshot: snapshot,
+      onOpenTask: onOpenTask,
+    );
+  }
+}
+
+class _ContextRail extends StatelessWidget {
+  const _ContextRail({
+    required this.snapshot,
+    required this.disabled,
+    required this.complete,
+    required this.delete,
+    required this.onOpenTask,
+  });
+  final DaySnapshot snapshot;
+  final bool disabled;
+  final Future<void> Function(TaskItem, bool) complete;
+  final Future<void> Function(DayItem) delete;
+  final ValueChanged<TaskItem> onOpenTask;
+
+  @override
+  Widget build(BuildContext context) {
+    final tasks = snapshot.items.whereType<TaskItem>().toList();
+    final notes = snapshot.items.whereType<NoteItem>().toList();
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    final dailyNote = DayAppearance.of(context)?.dailyNote;
+    final taskCard = FloeSquircle(
+      padding: EdgeInsets.all(mobile ? 23 : 27),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Today’s tasks',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+            ),
           ),
-          child: const Icon(
-            Icons.water_drop_outlined,
-            color: FloePalette.primary600,
+          const SizedBox(height: 16),
+          if (tasks.isEmpty)
+            const Text('오늘 처리할 할 일이 없어요.', style: FloeType.body),
+          for (final task in tasks)
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 64),
+              child: Row(
+                children: [
+                  _ToneDot(color: DayAppearance.tone(context, task.id).accent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => onOpenTask(task),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              task.title,
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.2,
+                                fontWeight: FontWeight.w600,
+                                color: task.isCompleted
+                                    ? FloePalette.neutral500
+                                    : FloePalette.neutral950,
+                                decoration: task.isCompleted
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              task.deadline == null
+                                  ? 'No due date'
+                                  : 'Due today',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                height: 1.2,
+                                color: FloePalette.neutral500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Checkbox(
+                      value: task.isCompleted,
+                      onChanged: disabled
+                          ? null
+                          : (value) => complete(task, value ?? false),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: InkWell(
+              onTap: tasks.isEmpty ? null : () => onOpenTask(tasks.first),
+              child: const SizedBox(
+                height: 32,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'View task detail',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: FloePalette.neutral600,
+                        ),
+                      ),
+                    ),
+                    Icon(LucideIcons.chevronRight, size: 17),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    final noteCard = FloeSquircle(
+      padding: EdgeInsets.all(mobile ? 23 : 27),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 184),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Note for today',
+                    style: TextStyle(
+                      fontSize: 17,
+                      height: 1.2,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Icon(
+                  LucideIcons.notebookPen,
+                  size: 20,
+                  color: FloePalette.neutral600,
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Text(
+              dailyNote ??
+                  (notes.isEmpty ? '오늘의 생각을 남겨보세요.' : notes.first.title),
+              style: FloeType.body.copyWith(height: 1.7),
+            ),
+            const SizedBox(height: 44),
+            const Text(
+              'Updated this morning',
+              style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mobile && MediaQuery.sizeOf(context).width <= 1080) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: taskCard),
+          const SizedBox(width: 20),
+          Expanded(child: noteCard),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        taskCard,
+        SizedBox(height: mobile ? 16 : 20),
+        noteCard,
+      ],
+    );
+  }
+}
+
+class _Timeline extends StatelessWidget {
+  const _Timeline({
+    required this.items,
+    required this.snapshot,
+    required this.onOpenTask,
+  });
+  static const firstHour = 8;
+  static const lastHour = 19;
+  static const hourExtent = 64.0;
+  final List<DayItem> items;
+  final DaySnapshot snapshot;
+  final ValueChanged<TaskItem> onOpenTask;
+
+  @override
+  Widget build(BuildContext context) {
+    final events =
+        items.whereType<EventItem>().where((event) => !event.isAllDay).toList()
+          ..sort((left, right) => left.startsAt.compareTo(right.startsAt));
+    final visible = events
+        .where(
+          (event) =>
+              event.startsAt.hour < lastHour && event.endsAt.hour >= firstHour,
+        )
+        .toList();
+    final current = events
+        .where(
+          (event) =>
+              !event.startsAt.isAfter(snapshot.generatedAt) &&
+              event.endsAt.isAfter(snapshot.generatedAt),
+        )
+        .firstOrNull;
+    final suggestion = current ?? visible.firstOrNull;
+    final hasBreakWindow =
+        suggestion != null &&
+        !events.any(
+          (event) =>
+              event.startsAt.isBefore(
+                suggestion.endsAt.add(const Duration(minutes: 20)),
+              ) &&
+              event.endsAt.isAfter(suggestion.endsAt),
+        );
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    final compact = MediaQuery.sizeOf(context).width <= 430;
+    final markerSize = compact ? 48.0 : 52.0;
+    return FloeSquircle(
+      key: const Key('timeline-card'),
+      padding: const EdgeInsets.all(1),
+      child: Column(
+        children: [
+          _AllDayStrip(
+            events: items
+                .whereType<EventItem>()
+                .where((event) => event.isAllDay)
+                .toList(),
+          ),
+          SizedBox(
+            height: 704,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (var hour = firstHour; hour <= lastHour; hour++)
+                  _HourGuide(hour: hour, top: (hour - firstHour) * hourExtent),
+                if (visible.isEmpty)
+                  Positioned(
+                    top: 108,
+                    left: 76,
+                    right: 24,
+                    child: Text(
+                      items.isEmpty ? '오늘은 아직 비어 있어요' : '시간이 지정된 일정이 없어요.',
+                      style: FloeType.body,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                for (final event in visible)
+                  _TimelineBlock(
+                    item: event,
+                    top: (_minutes(event.startsAt) / 60 * hourExtent + 4).clamp(
+                      4,
+                      650,
+                    ),
+                    onOpenTask: onOpenTask,
+                  ),
+                if (_showsCurrentTime)
+                  _TimelineNowMarker(
+                    now: snapshot.generatedAt,
+                    top: _minutes(snapshot.generatedAt) / 60 * hourExtent,
+                  ),
+                if (suggestion != null && hasBreakWindow)
+                  Positioned(
+                    right: mobile ? 12 : 84,
+                    top:
+                        ((_minutes(suggestion.startsAt) +
+                                        suggestion.endsAt
+                                                .difference(suggestion.startsAt)
+                                                .inMinutes /
+                                            2) /
+                                    60 *
+                                    hourExtent -
+                                26)
+                            .clamp(0, 652),
+                    width: markerSize,
+                    height: markerSize,
+                    child: _TimelineSuggestionButton(item: suggestion),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool get _showsCurrentTime {
+    final now = snapshot.generatedAt;
+    return now.year == snapshot.date.year &&
+        now.month == snapshot.date.month &&
+        now.day == snapshot.date.day &&
+        now.hour >= firstHour &&
+        now.hour < lastHour;
+  }
+
+  static int _minutes(DateTime value) =>
+      value.hour * 60 + value.minute - firstHour * 60;
+}
+
+extension<T> on Iterable<T> {
+  T? get firstOrNull {
+    final iterator = this.iterator;
+    return iterator.moveNext() ? iterator.current : null;
+  }
+}
+
+class _AllDayStrip extends StatelessWidget {
+  const _AllDayStrip({required this.events});
+  final List<EventItem> events;
+
+  @override
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    return Container(
+      height: 50,
+      padding: EdgeInsets.only(left: mobile ? 14 : 22, right: mobile ? 14 : 16),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: FloePalette.neutral200)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: mobile ? 62 : 112,
+            child: Text('All-day', style: FloeType.body.copyWith(fontSize: 13)),
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) => Align(
+                alignment: Alignment.centerLeft,
+                child: events.isEmpty
+                    ? const SizedBox.shrink()
+                    : SizedBox(
+                        width: mobile
+                            ? constraints.maxWidth.clamp(0, 230)
+                            : (constraints.maxWidth * .72).clamp(0, 320),
+                        height: 34,
+                        child: FloeSquircle(
+                          size: FloeSquircleSize.md,
+                          fill: FloePalette.mint50,
+                          borderColor: FloePalette.mint100,
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          child: Row(
+                            children: [
+                              const _ToneDot(color: Color(0xFF43B590)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  events.first.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: mobile ? 12 : 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HourGuide extends StatelessWidget {
+  const _HourGuide({required this.hour, required this.top});
+  final int hour;
+  final double top;
+
+  @override
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    return Positioned(
+      top: top,
+      right: mobile ? 12 : 16,
+      left: mobile ? 14 : 22,
+      child: Row(
+        children: [
+          SizedBox(
+            width: mobile ? 48 : 82,
+            child: Text(
+              _hourLabel(hour),
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.2,
+                color: FloePalette.neutral600,
+              ),
+            ),
+          ),
+          const Expanded(
+            child: CustomPaint(
+              size: Size(double.infinity, 1),
+              painter: _HourRule(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HourRule extends CustomPainter {
+  const _HourRule();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = FloePalette.neutral200
+      ..strokeWidth = 1;
+    for (double offset = 0; offset < size.width; offset += 7) {
+      canvas.drawLine(
+        Offset(offset, .5),
+        Offset((offset + 3).clamp(0, size.width), .5),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_HourRule oldDelegate) => false;
+}
+
+class _TimelineBlock extends StatelessWidget {
+  const _TimelineBlock({
+    required this.item,
+    required this.top,
+    required this.onOpenTask,
+  });
+  final EventItem item;
+  final double top;
+  final ValueChanged<TaskItem> onOpenTask;
+
+  @override
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    final compact = MediaQuery.sizeOf(context).width <= 430;
+    final tone = DayAppearance.tone(context, item.id, ItemTone.blue);
+    return Positioned(
+      top: top,
+      right: mobile ? 18 : 110,
+      left: compact
+          ? 68
+          : mobile
+          ? 74
+          : 112,
+      child: FloeSquircle(
+        size: FloeSquircleSize.md,
+        fill: tone.fill,
+        borderColor: tone.border,
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 16,
+          vertical: compact ? 9 : 11,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: _ToneDot(color: tone.accent),
+            ),
+            SizedBox(width: compact ? 8 : 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: compact ? 12 : 13,
+                      height: 1.2,
+                      fontWeight: FontWeight.w600,
+                      color: FloePalette.neutral950,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _timeRange(item.startsAt, item.endsAt),
+                    style: TextStyle(
+                      fontSize: compact ? 10 : 12,
+                      height: 1.2,
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToneDot extends StatelessWidget {
+  const _ToneDot({required this.color});
+  final Color color;
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    child: const SizedBox.square(dimension: 10),
+  );
+}
+
+class _TimelineSuggestionButton extends StatefulWidget {
+  const _TimelineSuggestionButton({required this.item});
+  final DayItem item;
+  @override
+  State<_TimelineSuggestionButton> createState() =>
+      _TimelineSuggestionButtonState();
+}
+
+class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
+  bool open = false;
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Floe 제안 열기',
+    child: FloeSquircle(
+      size: FloeSquircleSize.floating,
+      elevation: 4,
+      fill: open ? FloePalette.primary50 : FloePalette.neutral0,
+      borderWidth: open ? 2 : 1,
+      borderColor: open ? FloePalette.primary600 : FloePalette.primary200,
+      child: InkWell(
+        onTap: () async {
+          if (open) return;
+          setState(() => open = true);
+          await _showTimelineSuggestion(context, widget.item);
+          if (mounted) setState(() => open = false);
+        },
+        customBorder: floeSquircleBorder(FloeSquircleSize.floating),
+        child: Center(
+          child: FloeMascot(
+            size: MediaQuery.sizeOf(context).width <= 430 ? 31 : 34,
           ),
         ),
-        const SizedBox(height: FloeSpace.base),
-        const Text('오늘은 아직 비어 있어요', style: FloeType.headline),
-        const SizedBox(height: FloeSpace.sm),
-        Text('아래에서 일정, 할 일, 생각을 담아보세요.', style: FloeType.body),
+      ),
+    ),
+  );
+}
+
+class _TimelineNowMarker extends StatelessWidget {
+  const _TimelineNowMarker({required this.now, required this.top});
+  final DateTime now;
+  final double top;
+  @override
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    return Positioned(
+      top: top,
+      right: mobile ? 10 : 12,
+      left: mobile ? 6 : 8,
+      child: IgnorePointer(
+        child: Row(
+          children: [
+            SizedBox(
+              width: mobile ? 58 : 78,
+              child: Text(
+                _clock(now),
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.2,
+                  color: FloePalette.primary600,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            SizedBox(width: mobile ? 6 : 8),
+            Container(
+              width: mobile ? 7 : 8,
+              height: mobile ? 7 : 8,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: FloePalette.primary600,
+              ),
+            ),
+            SizedBox(width: mobile ? 6 : 8),
+            const Expanded(
+              child: SizedBox(
+                height: 1.5,
+                child: ColoredBox(color: FloePalette.primary600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _showTimelineSuggestion(BuildContext context, DayItem item) async {
+  if (item is! EventItem) return;
+  final owner = context.findAncestorStateOfType<_PersonalDayScreenState>();
+  final anchor = context.findRenderObject()! as RenderBox;
+  final origin = anchor.localToGlobal(Offset.zero);
+  final size = MediaQuery.sizeOf(context);
+  final width = (size.width - 40).clamp(0.0, 380.0);
+  final left = (origin.dx + anchor.size.width + 14).clamp(
+    20.0,
+    size.width - width - 20,
+  );
+  final top = (origin.dy - 130).clamp(
+    20.0,
+    (size.height - 380).clamp(20.0, double.infinity),
+  );
+  final nextEvents =
+      owner?.controller.snapshot?.items
+          .whereType<EventItem>()
+          .where(
+            (event) => !event.isAllDay && !event.startsAt.isBefore(item.endsAt),
+          )
+          .toList() ??
+      [];
+  nextEvents.sort((left, right) => left.startsAt.compareTo(right.startsAt));
+  final add = await showGeneralDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Dismiss suggestion',
+    barrierColor: Colors.transparent,
+    transitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (context, animation, secondaryAnimation) => Stack(
+      children: [
+        Positioned(
+          left: left,
+          top: top,
+          width: width,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: size.height - top - 20),
+            child: SingleChildScrollView(
+              child: _TimelineSuggestionPanel(
+                item: item,
+                next: nextEvents.firstOrNull,
+              ),
+            ),
+          ),
+        ),
       ],
     ),
   );
+  if (add == true && owner != null && owner.mounted) {
+    await owner._reserveBreak(item);
+  }
 }
 
-class _Row extends StatelessWidget {
-  const _Row({
+class _TimelineSuggestionPanel extends StatefulWidget {
+  const _TimelineSuggestionPanel({required this.item, this.next});
+  final EventItem item;
+  final EventItem? next;
+  @override
+  State<_TimelineSuggestionPanel> createState() =>
+      _TimelineSuggestionPanelState();
+}
+
+class _TimelineSuggestionPanelState extends State<_TimelineSuggestionPanel> {
+  bool reasonOpen = false;
+  @override
+  Widget build(BuildContext context) {
+    final mobile = MediaQuery.sizeOf(context).width <= 780;
+    final gap = mobile ? 14.0 : 16.0;
+    final end = widget.item.endsAt.add(const Duration(minutes: 20));
+    final add = FilledButton(
+      onPressed: () => Navigator.pop(context, true),
+      child: const Text('Add break'),
+    );
+    final keep = OutlinedButton(
+      onPressed: () => Navigator.pop(context),
+      child: const Text('Keep current'),
+    );
+    return FloeSquircle(
+      size: FloeSquircleSize.xl,
+      elevation: 8,
+      padding: EdgeInsets.all(mobile ? 21 : 25),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const FloeMascot(size: 32),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Floe suggestion',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: FloePalette.primary600,
+                  ),
+                ),
+              ),
+              FloeSquircle(
+                size: FloeSquircleSize.md,
+                child: IconButton(
+                  tooltip: 'Close suggestion',
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size.square(36),
+                    minimumSize: const Size.square(36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(LucideIcons.x, size: 18),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: gap),
+          const Text(
+            'Reserve a 20-minute break?',
+            style: TextStyle(
+              fontSize: 22,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -.55,
+            ),
+          ),
+          SizedBox(height: gap),
+          Text(
+            'Your afternoon is busy. Add a break after ${widget.item.title}${widget.next == null ? '?' : ', before ${widget.next!.title}?'}',
+            style: FloeType.body.copyWith(height: 1.55),
+          ),
+          SizedBox(height: gap),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FloeSquircle(
+              size: FloeSquircleSize.md,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.clock3, size: 17),
+                  const SizedBox(width: 8),
+                  Text(
+                    _timeRange(widget.item.endsAt, end),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: gap),
+          if (mobile) ...[
+            add,
+            const SizedBox(height: 10),
+            keep,
+          ] else
+            Row(
+              children: [
+                Expanded(child: add),
+                const SizedBox(width: 10),
+                Expanded(child: keep),
+              ],
+            ),
+          SizedBox(height: gap),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: FloePalette.primary600,
+              ),
+              onPressed: () => setState(() => reasonOpen = !reasonOpen),
+              child: const Text(
+                'Why this suggestion?',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+          if (reasonOpen) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            Text(
+              '${widget.item.title} ends at ${_clock(widget.item.endsAt)}. A short break keeps a transition between activities.',
+              style: FloeType.body.copyWith(fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _hourLabel(int hour) {
+  final suffix = hour < 12 ? 'AM' : 'PM';
+  final normalized = hour % 12 == 0 ? 12 : hour % 12;
+  return '$normalized $suffix';
+}
+
+class _DayRow extends StatelessWidget {
+  const _DayRow({
     required this.item,
     required this.snapshot,
     required this.disabled,
     required this.complete,
     required this.delete,
+    this.onOpen,
   });
   final DayItem item;
   final DaySnapshot snapshot;
   final bool disabled;
   final Future<void> Function(TaskItem, bool) complete;
   final Future<void> Function(DayItem) delete;
+  final VoidCallback? onOpen;
   @override
   Widget build(BuildContext context) {
     final task = item is TaskItem ? item as TaskItem : null;
@@ -484,55 +2160,53 @@ class _Row extends StatelessWidget {
     final label = switch (item) {
       EventItem() => '일정',
       TaskItem() => '할 일',
-      NoteItem() => '생각',
+      NoteItem() => '노트',
     };
     return ListTile(
+      onTap: onOpen,
       minTileHeight: 72,
-      contentPadding: const EdgeInsets.symmetric(
-        horizontal: FloeSpace.md,
-        vertical: FloeSpace.xs,
+      contentPadding: EdgeInsets.zero,
+      leading: SizedBox.square(
+        dimension: 44,
+        child: Center(
+          child: task != null
+              ? Checkbox(
+                  value: task.isCompleted,
+                  onChanged: disabled
+                      ? null
+                      : (value) => complete(task, value ?? false),
+                )
+              : Icon(
+                  item is EventItem
+                      ? Icons.calendar_today_outlined
+                      : Icons.notes_outlined,
+                  color: item is EventItem
+                      ? FloePalette.blue500
+                      : FloePalette.mint700,
+                  size: 20,
+                ),
+        ),
       ),
-      leading: task != null
-          ? Checkbox(
-              value: task.isCompleted,
-              onChanged: disabled
-                  ? null
-                  : (value) => complete(task, value ?? false),
-            )
-          : Icon(
-              item is EventItem
-                  ? Icons.calendar_today_outlined
-                  : Icons.notes_outlined,
-              color: FloePalette.neutral500,
-            ),
-      title: Row(
-        children: [
-          Text(label, style: FloeType.label),
-          const SizedBox(width: FloeSpace.sm),
-          Expanded(
-            child: Text(
-              item.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: FloeType.bodyLarge.copyWith(
-                decoration: task?.isCompleted == true
-                    ? TextDecoration.lineThrough
-                    : null,
-              ),
-            ),
-          ),
-        ],
+      title: Text(
+        item.title,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: FloeType.bodyLarge.copyWith(
+          decoration: task?.isCompleted == true
+              ? TextDecoration.lineThrough
+              : null,
+        ),
       ),
       subtitle: Text(
-        overdue ? '$subtitle · 기한 지남' : subtitle,
-        style: TextStyle(
+        overdue ? '$label · $subtitle · 기한 지남' : '$label · $subtitle',
+        style: FloeType.body.copyWith(
           color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
         ),
       ),
       trailing: IconButton(
         tooltip: '${item.title} 삭제',
         onPressed: disabled ? null : () => _confirmDelete(context),
-        icon: const Icon(Icons.delete_outline, size: 20),
+        icon: const Icon(Icons.more_horiz, size: 20),
       ),
     );
   }
@@ -544,26 +2218,142 @@ class _Row extends StatelessWidget {
         title: const Text('항목을 삭제할까요?'),
         content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
         actions: [
-          PressableScale(
-            child: TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소'),
-            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
           ),
-          PressableScale(
-            child: FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: FloeTheme.destructiveButtonStyle,
-              child: const Text('삭제'),
-            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FloeTheme.destructiveButtonStyle,
+            child: const Text('삭제'),
           ),
         ],
       ),
     );
-    if (confirmed == true) {
-      await delete(item);
-    }
+    if (confirmed == true) await delete(item);
   }
+}
+
+class _CaptureBar extends StatelessWidget {
+  const _CaptureBar({
+    required this.textController,
+    required this.pending,
+    required this.submit,
+  });
+  final TextEditingController textController;
+  final bool pending;
+  final VoidCallback submit;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.field,
+    padding: const EdgeInsets.fromLTRB(18, 9, 11, 9),
+    child: Row(
+      children: [
+        const Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
+        const SizedBox(width: 14),
+        Expanded(
+          child: TextField(
+            key: const Key('capture-field'),
+            controller: textController,
+            enabled: !pending,
+            style: TextStyle(
+              fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
+            ),
+            onSubmitted: (value) {
+              if (!pending && value.trim().isNotEmpty) submit();
+            },
+            decoration: const InputDecoration(
+              hintText: 'Capture an event, task, or thought',
+              hintStyle: TextStyle(color: FloePalette.neutral500),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: textController,
+          builder: (context, value, _) {
+            final enabled = !pending && value.text.trim().isNotEmpty;
+            return Tooltip(
+              message: '캡처 저장',
+              child: SizedBox.square(
+                dimension: 44,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    shape: floeSquircleBorder(FloeSquircleSize.md),
+                  ),
+                  onPressed: enabled ? submit : null,
+                  child: pending
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(LucideIcons.arrowUp, size: 19),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    ),
+  );
+}
+
+class _LoadingDay extends StatelessWidget {
+  const _LoadingDay();
+  @override
+  Widget build(BuildContext context) => const FloeSquircle(
+    size: FloeSquircleSize.xl,
+    fill: FloePalette.neutral50,
+    padding: EdgeInsets.all(FloeSpace.xxxl),
+    child: Center(child: CircularProgressIndicator()),
+  );
+}
+
+class _FailureDay extends StatelessWidget {
+  const _FailureDay({required this.retry});
+  final VoidCallback retry;
+  @override
+  Widget build(BuildContext context) => Center(
+    child: FilledButton.icon(
+      onPressed: retry,
+      icon: const Icon(Icons.refresh),
+      label: const Text('다시 불러오기'),
+    ),
+  );
+}
+
+class _ErrorNotice extends StatelessWidget {
+  const _ErrorNotice({required this.message, required this.dismiss});
+  final String message;
+  final VoidCallback dismiss;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: FloeSpace.base),
+    child: FloeSquircle(
+      size: FloeSquircleSize.md,
+      fill: FloePalette.error50,
+      borderColor: FloePalette.coral100,
+      padding: const EdgeInsets.symmetric(
+        horizontal: FloeSpace.base,
+        vertical: FloeSpace.sm,
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: FloePalette.error600),
+          const SizedBox(width: FloeSpace.md),
+          Expanded(child: Text(message)),
+          TextButton(onPressed: dismiss, child: const Text('닫기')),
+        ],
+      ),
+    ),
+  );
 }
 
 enum _Kind { event, task, note }
@@ -595,6 +2385,7 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
   );
   DateTime? taskDeadline;
   String? validationError;
+
   @override
   void dispose() {
     text.dispose();
@@ -602,80 +2393,91 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('어디에 담을까요?'),
-    content: SizedBox(
-      width: 440,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('입력 원문', style: Theme.of(context).textTheme.bodyMedium),
-          Text(widget.capture.originalInput),
-          const SizedBox(height: 18),
-          SegmentedButton<_Kind>(
-            segments: const [
-              ButtonSegment(value: _Kind.event, label: Text('일정')),
-              ButtonSegment(value: _Kind.task, label: Text('할 일')),
-              ButtonSegment(value: _Kind.note, label: Text('생각')),
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: FloeSquircle(
+      size: FloeSquircleSize.xl,
+      padding: const EdgeInsets.all(FloeSpace.xl),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('어디에 담을까요?', style: FloeType.headlineLarge),
+              const SizedBox(height: FloeSpace.lg),
+              const Text('입력 원문', style: FloeType.label),
+              const SizedBox(height: FloeSpace.xs),
+              Text(widget.capture.originalInput, style: FloeType.bodyLarge),
+              const SizedBox(height: FloeSpace.lg),
+              SegmentedButton<_Kind>(
+                segments: const [
+                  ButtonSegment(value: _Kind.event, label: Text('일정')),
+                  ButtonSegment(value: _Kind.task, label: Text('할 일')),
+                  ButtonSegment(value: _Kind.note, label: Text('생각')),
+                ],
+                selected: kind == null ? {} : {kind!},
+                emptySelectionAllowed: true,
+                onSelectionChanged: pending
+                    ? null
+                    : (value) => setState(() {
+                        kind = value.isEmpty ? null : value.first;
+                        validationError = null;
+                      }),
+              ),
+              const SizedBox(height: FloeSpace.base),
+              TextField(
+                controller: text,
+                decoration: InputDecoration(
+                  labelText: kind == _Kind.event ? '제목' : '내용',
+                  errorText: validationError,
+                ),
+              ),
+              const SizedBox(height: FloeSpace.md),
+              FloeAnimatedSwap(
+                child: switch (kind) {
+                  _Kind.event => _EventFields(
+                    key: const ValueKey('event-fields'),
+                    start: startTime,
+                    end: endTime,
+                    onStart: (value) => setState(() => startTime = value),
+                    onEnd: (value) => setState(() => endTime = value),
+                  ),
+                  _Kind.task => _TaskFields(
+                    key: const ValueKey('task-fields'),
+                    deadline: taskDeadline,
+                    onChanged: (value) => setState(() => taskDeadline = value),
+                    baseDate: widget.now,
+                  ),
+                  _Kind.note ||
+                  null => const SizedBox.shrink(key: ValueKey('note-fields')),
+                },
+              ),
+              const SizedBox(height: FloeSpace.lg),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: pending
+                        ? null
+                        : () => Navigator.pop(context, false),
+                    child: const Text('나중에'),
+                  ),
+                  const SizedBox(width: FloeSpace.sm),
+                  FilledButton(
+                    onPressed: pending || kind == null ? null : _submit,
+                    child: const Text('분류하여 추가'),
+                  ),
+                ],
+              ),
             ],
-            selected: kind == null ? {} : {kind!},
-            emptySelectionAllowed: true,
-            onSelectionChanged: pending
-                ? null
-                : (value) => setState(() {
-                    kind = value.isEmpty ? null : value.first;
-                    validationError = null;
-                  }),
           ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: text,
-            decoration: InputDecoration(
-              labelText: kind == _Kind.event ? '제목' : '내용',
-              errorText: validationError,
-            ),
-          ),
-          const SizedBox(height: FloeSpace.md),
-          FloeAnimatedSwap(
-            child: switch (kind) {
-              _Kind.event => _EventFields(
-                key: const ValueKey('event-fields'),
-                start: startTime,
-                end: endTime,
-                onStart: (value) => setState(() => startTime = value),
-                onEnd: (value) => setState(() => endTime = value),
-              ),
-              _Kind.task => _TaskFields(
-                key: const ValueKey('task-fields'),
-                deadline: taskDeadline,
-                onChanged: (value) => setState(() => taskDeadline = value),
-                baseDate: widget.now,
-              ),
-              _Kind.note ||
-              null => const SizedBox.shrink(key: ValueKey('note-fields')),
-            },
-          ),
-        ],
+        ),
       ),
     ),
-    actions: [
-      PressableScale(
-        enabled: !pending,
-        child: TextButton(
-          onPressed: pending ? null : () => Navigator.pop(context, false),
-          child: const Text('나중에'),
-        ),
-      ),
-      PressableScale(
-        enabled: !pending && kind != null,
-        child: FilledButton(
-          onPressed: pending || kind == null ? null : _submit,
-          child: const Text('분류하여 추가'),
-        ),
-      ),
-    ],
   );
+
   Future<void> _submit() async {
     final value = text.text.trim();
     if (value.isEmpty) {
@@ -715,7 +2517,6 @@ class _EventFields extends StatelessWidget {
   final TimeOfDay end;
   final ValueChanged<TimeOfDay> onStart;
   final ValueChanged<TimeOfDay> onEnd;
-
   @override
   Widget build(BuildContext context) => Row(
     children: [
@@ -799,10 +2600,32 @@ class _TaskFields extends StatelessWidget {
   );
 }
 
+void _showComingSoon(BuildContext context) {
+  ScaffoldMessenger.of(context)
+      .showSnackBar(const SnackBar(content: Text('이 화면은 다음 단계에서 연결할게요.')));
+}
+
 DateTime _onDate(DateTime date, TimeOfDay time) =>
     DateTime(date.year, date.month, date.day, time.hour, time.minute);
 
 String _time(DateTime value) =>
     '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+
 String _date(DateTime value) =>
-    '${value.month}월 ${value.day}일 ${['월', '화', '수', '목', '금', '토', '일'][value.weekday - 1]}요일';
+    '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value.month - 1]} ${value.day}';
+
+String _clock(DateTime value) =>
+    '${value.hour % 12 == 0 ? 12 : value.hour % 12}:${value.minute.toString().padLeft(2, '0')} ${value.hour < 12 ? 'AM' : 'PM'}';
+
+String _timeRange(DateTime start, DateTime end) {
+  final first = _clock(start);
+  return '${start.hour < 12 == (end.hour < 12) ? first.substring(0, first.length - 3) : first} – ${_clock(end)}';
+}
+
+TaskItem? _taskById(DaySnapshot snapshot, String? id) {
+  if (id == null) return null;
+  for (final task in snapshot.items.whereType<TaskItem>()) {
+    if (task.id == id) return task;
+  }
+  return null;
+}
