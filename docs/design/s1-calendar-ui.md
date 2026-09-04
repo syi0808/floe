@@ -71,6 +71,11 @@ reload, not navigation. Local notes survive simulated integration disconnection.
 Fixed September 2026 fixtures use Asia/Seoul display time and source-specific IDs.
 The Los Angeles event preserves original time; all-day events use exclusive date ends.
 Collected dates are tracked separately. Non-sample dates become empty only after a read.
+Timed fixtures carry numeric start/end minutes. Event position, duration, hour lines
+and the current-time marker share an 08:00 origin and one-pixel-per-minute scale.
+Cards never grow to fit text: short events show fewer fields, with full details in
+their accessible names and detail dialog. Browser measurements confirm 09:30–10:00
+at 90–120px, 11:00–12:00 at 180–240px and 16:00–16:45 at 480–525px on desktop and mobile.
 
 The native implementation still selects one calendar. This prototype and the updated
 plan do not deliver native multi-calendar migration, per-source partial-failure

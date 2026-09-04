@@ -42,13 +42,16 @@ const scenarios = {
   uncollected: 'Date not collected',
   loadError: 'Local data failed to load',
 };
+const timelineStartMinutes = 8 * 60;
+const pixelsPerMinute = 1;
 const externalEvents = [
   {
     id: 'standup',
     calendarId: 'work',
     title: 'A little alignment',
     time: '9:30 – 10:00 AM',
-    top: 90,
+    startMinutes: 9 * 60 + 30,
+    endMinutes: 10 * 60,
     detail: 'Daily stand-up',
     timezone: 'Asia/Seoul',
     original: 'Sep 4, 9:30 – 10:00 AM KST',
@@ -59,7 +62,8 @@ const externalEvents = [
     calendarId: 'work',
     title: 'Make room for the details',
     time: '11:00 AM – 12:00 PM',
-    top: 180,
+    startMinutes: 11 * 60,
+    endMinutes: 12 * 60,
     detail: 'Design review',
     timezone: 'Asia/Seoul',
     original: 'Sep 4, 11:00 AM – 12:00 PM KST',
@@ -69,7 +73,8 @@ const externalEvents = [
     calendarId: 'team',
     title: 'Across time zones',
     time: '4:00 – 4:45 PM',
-    top: 480,
+    startMinutes: 16 * 60,
+    endMinutes: 16 * 60 + 45,
     detail: 'San Francisco team catch-up',
     timezone: 'America/Los_Angeles',
     original: 'Sep 4, 12:00 – 12:45 AM PDT',
@@ -445,9 +450,14 @@ export function CalendarScreen({ page, onNavigate }) {
                 <div
                   className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
                   aria-label="Day timeline"
+                  style={{ height: 10 * 60 * pixelsPerMinute }}
                 >
                   {Array.from({ length: 10 }, (_, index) => (
-                    <div className="s1-hour" key={index} style={{ top: index * 60 }}>
+                    <div
+                      className="s1-hour"
+                      key={index}
+                      style={{ top: index * 60 * pixelsPerMinute }}
+                    >
                       <time>
                         {index + 8 > 12 ? index - 4 : index + 8}
                         {index + 8 >= 12 ? ' PM' : ' AM'}
@@ -461,7 +471,18 @@ export function CalendarScreen({ page, onNavigate }) {
                         key={event.id}
                         disabled={phase === 'syncing'}
                         className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
-                        style={{ top: event.top }}
+                        data-density={
+                          event.endMinutes - event.startMinutes <= 30
+                            ? 'compact'
+                            : event.endMinutes - event.startMinutes < 60
+                              ? 'medium'
+                              : 'full'
+                        }
+                        aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
+                        style={{
+                          top: (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
+                          height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
+                        }}
                         onClick={() => setModal(event)}
                       >
                         <span
@@ -522,7 +543,10 @@ export function CalendarScreen({ page, onNavigate }) {
                     </div>
                   )}
                   {dayOffset === 0 && (
-                    <div className="s1-now" style={{ top: 388 }}>
+                    <div
+                      className="s1-now"
+                      style={{ top: (14 * 60 + 28 - timelineStartMinutes) * pixelsPerMinute }}
+                    >
                       <time>2:28 PM</time>
                       <span />
                     </div>

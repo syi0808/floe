@@ -238,6 +238,7 @@
 }
 .s1-hour {
   position: absolute;
+  height: 1px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -260,7 +261,9 @@
   left: 80px;
   right: 20px;
   width: calc(100% - 100px);
-  padding: 13px 16px;
+  min-height: 0;
+  padding: 6px 16px;
+  overflow: hidden;
   align-items: flex-start;
   justify-content: flex-start;
   text-align: left;
@@ -295,15 +298,29 @@
   font-size: 12px;
   font-weight: 600;
   line-height: 1.3;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .s1-event time {
   font-size: 11px;
   color: var(--ink-secondary);
-  margin-top: 6px;
+  margin-top: 2px;
 }
 .s1-event small {
-  margin-top: 3px;
+  margin-top: 2px;
   font-size: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.s1-event[data-density='compact'] time,
+.s1-event[data-density='compact'] small,
+.s1-event[data-density='medium'] small {
+  display: none;
+}
+.s1-event.sq-button:active:not(:disabled) {
+  transform: none;
 }
 .s1-event > svg {
   flex-shrink: 0;
@@ -315,6 +332,7 @@
 }
 .s1-now {
   position: absolute;
+  height: 1px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -866,7 +884,7 @@
     left: 64px;
     right: 12px;
     width: calc(100% - 76px);
-    padding: 12px;
+    padding: 6px 12px;
   }
   .s1-event > svg {
     display: none;
