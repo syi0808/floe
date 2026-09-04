@@ -139,7 +139,21 @@
   line-height: 1.6;
 }
 .s1-agenda .s1-surface-content {
+  position: relative;
   padding: 0;
+}
+.s1-calendar-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--primary-600);
+  font-size: 13px;
 }
 .s1-all-day {
   min-height: 62px;

@@ -355,7 +355,7 @@ export function CalendarScreen({ page, onNavigate }) {
               </SquircleButton>
             )}
           </div>
-          {phase !== 'connected' && phase !== 'empty' && (
+          {!['connected', 'empty', 'syncing'].includes(phase) && (
             <StatusBanner
               phase={phase}
               dateLabel={dateShort}
@@ -385,10 +385,17 @@ export function CalendarScreen({ page, onNavigate }) {
               </Surface>
             ) : (
               <Surface className="s1-agenda">
+                {phase === 'syncing' && (
+                  <div className="s1-calendar-loading" role="status">
+                    <LoaderCircle size={25} className="s1-spin" aria-hidden="true" />
+                    <span>Loading calendar…</span>
+                  </div>
+                )}
                 <div className="s1-all-day">
                   <span>All day</span>
                   {hasCache ? (
                     <button
+                      disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
                           id: 'all-day',
@@ -409,6 +416,7 @@ export function CalendarScreen({ page, onNavigate }) {
                   {hasCache && (
                     <button
                       className="s1-more-all-day"
+                      disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
                           id: 'multi-day',
@@ -444,6 +452,7 @@ export function CalendarScreen({ page, onNavigate }) {
                     externalEvents.map((event) => (
                       <SquircleButton
                         key={event.id}
+                        disabled={phase === 'syncing'}
                         className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
                         style={{ top: event.top }}
                         onClick={() => setModal(event)}
@@ -463,7 +472,7 @@ export function CalendarScreen({ page, onNavigate }) {
                         <LockKeyhole size={13} />
                       </SquircleButton>
                     ))}
-                  {!hasCache && (
+                  {!hasCache && phase !== 'syncing' && (
                     <div className="s1-empty-day">
                       <img src={mascotUrl} alt="" />
                       <h3>

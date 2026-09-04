@@ -8,7 +8,9 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 - Today starts with the date and one refresh action, then the unified day timeline.
   No marketing heading, timezone label in the toolbar, source selector, healthy-status
   badge, imported-data footer, or prototype lab. Use sentence case, including “All day.”
-- Date navigation automatically reads the destination date with a loading banner.
+- Date navigation automatically reads the destination date with a loading overlay
+  inside the calendar box, not a page-level banner. Cached event actions are disabled
+  during loading and the surrounding layout stays in place.
   Retain that date's existing cache during loading, preserve other dates, and show an
   empty result only after success. Use the requested offset, not the previous date.
   Navigation does not request permission or bypass existing access/provider errors.
@@ -49,7 +51,7 @@ no lab, state dropdown, badge or link to the old reference.
 | --- | --- |
 | `connected` (default) | Unified sample events; no healthy-status banner/badge on Today |
 | `disconnected` | Optional connection invitation; local items remain usable |
-| `syncing` | Cache retained, reading banner, duplicate refresh disabled |
+| `syncing` | Cache retained under calendar-local loading overlay, duplicate refresh disabled |
 | `cached` | Saved data with collection time and refresh action |
 | `offline` | Last good cache, failure timestamp and retry |
 | `denied` | Local day and permission recovery |
