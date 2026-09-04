@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Settings } from 'lucide-react';
-import { SQUIRCLE_RADIUS, SquircleButton, SquircleSurface } from './primitives.jsx';
+import { SquircleButton } from './primitives.jsx';
 import { GlobalSidebar } from './components/shell/GlobalSidebar.jsx';
 import { TodayScreen } from './components/reference/TodayScreen.jsx';
 import { TaskDetail } from './components/tasks/TaskDetail.jsx';
@@ -13,11 +13,7 @@ export function App() {
 
   return (
     <main className="prototype-stage">
-      <SquircleSurface
-        radius={SQUIRCLE_RADIUS.frame}
-        className="app-frame"
-        contentClassName="app-window"
-      >
+      <div className="app-window">
         <GlobalSidebar
           screen={screen === 'calendar-connection' ? 'connections' : screen}
           onNavigate={setScreen}
@@ -42,7 +38,7 @@ export function App() {
           {screen === 'notes' && <NotesCollection />}
           {screen === 'progress' && <ProgressScreen />}
         </div>
-      </SquircleSurface>
+      </div>
     </main>
   );
 }

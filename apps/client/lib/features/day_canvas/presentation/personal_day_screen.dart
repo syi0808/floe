@@ -65,71 +65,62 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         return Scaffold(
           backgroundColor: FloePalette.neutral25,
           body: SafeArea(
-            child: Padding(
-              padding: EdgeInsets.all(narrow ? 0 : 16),
-              child: FloeSquircle(
-                size: FloeSquircleSize.frame,
-                fill: FloePalette.neutral25,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.fromLTRB(
-                          narrow ? FloeSpace.md : 120,
-                          narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
-                          narrow ? FloeSpace.md : 36,
-                          narrow ? 112 : 28,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(
+                      narrow ? FloeSpace.md : 120,
+                      narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
+                      narrow ? FloeSpace.md : 36,
+                      narrow ? 112 : 28,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        FloeScreenEntrance(
+                          identity: selectedTaskId ?? destination,
+                          child: _workspace(narrow),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            FloeScreenEntrance(
-                              identity: selectedTaskId ?? destination,
-                              child: _workspace(narrow),
+                        if (destination == _DestinationView.today &&
+                            selectedTaskId == null)
+                          Padding(
+                            padding: EdgeInsets.only(top: narrow ? 16 : 22),
+                            child: _CaptureBar(
+                              textController: captureController,
+                              pending: controller.commandPending,
+                              submit: _capture,
+                              capturedText: capturedText,
+                              dismiss: () =>
+                                  setState(() => capturedText = null),
                             ),
-                            if (destination == _DestinationView.today &&
-                                selectedTaskId == null)
-                              Padding(
-                                padding: EdgeInsets.only(top: narrow ? 16 : 22),
-                                child: _CaptureBar(
-                                  textController: captureController,
-                                  pending: controller.commandPending,
-                                  submit: _capture,
-                                  capturedText: capturedText,
-                                  dismiss: () =>
-                                      setState(() => capturedText = null),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    _AdaptiveNavigation(
-                      narrow: narrow,
-                      selected: destination,
-                      onSelected: _selectDestination,
-                    ),
-                    Positioned(
-                      top: narrow ? 10 : 30,
-                      right: narrow ? 8 : 36,
-                      child: FloeButton.icon(
-                        tooltip: AppLocalizations.of(context).settings,
-                        style: ButtonStyle(
-                          backgroundColor: WidgetStatePropertyAll(
-                            Colors.transparent,
                           ),
-                          overlayColor: WidgetStatePropertyAll(
-                            Colors.transparent,
-                          ),
-                        ),
-                        onPressed: () =>
-                            _selectDestination(_DestinationView.connections),
-                        icon: Icon(LucideIcons.settings, size: 20),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                _AdaptiveNavigation(
+                  narrow: narrow,
+                  selected: destination,
+                  onSelected: _selectDestination,
+                ),
+                Positioned(
+                  top: narrow ? 10 : 30,
+                  right: narrow ? 8 : 36,
+                  child: FloeButton.icon(
+                    tooltip: AppLocalizations.of(context).settings,
+                    style: ButtonStyle(
+                      backgroundColor: WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                    ),
+                    onPressed: () =>
+                        _selectDestination(_DestinationView.connections),
+                    icon: Icon(LucideIcons.settings, size: 20),
+                  ),
+                ),
+              ],
             ),
           ),
         );

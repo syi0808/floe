@@ -172,8 +172,7 @@ p {
 }
 
 .prototype-stage {
-  min-height: 100vh;
-  padding: 16px;
+  min-height: 100dvh;
 }
 
 .sq-border {
@@ -188,16 +187,9 @@ p {
   background: var(--surface);
 }
 
-.app-frame {
-  width: min(1500px, 100%);
-  min-height: calc(100vh - 32px);
-  margin: 0 auto;
-  filter: drop-shadow(0 18px 48px rgb(21 24 43 / 7%));
-}
-
 .app-window {
   position: relative;
-  min-height: calc(100vh - 34px);
+  min-height: 100dvh;
   overflow: visible;
   background: var(--canvas);
 }
@@ -1763,19 +1755,7 @@ p {
     background: var(--canvas);
   }
 
-  .prototype-stage {
-    padding: 0;
-  }
-
-  .app-frame {
-    min-height: 100dvh;
-    padding: 0;
-    background: var(--canvas);
-    filter: none;
-  }
-
   .app-window {
-    min-height: 100dvh;
     padding-bottom: calc(92px + env(safe-area-inset-bottom));
   }
 
