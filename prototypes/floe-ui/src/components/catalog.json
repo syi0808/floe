@@ -1,0 +1,792 @@
+{
+  "schemaVersion": 1,
+  "scope": "HTML prototype as-built; not a native product contract",
+  "entries": [
+    {
+      "id": "app",
+      "export": "App",
+      "source": "src/App.jsx",
+      "kind": "screen",
+      "responsibility": "Screen navigation and persistent calendar mounting",
+      "props": [],
+      "stateOwner": "self: screen",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-screen",
+      "export": "CalendarScreen",
+      "source": "src/CalendarScreen.jsx",
+      "kind": "screen",
+      "responsibility": "Calendar state machine, simulated reads, dates, drafts, zoom and navigation",
+      "props": [
+        "page",
+        "onNavigate"
+      ],
+      "stateOwner": "self: phase, dates, timers, dialog, local data, zoom and scroll",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "progress-screen",
+      "export": "ProgressScreen",
+      "source": "src/ProgressScreen.jsx",
+      "kind": "screen",
+      "responsibility": "Composition of fixed build-overview fixtures",
+      "props": [],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "squircle-surface",
+      "export": "SquircleSurface",
+      "source": "src/primitives.jsx",
+      "kind": "primitive",
+      "responsibility": "Shared continuous-corner surface geometry",
+      "props": [
+        "children",
+        "className",
+        "contentClassName",
+        "radius",
+        "as"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "squircle-button",
+      "export": "SquircleButton",
+      "source": "src/primitives.jsx",
+      "kind": "primitive",
+      "responsibility": "Semantic button with continuous-corner shape and forwarded native props",
+      "props": [
+        "children",
+        "className",
+        "radius",
+        "type",
+        "...buttonProps"
+      ],
+      "stateOwner": "caller",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "squircle-block",
+      "export": "SquircleBlock",
+      "source": "src/primitives.jsx",
+      "kind": "primitive",
+      "responsibility": "Continuous-corner block and asChild composition",
+      "props": [
+        "children",
+        "className",
+        "radius",
+        "style",
+        "...props"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-access-recovery",
+      "export": "CalendarAccessRecovery",
+      "source": "src/components/calendar/CalendarAccessRecovery.jsx",
+      "kind": "dialog-content",
+      "responsibility": "Simulated Settings recovery guidance",
+      "props": [
+        "onClose",
+        "onRefresh"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-agenda",
+      "export": "CalendarAgenda",
+      "source": "src/components/calendar/CalendarAgenda.jsx",
+      "kind": "composition",
+      "responsibility": "Full-day timeline, overlap columns, zoom, loading and empty overlays",
+      "props": [
+        "hasCache",
+        "phase",
+        "stale",
+        "currentTime",
+        "dateShort",
+        "pixelsPerMinute",
+        "onZoomChange",
+        "timelineScroll",
+        "onScrollMinute",
+        "timedEvents",
+        "calendars",
+        "allDayEvents",
+        "onEventSelect",
+        "onEmptyAction"
+      ],
+      "stateOwner": "caller: data, zoom, scroll position and phase",
+      "states": [
+        "cached events",
+        "loading",
+        "empty/inert background",
+        "stale",
+        "horizontal overflow"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-all-day",
+      "export": "CalendarAllDay",
+      "source": "src/components/calendar/CalendarAllDay.jsx",
+      "kind": "control",
+      "responsibility": "Data-driven all-day event rows and selection",
+      "props": [
+        "events",
+        "disabled",
+        "onSelect"
+      ],
+      "stateOwner": "caller: events and disabled",
+      "states": [
+        "events",
+        "empty",
+        "disabled",
+        "hover",
+        "focus"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-capture",
+      "export": "CalendarCapture",
+      "source": "src/components/calendar/CalendarCapture.jsx",
+      "kind": "control",
+      "responsibility": "Controlled local-note capture with trim and empty-submit guard",
+      "props": [
+        "value",
+        "onChange",
+        "onSubmit"
+      ],
+      "stateOwner": "caller: value; self: generated input ID",
+      "states": [
+        "empty",
+        "draft",
+        "submit"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-connections",
+      "export": "CalendarConnections",
+      "source": "src/components/calendar/CalendarConnections.jsx",
+      "kind": "composition",
+      "responsibility": "Connected calendar inventory, status, storage facts and access commands",
+      "props": [
+        "hasConnection",
+        "phase",
+        "statusTone",
+        "statusLabel",
+        "readDates",
+        "calendars",
+        "onNavigate",
+        "onOpenDialog",
+        "onRefresh"
+      ],
+      "stateOwner": "caller: phase and connection records",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-context-rail",
+      "export": "CalendarContextRail",
+      "source": "src/components/calendar/CalendarContextRail.jsx",
+      "kind": "composition",
+      "responsibility": "Local task, saved notes and provenance hint",
+      "props": [
+        "taskDone",
+        "onTaskChange",
+        "localNotes",
+        "hasCache",
+        "onNavigate"
+      ],
+      "stateOwner": "caller: taskDone, localNotes and hasCache",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-date-toolbar",
+      "export": "CalendarDateToolbar",
+      "source": "src/components/calendar/CalendarDateToolbar.jsx",
+      "kind": "control",
+      "responsibility": "Date navigation and refresh commands",
+      "props": [
+        "dateLabel",
+        "disabled",
+        "refreshDisabled",
+        "showRefresh",
+        "onPrevious",
+        "onNext",
+        "onToday",
+        "onRefresh"
+      ],
+      "stateOwner": "caller: date and disabled flags",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-dialogs",
+      "export": "CalendarDialogs",
+      "source": "src/components/calendar/CalendarDialogs.jsx",
+      "kind": "composition",
+      "responsibility": "Single dialog routing to permission, recovery, disconnect or event details",
+      "props": [
+        "modal",
+        "detailCalendar",
+        "dateLabel",
+        "dateShort",
+        "dayOffset",
+        "stale",
+        "onClose",
+        "onPermission",
+        "onDeny",
+        "onRefresh",
+        "onDisconnect"
+      ],
+      "stateOwner": "caller: modal",
+      "states": [
+        "disclosure",
+        "permission",
+        "settings",
+        "disconnect",
+        "event"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-disclosure",
+      "export": "CalendarDisclosure",
+      "source": "src/components/calendar/CalendarDisclosure.jsx",
+      "kind": "dialog-content",
+      "responsibility": "Read-only scope explanation and continue/cancel commands",
+      "props": [
+        "onClose",
+        "onPermission"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-disconnect",
+      "export": "CalendarDisconnect",
+      "source": "src/components/calendar/CalendarDisconnect.jsx",
+      "kind": "dialog-content",
+      "responsibility": "Disconnect consequences and confirmation commands",
+      "props": [
+        "onClose",
+        "onDisconnect"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-empty-state",
+      "export": "CalendarEmptyState",
+      "source": "src/components/calendar/CalendarEmptyState.jsx",
+      "kind": "feedback",
+      "responsibility": "Centered empty or unconnected state with next action",
+      "props": [
+        "phase",
+        "dateShort",
+        "onAction"
+      ],
+      "stateOwner": "caller: phase",
+      "states": [
+        "empty",
+        "uncollected",
+        "unconnected"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-event",
+      "export": "CalendarEvent",
+      "source": "src/components/calendar/CalendarEvent.jsx",
+      "kind": "control",
+      "responsibility": "Exact-time event geometry, density, color and selection",
+      "props": [
+        "event",
+        "calendar",
+        "pixelsPerMinute",
+        "disabled",
+        "onSelect"
+      ],
+      "stateOwner": "caller: laid-out event and zoom",
+      "states": [
+        "micro (<24px)",
+        "compact (24–39px)",
+        "medium (40–57px)",
+        "full (>=58px)",
+        "overlapping",
+        "disabled",
+        "hover",
+        "focus"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-event-details",
+      "export": "CalendarEventDetails",
+      "source": "src/components/calendar/CalendarEventDetails.jsx",
+      "kind": "dialog-content",
+      "responsibility": "Read-only event time, provenance and source disclosure",
+      "props": [
+        "event",
+        "calendar",
+        "dateLabel",
+        "dateShort",
+        "dayOffset",
+        "stale",
+        "onClose"
+      ],
+      "stateOwner": "caller: event; browser: details expansion",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-permission",
+      "export": "CalendarPermission",
+      "source": "src/components/calendar/CalendarPermission.jsx",
+      "kind": "dialog-content",
+      "responsibility": "Simulated permission allow/deny UI",
+      "props": [
+        "onDeny",
+        "onRefresh"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-status-banner",
+      "export": "CalendarStatusBanner",
+      "source": "src/components/calendar/CalendarStatusBanner.jsx",
+      "kind": "feedback",
+      "responsibility": "Phase-specific status or alert with recovery callback",
+      "props": [
+        "phase",
+        "dateLabel",
+        "onConnect",
+        "onRefresh",
+        "onSettings",
+        "onPicker"
+      ],
+      "stateOwner": "caller: phase",
+      "states": [
+        "disconnected",
+        "syncing",
+        "cached",
+        "offline",
+        "denied",
+        "revoked",
+        "missing",
+        "noCalendars",
+        "uncollected",
+        "loadError"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "calendar-surface",
+      "export": "CalendarSurface",
+      "source": "src/components/calendar/CalendarSurface.jsx",
+      "kind": "domain-surface",
+      "responsibility": "Calendar card styling over shared squircle geometry",
+      "props": [
+        "children",
+        "className"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "timeline-zoom",
+      "export": "TimelineZoom",
+      "source": "src/components/calendar/TimelineZoom.jsx",
+      "kind": "control",
+      "responsibility": "Keyboard-operable 1–12 times magnification slider",
+      "props": [
+        "value",
+        "onChange"
+      ],
+      "stateOwner": "caller: value",
+      "states": [],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "note-preview",
+      "export": "NotePreview",
+      "source": "src/components/notes/NotePreview.jsx",
+      "kind": "display",
+      "responsibility": "Noninteractive note summary card",
+      "props": [
+        "note"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "notes-collection",
+      "export": "NotesCollection",
+      "source": "src/components/notes/NotesCollection.jsx",
+      "kind": "screen",
+      "responsibility": "Local note creation, search and personal filter",
+      "props": [],
+      "stateOwner": "self: notes, query and personalOnly",
+      "states": [
+        "all",
+        "filtered",
+        "search",
+        "empty",
+        "new draft"
+      ],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "checklist",
+      "export": "Checklist",
+      "source": "src/components/progress/Checklist.jsx",
+      "kind": "display",
+      "responsibility": "Delivered/open progress list",
+      "props": [
+        "title",
+        "items",
+        "complete"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "progress-bar",
+      "export": "ProgressBar",
+      "source": "src/components/progress/ProgressBar.jsx",
+      "kind": "display",
+      "responsibility": "Progress value semantics and minimum visible fill",
+      "props": [
+        "value",
+        "tone"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "section-heading",
+      "export": "SectionHeading",
+      "source": "src/components/progress/SectionHeading.jsx",
+      "kind": "display",
+      "responsibility": "Progress section icon, eyebrow, title and meta",
+      "props": [
+        "icon",
+        "eyebrow",
+        "title",
+        "meta"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "validation-item",
+      "export": "ValidationItem",
+      "source": "src/components/progress/ValidationItem.jsx",
+      "kind": "display",
+      "responsibility": "Progress validation value or icon",
+      "props": [
+        "value",
+        "icon",
+        "label"
+      ],
+      "stateOwner": "none",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "today-screen",
+      "export": "TodayScreen",
+      "source": "src/components/reference/TodayScreen.jsx",
+      "kind": "reference-screen",
+      "responsibility": "Historical Personal Day reference, not the active calendar implementation",
+      "props": [
+        "onNavigate"
+      ],
+      "stateOwner": "self: suggestion, reason, tasks, break and capture",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "historical-reference",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "global-sidebar",
+      "export": "GlobalSidebar",
+      "source": "src/components/shell/GlobalSidebar.jsx",
+      "kind": "shell",
+      "responsibility": "Icon-only primary navigation and active destination",
+      "props": [
+        "screen",
+        "onNavigate"
+      ],
+      "stateOwner": "caller: screen",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "subtask-list",
+      "export": "SubtaskList",
+      "source": "src/components/tasks/SubtaskList.jsx",
+      "kind": "control",
+      "responsibility": "Controlled list of completion toggles and duration labels",
+      "props": [
+        "subtasks",
+        "onToggle"
+      ],
+      "stateOwner": "caller: subtasks",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "task-detail",
+      "export": "TaskDetail",
+      "source": "src/components/tasks/TaskDetail.jsx",
+      "kind": "screen",
+      "responsibility": "Task fixture with subtasks and dismissible suggestion",
+      "props": [
+        "onBack"
+      ],
+      "stateOwner": "self: subtasks and suggestionVisible",
+      "states": [],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "task-suggestion-card",
+      "export": "TaskSuggestionCard",
+      "source": "src/components/tasks/TaskSuggestionCard.jsx",
+      "kind": "composition",
+      "responsibility": "Task review suggestion and dismissal; other actions remain visual fixtures",
+      "props": [
+        "onDismiss"
+      ],
+      "stateOwner": "caller: visibility",
+      "states": [
+        "visible",
+        "dismissed by parent"
+      ],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "check-control",
+      "export": "CheckControl",
+      "source": "src/components/ui/CheckControl.jsx",
+      "kind": "control",
+      "responsibility": "Accessible controlled task completion toggle",
+      "props": [
+        "checked",
+        "label",
+        "onClick"
+      ],
+      "stateOwner": "caller: checked",
+      "states": [
+        "checked",
+        "unchecked",
+        "focus"
+      ],
+      "styles": [
+        "src/styles.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "modal",
+      "export": "Modal",
+      "source": "src/components/ui/Modal.jsx",
+      "kind": "overlay",
+      "responsibility": "Native dialog lifecycle, focus restoration, backdrop dismissal and title association",
+      "props": [
+        "title",
+        "children",
+        "onClose"
+      ],
+      "stateOwner": "self: dialog ref and generated title ID; caller: mount/unmount",
+      "states": [
+        "mounted/open",
+        "Escape",
+        "backdrop click",
+        "close",
+        "reduced motion"
+      ],
+      "styles": [
+        "src/styles.css",
+        "src/calendar.css"
+      ],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    }
+  ]
+}

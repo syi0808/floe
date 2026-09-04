@@ -1,89 +1,26 @@
 import {
+  summary,
+  mvpAreas,
+  delivered,
+  remaining,
+  phases,
+  priorities,
+} from './components/progress/progress-fixtures.js';
+import {
   ArrowUpRight,
   CheckCircle2,
-  Circle,
   Flag,
   Layers3,
   ShieldCheck,
   Sparkles,
   TestTube2,
 } from 'lucide-react';
-
-import mascotUrl from '../../../assets/floe-mascot.svg?url';
-import {
-  SQUIRCLE_RADIUS,
-  SquircleBlock,
-  SquircleSurface,
-} from './primitives.jsx';
-
-const summary = [
-  { label: 'Personal Day slice', value: 78, detail: '75–80%', tone: 'violet' },
-  { label: 'MVP engineering', value: 58, detail: '55–60%', tone: 'blue' },
-  { label: 'Phase 1 · Personal Day', value: 40, detail: '35–45%', tone: 'mint' },
-];
-
-const mvpAreas = [
-  {
-    label: 'Day Canvas',
-    value: 70,
-    note: 'Now/Next · unified projection',
-    tone: 'violet',
-  },
-  {
-    label: 'Universal Capture',
-    value: 60,
-    note: 'Typed capture · provenance',
-    tone: 'blue',
-  },
-  {
-    label: 'Local Day Store',
-    value: 83,
-    note: 'Turso · CRUD · persistence',
-    tone: 'mint',
-  },
-  {
-    label: 'Minimal Assistant',
-    value: 0,
-    note: 'Manager · proposals · policy',
-    tone: 'amber',
-  },
-];
-
-const delivered = [
-  'Rust domain + typed operations',
-  'Deterministic Day snapshot',
-  'Embedded Turso persistence',
-  'Flutter ↔ Rust JSON/C ABI',
-  'Typed capture + classification',
-  'Task completion + deletion',
-];
-
-const remaining = [
-  'Event, task, note editing UI',
-  'Typed conflict recovery',
-  'Read-only calendar integration',
-  'Dense-day folding',
-  'Two-week Day Canvas dogfood',
-];
-
-const phases = [
-  { phase: '0', label: 'Architecture PoCs', value: 13, status: 'active' },
-  { phase: '1', label: 'Personal Day', value: 40, status: 'active' },
-  { phase: '2', label: 'Connected Floe', value: 0, status: 'queued' },
-  { phase: '3', label: 'Personal Memory', value: 0, status: 'queued' },
-  { phase: '3.5', label: 'Expert Ecosystem', value: 0, status: 'queued' },
-  { phase: '4', label: 'Cross-device', value: 0, status: 'queued' },
-  { phase: '5', label: 'Ambient Floe', value: 0, status: 'queued' },
-  { phase: '6', label: 'Hosted / Self-host', value: 0, status: 'queued' },
-];
-
-const priorities = [
-  ['01', 'Connect editing flows', 'Complete the local Personal Day loop.'],
-  ['02', 'Recover from conflicts', 'Refresh, retry, or keep user input safely.'],
-  ['03', 'Import calendar context', 'Validate Calendar + Tasks + Notes together.'],
-  ['04', 'Handle dense days', 'Fold and reveal without losing orientation.'],
-  ['05', 'Dogfood for two weeks', 'Measure usefulness, misses, and return rate.'],
-];
+import { SQUIRCLE_RADIUS, SquircleSurface } from './primitives.jsx';
+import { mascotUrl } from './assets.js';
+import { SectionHeading } from './components/progress/SectionHeading.jsx';
+import { ProgressBar } from './components/progress/ProgressBar.jsx';
+import { Checklist } from './components/progress/Checklist.jsx';
+import { ValidationItem } from './components/progress/ValidationItem.jsx';
 
 export function ProgressScreen() {
   return (
@@ -93,8 +30,8 @@ export function ProgressScreen() {
           <span className="progress-eyebrow">Build overview</span>
           <h1>Floe is becoming a useful day companion.</h1>
           <p>
-            The technical spine works. The next milestone is turning the
-            Personal Day slice into a complete, dogfood-ready product loop.
+            The technical spine works. The next milestone is turning the Personal Day slice into a
+            complete, dogfood-ready product loop.
           </p>
         </div>
         <div className="progress-update">
@@ -226,8 +163,7 @@ export function ProgressScreen() {
               <strong>Close the local Personal Day loop</strong>
             </div>
             <p>
-              Connected data waits until the daily experience is useful enough
-              to earn repeat use.
+              Connected data waits until the daily experience is useful enough to earn repeat use.
             </p>
           </div>
         </SquircleSurface>
@@ -269,68 +205,6 @@ export function ProgressScreen() {
         <ValidationItem icon={CheckCircle2} label="Analyzer clean" />
         <span className="source-note">Source · PROGRESS.md</span>
       </section>
-    </div>
-  );
-}
-
-function SectionHeading({ icon: Icon, eyebrow, title, meta }) {
-  return (
-    <div className="section-heading">
-      <div className="section-icon" aria-hidden="true">
-        <Icon size={18} strokeWidth={1.8} />
-      </div>
-      <div>
-        <span>{eyebrow}</span>
-        <h2>{title}</h2>
-      </div>
-      <small>{meta}</small>
-    </div>
-  );
-}
-
-function ProgressBar({ value, tone }) {
-  return (
-    <div
-      className={`progress-bar ${tone}`}
-      role="progressbar"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={value}
-    >
-      <SquircleBlock
-        radius={SQUIRCLE_RADIUS.micro}
-        className="progress-fill"
-        style={{ width: `${Math.max(value, 2)}%` }}
-      />
-    </div>
-  );
-}
-
-function Checklist({ title, items, complete = false }) {
-  return (
-    <div className="checkpoint-list">
-      <h3>{title}</h3>
-      <ul>
-        {items.map((item) => (
-          <li key={item}>
-            {complete ? (
-              <CheckCircle2 size={16} aria-hidden="true" />
-            ) : (
-              <Circle size={16} aria-hidden="true" />
-            )}
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function ValidationItem({ value, icon: Icon, label }) {
-  return (
-    <div className="validation-item">
-      {value ? <strong>{value}</strong> : <Icon size={18} aria-hidden="true" />}
-      <span>{label}</span>
     </div>
   );
 }

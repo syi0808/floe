@@ -49,7 +49,15 @@ Build the static output with:
 npm run build
 ```
 
-## Squircle implementation
+## Component boundaries
+
+Reusable UI lives in `src/components/{ui,shell,calendar,tasks,notes,progress}`.
+Screens own state and compose these units; `reference` holds the historical Today view.
+See the [as-built component map](../../docs/design/prototype-components.md) for props,
+state ownership, style boundaries and reverse-spec guidance. The machine-readable
+index is `src/components/catalog.json`; validate it with `npm run check:components`.
+
+## Squircle geometry
 
 The prototype uses `@squircle-js/react` rather than large CSS `border-radius` values. The library measures responsive elements with `ResizeObserver`, generates Figma-style SVG paths, and applies them through `clip-path`. Shared wrappers in `src/primitives.jsx` keep smoothing and semantic corner sizes consistent.
 

@@ -25,6 +25,7 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | --- | --- |
 | [Foundations](foundations.md) | Color, type, spacing, continuous-corner geometry, depth |
 | [Components](components.md) | Shared controls, cards, timeline items, rails, and overlays |
+| [Prototype component boundaries](prototype-components.md) | As-built React units, state/props/style ownership and reverse-spec catalog (not normative product requirements) |
 | [Assistant and interventions](assistant-and-interventions.md) | Passive, suggestion, active, and confirmation states |
 | [Accessibility and motion](accessibility-and-motion.md) | Input, focus, scaling, semantics, motion, validation |
 | [Application shell](screens/application-shell.md) | Global navigation, local tools, desktop and narrow layout |

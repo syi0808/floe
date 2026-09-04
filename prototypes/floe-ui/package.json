@@ -7,6 +7,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
+    "check:components": "node scripts/check-component-catalog.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
