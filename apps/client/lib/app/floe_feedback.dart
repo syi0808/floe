@@ -207,6 +207,45 @@ class FloeDetailDialog extends StatelessWidget {
   );
 }
 
+class FloeIconText extends StatelessWidget {
+  const FloeIconText({
+    super.key,
+    required this.icon,
+    required this.text,
+    required this.style,
+    this.gap = 12,
+  });
+
+  final Widget icon;
+  final String text;
+  final TextStyle style;
+  final double gap;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveStyle = DefaultTextStyle.of(context).style.merge(style);
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: effectiveStyle),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.maybeLocaleOf(context),
+    )..layout();
+    final lineHeight = painter.preferredLineHeight;
+    painter.dispose();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: lineHeight,
+          child: Center(child: icon),
+        ),
+        SizedBox(width: gap),
+        Expanded(child: Text(text, style: style)),
+      ],
+    );
+  }
+}
+
 class FloeInfoNote extends StatelessWidget {
   const FloeInfoNote({
     super.key,
@@ -221,22 +260,14 @@ class FloeInfoNote extends StatelessWidget {
       border: Border(left: BorderSide(color: FloePalette.primary200, width: 2)),
     ),
     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 18, color: FloePalette.primary600),
-        SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.7,
-              color: FloePalette.neutral600,
-            ),
-          ),
-        ),
-      ],
+    child: FloeIconText(
+      icon: Icon(icon, size: 18, color: FloePalette.primary600),
+      text: text,
+      style: TextStyle(
+        fontSize: 13,
+        height: 1.7,
+        color: FloePalette.neutral600,
+      ),
     ),
   );
 }

@@ -125,23 +125,20 @@ class CalendarContextRail extends StatelessWidget {
         SizedBox(height: 24),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(LucideIcons.link, size: 15, color: FloePalette.neutral500),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  AppLocalizations.of(context)
-                      .wonderingWhereAnEventCameFromOpen,
-                  style: TextStyle(
-                    fontSize: 11,
-                    height: 1.8,
-                    color: FloePalette.neutral600,
-                  ),
-                ),
-              ),
-            ],
+          child: FloeIconText(
+            icon: Icon(
+              LucideIcons.link,
+              size: 15,
+              color: FloePalette.neutral500,
+            ),
+            gap: 10,
+            text: AppLocalizations.of(context)
+                .wonderingWhereAnEventCameFromOpen,
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.8,
+              color: FloePalette.neutral600,
+            ),
           ),
         ),
       ],

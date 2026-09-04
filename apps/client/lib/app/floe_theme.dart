@@ -188,6 +188,7 @@ abstract final class FloeTheme {
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       ),
       dialogTheme: DialogThemeData(
+        constraints: BoxConstraints(minWidth: 280, maxWidth: 540),
         backgroundColor: FloePalette.neutral0,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
