@@ -47,7 +47,8 @@ implementation slice. This does not advance S4 server/sync acceptance.
 Environment: macOS arm64, Go 1.25.5, 2026-09-05 KST. Fixture model/provider and
 isolated stores only. The full bridge test starts the actual Go service and feeds
 its response through Rust validation and Flutter decoding; it does not bypass the
-gateway. Source: S2 implementation working tree based on `ec607ec`.
+gateway. Source: implementation commit `66c2856` (based on `ec607ec`);
+validation ran on its unchanged source immediately before committing.
 
 - `cargo test --workspace`: 32 passed; Clippy with warnings denied passes.
 - `go test -race ./...`: 11 passed; `go vet ./...` passes.
