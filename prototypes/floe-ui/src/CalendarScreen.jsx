@@ -146,14 +146,16 @@ export function CalendarScreen({ page, onNavigate }) {
     toastTimer.current = setTimeout(() => setToast(''), 4500);
   }
 
-  function refresh() {
+  function refresh(offset = dayOffset, announce = true) {
     clearTimeout(timer.current);
+    clearTimeout(toastTimer.current);
+    setToast('');
     setModal(null);
     setPhase('syncing');
     timer.current = setTimeout(() => {
-      setPhase(dayOffset === 0 ? 'connected' : 'empty');
-      setReadDates((current) => [...new Set([...current, dayOffset])]);
-      notify('All calendars refreshed. Your local tasks and notes are unchanged.');
+      setPhase(offset === 0 ? 'connected' : 'empty');
+      setReadDates((current) => [...new Set([...current, offset])]);
+      if (announce) notify('All calendars refreshed. Your local tasks and notes are unchanged.');
     }, 1100);
   }
 
@@ -161,7 +163,7 @@ export function CalendarScreen({ page, onNavigate }) {
     clearTimeout(timer.current);
     setDayOffset(offset);
     if (hasConnection && !['revoked', 'missing', 'offline', 'loadError'].includes(phase))
-      setPhase(readDates.includes(offset) ? (offset === 0 ? 'cached' : 'empty') : 'uncollected');
+      refresh(offset, false);
   }
 
   const statusLabel =
@@ -259,7 +261,7 @@ export function CalendarScreen({ page, onNavigate }) {
                 </div>
                 <div>
                   <dt>Refresh behavior</dt>
-                  <dd>Only when you ask</dd>
+                  <dd>On date changes · or when you refresh</dd>
                 </div>
               </dl>
               <div className="s1-actions">

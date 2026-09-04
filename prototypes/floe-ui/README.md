@@ -8,8 +8,8 @@ settings icon) opens Calendar management. Task Detail, Notes and Progress remain
 ## Explore S1
 
 - **Today:** open an event for provenance, original/display time zones, recurrence,
-  and all-day exclusive boundaries. Refresh the selected date; use day arrows to
-  distinguish an unread date from a successfully checked empty date.
+  and all-day exclusive boundaries. Changing the date automatically loads its events
+  with a loading indicator; manual refresh remains available. Cached dates are preserved.
 - **Connect / Settings:** inspect all included calendars/accounts and stored dates;
   refresh all calendars, manage permission recovery, or simulate integration-wide
   disconnection. There is no single-calendar selection or switching flow.

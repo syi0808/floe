@@ -8,6 +8,11 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 - Today starts with the date and one refresh action, then the unified day timeline.
   No marketing heading, timezone label in the toolbar, source selector, healthy-status
   badge, imported-data footer, or prototype lab. Use sentence case, including “All day.”
+- Date navigation automatically reads the destination date with a loading banner.
+  Retain that date's existing cache during loading, preserve other dates, and show an
+  empty result only after success. Use the requested offset, not the previous date.
+  Navigation does not request permission or bypass existing access/provider errors.
+  Automatic reads finish without a success toast; manual refresh still confirms completion.
 - Include all calendars available through macOS Calendar, not one selected calendar.
   Work, Personal and Product team fixtures share the timeline, retaining source colors
   and identity. Calendar inventory belongs in Connect, not above the day.
@@ -32,7 +37,7 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 | Disconnect confirmation | Remove all imported copies, preserve Floe tasks/notes and external events; OS authorization remains separate |
 
 There is no calendar picker or switch confirmation. New calendars join subsequent
-explicit refreshes. Native dialogs handle modality, focus restoration, Escape and
+date-navigation reads or explicit refreshes. Native dialogs handle modality, focus restoration, Escape and
 viewport scrolling. OS handoffs never change actual settings in the prototype.
 
 ## State coverage without on-page demo controls

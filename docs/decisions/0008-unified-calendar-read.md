@@ -12,7 +12,7 @@ picker, switch action, or source selector above the timeline. This remains one c
 not multiple provider adapters. S3 must still explicitly select a write destination.
 
 Permission disclosure explains the full scope before the OS handoff: all available
-calendars are read, including calendars discovered on later explicit refreshes.
+calendars are read, including calendars discovered on later date changes or refreshes.
 The user can decline or disconnect the entire integration. S1 exposes no external writes.
 Per-calendar inclusion toggles are out of scope; do not suggest selective consent.
 
@@ -21,7 +21,10 @@ Per-calendar inclusion toggles are out of scope; do not suggest selective consen
 - Connection identity is Person + device + connector. Preserve account/calendar IDs
   and names on every event; occurrence identity includes the source calendar to prevent
   collisions across calendars. Never deduplicate unrelated events by title/time alone.
-- Every explicit date refresh enumerates calendars and reads each available source.
+- Date navigation automatically reads the destination date with a loading indicator;
+  explicit refresh remains available. Neither navigation nor launch requests permission.
+  Known access/provider errors retain their recovery path rather than silently retrying.
+  Every date read enumerates calendars and reads each available source.
   Newly discovered calendars join that read. Launch does not request permission.
 - Reconcile complete, validated results per calendar and date range. A successful
   source read may update/remove only that source's overlapping records. Partial source
