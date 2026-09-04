@@ -385,8 +385,18 @@
 }
 .s1-event.sq-button[data-density='micro'] {
   padding: 0;
-  box-shadow: inset 3px 0 var(--event-accent);
+  box-shadow: none;
   filter: saturate(1.5);
+}
+.s1-event[data-density='micro']::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 15%;
+  bottom: 15%;
+  width: 3px;
+  background: var(--event-accent);
+  pointer-events: none;
 }
 .s1-event[data-density='micro'] > * {
   display: none;

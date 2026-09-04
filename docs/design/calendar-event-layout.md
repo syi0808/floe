@@ -30,6 +30,8 @@ Exact cutoffs: below 24px = bar; 24–39px = title; 40–57px = title/time;
 58px and above = title/time/source. Card corners shrink with available height.
 Source colors and timestamps never change with density. Metadata is never allowed
 to overflow into the next event. Hover must not change geometry.
+The micro-event accent is a separate straight 3px bar inset 4px from the left and
+15% from the top/bottom, not an inset shadow following the card's rounded corners.
 
 ## Interaction and accessibility
 
