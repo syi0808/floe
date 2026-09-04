@@ -160,7 +160,7 @@
   display: grid;
   grid-template-columns: 53px minmax(0, 1fr);
   align-items: center;
-  gap: 8px 20px;
+  gap: 20px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
 }
@@ -183,6 +183,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  padding: 0;
   background: transparent;
   font-size: 12px;
   font-weight: 550;
@@ -200,8 +201,10 @@
   background: var(--surface-subtle);
   box-shadow: none;
 }
-.s1-all-day .s1-quiet-action {
-  width: 100%;
+.s1-all-day button:hover:not(:disabled) .s1-all-day-title,
+.s1-all-day button:focus-visible:not(:disabled) .s1-all-day-title {
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 .s1-all-day small {
   font-weight: 400;

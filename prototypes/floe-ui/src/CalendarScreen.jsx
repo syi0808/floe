@@ -397,8 +397,7 @@ export function CalendarScreen({ page, onNavigate }) {
                 <div className="s1-all-day">
                   <span>All day</span>
                   {hasCache ? (
-                    <SquircleButton
-                      className="s1-quiet-action"
+                    <button
                       disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
@@ -412,14 +411,16 @@ export function CalendarScreen({ page, onNavigate }) {
                         })
                       }
                     >
-                      <span className="tone-dot mint" /> A day for making <small>Personal</small>
-                    </SquircleButton>
+                      <span className="tone-dot mint" />
+                      <span className="s1-all-day-title">A day for making</span>
+                      <small>Personal</small>
+                    </button>
                   ) : (
                     <span className="s1-muted">—</span>
                   )}
                   {hasCache && (
-                    <SquircleButton
-                      className="s1-more-all-day s1-quiet-action"
+                    <button
+                      className="s1-more-all-day"
                       disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
@@ -435,8 +436,10 @@ export function CalendarScreen({ page, onNavigate }) {
                         })
                       }
                     >
-                      <span className="tone-dot violet" /> Research week <small>Day 2 of 3</small>
-                    </SquircleButton>
+                      <span className="tone-dot violet" />
+                      <span className="s1-all-day-title">Research week</span>
+                      <small>Day 2 of 3</small>
+                    </button>
                   )}
                 </div>
                 <div
