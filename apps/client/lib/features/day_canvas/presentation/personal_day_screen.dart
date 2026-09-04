@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_button.dart';
 import '../../../app/floe_mascot.dart';
 import '../../../app/floe_motion.dart';
 import '../../../app/floe_squircle.dart';
@@ -115,7 +116,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                       Positioned(
                         top: narrow ? 10 : 30,
                         right: narrow ? 8 : 36,
-                        child: IconButton(
+                        child: FloeButton.icon(
                           tooltip: '설정',
                           style: const ButtonStyle(
                             backgroundColor: WidgetStatePropertyAll(
@@ -419,7 +420,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
     button: true,
     child: PressableScale(
       scale: 0.98,
-      child: FloeSquircle(
+      builder: (states) => FloeSquircle(
         size: FloeSquircleSize.md,
         fill: selected
             ? FloePalette.primary100
@@ -429,6 +430,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
         borderColor: focused ? FloePalette.primary600 : Colors.transparent,
         borderWidth: focused ? 2 : 0,
         child: InkWell(
+          statesController: states,
           onTap: widget.onPressed,
           onHover: (value) => setState(() => hovered = value),
           onFocusChange: (value) => setState(() => focused = value),
@@ -478,7 +480,7 @@ class _DayToolbar extends StatelessWidget {
         for (final direction in [-1, 1]) ...[
           FloeSquircle(
             size: FloeSquircleSize.md,
-            child: IconButton(
+            child: FloeButton.icon(
               tooltip: direction == -1 ? '이전 날' : '다음 날',
               constraints: BoxConstraints.tightFor(
                 width: compact ? 40 : 44,
@@ -514,7 +516,7 @@ class _DayToolbar extends StatelessWidget {
           ),
         ),
         SizedBox(width: narrow ? 8 : 12),
-        TextButton(
+        FloeButton.text(
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,
             minimumSize: const Size(0, 40),
@@ -572,7 +574,7 @@ class _CalendarViewSelector extends StatelessWidget {
               size: FloeSquircleSize.md,
               fill: index == 0 ? FloePalette.primary100 : Colors.transparent,
               borderWidth: 0,
-              child: TextButton(
+              child: FloeButton.text(
                 onPressed: index == 0 ? null : onUnavailable,
                 style: TextButton.styleFrom(
                   padding: EdgeInsets.zero,
@@ -635,10 +637,10 @@ class _TasksScreen extends StatelessWidget {
                 ],
               ),
             ),
-            FilledButton.icon(
+            FloeButton.filled(
               onPressed: () => _showComingSoon(context),
               icon: const Icon(Icons.add),
-              label: const Text('새 할 일'),
+              child: const Text('새 할 일'),
             ),
           ],
         ),
@@ -770,7 +772,7 @@ class _NotesScreenState extends State<_NotesScreen> {
         ),
       ),
     );
-    final filter = OutlinedButton.icon(
+    final filter = FloeButton.outlined(
       style: OutlinedButton.styleFrom(
         shape: floeSquircleBorder(FloeSquircleSize.md),
         backgroundColor: personalOnly
@@ -780,15 +782,15 @@ class _NotesScreenState extends State<_NotesScreen> {
       ),
       onPressed: () => setState(() => personalOnly = !personalOnly),
       icon: const Icon(LucideIcons.filter, size: 18),
-      label: const Text('Filter'),
+      child: const Text('Filter'),
     );
-    final create = FilledButton.icon(
+    final create = FloeButton.filled(
       style: FilledButton.styleFrom(
         shape: floeSquircleBorder(FloeSquircleSize.md),
       ),
       onPressed: widget.pending ? null : _create,
       icon: const Icon(LucideIcons.plus, size: 18),
-      label: const Text('New note'),
+      child: const Text('New note'),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -838,7 +840,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                     'Try a different search or clear the current filter.',
                     textAlign: TextAlign.center,
                   ),
-                  TextButton(
+                  FloeButton.text(
                     onPressed: () => setState(() {
                       search.clear();
                       personalOnly = false;
@@ -940,11 +942,11 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
         ),
       ),
       actions: [
-        TextButton(
+        FloeButton.text(
           onPressed: pending ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        FloeButton.filled(
           onPressed: pending || content.text.trim().isEmpty ? null : _save,
           child: Text(pending ? 'Saving…' : 'Save note'),
         ),
@@ -1166,14 +1168,14 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
+              child: FloeButton.text(
                 onPressed: () => _showComingSoon(context),
                 style: TextButton.styleFrom(
                   padding: EdgeInsets.zero,
                   foregroundColor: FloePalette.primary600,
                 ),
                 icon: const Icon(LucideIcons.plus, size: 18),
-                label: const Text('Add a subtask'),
+                child: const Text('Add a subtask'),
               ),
             ),
           ],
@@ -1205,7 +1207,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     ),
                     FloeSquircle(
                       size: FloeSquircleSize.md,
-                      child: IconButton(
+                      child: FloeButton.icon(
                         tooltip: 'Dismiss suggestion',
                         style: IconButton.styleFrom(
                           fixedSize: const Size.square(36),
@@ -1230,7 +1232,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   alignment: WrapAlignment.center,
                   spacing: 28,
                   children: [
-                    TextButton(
+                    FloeButton.text(
                       onPressed: () => _showComingSoon(context),
                       style: TextButton.styleFrom(
                         foregroundColor: FloePalette.primary600,
@@ -1244,7 +1246,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                       ),
                       child: const Text('Review now'),
                     ),
-                    TextButton(
+                    FloeButton.text(
                       style: TextButton.styleFrom(
                         minimumSize: const Size(0, 40),
                         padding: EdgeInsets.zero,
@@ -1301,11 +1303,11 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(
             children: [
-              TextButton.icon(
+              FloeButton.text(
                 onPressed: widget.onBack,
                 style: TextButton.styleFrom(padding: EdgeInsets.zero),
                 icon: const Icon(LucideIcons.arrowLeft, size: 19),
-                label: const Text('Back to today'),
+                child: const Text('Back to today'),
               ),
               const Spacer(),
               FloeSquircle(
@@ -1430,7 +1432,7 @@ class _NoteDetail extends StatelessWidget {
             children: [
               const Text('개인 노트', style: FloeType.label),
               const Spacer(),
-              IconButton(
+              FloeButton.icon(
                 tooltip: '닫기',
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(Icons.close),
@@ -1447,10 +1449,10 @@ class _NoteDetail extends StatelessWidget {
             style: FloeType.bodyLarge,
           ),
           const SizedBox(height: FloeSpace.xl),
-          OutlinedButton.icon(
+          FloeButton.outlined(
             onPressed: () => _showComingSoon(context),
             icon: const FloeMascot(size: 24),
-            label: const Text('Floe와 함께 보기'),
+            child: const Text('Floe와 함께 보기'),
           ),
         ],
       ),
@@ -2008,7 +2010,7 @@ class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
     message: 'Floe 제안 열기',
     child: PressableScale(
       scale: 0.98,
-      child: FloeSquircle(
+      builder: (states) => FloeSquircle(
         size: FloeSquircleSize.floating,
         elevation: 4,
         fill: open || hovered || focused
@@ -2019,6 +2021,7 @@ class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
             ? FloePalette.primary600
             : FloePalette.primary200,
         child: InkWell(
+          statesController: states,
           onHover: (value) => setState(() => hovered = value),
           onFocusChange: (value) => setState(() => focused = value),
           onTap: () async {
@@ -2158,11 +2161,11 @@ class _TimelineSuggestionPanelState extends State<_TimelineSuggestionPanel> {
     final mobile = MediaQuery.sizeOf(context).width <= 780;
     final gap = mobile ? 14.0 : 16.0;
     final end = widget.item.endsAt.add(const Duration(minutes: 20));
-    final add = FilledButton(
+    final add = FloeButton.filled(
       onPressed: () => Navigator.pop(context, true),
       child: const Text('Add break'),
     );
-    final keep = OutlinedButton(
+    final keep = FloeButton.outlined(
       onPressed: () => Navigator.pop(context),
       child: const Text('Keep current'),
     );
@@ -2190,7 +2193,7 @@ class _TimelineSuggestionPanelState extends State<_TimelineSuggestionPanel> {
               ),
               FloeSquircle(
                 size: FloeSquircleSize.md,
-                child: IconButton(
+                child: FloeButton.icon(
                   tooltip: 'Close suggestion',
                   style: IconButton.styleFrom(
                     fixedSize: const Size.square(36),
@@ -2256,7 +2259,7 @@ class _TimelineSuggestionPanelState extends State<_TimelineSuggestionPanel> {
           SizedBox(height: gap),
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton(
+            child: FloeButton.text(
               style: TextButton.styleFrom(
                 padding: EdgeInsets.zero,
                 minimumSize: Size.zero,
@@ -2365,7 +2368,7 @@ class _DayRow extends StatelessWidget {
           color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
         ),
       ),
-      trailing: IconButton(
+      trailing: FloeButton.icon(
         tooltip: '${item.title} 삭제',
         onPressed: disabled ? null : () => _confirmDelete(context),
         icon: const Icon(Icons.more_horiz, size: 20),
@@ -2380,11 +2383,11 @@ class _DayRow extends StatelessWidget {
         title: const Text('항목을 삭제할까요?'),
         content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
         actions: [
-          TextButton(
+          FloeButton.text(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('취소'),
           ),
-          FilledButton(
+          FloeButton.filled(
             onPressed: () => Navigator.pop(context, true),
             style: FloeTheme.destructiveButtonStyle,
             child: const Text('삭제'),
@@ -2434,7 +2437,7 @@ class _CaptureBar extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  IconButton(
+                  FloeButton.icon(
                     tooltip: 'Dismiss capture',
                     onPressed: dismiss,
                     icon: const Icon(LucideIcons.x, size: 17),
@@ -2482,7 +2485,7 @@ class _CaptureBar extends StatelessWidget {
                     message: '캡처 저장',
                     child: SizedBox.square(
                       dimension: 44,
-                      child: FilledButton(
+                      child: FloeButton.filled(
                         style: FilledButton.styleFrom(
                           padding: EdgeInsets.zero,
                           shape: floeSquircleBorder(FloeSquircleSize.md),
@@ -2522,10 +2525,10 @@ class _FailureDay extends StatelessWidget {
   final VoidCallback retry;
   @override
   Widget build(BuildContext context) => Center(
-    child: FilledButton.icon(
+    child: FloeButton.filled(
       onPressed: retry,
       icon: const Icon(Icons.refresh),
-      label: const Text('다시 불러오기'),
+      child: const Text('다시 불러오기'),
     ),
   );
 }
@@ -2550,7 +2553,7 @@ class _ErrorNotice extends StatelessWidget {
           const Icon(Icons.error_outline, color: FloePalette.error600),
           const SizedBox(width: FloeSpace.md),
           Expanded(child: Text(message)),
-          TextButton(onPressed: dismiss, child: const Text('닫기')),
+          FloeButton.text(onPressed: dismiss, child: const Text('닫기')),
         ],
       ),
     ),
@@ -2659,14 +2662,14 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  TextButton(
+                  FloeButton.text(
                     onPressed: pending
                         ? null
                         : () => Navigator.pop(context, false),
                     child: const Text('나중에'),
                   ),
                   const SizedBox(width: FloeSpace.sm),
-                  FilledButton(
+                  FloeButton.filled(
                     onPressed: pending || kind == null ? null : _submit,
                     child: const Text('분류하여 추가'),
                   ),
@@ -2742,7 +2745,7 @@ class _TimeField extends StatelessWidget {
   final TimeOfDay value;
   final ValueChanged<TimeOfDay> onChanged;
   @override
-  Widget build(BuildContext context) => OutlinedButton(
+  Widget build(BuildContext context) => FloeButton.outlined(
     onPressed: () async {
       final selected = await showTimePicker(
         context: context,
@@ -2781,7 +2784,7 @@ class _TaskFields extends StatelessWidget {
       const Text('마감 설정'),
       const Spacer(),
       if (deadline != null)
-        TextButton(
+        FloeButton.text(
           onPressed: () async {
             final selected = await showDatePicker(
               context: context,

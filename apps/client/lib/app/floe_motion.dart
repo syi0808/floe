@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 abstract final class FloeMotion {
   static const easeOut = Cubic(0.23, 1, 0.32, 1);
@@ -72,15 +73,13 @@ final class _FloeScreenEntranceState extends State<FloeScreenEntrance>
 
 final class PressableScale extends StatefulWidget {
   const PressableScale({
-    required this.child,
-    this.enabled = true,
+    required this.builder,
     this.scale = 0.97,
     this.alignment = Alignment.center,
     super.key,
-  });
+  }) : assert(scale > 0 && scale <= 1);
 
-  final Widget child;
-  final bool enabled;
+  final Widget Function(WidgetStatesController states) builder;
   final double scale;
   final Alignment alignment;
 
@@ -88,37 +87,76 @@ final class PressableScale extends StatefulWidget {
   State<PressableScale> createState() => _PressableScaleState();
 }
 
-final class _PressableScaleState extends State<PressableScale> {
-  bool _pointerDown = false;
+final class _PressableScaleState extends State<PressableScale>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController animation = AnimationController(
+    vsync: this,
+    value: 1,
+    lowerBound: 0,
+    upperBound: 1,
+  );
+  late final WidgetStatesController states = WidgetStatesController()
+    ..addListener(_onStatesChanged);
+  bool reduceMotion = false;
+  bool updateScheduled = false;
+
+  void _onStatesChanged() {
+    if (SchedulerBinding.instance.schedulerPhase !=
+        SchedulerPhase.persistentCallbacks) {
+      _updateScale();
+      return;
+    }
+    if (updateScheduled) return;
+    updateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      updateScheduled = false;
+      if (mounted) _updateScale();
+    });
+  }
+
+  void _updateScale() {
+    final pressed =
+        states.value.contains(WidgetState.pressed) &&
+        !states.value.contains(WidgetState.disabled);
+    final target = pressed && !reduceMotion ? widget.scale : 1.0;
+    if (animation.value == target && !animation.isAnimating) return;
+    if (reduceMotion || states.value.contains(WidgetState.disabled)) {
+      animation.value = target;
+    } else {
+      animation.animateTo(
+        target,
+        duration: FloeMotion.pressDuration,
+        curve: FloeMotion.easeOut,
+      );
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    reduceMotion = FloeMotion.reduceMotion(context);
+    _updateScale();
+  }
 
   @override
   void didUpdateWidget(PressableScale oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled && _pointerDown) {
-      _pointerDown = false;
-    }
+    _updateScale();
   }
 
-  void _setPointerDown(bool value) {
-    if (!widget.enabled || _pointerDown == value) return;
-    setState(() => _pointerDown = value);
+  @override
+  void dispose() {
+    states.dispose();
+    animation.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final reduceMotion = FloeMotion.reduceMotion(context);
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) => _setPointerDown(true),
-      onPointerUp: (_) => _setPointerDown(false),
-      onPointerCancel: (_) => _setPointerDown(false),
-      child: AnimatedScale(
-        scale: _pointerDown && !reduceMotion ? widget.scale : 1,
-        alignment: widget.alignment,
-        duration: reduceMotion ? Duration.zero : FloeMotion.pressDuration,
-        curve: FloeMotion.easeOut,
-        child: widget.child,
-      ),
+    return ScaleTransition(
+      scale: animation,
+      alignment: widget.alignment,
+      child: widget.builder(states),
     );
   }
 }
