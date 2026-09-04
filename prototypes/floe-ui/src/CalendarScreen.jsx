@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -42,9 +42,30 @@ const scenarios = {
   uncollected: 'Date not collected',
   loadError: 'Local data failed to load',
 };
-const timelineStartMinutes = 8 * 60;
-const pixelsPerMinute = 1;
+const timelineStartMinutes = 0;
 const externalEvents = [
+  {
+    id: 'quick',
+    calendarId: 'personal',
+    title: 'A quick check-in',
+    time: '12:30 – 12:35 PM',
+    startMinutes: 12 * 60 + 30,
+    endMinutes: 12 * 60 + 35,
+    detail: 'Five-minute check-in',
+    timezone: 'Asia/Seoul',
+    original: 'Sep 4, 12:30 – 12:35 PM KST',
+  },
+  {
+    id: 'closing',
+    calendarId: 'personal',
+    title: 'Close the day',
+    time: '11:55 PM – 12:00 AM',
+    startMinutes: 23 * 60 + 55,
+    endMinutes: 24 * 60,
+    detail: 'Five minutes before midnight',
+    timezone: 'Asia/Seoul',
+    original: 'Sep 4, 11:55 PM – Sep 5, 12:00 AM KST',
+  },
   {
     id: 'standup',
     calendarId: 'work',
@@ -95,6 +116,9 @@ export function CalendarScreen({ page, onNavigate }) {
     return Object.hasOwn(scenarios, scenario) ? scenario : 'connected';
   });
   const [dayOffset, setDayOffset] = useState(() => (phase === 'uncollected' ? 1 : 0));
+  const [pixelsPerMinute, setPixelsPerMinute] = useState(1);
+  const timelineScroll = useRef(null);
+  const scrollMinute = useRef(8 * 60);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState('');
   const [taskDone, setTaskDone] = useState(false);
@@ -144,6 +168,12 @@ export function CalendarScreen({ page, onNavigate }) {
     },
     [],
   );
+
+  useLayoutEffect(() => {
+    if (timelineScroll.current) {
+      timelineScroll.current.scrollTop = scrollMinute.current * pixelsPerMinute;
+    }
+  }, [page, pixelsPerMinute, phase === 'loadError']);
 
   function notify(message) {
     clearTimeout(toastTimer.current);
@@ -447,59 +477,109 @@ export function CalendarScreen({ page, onNavigate }) {
                     </button>
                   )}
                 </div>
-                <div
-                  className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
-                  aria-label="Day timeline"
-                  style={{ height: 10 * 60 * pixelsPerMinute }}
-                >
-                  {Array.from({ length: 10 }, (_, index) => (
-                    <div
-                      className="s1-hour"
-                      key={index}
-                      style={{ top: index * 60 * pixelsPerMinute }}
+                <div className="s1-timeline-tools">
+                  <span>00:00–24:00</span>
+                  <label>
+                    Zoom
+                    <select
+                      aria-label="Timeline zoom"
+                      value={pixelsPerMinute}
+                      onChange={(event) => setPixelsPerMinute(Number(event.target.value))}
                     >
-                      <time>
-                        {index + 8 > 12 ? index - 4 : index + 8}
-                        {index + 8 >= 12 ? ' PM' : ' AM'}
-                      </time>
-                      <span />
-                    </div>
-                  ))}
-                  {hasCache &&
-                    externalEvents.map((event) => (
-                      <SquircleButton
-                        key={event.id}
-                        disabled={phase === 'syncing'}
-                        className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
-                        data-density={
-                          event.endMinutes - event.startMinutes <= 30
-                            ? 'compact'
-                            : event.endMinutes - event.startMinutes < 60
-                              ? 'medium'
-                              : 'full'
-                        }
-                        aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
-                        style={{
-                          top: (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
-                          height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
-                        }}
-                        onClick={() => setModal(event)}
-                      >
-                        <span
-                          className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
+                      <option value="1">1×</option>
+                      <option value="3">3×</option>
+                      <option value="12">12× · 5 min</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="s1-timeline-viewport">
+                  <div
+                    className="s1-timeline-scroll"
+                    ref={timelineScroll}
+                    role="region"
+                    aria-label="24-hour calendar"
+                    tabIndex={0}
+                    onScroll={(event) => {
+                      scrollMinute.current = event.currentTarget.scrollTop / pixelsPerMinute;
+                    }}
+                  >
+                    <div
+                      className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
+                      aria-label="Day timeline"
+                      style={{ height: 24 * 60 * pixelsPerMinute }}
+                    >
+                      {Array.from({ length: 25 }, (_, index) => (
+                        <div
+                          className="s1-hour"
+                          key={index}
+                          style={{ top: index * 60 * pixelsPerMinute }}
+                        >
+                          <time>{String(index).padStart(2, '0')}:00</time>
+                          <span />
+                        </div>
+                      ))}
+                      {Array.from({ length: 24 }, (_, index) => (
+                        <div
+                          key={index}
+                          className="s1-half-hour-line"
+                          style={{ top: (index * 60 + 30) * pixelsPerMinute }}
                         />
-                        <span>
-                          <strong>{event.title}</strong>
-                          <time>{event.time}</time>
-                          <small>
-                            {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
-                            {event.detail}
-                            {event.recurring ? ' · Repeats' : ''}
-                          </small>
-                        </span>
-                        <LockKeyhole size={13} />
-                      </SquircleButton>
-                    ))}
+                      ))}
+                      {hasCache &&
+                        [...externalEvents]
+                          .sort((first, second) => first.startMinutes - second.startMinutes)
+                          .map((event) => (
+                            <SquircleButton
+                              key={event.id}
+                              radius={Math.min(
+                                16,
+                                ((event.endMinutes - event.startMinutes) * pixelsPerMinute) / 4,
+                              )}
+                              title={`${event.title} · ${event.time}`}
+                              disabled={phase === 'syncing'}
+                              className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
+                              data-density={
+                                (event.endMinutes - event.startMinutes) * pixelsPerMinute < 24
+                                  ? 'micro'
+                                  : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 40
+                                    ? 'compact'
+                                    : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 58
+                                      ? 'medium'
+                                      : 'full'
+                              }
+                              aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
+                              style={{
+                                top: (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
+                                height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
+                              }}
+                              onClick={() => setModal(event)}
+                            >
+                              <span
+                                className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
+                              />
+                              <span>
+                                <strong>{event.title}</strong>
+                                <time>{event.time}</time>
+                                <small>
+                                  {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
+                                  {event.detail}
+                                  {event.recurring ? ' · Repeats' : ''}
+                                </small>
+                              </span>
+                              <LockKeyhole size={13} />
+                            </SquircleButton>
+                          ))}
+                      {dayOffset === 0 && (
+                        <div
+                          className="s1-now"
+                          style={{ top: (14 * 60 + 28 - timelineStartMinutes) * pixelsPerMinute }}
+                        >
+                          <time>2:28 PM</time>
+                          <span />
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   {!hasCache && phase !== 'syncing' && (
                     <div className="s1-empty-day">
                       <img src={mascotUrl} alt="" />
@@ -542,15 +622,6 @@ export function CalendarScreen({ page, onNavigate }) {
                       </SquircleButton>
                     </div>
                   )}
-                  {dayOffset === 0 && (
-                    <div
-                      className="s1-now"
-                      style={{ top: (14 * 60 + 28 - timelineStartMinutes) * pixelsPerMinute }}
-                    >
-                      <time>2:28 PM</time>
-                      <span />
-                    </div>
-                  )}
                 </div>
               </Surface>
             )}
@@ -570,10 +641,7 @@ export function CalendarScreen({ page, onNavigate }) {
                     Finish the launch brief<small>One good thing to move forward</small>
                   </span>
                 </label>
-                <button
-                  className="s1-text-link"
-                  onClick={() => onNavigate('tasks')}
-                >
+                <button className="s1-text-link" onClick={() => onNavigate('tasks')}>
                   <span>See your tasks</span> <ArrowRight size={15} />
                 </button>
               </Surface>

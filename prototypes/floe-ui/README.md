@@ -10,6 +10,9 @@ settings icon) opens Calendar management. Task Detail, Notes and Progress remain
 - **Today:** open an event for provenance, original/display time zones, recurrence,
   and all-day exclusive boundaries. Changing the date automatically loads its events
   with a loading indicator; manual refresh remains available. Cached dates are preserved.
+- **Full day:** scroll inside the calendar from 00:00 to 24:00. Zoom to 3× or 12× to
+  inspect short events. Five-minute fixtures at 12:30 and 23:55 retain exact duration;
+  see [event density rules](../../docs/design/calendar-event-layout.md).
 - **Connect / Settings:** inspect all included calendars/accounts and stored dates;
   refresh all calendars, manage permission recovery, or simulate integration-wide
   disconnection. There is no single-calendar selection or switching flow.
