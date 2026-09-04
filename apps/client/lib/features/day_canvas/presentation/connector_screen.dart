@@ -8,6 +8,8 @@ import '../../../app/floe_squircle.dart';
 import '../application/calendar_gateway.dart';
 import '../domain/day_models.dart';
 import 'calendar_panel.dart';
+import '../application/ffi_day_gateway.dart';
+import '../../server/local_server_panel.dart';
 
 class ConnectorScreen extends StatefulWidget {
   const ConnectorScreen({
@@ -108,6 +110,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           style: TextStyle(color: FloePalette.neutral600),
         ),
         SizedBox(height: 36),
+        if (widget.gateway case FfiDayGateway gateway) ...[
+          LocalServerPanel(client: gateway.serverClient),
+          const SizedBox(height: 28),
+        ],
         Text(
           widget.connection == null
               ? AppLocalizations.of(context).availableServices

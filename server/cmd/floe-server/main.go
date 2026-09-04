@@ -10,13 +10,47 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"floe/server/internal/codexauth"
+	"floe/server/internal/console"
+	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 )
 
 func main() {
+	var handler http.Handler
+	address := "127.0.0.1:8431"
+	if os.Getenv("FLOE_INFERENCE_CONFIG") == "" || os.Getenv("FLOE_SERVER_DATA") != "" {
+		directory := os.Getenv("FLOE_SERVER_DATA")
+		if directory == "" {
+			base, err := os.UserConfigDir()
+			if err != nil {
+				log.Fatal("Cannot locate server data directory")
+			}
+			directory = filepath.Join(base, "FloeServer")
+		}
+		if configured := os.Getenv("FLOE_SERVER_ADDRESS"); configured != "" {
+			address = configured
+		}
+		runtime := codexauth.New(directory)
+		defer runtime.Close()
+		management, err := console.New(directory, address, credentials.Keychain{}, runtime)
+		if err != nil {
+			log.Fatal("Cannot start local console: check private data directory and loopback address")
+		}
+		handler = management
+		log.Printf("Local dashboard: http://%s/manage/", address)
+		log.Printf("Administrator token file (keep private): %s", filepath.Join(directory, "admin-token"))
+	} else {
+		handler = legacyGateway()
+	}
+	serve(handler, address)
+}
+
+func legacyGateway() http.Handler {
 	configFile, err := os.Open(os.Getenv("FLOE_INFERENCE_CONFIG"))
 	if err != nil {
 		log.Fatal("Set FLOE_INFERENCE_CONFIG to a gateway configuration file")
@@ -32,10 +66,14 @@ func main() {
 	if err != nil {
 		log.Fatal("Invalid inference configuration or missing credential")
 	}
+	return gateway
+}
+
+func serve(handler http.Handler, address string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server := &http.Server{
-		Addr: "127.0.0.1:8431", Handler: gateway,
+		Addr: address, Handler: handler,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192,
 		BaseContext: func(net.Listener) context.Context { return ctx },
@@ -48,7 +86,7 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}()
-	log.Print("Floe inference gateway listening on 127.0.0.1:8431")
+	log.Printf("Floe inference gateway listening on %s", address)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal("Inference gateway stopped unexpectedly")
 	}

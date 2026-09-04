@@ -169,6 +169,22 @@ pub struct CalendarRecordDto {
     pub schedule: EventScheduleDto,
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InferenceConnectionDto {
+    pub base_url: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for InferenceConnectionDto {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InferenceConnectionDto")
+            .field("base_url", &self.base_url)
+            .field("token", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
@@ -181,6 +197,8 @@ pub enum CommandDto {
         model: String,
         #[serde(default)]
         allow_external: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection: Option<InferenceConnectionDto>,
     },
     SelectCalendars {
         provider: floe_domain::CalendarProvider,

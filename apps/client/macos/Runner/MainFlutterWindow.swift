@@ -2,9 +2,11 @@ import Cocoa
 import FlutterMacOS
 import EventKit
 import CryptoKit
+import Security
 
 class MainFlutterWindow: NSWindow {
   private let calendarBridge = CalendarBridge()
+  private let serverBridge = LocalServerBridge()
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -22,8 +24,62 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
     let channel = FlutterMethodChannel(name: "floe/calendar", binaryMessenger: flutterViewController.engine.binaryMessenger)
     channel.setMethodCallHandler(calendarBridge.handle)
+    let serverChannel = FlutterMethodChannel(name: "floe/local-server", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    serverChannel.setMethodCallHandler(serverBridge.handle)
 
     super.awakeFromNib()
+  }
+}
+
+final class LocalServerBridge {
+  private var query: [String: Any] {
+    [kSecClass as String: kSecClassGenericPassword,
+     kSecAttrService as String: "app.floe.local-server",
+     kSecAttrAccount as String: "connection-v1"]
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "open":
+      guard let source = call.arguments as? String,
+            let url = URL(string: source), url.scheme == "http", url.host == "127.0.0.1",
+            url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+            url.path == "/manage/" || url.path == "/manage" else {
+        result(failure()); return
+      }
+      if NSWorkspace.shared.open(url) { result(nil) } else { result(failure()) }
+    case "read":
+      var request = query
+      request[kSecReturnData as String] = true
+      request[kSecMatchLimit as String] = kSecMatchLimitOne
+      var found: CFTypeRef?
+      let status = SecItemCopyMatching(request as CFDictionary, &found)
+      if status == errSecItemNotFound { result(nil); return }
+      guard status == errSecSuccess, let data = found as? Data,
+            let value = String(data: data, encoding: .utf8) else { result(failure()); return }
+      result(value)
+    case "write":
+      guard let value = call.arguments as? String, value.utf8.count <= 4096,
+            let data = value.data(using: .utf8) else { result(failure()); return }
+      let update = [kSecValueData as String: data]
+      var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+      if status == errSecItemNotFound {
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        status = SecItemAdd(item as CFDictionary, nil)
+      }
+      result(status == errSecSuccess ? nil : failure())
+    case "delete":
+      let status = SecItemDelete(query as CFDictionary)
+      result(status == errSecSuccess || status == errSecItemNotFound ? nil : failure())
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func failure() -> FlutterError {
+    FlutterError(code: "credential_store_unavailable", message: "Could not access the local server connection.", details: nil)
   }
 }
 

@@ -55,6 +55,9 @@ flutter run -d macos
 
 ## Working rules
 
+Local model connections and app pairing: [server dashboard setup](server/README.md#local-dashboard-and-app-pairing).
+The node is loopback-only; it is not the hosted/sync server.
+
 JavaScript/TypeScript projects in this repository use **pnpm**, with the version
 pinned in each `package.json`. Commit `pnpm-lock.yaml`, not npm or Yarn lockfiles.
 See the [prototype setup](prototypes/floe-ui/README.md#run) for installation and scripts.

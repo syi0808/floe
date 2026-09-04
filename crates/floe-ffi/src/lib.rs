@@ -206,9 +206,18 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
         CommandDto::SuggestFocus {
             model,
             allow_external,
+            connection,
         } => {
-            let model =
+            let mut model =
                 floe_core::GatewayScheduleModel::new(model, allow_external).map_err(core_error)?;
+            if let Some(connection) = connection {
+                model = model
+                    .with_connection(floe_core::GatewayConnection {
+                        base_url: connection.base_url,
+                        token: connection.token,
+                    })
+                    .map_err(core_error)?;
+            }
             focus_proposal = Some(
                 handle
                     .runtime

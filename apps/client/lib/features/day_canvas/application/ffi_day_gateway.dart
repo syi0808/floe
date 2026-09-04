@@ -14,6 +14,7 @@ import 'day_gateway.dart';
 import 'calendar_gateway.dart';
 import 'focus_gateway.dart';
 import '../domain/focus_models.dart';
+import '../../server/local_server_client.dart';
 
 const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
@@ -34,6 +35,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
     this._commands,
     this._clock,
     this._calendarAdapter,
+    this.serverClient,
   ) {
     _finalizer.attach(this, _commands, detach: this);
   }
@@ -46,6 +48,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
   final SendPort _commands;
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
+  final LocalServerClient serverClient;
   bool _closed = false;
 
   static Future<FfiDayGateway> openDefault() async {
@@ -65,6 +68,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
     required String databasePath,
     DateTime Function()? clock,
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
+    LocalServerClient? serverClient,
   }) async {
     final ready = ReceivePort();
     final isolate = await Isolate.spawn(_ffiWorkerMain, {
@@ -83,6 +87,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
       result['commands']! as SendPort,
       clock ?? DateTime.now,
       calendarAdapter,
+      serverClient ?? LocalServerClient.shared,
     );
   }
 
@@ -216,10 +221,12 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
     String model, {
     bool allowExternal = false,
   }) async {
+    final connection = await serverClient.connection();
     final result = await _focusRequest(query, {
       'type': 'suggest_focus',
       'model': model,
       'allow_external': allowExternal,
+      if (connection != null) 'connection': connection.toInferenceJson(),
     });
     return FocusProposal.fromJson(_asMap(result['focus_proposal']));
   }

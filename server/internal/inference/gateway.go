@@ -43,7 +43,7 @@ type Gateway struct {
 var targetID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func New(config Config, token string, lookup func(string) string) (*Gateway, error) {
-	if len(token) < 32 || strings.ContainsAny(token, "\r\n ") || len(config.Targets) == 0 || len(config.Targets) > 32 {
+	if len(token) < 32 || strings.ContainsAny(token, "\r\n ") || len(config.Targets) > 32 {
 		return nil, errors.New("invalid inference configuration")
 	}
 	gateway := &Gateway{tokenHash: sha256.Sum256([]byte(token)), targets: make(map[string]*provider), active: make(chan struct{}, 4), timeout: 40 * time.Second}

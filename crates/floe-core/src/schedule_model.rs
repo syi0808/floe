@@ -21,9 +21,49 @@ pub fn schedule_output_schema(view: &ScheduleView) -> Value {
 pub struct GatewayScheduleModel {
     target: String,
     allow_external: bool,
+    connection: Option<GatewayConnection>,
+}
+
+pub struct GatewayConnection {
+    pub base_url: String,
+    pub token: String,
+}
+
+impl GatewayConnection {
+    fn validate(&self) -> Result<(), CoreError> {
+        let valid_url = reqwest::Url::parse(&self.base_url).is_ok_and(|url| {
+            url.scheme() == "http"
+                && url.host_str() == Some("127.0.0.1")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && matches!(url.path(), "" | "/")
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.port_or_known_default().is_some_and(|port| port > 0)
+        });
+        if !valid_url
+            || !(32..=256).contains(&self.token.len())
+            || !self
+                .token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+        {
+            return Err(CoreError::new(
+                ErrorCode::Validation,
+                "invalid local gateway connection",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl GatewayScheduleModel {
+    pub fn with_connection(mut self, connection: GatewayConnection) -> Result<Self, CoreError> {
+        connection.validate()?;
+        self.connection = Some(connection);
+        Ok(self)
+    }
+
     pub fn new(target: String, allow_external: bool) -> Result<Self, CoreError> {
         if target.is_empty()
             || target.len() > 64
@@ -39,6 +79,7 @@ impl GatewayScheduleModel {
         Ok(Self {
             target,
             allow_external,
+            connection: None,
         })
     }
 }
@@ -49,15 +90,25 @@ impl ScheduleModel for GatewayScheduleModel {
     }
 
     async fn generate(&self, view: &ScheduleView) -> Result<String, CoreError> {
-        let token = std::env::var("FLOE_INFERENCE_TOKEN")
-            .ok()
-            .filter(|token| token.len() >= 32)
-            .ok_or_else(|| {
-                CoreError::new(
-                    ErrorCode::ModelUnavailable,
-                    "configure the local inference gateway",
-                )
-            })?;
+        let fallback;
+        let connection = if let Some(connection) = &self.connection {
+            connection
+        } else {
+            fallback = GatewayConnection {
+                base_url: "http://127.0.0.1:8431".to_owned(),
+                token: std::env::var("FLOE_INFERENCE_TOKEN")
+                    .ok()
+                    .filter(|token| token.len() >= 32)
+                    .ok_or_else(|| {
+                        CoreError::new(
+                            ErrorCode::ModelUnavailable,
+                            "configure the local inference gateway",
+                        )
+                    })?,
+            };
+            fallback.validate()?;
+            &fallback
+        };
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -67,8 +118,11 @@ impl ScheduleModel for GatewayScheduleModel {
             .build()
             .map_err(transport_error)?;
         let mut response = client
-            .post("http://127.0.0.1:8431/v1/generate")
-            .bearer_auth(token)
+            .post(format!(
+                "{}/v1/generate",
+                connection.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&connection.token)
             .json(&json!({
                 "schema_version": 1,
                 "target": self.target,

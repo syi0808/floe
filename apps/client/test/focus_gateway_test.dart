@@ -5,6 +5,9 @@ import 'package:floe_client/features/day_canvas/application/focus_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/domain/focus_models.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/features/server/local_server_client.dart';
+
+import 'support/server_credentials.dart';
 
 void main() {
   test('actual JSON/C ABI persists scoped preference CRUD and rejects stale writes', () async {
@@ -25,6 +28,7 @@ void main() {
       libraryPath: File('../../target/debug/libfloe_ffi.dylib').absolute.path,
       databasePath: '${directory.path}/focus.db',
       clock: () => now,
+      serverClient: LocalServerClient(store: MemoryServerCredentials()),
     );
     var gateway = await open();
     addTearDown(() async {

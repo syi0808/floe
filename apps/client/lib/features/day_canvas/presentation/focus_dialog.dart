@@ -8,6 +8,7 @@ import '../../../app/floe_feedback.dart';
 import '../../../app/floe_squircle.dart';
 import '../application/focus_controller.dart';
 import '../application/focus_gateway.dart';
+import '../application/ffi_day_gateway.dart';
 import '../domain/day_models.dart';
 import '../domain/focus_models.dart';
 
@@ -40,6 +41,7 @@ class _FocusDialogState extends State<FocusDialog> {
   bool allowExternal = false;
   bool dirty = false;
   bool invalidPreference = false;
+  bool serverUnavailable = false;
 
   @override
   void initState() {
@@ -49,6 +51,16 @@ class _FocusDialogState extends State<FocusDialog> {
   }
 
   Future<void> _load() async {
+    if (widget.gateway case FfiDayGateway gateway) {
+      try {
+        final connection = await gateway.serverClient.connection();
+        if (mounted && model.text.isEmpty && connection != null) {
+          model.text = connection.target;
+        }
+      } on Object {
+        serverUnavailable = true;
+      }
+    }
     if (await controller.load() && mounted) _restoreFields();
   }
 
@@ -193,6 +205,10 @@ class _FocusDialogState extends State<FocusDialog> {
           if (invalidPreference) _notice(strings.focusInvalidPreference),
           const SizedBox(height: 24),
           FloeInfoNote(text: strings.focusDisclosure),
+          if (serverUnavailable)
+            const FloeInfoNote(
+              text: 'Check your local server connection in Connections before requesting a suggestion.',
+            ),
           const SizedBox(height: 16),
           TextField(
             controller: model,

@@ -47,10 +47,14 @@ These are fixture results, not real model or live Calendar acceptance.
 
 ## Live setup
 
-Follow [the gateway README](../../server/README.md). The gateway and Flutter process
-must share a newly provisioned local gateway token. Provider credentials are
-injected only into Go. Do not paste credentials into configuration JSON, chat,
+Follow [the gateway README](../../server/README.md) for the local dashboard and app
+pairing. The legacy headless mode instead requires a shared environment token.
+Provider credentials stay in the Go-side Keychain (legacy: Go environment).
+Do not paste credentials into configuration JSON, chat,
 model fields, committed files or logs.
+
+[Local console validation](local-connections.md) records the additional paired-port
+integration, secret-store checks and remaining native UI/OAuth gates.
 
 Use synthetic events or the dedicated S1 test Calendar. Enter a configured target
 ID in **When should I focus today?**. Review the target's configured provider/model

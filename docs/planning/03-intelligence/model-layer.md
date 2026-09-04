@@ -10,9 +10,11 @@
 이는 업무 의미나 privacy를 추측하는 중앙 smart router가 아니다.
 
 Apple Foundation Models 같은 기기 내 모델은 native executor 경계로 분리하며
-원격 서버를 필수 경유하지 않는다. CLIProxyAPI 전체 채택과 OAuth adapter는
-보류한다. 현재 구현은 loopback Go service + API/Ollama의 bounded non-streaming
-호출이며, OAuth·native adapter·streaming·사용량 집계는 완료된 것으로 보지 않는다.
+원격 서버를 필수 경유하지 않는다. CLIProxyAPI 전체 채택은 보류한다.
+[ADR 0010](../../decisions/0010-local-connection-console.md)은 로컬 관리 콘솔,
+Keychain 기반 키 등록, 앱 주소 설정·페어링 및 Codex 공식 인증 preview를 추가한다.
+추론은 API/Ollama의 bounded non-streaming 호출이며 Codex 추론은 비활성이다.
+실제 OAuth consent/refresh·native adapter·streaming·사용량 집계는 완료된 것으로 보지 않는다.
 
 ## 핵심 원칙
 

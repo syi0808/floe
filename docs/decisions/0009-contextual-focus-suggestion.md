@@ -44,6 +44,10 @@ Rust host → validate returned proposal → Flutter presentation
 
 ## First implementation
 
+The headless baseline below is extended by [ADR 0010](0010-local-connection-console.md):
+the default local console adds managed target registration, Keychain-backed credentials,
+app pairing/configurable local address and a gated Codex authentication preview.
+
 The Go module lives under `server/`, has no third-party Go dependencies, and
 runs explicitly as a loopback-only developer service on `127.0.0.1:8431`.
 This is not the hosted/multi-user server, resident Device Agent or S4 sync slice.
@@ -89,8 +93,8 @@ an event/task and are not S3 executable action proposals.
 
 ## Known limits and deferred work
 
-- Live model quality, OAuth lifecycle, Apple model availability, credential vault
-  integration and native UI review remain unverified.
+- Live model quality, actual OAuth consent/refresh, Apple model availability and
+  native UI review remain unverified. ADR 0010 records local vault/console evidence.
 - All-day events conservatively block the day. Candidate starts are sampled every
   15 minutes from the first available minute; this is not global optimization.
 - The existing DayQuery fixed-offset contract does not provide IANA/DST handling.
