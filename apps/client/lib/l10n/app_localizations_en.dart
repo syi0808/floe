@@ -280,6 +280,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get savedInFloe => 'Saved in Floe';
 
   @override
+  String get calendarsRefreshed => 'Calendars refreshed';
+
+  @override
+  String get localTasksAndNotesUnchanged =>
+      'Your local tasks and notes are unchanged.';
+
+  @override
   String get sourceTimeZone => 'Source time zone';
 
   @override

@@ -9,6 +9,7 @@ import '../features/day_canvas/application/ffi_day_gateway.dart';
 import '../features/day_canvas/domain/day_models.dart';
 import '../features/day_canvas/presentation/personal_day_screen.dart';
 import 'floe_theme.dart';
+import 'floe_toast.dart';
 
 class FloeApp extends StatefulWidget {
   const FloeApp({
@@ -52,7 +53,12 @@ class _FloeAppState extends State<FloeApp> {
       locale: widget.locale,
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
-      home: PersonalDayScreen(gateway: widget.gateway, query: effectiveQuery),
+      home: FloeToastHost(
+        child: PersonalDayScreen(
+          gateway: widget.gateway,
+          query: effectiveQuery,
+        ),
+      ),
     );
   }
 }

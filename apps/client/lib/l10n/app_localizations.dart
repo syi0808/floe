@@ -616,6 +616,18 @@ abstract class AppLocalizations {
   /// **'Saved in Floe'**
   String get savedInFloe;
 
+  /// No description provided for @calendarsRefreshed.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars refreshed'**
+  String get calendarsRefreshed;
+
+  /// No description provided for @localTasksAndNotesUnchanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Your local tasks and notes are unchanged.'**
+  String get localTasksAndNotesUnchanged;
+
   /// No description provided for @sourceTimeZone.
   ///
   /// In en, this message translates to:

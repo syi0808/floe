@@ -7,6 +7,90 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 
 void main() {
+  testWidgets('task toast preserves undo and survives navigation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final now = DateTime(2026, 9, 4);
+    final gateway = FakeDayGateway(
+      initialItems: [
+        TaskItem(
+          id: 'toast-task',
+          title: 'Toast task',
+          revision: 0,
+          createdAt: now,
+        ),
+      ],
+    );
+    final query = DayQuery(
+      personId: 'test',
+      date: now,
+      now: now,
+      timezoneOffsetSeconds: 0,
+    );
+    await tester.pumpWidget(FloeApp(gateway: gateway, query: query));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Undo'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(
+      (await gateway.loadDay(query)).items
+          .whereType<TaskItem>()
+          .single
+          .isCompleted,
+      isTrue,
+    );
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Undo'), findsOneWidget);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(
+      (await gateway.loadDay(query)).items
+          .whereType<TaskItem>()
+          .single
+          .isCompleted,
+      isFalse,
+    );
+    expect(find.text('Undo'), findsNothing);
+  });
+
+  testWidgets(
+    'capture success keeps the input available and refresh uses toast',
+    (tester) async {
+      tester.view.physicalSize = Size(1440, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(FloeApp(gateway: FakeDayGateway()));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(Key('capture-field')),
+        'Keep a little room',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Thought'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Classify and add'));
+      await tester.pumpAndSettle();
+      expect(find.text('Saved in Floe'), findsOneWidget);
+      final field = tester.widget<TextField>(find.byKey(Key('capture-field')));
+      expect(field.enabled, isTrue);
+      expect(field.controller!.text, isEmpty);
+      await tester.tap(find.byTooltip('Refresh calendar'));
+      await tester.pumpAndSettle();
+      expect(find.text('Calendars refreshed'), findsOneWidget);
+      await tester.pump(Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('calendar navigation distinguishes selected dates from today', (
     tester,
   ) async {

@@ -9,6 +9,7 @@ import '../../../app/floe_mascot.dart';
 import '../../../app/floe_motion.dart';
 import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
+import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
 import '../application/calendar_gateway.dart';
 import '../application/personal_day_controller.dart';
@@ -38,7 +39,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   final captureController = TextEditingController();
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
-  String? capturedText;
 
   @override
   void initState() {
@@ -106,8 +106,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             textController: captureController,
             pending: controller.commandPending,
             submit: _capture,
-            capturedText: capturedText,
-            dismiss: () => setState(() => capturedText = null),
           ),
         ],
       ),
@@ -268,21 +266,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   Future<void> _setTaskCompleted(TaskItem task, bool completed) async {
     await controller.setTaskCompleted(task, completed);
     if (!mounted || controller.errorMessage != null) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            completed
-                ? AppLocalizations.of(context).taskCompleted
-                : AppLocalizations.of(context).taskMarkedIncomplete,
-          ),
-          action: SnackBarAction(
-            label: AppLocalizations.of(context).undo,
-            onPressed: () => controller.setTaskCompleted(task, !completed),
-          ),
-        ),
-      );
+    FloeToastHost.of(context).show(
+      title: completed
+          ? AppLocalizations.of(context).taskCompleted
+          : AppLocalizations.of(context).taskMarkedIncomplete,
+      actionLabel: AppLocalizations.of(context).undo,
+      onAction: () {
+        if (mounted) controller.setTaskCompleted(task, !completed);
+      },
+    );
   }
 
   Future<void> _capture() async {
@@ -310,14 +302,22 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           );
     if (saved == true && mounted) {
       captureController.clear();
-      setState(() => capturedText = input);
+      FloeToastHost.of(context).show(
+        title: AppLocalizations.of(context).savedInFloe,
+        description: input,
+      );
     }
   }
 
   Future<bool> _createNote(String content) async {
     if (controller.commandPending) return false;
     if (!await controller.submitCapture(content)) return false;
-    return controller.classify(NoteDraft(content: content));
+    final saved = await controller.classify(NoteDraft(content: content));
+    if (saved && mounted) {
+      FloeToastHost.of(context)
+          .show(title: AppLocalizations.of(context).savedInFloe);
+    }
+    return saved;
   }
 }
 
@@ -552,7 +552,19 @@ class _DayToolbar extends StatelessWidget {
             tooltip: AppLocalizations.of(context).refreshCalendar,
             onPressed: controller.loadState == DayLoadState.loading
                 ? null
-                : controller.refresh,
+                : () async {
+                    await controller.refresh();
+                    if (!context.mounted ||
+                        controller.loadState != DayLoadState.ready ||
+                        controller.snapshot?.calendar?.error != null) {
+                      return;
+                    }
+                    FloeToastHost.of(context).show(
+                      title: AppLocalizations.of(context).calendarsRefreshed,
+                      description: AppLocalizations.of(context)
+                          .localTasksAndNotesUnchanged,
+                    );
+                  },
             icon: Icon(LucideIcons.refreshCw, size: 18),
           ),
         ],
@@ -1561,104 +1573,69 @@ class _CaptureBar extends StatelessWidget {
     required this.textController,
     required this.pending,
     required this.submit,
-    required this.capturedText,
-    required this.dismiss,
   });
   final TextEditingController textController;
   final bool pending;
   final VoidCallback submit;
-  final String? capturedText;
-  final VoidCallback dismiss;
 
   @override
   Widget build(BuildContext context) => FloeSquircle(
     size: FloeSquircleSize.field,
     padding: EdgeInsets.fromLTRB(18, 9, 11, 9),
-    child: capturedText != null
-        ? Semantics(
-            liveRegion: true,
-            child: SizedBox(
-              height: 48,
-              child: Row(
-                children: [
-                  Icon(
-                    LucideIcons.check,
-                    size: 18,
-                    color: FloePalette.primary600,
-                  ),
-                  SizedBox(width: 14),
-                  Expanded(
-                    child: Text(
-                      AppLocalizations.of(context).capturedText(capturedText!),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  FloeButton.icon(
-                    tooltip: AppLocalizations.of(context).dismissCapture,
-                    onPressed: dismiss,
-                    icon: Icon(LucideIcons.x, size: 17),
-                  ),
-                ],
-              ),
+    child: Row(
+      children: [
+        Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
+        SizedBox(width: 14),
+        Expanded(
+          child: TextField(
+            key: Key('capture-field'),
+            controller: textController,
+            enabled: !pending,
+            style: TextStyle(
+              fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
             ),
-          )
-        : Row(
-            children: [
-              Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
-              SizedBox(width: 14),
-              Expanded(
-                child: TextField(
-                  key: Key('capture-field'),
-                  controller: textController,
-                  enabled: !pending,
-                  style: TextStyle(
-                    fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
+            onSubmitted: (value) {
+              if (!pending && value.trim().isNotEmpty) submit();
+            },
+            decoration: InputDecoration(
+              hintText: AppLocalizations.of(context).aThoughtForYourDay,
+              hintStyle: TextStyle(color: FloePalette.neutral500),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        ),
+        SizedBox(width: 14),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: textController,
+          builder: (context, value, _) {
+            final enabled = !pending && value.text.trim().isNotEmpty;
+            return Tooltip(
+              message: AppLocalizations.of(context).saveCapture,
+              child: SizedBox.square(
+                dimension: 44,
+                child: FloeButton.outlined(
+                  style: OutlinedButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    shape: floeSquircleBorder(FloeSquircleSize.md),
                   ),
-                  onSubmitted: (value) {
-                    if (!pending && value.trim().isNotEmpty) submit();
-                  },
-                  decoration: InputDecoration(
-                    hintText: AppLocalizations.of(context).aThoughtForYourDay,
-                    hintStyle: TextStyle(color: FloePalette.neutral500),
-                    filled: false,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
-                  ),
+                  onPressed: enabled ? submit : null,
+                  child: pending
+                      ? SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(LucideIcons.arrowRight, size: 19),
                 ),
               ),
-              SizedBox(width: 14),
-              ValueListenableBuilder<TextEditingValue>(
-                valueListenable: textController,
-                builder: (context, value, _) {
-                  final enabled = !pending && value.text.trim().isNotEmpty;
-                  return Tooltip(
-                    message: AppLocalizations.of(context).saveCapture,
-                    child: SizedBox.square(
-                      dimension: 44,
-                      child: FloeButton.outlined(
-                        style: OutlinedButton.styleFrom(
-                          padding: EdgeInsets.zero,
-                          shape: floeSquircleBorder(FloeSquircleSize.md),
-                        ),
-                        onPressed: enabled ? submit : null,
-                        child: pending
-                            ? SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(LucideIcons.arrowRight, size: 19),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
+            );
+          },
+        ),
+      ],
+    ),
   );
 }
 
@@ -2004,10 +1981,9 @@ class _TaskFields extends StatelessWidget {
 }
 
 void _showComingSoon(BuildContext context) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(AppLocalizations.of(context).thisFeatureIsNotAvailableYet),
-    ),
+  FloeToastHost.of(context).show(
+    title: AppLocalizations.of(context).thisFeatureIsNotAvailableYet,
+    tone: FloeToastTone.info,
   );
 }
 

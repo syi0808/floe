@@ -87,6 +87,8 @@
   "noSavedEventsForThisDay": "No saved events for this day.",
   "viewConnectedCalendars": "View connected calendars",
   "savedInFloe": "Saved in Floe",
+  "calendarsRefreshed": "Calendars refreshed",
+  "localTasksAndNotesUnchanged": "Your local tasks and notes are unchanged.",
   "sourceTimeZone": "Source time zone",
   "localTime": "Local time",
   "lastCollected": "Last collected",

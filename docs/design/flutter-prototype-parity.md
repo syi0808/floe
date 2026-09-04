@@ -18,6 +18,7 @@ not certification of live EventKit acceptance.
 | `CalendarPanel` | Actual gateway calendar selection, refresh and OS settings; pending/error feedback | CalendarConnections |
 | `FloeTextLink` | Underline-only hover/focus, no extra horizontal padding | text-link / all-day actions |
 | `FloeDotSpinner` | Eight rotating dots, semantic loading label, static reduced-motion variant | DotSpinner |
+| `FloeToastHost` | Shared success/info stack, expiry, dismissal and optional action | ToastViewport |
 | `showFloeDialog` / `FloeDetailDialog` | Backdrop blur, modal focus/navigation, 240 ms enter and 120 ms exit; zero motion when requested | Modal |
 | `FloeInfoNote` / `FloeReadOnlyPill` | Compact top-aligned note and rounded permission indicator | note / pill |
 
@@ -36,6 +37,27 @@ not certification of live EventKit acceptance.
 
 ## Scope boundaries
 
+### Toast feedback
+
+The home route now owns a custom `FloeToastHost` (no new dependency). Task completion
+and incomplete feedback retain Undo; unavailable actions use information toasts.
+Capture/classification and note creation use success toasts instead of replacing the
+capture field with a confirmation banner. Manual day refresh announces success only
+after a successful load without a calendar error. Persistent recovery notices remain
+inline, and dialogs stay above the toast host.
+
+Cards use the prototype's white surface, 16px corners, status icon, subtle shadow and
+newest-three stack with 9px offsets and scale reduction. Hover or keyboard focus
+expands the stack with 10px gaps and pauses the 4.5-second lifetime. App inactivity
+also pauses expiry. Close and Escape dismiss; reduced motion skips transitions.
+Accessible navigation keeps actionable toasts until dismissed or acted upon.
+Desktop width is 356px at bottom-right; narrow screens use 16px gutters above
+navigation. Keyboard and safe-area insets are respected, and long
+content scrolls within the available height. The capture input stays available.
+
+`floe_toast_test.dart` covers capacity, expiry, hover/focus pause, Escape, lifecycle,
+Undo, disposal, large text, keyboard bounds and reduced motion at 390/1440px.
+
 Tasks and Notes retain their real local create/classify/complete/delete paths and
 existing collection layouts. The current HTML Tasks page is a static example of a
 task detail; Flutter opens that layout from an actual task. Task-detail Back to
@@ -52,6 +74,7 @@ The preview does not request calendar permissions or touch the user's database.
 
 `flutter analyze`, `flutter test`, and `flutter build macos --debug`.
 Automated tests cover controller load ordering/retry/disposal and data/native gateway
-behavior. Flutter design, layout, geometry, interaction and visual-capture tests are
-not maintained. Review those manually using `lib/main_preview.dart`, including zoom,
+behavior. Toast-specific widget and app-shell integration tests additionally cover
+the feedback behaviors listed above. Review visual parity manually using
+`lib/main_preview.dart`, including zoom,
 overlap, short-event detail, dialog dismissal, navigation and narrow-window layouts.
