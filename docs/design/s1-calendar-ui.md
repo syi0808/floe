@@ -44,6 +44,13 @@ viewport scrolling. OS handoffs never change actual settings in the prototype.
 
 ## State coverage without on-page demo controls
 
+Popup entry uses a 240ms ease-out scale (0.96 → 1), 8px upward settling and opacity,
+with a 200ms backdrop fade. No overshoot, content staggering or layout animation.
+Reduced-motion disables both animations. The shared dialog handles all popup types;
+changing content inside an already-open dialog does not replay entry. Closing remains
+immediate. This follows the restrained scale and easing guidance in
+[Emil Kowalski's animation tips](https://emilkowal.ski/ui/7-practical-animation-tips).
+
 For development review only, load `/?state=<value>` directly. Normal navigation has
 no lab, state dropdown, badge or link to the old reference.
 
