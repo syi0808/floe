@@ -271,7 +271,7 @@
   min-height: 0;
   padding: 6px 16px;
   overflow: hidden;
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-start;
   text-align: left;
   gap: 10px;
@@ -291,7 +291,7 @@
   background: var(--primary-50);
 }
 .s1-event > .tone-dot {
-  margin-top: 5px;
+  margin-top: 0;
 }
 .s1-event > span:nth-child(2) {
   flex: 1;
@@ -332,13 +332,6 @@
 .s1-event > svg {
   flex-shrink: 0;
   color: var(--ink-tertiary);
-  margin-top: 2px;
-}
-.s1-event.sq-button[data-density='compact'] {
-  align-items: center;
-}
-.s1-event[data-density='compact'] > .tone-dot,
-.s1-event[data-density='compact'] > svg {
   margin-top: 0;
 }
 .s1-cached-grid .s1-event {
