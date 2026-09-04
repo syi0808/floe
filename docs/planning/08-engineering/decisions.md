@@ -342,3 +342,17 @@ For cases requiring custom code, WebAssembly Component Model/WIT + Wasmtime is t
 
 Floe renders structured settings, insight, intervention, and action-confirmation surfaces to preserve Calm UI and security.
 
+---
+
+## D-036 — Vertical slices are the delivery unit
+
+**Status:** Accepted — 2026-09-04
+
+Roadmap phases remain capability scopes, not sequential implementation gates.
+Deliver the connected Calendar read → contextual suggestion → approved action
+loop first, then extend it across devices/server and event-driven interventions.
+Track evidence-backed slice states rather than subjective phase percentages.
+Existing Personal Day acceptance and MVP boundaries remain separate.
+
+See [ADR 0006](../../decisions/0006-slice-driven-delivery.md) and
+[vertical slice delivery](vertical-slice-delivery.md).

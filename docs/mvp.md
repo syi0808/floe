@@ -3,6 +3,14 @@
 **Status:** proposed scope, aligned with planning v0.5
 **Last updated:** 2026-09-02
 
+## Delivery relationship
+
+[ADR 0006](decisions/0006-slice-driven-delivery.md) adds a connected integration
+track alongside this Personal Day product scope. Its S1–S5 slices do not expand
+the MVP exclusions below or replace the two-week acceptance signals. Implementation
+priority follows the [slice plan](planning/08-engineering/vertical-slice-delivery.md);
+existing MVP work remains incomplete until its own criteria are met.
+
 ## Outcome to validate
 
 Can a unified Calendar + Todo + Notes experience, presented as Floe’s Day Canvas, help a real user run their day better than the separate tools they already use?

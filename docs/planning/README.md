@@ -117,6 +117,10 @@ floe-planning/
 
 구현을 시작하는 경우:
 
+먼저 [Vertical Slice Delivery](08-engineering/vertical-slice-delivery.md)의
+구현 단위와 인수 조건, [PROGRESS.md](../../PROGRESS.md)의 현재 상태를 확인한다.
+Phase 순서는 구현 gate가 아니며 필요한 PoC를 해당 slice 착수 전에 수행한다.
+
 1. `08-engineering/poc-plan.md`
 2. `04-platform/device-agent.md`
 3. `05-integrations/connector-contract.md`

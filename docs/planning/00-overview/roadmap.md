@@ -1,6 +1,18 @@
 # Roadmap
 
-> Status: Draft sequencing
+> Status: Capability roadmap; delivery sequenced by vertical slices
+
+## Delivery model
+
+Phase는 장기 제품 범위 지도이며 순차 구현 gate가 아니다.
+[ADR 0006](../../decisions/0006-slice-driven-delivery.md)에 따라 실제 구현은
+[S1–S5 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
+S1–S3에서 connector → agent → app → 승인 실행 흐름을 먼저 검증하고,
+S4–S5에서 서버·기기·개입으로 확장한다. Phase 0 PoC는 필요한 경계의 구현 전에
+수행하며 보안·권한 검증을 생략하지 않는다.
+
+Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것은 아니다.
+현재 상태와 검증 근거는 [PROGRESS.md](../../../PROGRESS.md)에서 관리한다.
 
 ## Phase 0 — Architecture PoCs
 
