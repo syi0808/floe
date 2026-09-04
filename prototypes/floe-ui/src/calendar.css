@@ -79,6 +79,8 @@
 }
 .s1-banner > svg {
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: calc((1lh - 19px) / 2);
   color: var(--primary-600);
 }
 .s1-banner strong {
@@ -595,7 +597,7 @@
 }
 .s1-provenance-hint svg {
   flex-shrink: 0;
-  margin-top: 3px;
+  margin-top: calc((1lh - 15px) / 2);
 }
 .s1-capture-card {
   margin-top: 24px;
@@ -771,6 +773,8 @@
   display: flex;
   gap: 10px;
   align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.75;
   padding: 16px 0 16px 14px;
   border-left: 2px solid var(--primary-200);
   margin: 20px 0;
@@ -778,7 +782,7 @@
 .s1-note > svg {
   color: var(--primary-600);
   flex-shrink: 0;
-  margin-top: 2px;
+  transform: translateY(calc(0.5lh - 50%));
 }
 .s1-note p {
   color: var(--ink-secondary);
@@ -789,9 +793,6 @@
   padding-block: 6px;
   margin: 12px 0 0;
   align-items: flex-start;
-}
-.s1-connection-note > svg {
-  margin-top: 0;
 }
 .s1-connection-note p {
   margin: 0;
@@ -931,13 +932,14 @@
 }
 .s1-permission-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   margin: 15px 0;
   line-height: 1.7;
 }
 .s1-permission-list svg {
   flex-shrink: 0;
+  margin-top: calc((1lh - 17px) / 2);
   color: #267b62;
 }
 .s1-settings-steps {
