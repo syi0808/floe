@@ -16,6 +16,7 @@ fn range(day: i64) -> CalendarRange {
 
 fn record(identifier: &str, day: i64) -> CalendarRecord {
     CalendarRecord {
+        calendar_id: None,
         external_id: identifier.into(),
         external_revision: "v1".into(),
         title: "Fixture event".into(),
@@ -49,6 +50,76 @@ async fn snapshot(core: &FloeCore, person: PersonId, day: i64) -> DaySnapshot {
     core.day_snapshot(person, range(day).start_date, 32_400, now())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
+    let (core, person, path) = fixture().await;
+    let calendars = vec![
+        CalendarSelection {
+            calendar_id: "calendar-1".into(),
+            calendar_name: "Home".into(),
+        },
+        CalendarSelection {
+            calendar_id: "calendar-2".into(),
+            calendar_name: "Work".into(),
+        },
+    ];
+    for invalid in [vec![], vec![calendars[0].clone(), calendars[0].clone()]] {
+        assert_eq!(
+            core.select_calendars(person, CalendarProvider::Fixture, invalid)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::Validation
+        );
+    }
+    core.select_calendars(person, CalendarProvider::Fixture, calendars.clone())
+        .await
+        .unwrap();
+    let selected = snapshot(&core, person, 0).await;
+    let revision = selected.calendar.as_ref().unwrap().revision;
+    let mut unknown = record("event", 0);
+    unknown.calendar_id = Some("unknown".into());
+    for invalid in [record("ambiguous", 0), unknown] {
+        assert_eq!(
+            core.import_calendar(person, revision, range(0), vec![invalid], now())
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::Validation
+        );
+        assert_eq!(snapshot(&core, person, 0).await, selected);
+    }
+    core.select_calendars(
+        person,
+        CalendarProvider::Fixture,
+        calendars.into_iter().rev().collect(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(snapshot(&core, person, 0).await, selected);
+    assert_eq!(
+        core.import_calendar(person, revision - 1, range(0), vec![], now())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    let legacy: CalendarConnection = serde_json::from_value(serde_json::json!({
+        "provider": "event_kit", "calendar_id": "legacy", "calendar_name": "Legacy",
+        "revision": 1, "last_success_at": null, "last_range": null, "error": null
+    }))
+    .unwrap();
+    assert_eq!(legacy.selected_calendars()[0].calendar_id, "legacy");
+    assert!(
+        serde_json::to_value(&legacy)
+            .unwrap()
+            .get("calendars")
+            .is_none()
+    );
+    drop(core);
+    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]

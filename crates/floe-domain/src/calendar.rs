@@ -62,14 +62,35 @@ impl CalendarRange {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarSelection {
+    pub calendar_id: String,
+    pub calendar_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarConnection {
     pub provider: CalendarProvider,
     pub calendar_id: String,
     pub calendar_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendars: Vec<CalendarSelection>,
     pub revision: u64,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
+}
+
+impl CalendarConnection {
+    pub fn selected_calendars(&self) -> Vec<CalendarSelection> {
+        if self.calendars.is_empty() {
+            vec![CalendarSelection {
+                calendar_id: self.calendar_id.clone(),
+                calendar_name: self.calendar_name.clone(),
+            }]
+        } else {
+            self.calendars.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,6 +101,7 @@ pub struct CalendarMirror {
 
 #[derive(Clone, Debug)]
 pub struct CalendarRecord {
+    pub calendar_id: Option<String>,
     pub external_id: String,
     pub external_revision: String,
     pub title: String,

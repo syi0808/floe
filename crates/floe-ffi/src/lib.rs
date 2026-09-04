@@ -174,6 +174,15 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
     let mut capture = None;
 
     match request.command {
+        CommandDto::SelectCalendars {
+            provider,
+            calendars,
+        } => {
+            handle
+                .runtime
+                .block_on(handle.core.select_calendars(person_id, provider, calendars))
+                .map_err(core_error)?;
+        }
         CommandDto::SelectCalendar {
             provider,
             calendar_id,
@@ -199,6 +208,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .into_iter()
                 .map(|record| {
                     Ok(floe_domain::CalendarRecord {
+                        calendar_id: record.calendar_id,
                         external_id: record.external_id,
                         external_revision: record.external_revision,
                         title: record.title,

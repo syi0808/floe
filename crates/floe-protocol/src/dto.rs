@@ -161,6 +161,8 @@ pub struct CommandRequestDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarRecordDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_id: Option<String>,
     pub external_id: String,
     pub external_revision: String,
     pub title: String,
@@ -170,6 +172,10 @@ pub struct CalendarRecordDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
+    SelectCalendars {
+        provider: floe_domain::CalendarProvider,
+        calendars: Vec<floe_domain::CalendarSelection>,
+    },
     SelectCalendar {
         provider: floe_domain::CalendarProvider,
         calendar_id: String,

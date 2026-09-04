@@ -85,23 +85,60 @@ class _CalendarPanelState extends State<CalendarPanel> {
       );
       return;
     }
-    final choice = await showFloeDialog<CalendarChoice>(
+    final selected =
+        widget.connection?.selectedCalendarIds.toSet() ?? <String>{};
+    final choices = await showFloeDialog<List<CalendarChoice>>(
       context,
-      (context) => SimpleDialog(
-        title: Text(AppLocalizations.of(context).chooseACalendar),
-        children: calendars
-            .map(
-              (calendar) => SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, calendar),
-                child: Text(calendar.name),
+      (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(AppLocalizations.of(context).chooseACalendar),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final calendar in calendars)
+                    CheckboxListTile(
+                      value: selected.contains(calendar.id),
+                      title: Text(calendar.name),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (checked) => setDialogState(() {
+                        if (checked == true) {
+                          selected.add(calendar.id);
+                        } else {
+                          selected.remove(calendar.id);
+                        }
+                      }),
+                    ),
+                ],
               ),
-            )
-            .toList(),
+            ),
+          ),
+          actions: [
+            FloeButton.text(
+              onPressed: () => Navigator.pop(context),
+              child: Text(AppLocalizations.of(context).cancel),
+            ),
+            FloeButton.filled(
+              onPressed:
+                  calendars.any((calendar) => selected.contains(calendar.id))
+                  ? () => Navigator.pop(
+                      context,
+                      calendars
+                          .where((calendar) => selected.contains(calendar.id))
+                          .toList(),
+                    )
+                  : null,
+              child: Text(AppLocalizations.of(context).continueAction),
+            ),
+          ],
+        ),
       ),
     );
-    if (choice == null || !mounted) return;
+    if (choices == null || !mounted) return;
     final query = widget.query;
-    await widget.gateway.selectCalendar(choice, query);
+    await widget.gateway.selectCalendars(choices, query);
     try {
       await widget.gateway.syncCalendar(query);
     } finally {

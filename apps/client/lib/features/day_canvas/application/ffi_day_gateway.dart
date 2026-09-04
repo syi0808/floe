@@ -183,17 +183,29 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
   Future<void> openCalendarSettings() => _calendarAdapter.openSettings();
 
   @override
-  Future<DaySnapshot> selectCalendar(
-    CalendarChoice calendar,
+  Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query) =>
+      selectCalendars([calendar], query);
+
+  @override
+  Future<DaySnapshot> selectCalendars(
+    List<CalendarChoice> calendars,
     DayQuery query,
   ) async {
+    if (calendars.isEmpty ||
+        calendars.any(
+          (calendar) => calendar.provider != calendars.first.provider,
+        )) {
+      throw ArgumentError('Select calendars from one provider');
+    }
     final data = await _request(
       'execute',
       _commandRequest(query, {
-        'type': 'select_calendar',
-        'provider': calendar.provider,
-        'calendar_id': calendar.id,
-        'calendar_name': calendar.name,
+        'type': 'select_calendars',
+        'provider': calendars.first.provider,
+        'calendars': [
+          for (final calendar in calendars)
+            {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+        ],
       }),
     );
     return _decodeSnapshot(_asMap(data['snapshot']));
@@ -205,9 +217,16 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     final connection = current.calendar;
     if (connection == null) return current;
     try {
-      final records = await _calendarAdapter
-          .read(connection.id, query)
-          .timeout(const Duration(seconds: 20));
+      final batches = await Future.wait(
+        connection.selectedCalendarIds.map((calendarId) async {
+          final records = await _calendarAdapter.read(calendarId, query);
+          return [
+            for (final record in records)
+              {...record, 'calendar_id': calendarId},
+          ];
+        }),
+      ).timeout(const Duration(seconds: 20));
+      final records = batches.expand((batch) => batch).toList();
       final data = await _request(
         'execute',
         _commandRequest(query, {
@@ -431,7 +450,16 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
 CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
     CalendarConnection(
       id: json['calendar_id']! as String,
-      name: json['calendar_name']! as String,
+      name: (json['calendars'] as List?)?.isNotEmpty == true
+          ? (json['calendars'] as List)
+                .map((calendar) => calendar['calendar_name'] as String)
+                .join(', ')
+          : json['calendar_name']! as String,
+      calendarIds:
+          (json['calendars'] as List?)
+              ?.map((calendar) => calendar['calendar_id'] as String)
+              .toList() ??
+          const [],
       provider: json['provider']! as String,
       revision: json['revision']! as int,
       lastSuccessAt: _optionalTimestamp(json['last_success_at']),

@@ -8,6 +8,7 @@ import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 
 class FixtureCalendarAdapter implements CalendarAdapter {
   bool denied = false;
+  String? deniedCalendarId;
   List<Map<String, dynamic>> records = [
     {
       'external_id': 'fixture-1',
@@ -41,7 +42,9 @@ class FixtureCalendarAdapter implements CalendarAdapter {
     String calendarId,
     DayQuery query,
   ) async {
-    if (denied) throw PlatformException(code: 'permission_denied');
+    if (denied || deniedCalendarId == calendarId) {
+      throw PlatformException(code: 'permission_denied');
+    }
     return records;
   }
 
@@ -57,6 +60,72 @@ final query = DayQuery(
 );
 
 void main() {
+  test(
+    'multiple calendars preserve sources, selection, and atomic cache',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      if (!library.existsSync()) {
+        markTestSkipped('cargo build -p floe-ffi required');
+        return;
+      }
+      final directory = await Directory.systemTemp.createTemp('floe-multiple-');
+      final adapter = FixtureCalendarAdapter();
+      Future<FfiDayGateway> open() => FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${directory.path}/calendar.db',
+        calendarAdapter: adapter,
+        clock: () => query.now,
+      );
+      var gateway = await open();
+      const calendars = [
+        CalendarChoice('home', 'Home', provider: 'fixture'),
+        CalendarChoice('work', 'Work', provider: 'fixture'),
+      ];
+      try {
+        await gateway.selectCalendars(calendars, query);
+        var snapshot = await gateway.syncCalendar(query);
+        expect(snapshot.items, hasLength(4));
+        expect(
+          snapshot.items
+              .whereType<EventItem>()
+              .map((event) => event.calendarName)
+              .toSet(),
+          {'Home', 'Work'},
+        );
+        final identifiers = snapshot.items.map((item) => item.id).toSet();
+        snapshot = await gateway.syncCalendar(query);
+        expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
+        await gateway.close();
+        gateway = await open();
+        snapshot = await gateway.loadDay(query);
+        expect(snapshot.calendar!.selectedCalendarIds, ['home', 'work']);
+        adapter.records = [];
+        adapter.deniedCalendarId = 'work';
+        snapshot = await gateway.syncCalendar(query);
+        expect(snapshot.calendar!.error, 'permission_denied');
+        expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
+        snapshot = await gateway.selectCalendars([calendars.first], query);
+        expect(snapshot.items, hasLength(2));
+        expect(
+          snapshot.items.whereType<EventItem>().every(
+            (event) => event.calendarName == 'Home',
+          ),
+          isTrue,
+        );
+        expect(
+          snapshot.items.every((item) => identifiers.contains(item.id)),
+          isTrue,
+        );
+        snapshot = await gateway.syncCalendar(query);
+        expect(snapshot.items, isEmpty);
+        expect(snapshot.calendar!.error, isNull);
+      } finally {
+        await gateway.close();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
+
   test(
     'fixture crosses native ABI, preserves provenance, failure, and restart',
     () async {

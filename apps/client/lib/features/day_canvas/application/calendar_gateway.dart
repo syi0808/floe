@@ -5,6 +5,10 @@ import '../domain/day_models.dart';
 abstract interface class CalendarGateway {
   Future<List<CalendarChoice>> calendars();
   Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query);
+  Future<DaySnapshot> selectCalendars(
+    List<CalendarChoice> calendars,
+    DayQuery query,
+  );
   Future<DaySnapshot> syncCalendar(DayQuery query);
   Future<void> openCalendarSettings();
 }

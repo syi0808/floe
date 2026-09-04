@@ -691,7 +691,7 @@ abstract class AppLocalizations {
   /// No description provided for @eventsFromTheSelectedCalendarAreSaved.
   ///
   /// In en, this message translates to:
-  /// **'Events from the selected calendar are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Selecting a different calendar replaces the previous local copy.'**
+  /// **'Events from the selected calendars are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Deselecting a calendar removes its local copy.'**
   String get eventsFromTheSelectedCalendarAreSaved;
 
   /// No description provided for @continueAction.
@@ -709,7 +709,7 @@ abstract class AppLocalizations {
   /// No description provided for @chooseACalendar.
   ///
   /// In en, this message translates to:
-  /// **'Choose a calendar'**
+  /// **'Choose calendars'**
   String get chooseACalendar;
 
   /// No description provided for @calendarAccessWasDeniedOrRevokedAllow.
@@ -757,7 +757,7 @@ abstract class AppLocalizations {
   /// No description provided for @connectedCalendar.
   ///
   /// In en, this message translates to:
-  /// **'Connected calendar'**
+  /// **'Connected calendars'**
   String get connectedCalendar;
 
   /// No description provided for @makeRoomForYourDay.
@@ -769,7 +769,7 @@ abstract class AppLocalizations {
   /// No description provided for @chooseACalendarToStartThisClient.
   ///
   /// In en, this message translates to:
-  /// **'Choose a calendar to start. This client currently supports one calendar at a time.'**
+  /// **'Choose one or more calendars to bring their events into your day.'**
   String get chooseACalendarToStartThisClient;
 
   /// No description provided for @person.

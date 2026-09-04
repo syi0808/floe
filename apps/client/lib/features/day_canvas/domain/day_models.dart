@@ -125,6 +125,7 @@ final class CalendarConnection {
     this.error,
     this.rangeStart,
     this.rangeEnd,
+    this.calendarIds = const [],
   });
   final String id;
   final String name;
@@ -134,6 +135,9 @@ final class CalendarConnection {
   final String? error;
   final String? rangeStart;
   final String? rangeEnd;
+  final List<String> calendarIds;
+  List<String> get selectedCalendarIds =>
+      calendarIds.isEmpty ? [id] : calendarIds;
 }
 
 final class CaptureReceipt {
