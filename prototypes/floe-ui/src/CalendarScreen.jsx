@@ -957,11 +957,11 @@ function Modal({ title, children, onClose }) {
     >
       <SquircleSurface radius={34} className="s1-modal-border" contentClassName="s1-modal">
         <div className="s1-modal-heading">
+          <h2 id="s1-modal-title">{title}</h2>
           <SquircleButton aria-label="Close dialog" className="icon-button" onClick={onClose}>
             <X size={19} />
           </SquircleButton>
         </div>
-        <h2 id="s1-modal-title">{title}</h2>
         {children}
       </SquircleSurface>
     </dialog>
