@@ -569,30 +569,32 @@ export function CalendarScreen({ page, onNavigate }) {
               )}
             </aside>
           </div>
-          <form
-            className="s1-capture"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (capture.trim()) {
-                setLocalNotes((items) => [...items, capture.trim()]);
-                setCapture('');
-                notify('Note saved in Floe. No calendar changes.');
-              }
-            }}
-          >
-            <label htmlFor="s1-capture">+</label>
-            <input
-              id="s1-capture"
-              value={capture}
-              onChange={(event) => setCapture(event.target.value)}
-              placeholder="A thought for your day…"
-              aria-label="Capture a local note"
-            />
-            <span>Only in Floe</span>
-            <SquircleButton disabled={!capture.trim()} type="submit" aria-label="Save local note">
-              <ArrowRight size={18} />
-            </SquircleButton>
-          </form>
+          <Surface className="s1-capture-card">
+            <form
+              className="s1-capture"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (capture.trim()) {
+                  setLocalNotes((items) => [...items, capture.trim()]);
+                  setCapture('');
+                  notify('Note saved in Floe. No calendar changes.');
+                }
+              }}
+            >
+              <label htmlFor="s1-capture">+</label>
+              <input
+                id="s1-capture"
+                value={capture}
+                onChange={(event) => setCapture(event.target.value)}
+                placeholder="A thought for your day…"
+                aria-label="Capture a local note"
+              />
+              <span>Only in Floe</span>
+              <SquircleButton disabled={!capture.trim()} type="submit" aria-label="Save local note">
+                <ArrowRight size={18} />
+              </SquircleButton>
+            </form>
+          </Surface>
         </>
       )}
 
