@@ -28,6 +28,16 @@ S1 automated and native-build evidence is described in
 [the validation runbook](docs/validation/s1-calendar.md). Live results remain pending;
 fixture-only evidence cannot satisfy the live integration acceptance gate.
 
+Evidence build: `0d52e2620938fc7008572937e72dc8d6572c6e0b`, 2026-09-04,
+macOS 26.2 (25C56), arm64. Connector integration is fixture; EventKit is SDK/build-only.
+
+| Criterion | Result | Evidence | Remaining live gate |
+| --- | --- | --- | --- |
+| S1-A1 | Pending | `calendar_gateway_test.dart`: typed denial retains cache; settings/refresh actions pass. Native EventKit app compiles/signature verifies. | Real prompt, selection, revocation/reconnect |
+| S1-A2 | Pending | Rust calendar tests and Flutter FFI/widget tests: provenance, Person, IDs, change token, all-day and UTC+09 midnight | Real normalization, recurring exceptions and timezone cases |
+| S1-A3 | Pending | Rust calendar tests: idempotent import, update, range-only deletion, stale/invalid batch rejection | Real external edit/delete and recurring identity |
+| S1-A4 | Pending | Rust and native FFI tests: cached events/error survive reopen; retry clears failure | Signed app lifecycle and provider-failure demo |
+
 ### S1 implementation checkpoint
 
 - EventKit calendar listing, explicit permission request, date-range read, and settings recovery.
