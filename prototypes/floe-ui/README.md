@@ -37,18 +37,22 @@ interaction matrix and implementation boundaries.
 ## Run
 
 Node.js 20.19 or newer is required; the checked-in `.nvmrc` selects Node.js 24.
+Use pnpm, pinned by `packageManager` in `package.json`. If pnpm is not installed,
+enable it with `corepack enable pnpm` (with Corepack installed).
+If an existing pnpm installation takes precedence over Corepack, use
+`corepack pnpm` in place of `pnpm` to run the pinned version.
 
 ```sh
 cd prototypes/floe-ui
 nvm use
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
 Build the static output with:
 
 ```sh
-npm run build
+pnpm build
 ```
 
 ## Component boundaries
@@ -57,7 +61,7 @@ Reusable UI lives in `src/components/{ui,shell,connectors,calendar,tasks,notes,p
 Screens own state and compose these units; `reference` holds the historical Today view.
 See the [as-built component map](../../docs/design/prototype-components.md) for props,
 state ownership, style boundaries and reverse-spec guidance. The machine-readable
-index is `src/components/catalog.json`; validate it with `npm run check:components`.
+index is `src/components/catalog.json`; validate it with `pnpm check:components`.
 
 ## Squircle geometry
 

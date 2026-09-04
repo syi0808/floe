@@ -186,7 +186,7 @@ breakpoints and Squircle clipping. A later CSS-module split is separate work.
 4. Describe anatomy, sizing, typography, callbacks and accessibility. Link design
    targets separately from observed prototype behavior; mark placeholders explicitly.
 5. On a component change, update its contract/catalog entry and the affected feature
-   specification, then run `npm run check:components` and `npm run build`.
+   specification, then run `pnpm check:components` and `pnpm build`.
 
 The catalog validator checks export coverage, unique IDs, prop signatures and source/
 style/spec paths. It does not certify behavior, accessibility or visual parity.

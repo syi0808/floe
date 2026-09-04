@@ -51,6 +51,10 @@ flutter run -d macos
 
 ## Working rules
 
+JavaScript/TypeScript projects in this repository use **pnpm**, with the version
+pinned in each `package.json`. Commit `pnpm-lock.yaml`, not npm or Yarn lockfiles.
+See the [prototype setup](prototypes/floe-ui/README.md#run) for installation and scripts.
+
 - Product semantics come before implementation choices.
 - Personal memory must be inspectable, editable, deletable, and source-backed.
 - Intelligence may propose; explicit policy and user confirmation govern actions.

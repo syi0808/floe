@@ -3,10 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=20.19.0"
   },
   "scripts": {
+    "preinstall": "node -e \"if (!process.env.npm_config_user_agent?.startsWith('pnpm/')) { console.error('Use pnpm install for this project.'); process.exit(1); }\"",
     "check:components": "node scripts/check-component-catalog.mjs",
     "dev": "vite",
     "build": "vite build",

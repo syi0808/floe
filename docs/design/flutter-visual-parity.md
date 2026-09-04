@@ -57,7 +57,7 @@
 
 ```sh
 cd prototypes/floe-ui
-npm run dev -- --host 127.0.0.1
+pnpm dev --host 127.0.0.1
 
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --headless=new --disable-gpu --remote-debugging-port=9223 \

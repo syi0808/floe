@@ -97,7 +97,7 @@ the prototype no longer exposes that simulation. Native integration evidence is 
 
 ## Validation
 
-Use Node 24 and `npm run build`. Browser review covers the simplified Today, mixed-source
+Use Node 24 and `pnpm build`. Browser review covers the simplified Today, mixed-source
 event provenance, all-calendar inventory, permission handoff and disconnection flows,
 and responsive mobile layout. This prototype has no automated test harness; browser
 checks and static build are design validation, not S1-A1–A4 integration evidence.
