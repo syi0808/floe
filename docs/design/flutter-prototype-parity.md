@@ -55,8 +55,18 @@ Desktop width is 356px at bottom-right; narrow screens use 16px gutters above
 navigation. Keyboard and safe-area insets are respected, and long
 content scrolls within the available height. The capture input stays available.
 
+Collapsed rear surfaces take the front card's height, not their own content height.
+The render layout measures natural heights before applying interpolated surface
+heights and cumulative offsets, restoring each height on expansion. Rear content
+only fades in near the end of expansion and clips to the rounded surface. Gaps
+between expanded cards retain hover so moving between cards does not collapse them.
+Undo is a compact, explicitly styled trailing action next to the message, vertically
+centered with the icon and close control rather than occupying a second content row.
+
 `floe_toast_test.dart` covers capacity, expiry, hover/focus pause, Escape, lifecycle,
 Undo, disposal, large text, keyboard bounds and reduced motion at 390/1440px.
+Mixed-height tests cover both arrival orders, expansion/collapse, a third card,
+gap hover, and trailing Undo alignment at 1×/2× text scale.
 
 Tasks and Notes retain their real local create/classify/complete/delete paths and
 existing collection layouts. The current HTML Tasks page is a static example of a

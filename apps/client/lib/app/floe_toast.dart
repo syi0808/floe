@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -167,37 +168,32 @@ class FloeToastHostState extends State<FloeToastHost>
                 tween: Tween(end: _hovered || _focused ? 1 : 0),
                 duration: duration,
                 curve: FloeMotion.easeOut,
-                builder: (context, expansion, _) => CustomMultiChildLayout(
-                  delegate: _ToastLayout(
-                    count: _entries.length,
+                builder: (context, expansion, _) => MouseRegion(
+                  opaque: false,
+                  onEnter: (_) => _hover(true),
+                  onExit: (_) => _hover(false),
+                  child: _ToastStack(
                     expansion: expansion,
-                  ),
-                  children: [
-                    for (var index = 0; index < _entries.length; index++)
-                      LayoutId(
-                        id: index,
-                        key: ValueKey(_entries[index].id),
-                        child: MouseRegion(
-                          onEnter: (_) => _hover(true),
-                          onExit: (_) => _hover(false),
-                          child: Transform.scale(
-                            scale:
-                                1 -
-                                (_entries.length - 1 - index) *
-                                    0.045 *
-                                    (1 - expansion),
-                            alignment: Alignment.bottomCenter,
-                            child: _ToastCard(
-                              entry: _entries[index],
-                              covered:
-                                  index != _entries.length - 1 &&
-                                  expansion == 0,
-                              dismiss: () => _dismiss(_entries[index]),
-                            ),
+                    children: [
+                      for (var index = 0; index < _entries.length; index++)
+                        Transform.scale(
+                          key: ValueKey(_entries[index].id),
+                          scale:
+                              1 -
+                              (_entries.length - 1 - index) *
+                                  0.045 *
+                                  (1 - expansion),
+                          alignment: Alignment.bottomCenter,
+                          child: _ToastCard(
+                            entry: _entries[index],
+                            contentOpacity: index == _entries.length - 1
+                                ? 1
+                                : const Interval(0.65, 1).transform(expansion),
+                            dismiss: () => _dismiss(_entries[index]),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -227,62 +223,107 @@ class _ToastEntry {
   bool leaving = false;
 }
 
-class _ToastLayout extends MultiChildLayoutDelegate {
-  _ToastLayout({required this.count, required this.expansion});
-  final int count;
+class _ToastStack extends MultiChildRenderObjectWidget {
+  const _ToastStack({required this.expansion, required super.children});
+
   final double expansion;
 
   @override
-  void performLayout(Size size) {
-    final heights = <double>[];
-    for (var index = 0; index < count; index++) {
-      heights.add(
-        layoutChild(
-          index,
-          BoxConstraints(
-            minWidth: size.width,
-            maxWidth: size.width,
-            maxHeight: math.max(
-              0,
-              (size.height - (count - 1) * 10 * expansion) /
-                  (1 + (count - 1) * expansion),
-            ),
-          ),
-        ).height,
-      );
-    }
-    var offset = 0.0;
-    for (var index = count - 1; index >= 0; index--) {
-      final depth = count - 1 - index;
-      final collapsed = heights.last + depth * 9;
-      final expanded = offset + heights[index];
-      positionChild(
-        index,
-        Offset(
-          0,
-          math.max(
-            0,
-            size.height - (collapsed + (expanded - collapsed) * expansion),
-          ),
-        ),
-      );
-      offset += heights[index] + 10;
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderToastStack(expansion);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderToastStack renderObject,
+  ) {
+    renderObject.expansion = expansion;
+  }
+}
+
+class _ToastParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _RenderToastStack extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _ToastParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _ToastParentData> {
+  _RenderToastStack(this._expansion);
+  double _expansion;
+  Rect _hitBounds = Rect.zero;
+
+  set expansion(double value) {
+    if (_expansion == value) return;
+    _expansion = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _ToastParentData) {
+      child.parentData = _ToastParentData();
     }
   }
 
   @override
-  bool shouldRelayout(_ToastLayout oldDelegate) =>
-      oldDelegate.count != count || oldDelegate.expansion != expansion;
+  void performLayout() {
+    size = constraints.biggest;
+    final children = getChildrenAsList();
+    final naturalHeights = <double>[];
+    final naturalConstraints = BoxConstraints(
+      minWidth: size.width,
+      maxWidth: size.width,
+      maxHeight: math.max(
+        0,
+        (size.height - (children.length - 1) * 10) / children.length,
+      ),
+    );
+    for (final child in children) {
+      child.layout(naturalConstraints, parentUsesSize: true);
+      naturalHeights.add(child.size.height);
+    }
+    final frontHeight = naturalHeights.last;
+    var offset = 0.0;
+    var top = size.height;
+    for (var index = children.length - 1; index >= 0; index--) {
+      final child = children[index];
+      final depth = children.length - 1 - index;
+      final height =
+          frontHeight + (naturalHeights[index] - frontHeight) * _expansion;
+      child.layout(
+        BoxConstraints.tight(Size(size.width, height)),
+        parentUsesSize: true,
+      );
+      final bottom = depth * 9 + (offset - depth * 9) * _expansion;
+      (child.parentData! as _ToastParentData).offset = Offset(
+        0,
+        size.height - height - bottom,
+      );
+      top = math.min(top, size.height - height - bottom);
+      offset += naturalHeights[index] + 10;
+    }
+    _hitBounds = Rect.fromLTRB(0, top, size.width, size.height);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) =>
+      defaultPaint(context, offset);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
+
+  @override
+  bool hitTestSelf(Offset position) => _hitBounds.contains(position);
 }
 
 class _ToastCard extends StatelessWidget {
   const _ToastCard({
     required this.entry,
-    required this.covered,
+    required this.contentOpacity,
     required this.dismiss,
   });
   final _ToastEntry entry;
-  final bool covered;
+  final double contentOpacity;
   final VoidCallback dismiss;
 
   @override
@@ -303,6 +344,8 @@ class _ToastCard extends StatelessWidget {
           ),
         ),
         child: Material(
+          key: ValueKey('toast-card-${entry.id}'),
+          clipBehavior: Clip.antiAlias,
           color: FloePalette.neutral0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
@@ -313,9 +356,9 @@ class _ToastCard extends StatelessWidget {
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(17, 17, 10, 17),
             child: Opacity(
-              opacity: covered ? 0 : 1,
+              opacity: contentOpacity,
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
                     width: 28,
@@ -368,18 +411,39 @@ class _ToastCard extends StatelessWidget {
                             ],
                           ),
                         ),
-                        if (entry.onAction != null)
-                          TextButton(
-                            onPressed: () {
-                              if (entry.leaving) return;
-                              dismiss();
-                              entry.onAction!();
-                            },
-                            child: Text(entry.actionLabel!),
-                          ),
                       ],
                     ),
                   ),
+                  if (entry.onAction != null) ...[
+                    SizedBox(width: 12),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        backgroundColor: FloePalette.primary50,
+                        foregroundColor: FloePalette.primary700,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        minimumSize: Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        textStyle: TextStyle(
+                          fontFamily: 'Pretendard',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      onPressed: () {
+                        if (entry.leaving) return;
+                        dismiss();
+                        entry.onAction!();
+                      },
+                      child: Text(entry.actionLabel!),
+                    ),
+                    SizedBox(width: 4),
+                  ],
                   IconButton(
                     tooltip: AppLocalizations.of(context).close,
                     onPressed: dismiss,

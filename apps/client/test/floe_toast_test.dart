@@ -79,6 +79,19 @@ void main() {
       tester.getTopLeft(find.text('First')).dy,
       lessThan(tester.getTopLeft(find.text('Second')).dy - 30),
     );
+    final firstCard = find.byKey(ValueKey('toast-card-0'));
+    final secondCard = find.byKey(ValueKey('toast-card-1'));
+    final gap = Offset(
+      tester.getCenter(secondCard).dx,
+      (tester.getBottomRight(firstCard).dy + tester.getTopLeft(secondCard).dy) /
+          2,
+    );
+    await mouse.moveTo(gap);
+    await tester.pump(Duration(seconds: 6));
+    expect(
+      tester.getTopLeft(secondCard).dy - tester.getBottomRight(firstCard).dy,
+      closeTo(10, 0.1),
+    );
     await mouse.moveTo(Offset.zero);
     await tester.pumpAndSettle();
     await tester.pump(Duration(seconds: 5));
@@ -101,6 +114,85 @@ void main() {
     await tester.pump(Duration(milliseconds: 300));
     expect(find.text('Keyboard'), findsNothing);
   });
+
+  for (final tallFirst in [true, false]) {
+    testWidgets(
+      'mixed heights normalize collapsed and restore expanded: $tallFirst',
+      (tester) async {
+        await mount(tester);
+        void show(bool tall) => host.currentState!.show(
+          title: tall ? 'Long notification' : 'Task completed',
+          description: tall
+              ? 'First line\nSecond line\nThird line\nFourth line'
+              : null,
+          actionLabel: tall ? null : 'Undo',
+          onAction: tall ? null : () {},
+        );
+        show(tallFirst);
+        show(!tallFirst);
+        await tester.pumpAndSettle();
+        final first = find.byKey(ValueKey('toast-card-0'));
+        final front = find.byKey(ValueKey('toast-card-1'));
+        final collapsedHeight = tester.getSize(front).height;
+        expect(tester.getSize(first).height, collapsedHeight);
+        expect(
+          tester.getBottomRight(first).dy,
+          lessThan(tester.getBottomRight(front).dy),
+        );
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        await mouse.moveTo(tester.getCenter(front));
+        await tester.pumpAndSettle();
+        final tall = tallFirst ? first : front;
+        final short = tallFirst ? front : first;
+        expect(
+          tester.getSize(tall).height,
+          greaterThan(tester.getSize(short).height + 40),
+        );
+        expect(
+          tester.getTopLeft(front).dy - tester.getBottomRight(first).dy,
+          closeTo(10, 0.1),
+        );
+        await mouse.moveTo(Offset.zero);
+        await tester.pumpAndSettle();
+        expect(tester.getSize(first).height, closeTo(collapsedHeight, 0.1));
+        expect(tester.getSize(front).height, closeTo(collapsedHeight, 0.1));
+
+        show(false);
+        await tester.pumpAndSettle();
+        final newest = find.byKey(ValueKey('toast-card-2'));
+        for (final card in [first, front]) {
+          expect(tester.getSize(card).height, tester.getSize(newest).height);
+        }
+        await mouse.removePointer();
+        await tester.pumpWidget(SizedBox());
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets('Undo sits to the right of the message at text scale $scale', (
+      tester,
+    ) async {
+      await mount(tester, width: 390, scale: scale);
+      host.currentState!.show(
+        title: 'Task completed',
+        actionLabel: 'Undo',
+        onAction: () {},
+      );
+      await tester.pumpAndSettle();
+      final message = tester.getRect(find.text('Task completed'));
+      final undo = tester.getRect(find.widgetWithText(TextButton, 'Undo'));
+      final close = tester.getRect(find.byType(IconButton));
+      expect(undo.left, greaterThan(message.right));
+      expect(undo.right, lessThan(close.left));
+      expect(undo.center.dy, closeTo(message.center.dy, 0.1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(SizedBox());
+    });
+  }
 
   testWidgets('background pauses expiry and dispose cancels timers', (
     tester,
