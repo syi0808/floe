@@ -431,163 +431,172 @@ export function CalendarScreen({ page, onNavigate }) {
                     <span>Loading calendar…</span>
                   </div>
                 )}
-                <div className="s1-all-day">
-                  <span>All day</span>
-                  {hasCache ? (
-                    <button
-                      disabled={phase === 'syncing'}
-                      onClick={() =>
-                        setModal({
-                          id: 'all-day',
-                          calendarId: 'personal',
-                          title: 'A day for making',
-                          time: 'All day',
-                          timezone: 'Asia/Seoul',
-                          original: `${dateShort}, all day`,
-                          allDay: true,
-                        })
-                      }
-                    >
-                      <span className="tone-dot mint" />
-                      <span className="s1-all-day-title">A day for making</span>
-                      <small>Personal</small>
-                    </button>
-                  ) : (
-                    <span className="s1-muted">—</span>
-                  )}
-                  {hasCache && (
-                    <button
-                      className="s1-more-all-day"
-                      disabled={phase === 'syncing'}
-                      onClick={() =>
-                        setModal({
-                          id: 'multi-day',
-                          calendarId: 'team',
-                          title: 'Research week',
-                          time: 'Sep 3–5 · All day',
-                          timezone: 'Date-only · no conversion',
-                          original: 'Sep 3–5, all day',
-                          detail: 'A multi-day event. Dates stay dates, even across time zones.',
-                          allDay: true,
-                          endDateExclusive: 'Sep 6, 2026 · exclusive',
-                        })
-                      }
-                    >
-                      <span className="tone-dot violet" />
-                      <span className="s1-all-day-title">Research week</span>
-                      <small>Day 2 of 3</small>
-                    </button>
-                  )}
-                </div>
-                <div className="s1-timeline-tools">
-                  <ZoomOut size={15} aria-hidden="true" />
-                  <input
-                    className="s1-zoom-slider"
-                    type="range"
-                    min="1"
-                    max="12"
-                    step="1"
-                    aria-label="Timeline zoom"
-                    aria-valuetext={`${pixelsPerMinute} times magnification`}
-                    value={pixelsPerMinute}
-                    style={{ '--zoom-progress': `${((pixelsPerMinute - 1) / 11) * 100}%` }}
-                    onChange={(event) => setPixelsPerMinute(Number(event.target.value))}
-                  />
-                  <ZoomIn size={15} aria-hidden="true" />
-                  <span className="s1-zoom-value" aria-hidden="true">
-                    {pixelsPerMinute}×
-                  </span>
-                </div>
-                <div className="s1-timeline-viewport">
-                  <div
-                    className="s1-timeline-scroll"
-                    ref={timelineScroll}
-                    role="region"
-                    aria-label="24-hour calendar"
-                    tabIndex={0}
-                    onScroll={(event) => {
-                      scrollMinute.current = event.currentTarget.scrollTop / pixelsPerMinute;
-                    }}
-                  >
+                <div
+                  inert={!hasCache && phase !== 'syncing'}
+                  aria-hidden={!hasCache && phase !== 'syncing'}
+                >
+                  <div className="s1-all-day">
+                    <span>All day</span>
+                    {hasCache ? (
+                      <button
+                        disabled={phase === 'syncing'}
+                        onClick={() =>
+                          setModal({
+                            id: 'all-day',
+                            calendarId: 'personal',
+                            title: 'A day for making',
+                            time: 'All day',
+                            timezone: 'Asia/Seoul',
+                            original: `${dateShort}, all day`,
+                            allDay: true,
+                          })
+                        }
+                      >
+                        <span className="tone-dot mint" />
+                        <span className="s1-all-day-title">A day for making</span>
+                        <small>Personal</small>
+                      </button>
+                    ) : (
+                      <span className="s1-muted">—</span>
+                    )}
+                    {hasCache && (
+                      <button
+                        className="s1-more-all-day"
+                        disabled={phase === 'syncing'}
+                        onClick={() =>
+                          setModal({
+                            id: 'multi-day',
+                            calendarId: 'team',
+                            title: 'Research week',
+                            time: 'Sep 3–5 · All day',
+                            timezone: 'Date-only · no conversion',
+                            original: 'Sep 3–5, all day',
+                            detail: 'A multi-day event. Dates stay dates, even across time zones.',
+                            allDay: true,
+                            endDateExclusive: 'Sep 6, 2026 · exclusive',
+                          })
+                        }
+                      >
+                        <span className="tone-dot violet" />
+                        <span className="s1-all-day-title">Research week</span>
+                        <small>Day 2 of 3</small>
+                      </button>
+                    )}
+                  </div>
+                  <div className="s1-timeline-tools">
+                    <ZoomOut size={15} aria-hidden="true" />
+                    <input
+                      className="s1-zoom-slider"
+                      type="range"
+                      min="1"
+                      max="12"
+                      step="1"
+                      aria-label="Timeline zoom"
+                      aria-valuetext={`${pixelsPerMinute} times magnification`}
+                      value={pixelsPerMinute}
+                      style={{ '--zoom-progress': `${((pixelsPerMinute - 1) / 11) * 100}%` }}
+                      onChange={(event) => setPixelsPerMinute(Number(event.target.value))}
+                    />
+                    <ZoomIn size={15} aria-hidden="true" />
+                    <span className="s1-zoom-value" aria-hidden="true">
+                      {pixelsPerMinute}×
+                    </span>
+                  </div>
+                  <div className="s1-timeline-viewport">
                     <div
-                      className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
-                      aria-label="Day timeline"
-                      style={{ height: 24 * 60 * pixelsPerMinute }}
+                      className="s1-timeline-scroll"
+                      ref={timelineScroll}
+                      role="region"
+                      aria-label="24-hour calendar"
+                      tabIndex={0}
+                      onScroll={(event) => {
+                        scrollMinute.current = event.currentTarget.scrollTop / pixelsPerMinute;
+                      }}
                     >
-                      {Array.from({ length: 25 }, (_, index) => (
-                        <div
-                          className="s1-hour"
-                          key={index}
-                          style={{ top: index * 60 * pixelsPerMinute }}
-                        >
-                          <time>{String(index).padStart(2, '0')}:00</time>
-                          <span />
-                        </div>
-                      ))}
-                      {Array.from({ length: 24 }, (_, index) => (
-                        <div
-                          key={index}
-                          className="s1-half-hour-line"
-                          style={{ top: (index * 60 + 30) * pixelsPerMinute }}
-                        />
-                      ))}
-                      {hasCache &&
-                        [...externalEvents]
-                          .sort((first, second) => first.startMinutes - second.startMinutes)
-                          .map((event) => (
-                            <SquircleButton
-                              key={event.id}
-                              radius={Math.min(
-                                16,
-                                ((event.endMinutes - event.startMinutes) * pixelsPerMinute) / 4,
-                              )}
-                              title={`${event.title} · ${event.time}`}
-                              disabled={phase === 'syncing'}
-                              className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
-                              data-density={
-                                (event.endMinutes - event.startMinutes) * pixelsPerMinute < 24
-                                  ? 'micro'
-                                  : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 40
-                                    ? 'compact'
-                                    : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 58
-                                      ? 'medium'
-                                      : 'full'
-                              }
-                              aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
-                              style={{
-                                top: (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
-                                height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
-                              }}
-                              onClick={() => setModal(event)}
-                            >
-                              <span
-                                className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
-                              />
-                              <span>
-                                <strong>{event.title}</strong>
-                                <time>{event.time}</time>
-                                <small>
-                                  {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
-                                  {event.detail}
-                                  {event.recurring ? ' · Repeats' : ''}
-                                </small>
-                              </span>
-                              <LockKeyhole size={13} />
-                            </SquircleButton>
-                          ))}
-                      {dayOffset === 0 && (
-                        <div
-                          className="s1-now"
-                          style={{ top: (14 * 60 + 28 - timelineStartMinutes) * pixelsPerMinute }}
-                        >
-                          <time>2:28 PM</time>
-                          <span />
-                        </div>
-                      )}
+                      <div
+                        className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
+                        aria-label="Day timeline"
+                        style={{ height: 24 * 60 * pixelsPerMinute }}
+                      >
+                        {Array.from({ length: 25 }, (_, index) => (
+                          <div
+                            className="s1-hour"
+                            key={index}
+                            style={{ top: index * 60 * pixelsPerMinute }}
+                          >
+                            <time>{String(index).padStart(2, '0')}:00</time>
+                            <span />
+                          </div>
+                        ))}
+                        {Array.from({ length: 24 }, (_, index) => (
+                          <div
+                            key={index}
+                            className="s1-half-hour-line"
+                            style={{ top: (index * 60 + 30) * pixelsPerMinute }}
+                          />
+                        ))}
+                        {hasCache &&
+                          [...externalEvents]
+                            .sort((first, second) => first.startMinutes - second.startMinutes)
+                            .map((event) => (
+                              <SquircleButton
+                                key={event.id}
+                                radius={Math.min(
+                                  16,
+                                  ((event.endMinutes - event.startMinutes) * pixelsPerMinute) / 4,
+                                )}
+                                title={`${event.title} · ${event.time}`}
+                                disabled={phase === 'syncing'}
+                                className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
+                                data-density={
+                                  (event.endMinutes - event.startMinutes) * pixelsPerMinute < 24
+                                    ? 'micro'
+                                    : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 40
+                                      ? 'compact'
+                                      : (event.endMinutes - event.startMinutes) * pixelsPerMinute <
+                                          58
+                                        ? 'medium'
+                                        : 'full'
+                                }
+                                aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
+                                style={{
+                                  top:
+                                    (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
+                                  height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
+                                }}
+                                onClick={() => setModal(event)}
+                              >
+                                <span
+                                  className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
+                                />
+                                <span>
+                                  <strong>{event.title}</strong>
+                                  <time>{event.time}</time>
+                                  <small>
+                                    {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
+                                    {event.detail}
+                                    {event.recurring ? ' · Repeats' : ''}
+                                  </small>
+                                </span>
+                                <LockKeyhole size={13} />
+                              </SquircleButton>
+                            ))}
+                        {dayOffset === 0 && (
+                          <div
+                            className="s1-now"
+                            style={{ top: (14 * 60 + 28 - timelineStartMinutes) * pixelsPerMinute }}
+                          >
+                            <time>2:28 PM</time>
+                            <span />
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  {!hasCache && phase !== 'syncing' && (
-                    <div className="s1-empty-day">
+                </div>
+                {!hasCache && phase !== 'syncing' && (
+                  <div className="s1-empty-day" role="status">
+                    <div className="s1-empty-content">
                       <img src={mascotUrl} alt="" />
                       <h3>
                         {phase === 'syncing'
@@ -627,8 +636,8 @@ export function CalendarScreen({ page, onNavigate }) {
                               : 'Connect Calendar'}
                       </SquircleButton>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </Surface>
             )}
             <aside className="s1-side-stack">
