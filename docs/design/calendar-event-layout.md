@@ -42,11 +42,27 @@ to overflow into the next event. Hover must not change geometry.
 - The scroll region is keyboard-focusable. Wheel/trackpad/touch and keyboard scrolling
   navigate it independently of the page. No automatic scroll on every refresh.
 - Day-boundary records must be split/clipped to the displayed day's range in the
-  eventual native layout. Collision columns for overlapping events are separate work;
-  these prototype fixtures are non-overlapping. All-day spans remain outside this scale.
+  eventual native layout. All-day spans remain outside this scale.
+
+## Overlapping events
+
+- Treat intervals as start-inclusive, end-exclusive: an event ending at 12:00 does
+  not overlap one starting at 12:00. Compare across all connected calendars.
+- Sort by start time, then longer duration, then stable event ID. Assign the first
+  free column, reusing columns when events end. Each connected overlap group uses
+  its peak simultaneous count as the column count, with consistent widths throughout
+  the group and a 6px gap. Isolated events retain full width.
+- Preserve exact time positions/heights; do not stack cards on top of one another
+  or enlarge short events. Height-based density rules still apply. In narrower
+  overlap cards, hide the decorative lock and truncate title/time/source rather than
+  wrapping beyond the interval. Accessible names and the detail dialog retain all data.
+- Reserve at least 112px per column in the timeline. On narrow screens or with many
+  overlaps, allow horizontal scrolling inside the calendar, not page overflow.
 
 ## Prototype verification
 
 Fixtures include 12:30–12:35 and 23:55–24:00 five-minute events. Alongside 30-, 45-
 and 60-minute records, they exercise thin bars, zoom density and the final day boundary.
 This is a visual fixture, not native EventKit or timezone normalization acceptance.
+The 11:00–12:00 review, 11:15–12:15 planning and 11:30–11:45 personal call also
+exercise partial overlap and three simultaneous calendars.

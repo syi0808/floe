@@ -24,6 +24,7 @@ import {
 import { SquircleBlock, SquircleButton, SquircleSurface } from './primitives.jsx';
 import mascotUrl from '../../../assets/floe-mascot.svg?url';
 import './calendar.css';
+import { layoutTimedEvents } from './calendar-layout.js';
 
 const calendars = [
   { id: 'work', name: 'Work', account: 'iCloud', color: 'blue' },
@@ -46,6 +47,28 @@ const scenarios = {
 };
 const timelineStartMinutes = 0;
 const externalEvents = [
+  {
+    id: 'planning',
+    calendarId: 'team',
+    title: 'Plan the next step',
+    time: '11:15 AM – 12:15 PM',
+    startMinutes: 11 * 60 + 15,
+    endMinutes: 12 * 60 + 15,
+    detail: 'Team planning · overlaps the design review',
+    timezone: 'Asia/Seoul',
+    original: 'Sep 4, 11:15 AM – 12:15 PM KST',
+  },
+  {
+    id: 'personal-call',
+    calendarId: 'personal',
+    title: 'A quick personal call',
+    time: '11:30 – 11:45 AM',
+    startMinutes: 11 * 60 + 30,
+    endMinutes: 11 * 60 + 45,
+    detail: 'Personal call · three simultaneous events',
+    timezone: 'Asia/Seoul',
+    original: 'Sep 4, 11:30 – 11:45 AM KST',
+  },
   {
     id: 'quick',
     calendarId: 'personal',
@@ -103,6 +126,9 @@ const externalEvents = [
     original: 'Sep 4, 12:00 – 12:45 AM PDT',
   },
 ];
+
+const timedEvents = layoutTimedEvents(externalEvents);
+const timelineColumns = Math.max(1, ...timedEvents.map((event) => event.columns));
 
 function Surface({ children, className = '' }) {
   return (
@@ -516,7 +542,10 @@ export function CalendarScreen({ page, onNavigate }) {
                       <div
                         className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
                         aria-label="Day timeline"
-                        style={{ height: 24 * 60 * pixelsPerMinute }}
+                        style={{
+                          height: 24 * 60 * pixelsPerMinute,
+                          '--timeline-columns': hasCache ? timelineColumns : 1,
+                        }}
                       >
                         {Array.from({ length: 25 }, (_, index) => (
                           <div
@@ -536,51 +565,50 @@ export function CalendarScreen({ page, onNavigate }) {
                           />
                         ))}
                         {hasCache &&
-                          [...externalEvents]
-                            .sort((first, second) => first.startMinutes - second.startMinutes)
-                            .map((event) => (
-                              <SquircleButton
-                                key={event.id}
-                                radius={Math.min(
-                                  16,
-                                  ((event.endMinutes - event.startMinutes) * pixelsPerMinute) / 4,
-                                )}
-                                title={`${event.title} · ${event.time}`}
-                                disabled={phase === 'syncing'}
-                                className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
-                                data-density={
-                                  (event.endMinutes - event.startMinutes) * pixelsPerMinute < 24
-                                    ? 'micro'
-                                    : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 40
-                                      ? 'compact'
-                                      : (event.endMinutes - event.startMinutes) * pixelsPerMinute <
-                                          58
-                                        ? 'medium'
-                                        : 'full'
-                                }
-                                aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
-                                style={{
-                                  top:
-                                    (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
-                                  height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
-                                }}
-                                onClick={() => setModal(event)}
-                              >
-                                <span
-                                  className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
-                                />
-                                <span>
-                                  <strong>{event.title}</strong>
-                                  <time>{event.time}</time>
-                                  <small>
-                                    {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
-                                    {event.detail}
-                                    {event.recurring ? ' · Repeats' : ''}
-                                  </small>
-                                </span>
-                                <LockKeyhole size={13} />
-                              </SquircleButton>
-                            ))}
+                          timedEvents.map((event) => (
+                            <SquircleButton
+                              key={event.id}
+                              radius={Math.min(
+                                16,
+                                ((event.endMinutes - event.startMinutes) * pixelsPerMinute) / 4,
+                              )}
+                              title={`${event.title} · ${event.time}`}
+                              disabled={phase === 'syncing'}
+                              className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
+                              data-density={
+                                (event.endMinutes - event.startMinutes) * pixelsPerMinute < 24
+                                  ? 'micro'
+                                  : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 40
+                                    ? 'compact'
+                                    : (event.endMinutes - event.startMinutes) * pixelsPerMinute < 58
+                                      ? 'medium'
+                                      : 'full'
+                              }
+                              aria-label={`${event.title} · ${event.time} · ${calendars.find((item) => item.id === event.calendarId).name} · ${event.detail}`}
+                              style={{
+                                '--event-column': event.column,
+                                '--event-columns': event.columns,
+                                top: (event.startMinutes - timelineStartMinutes) * pixelsPerMinute,
+                                height: (event.endMinutes - event.startMinutes) * pixelsPerMinute,
+                              }}
+                              data-overlapping={event.columns > 1}
+                              onClick={() => setModal(event)}
+                            >
+                              <span
+                                className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
+                              />
+                              <span>
+                                <strong>{event.title}</strong>
+                                <time>{event.time}</time>
+                                <small>
+                                  {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
+                                  {event.detail}
+                                  {event.recurring ? ' · Repeats' : ''}
+                                </small>
+                              </span>
+                              <LockKeyhole size={13} />
+                            </SquircleButton>
+                          ))}
                         {dayOffset === 0 && (
                           <div
                             className="s1-now"
