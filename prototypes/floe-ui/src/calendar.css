@@ -417,10 +417,15 @@
   align-items: center;
   gap: 8px;
   background: transparent;
-  padding: 8px 0;
+  padding: 0;
   color: var(--primary-600);
   font-size: 12px;
   text-align: left;
+}
+.s1-text-link:hover:not(:disabled) > span,
+.s1-text-link:focus-visible:not(:disabled) > span {
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 .s1-personal-note {
   font-size: 14px;

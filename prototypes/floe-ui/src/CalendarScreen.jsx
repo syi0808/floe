@@ -570,12 +570,12 @@ export function CalendarScreen({ page, onNavigate }) {
                     Finish the launch brief<small>One good thing to move forward</small>
                   </span>
                 </label>
-                <SquircleButton
-                  className="s1-text-link s1-quiet-action"
+                <button
+                  className="s1-text-link"
                   onClick={() => onNavigate('tasks')}
                 >
-                  See your tasks <ArrowRight size={15} />
-                </SquircleButton>
+                  <span>See your tasks</span> <ArrowRight size={15} />
+                </button>
               </Surface>
               <Surface>
                 <div className="s1-card-heading">
