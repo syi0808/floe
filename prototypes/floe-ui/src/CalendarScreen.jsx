@@ -865,20 +865,20 @@ export function CalendarScreen({ page, onNavigate }) {
               <div className="s1-detail-source">
                 <span className={`tone-dot ${detailCalendar.color}`} />
                 {detailCalendar.name} · {detailCalendar.account}
-                <span className="s1-pill">
+                <SquircleBlock className="s1-pill" radius={8}>
                   <LockKeyhole size={12} /> Read-only
-                </span>
+                </SquircleBlock>
               </div>
               <p className="s1-event-purpose">
                 {modal.detail || 'A full day, not a midnight appointment.'}
               </p>
-              <div className="s1-detail-time">
+              <SquircleBlock className="s1-detail-time" radius={22}>
                 <Clock3 size={20} />
                 <div>
                   <strong>{modal.time}</strong>
                   <span>{dateLabel} · Asia/Seoul</span>
                 </div>
-              </div>
+              </SquircleBlock>
               <dl className="s1-facts">
                 <div>
                   <dt>Original time</dt>
