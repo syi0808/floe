@@ -984,8 +984,8 @@ p {
 .inline-actions {
   display: flex;
   align-items: center;
-  gap: 28px;
-  padding-left: 48px;
+  justify-content: flex-end;
+  gap: 16px;
 }
 
 .inline-actions button {

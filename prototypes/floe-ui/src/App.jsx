@@ -516,7 +516,7 @@ function TaskDetail({ onBack }) {
               </div>
               <p>Team retro starts at 3:30 PM. Review the launch brief first?</p>
               <div className="inline-actions">
-                <button type="button" className="violet-action">Review now</button>
+                <SquircleButton className="primary-button">Review now</SquircleButton>
                 <button type="button" className="quiet-action">Snooze</button>
               </div>
             </SquircleSurface>
