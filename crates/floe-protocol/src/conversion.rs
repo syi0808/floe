@@ -105,6 +105,7 @@ impl From<SourceRef> for SourceRefDto {
     fn from(value: SourceRef) -> Self {
         match value {
             SourceRef::Manual => Self::Manual,
+            SourceRef::Calendar(source) => Self::Calendar { source },
             SourceRef::Capture(id) => Self::Capture {
                 capture_id: id.to_string(),
             },
@@ -118,6 +119,7 @@ impl TryFrom<SourceRefDto> for SourceRef {
     fn try_from(value: SourceRefDto) -> Result<Self, Self::Error> {
         match value {
             SourceRefDto::Manual => Ok(Self::Manual),
+            SourceRefDto::Calendar { source } => Ok(Self::Calendar(source)),
             SourceRefDto::Capture { capture_id } => {
                 Ok(Self::Capture(parse_capture_id(&capture_id, "capture_id")?))
             }
@@ -444,6 +446,7 @@ impl TryFrom<DaySnapshot> for DaySnapshotDto {
                 }
             })?,
             items: value.items.into_iter().map(Into::into).collect(),
+            calendar: value.calendar,
         })
     }
 }
@@ -461,6 +464,7 @@ impl TryFrom<DaySnapshotDto> for DaySnapshot {
         Ok(Self {
             person_id: parse_person_id(&value.person_id, "person_id")?,
             date: parse_date(&value.date, "date")?,
+            calendar: value.calendar,
             generated_at: parse_timestamp(&value.generated_at, "generated_at")?,
             timezone_offset_seconds: value.timezone_offset_seconds,
             now_event_id: value

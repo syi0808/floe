@@ -4,7 +4,7 @@ use floe_domain::*;
 use crate::{CoreError, ErrorCode, TursoStore};
 
 pub struct FloeCore {
-    store: TursoStore,
+    pub(crate) store: TursoStore,
 }
 
 #[derive(Clone, Debug)]
@@ -285,15 +285,22 @@ impl FloeCore {
         timezone_offset_seconds: i32,
         now: DateTime<Utc>,
     ) -> Result<DaySnapshot, CoreError> {
-        Ok(project_day(
+        let mirror = self.store.calendar_mirror(person_id).await?;
+        let mut events = self.store.list_events(person_id).await?;
+        if let Some(mirror) = &mirror {
+            events.extend(mirror.events.clone());
+        }
+        let mut snapshot = project_day(
             person_id,
             date,
             timezone_offset_seconds,
             now,
-            self.store.list_events(person_id).await?,
+            events,
             self.store.list_tasks(person_id).await?,
             self.store.list_notes(person_id).await?,
-        ))
+        );
+        snapshot.calendar = mirror.map(|mirror| mirror.connection);
+        Ok(snapshot)
     }
 }
 

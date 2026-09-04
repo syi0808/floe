@@ -40,11 +40,22 @@ final class EventItem extends DayItem {
     required this.startsAt,
     required this.endsAt,
     this.isAllDay = false,
+    this.calendarName,
+    this.externalId,
+    this.provider,
+    this.timezone,
   });
 
   final DateTime startsAt;
   final DateTime endsAt;
   final bool isAllDay;
+  final String? calendarName;
+  final String? externalId;
+  final String? provider;
+  final String? timezone;
+  String get sourceLabel => calendarName == null
+      ? ''
+      : '${provider == 'fixture' ? 'Fixture' : 'Calendar'} · $calendarName';
   @override
   DayItemKind get kind => DayItemKind.event;
 }
@@ -90,6 +101,7 @@ final class DaySnapshot {
     this.nowEventId,
     this.nextEventId,
     this.overdueTaskCount = 0,
+    this.calendar,
   });
 
   final String personId;
@@ -100,6 +112,28 @@ final class DaySnapshot {
   final String? nowEventId;
   final String? nextEventId;
   final int overdueTaskCount;
+  final CalendarConnection? calendar;
+}
+
+final class CalendarConnection {
+  const CalendarConnection({
+    required this.id,
+    required this.name,
+    required this.provider,
+    required this.revision,
+    this.lastSuccessAt,
+    this.error,
+    this.rangeStart,
+    this.rangeEnd,
+  });
+  final String id;
+  final String name;
+  final String provider;
+  final int revision;
+  final DateTime? lastSuccessAt;
+  final String? error;
+  final String? rangeStart;
+  final String? rangeEnd;
 }
 
 final class CaptureReceipt {

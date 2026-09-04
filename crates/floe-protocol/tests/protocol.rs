@@ -16,6 +16,7 @@ fn id(value: &str) -> Uuid {
 #[test]
 fn snapshot_has_a_versioned_stable_wire_shape() {
     let snapshot = DaySnapshotDto {
+        calendar: None,
         schema_version: PROTOCOL_VERSION,
         person_id: "00000000-0000-0000-0000-000000000001".into(),
         date: "2026-09-02".into(),
@@ -214,6 +215,7 @@ fn domain_snapshot_round_trip_preserves_all_item_kinds() {
     .unwrap();
     let note = Note::new(person_id, "Remember", SourceRef::Manual, now).unwrap();
     let snapshot = DaySnapshot {
+        calendar: None,
         person_id,
         date: now.date_naive(),
         generated_at: now,
@@ -250,6 +252,7 @@ fn capture_round_trip_preserves_processing_and_revision() {
 #[test]
 fn conversion_rejects_invalid_versions_and_domain_values() {
     let snapshot = DaySnapshotDto {
+        calendar: None,
         schema_version: 99,
         person_id: "00000000-0000-0000-0000-000000000001".into(),
         date: "2026-09-02".into(),

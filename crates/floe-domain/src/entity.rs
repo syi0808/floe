@@ -25,6 +25,7 @@ fn required(value: impl Into<String>, field: &'static str) -> Result<String, Dom
 pub enum SourceRef {
     Manual,
     Capture(CaptureId),
+    Calendar(crate::CalendarSource),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

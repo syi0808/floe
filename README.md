@@ -10,7 +10,8 @@ The first Personal Day vertical slice is in progress. The macOS Flutter client n
 
 Delivery now prioritizes connected vertical slices over sequential roadmap phases:
 Calendar read → contextual suggestion → approved action, followed by cross-device
-and intervention slices. These connected slices are planned, not yet delivered;
+and intervention slices. S1 has an EventKit read implementation and fixture end-to-end
+coverage; live permission/read validation is still pending. Later slices remain planned;
 unfinished Personal Day work remains tracked separately in [progress](PROGRESS.md).
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).

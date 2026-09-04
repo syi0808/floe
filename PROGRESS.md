@@ -13,21 +13,30 @@ verified criteria, not estimated implementation percentages.
 
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
-| S1 — Calendar read | Planned | None | 0/4 | Select provider; validate read/create capabilities | External events in Day Canvas |
+| S1 — Calendar read | Implementing | Fixture end-to-end; EventKit app builds | 0/4 | Live permission/read/create PoC and dogfood | Connect a dedicated macOS Calendar |
 | S2 — Contextual suggestion | Planned | None | 0/4 | S1 Verified; model provider selection | Source-backed focus-time suggestion |
 | S3 — Approved action | Planned | None | 0/5 | S2 Verified; create capability | Approve, create externally, re-import |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
-No connected slice is implemented or verified by this documentation change.
-Next implementation focus is S1; no connected slice is currently Implementing.
+S1 implementation now connects a native EventKit adapter to Rust-owned mirror
+storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
 ## Acceptance Evidence
 
-No S1–S5 acceptance evidence has been recorded yet. On validation, add a row per
-criterion with result, integration mode per dependency, test/demo evidence,
-verified commit, date/environment, and limitations using the delivery plan format.
-Fixture-only evidence cannot satisfy the live integration acceptance gate.
+S1 automated and native-build evidence is described in
+[the validation runbook](docs/validation/s1-calendar.md). Live results remain pending;
+fixture-only evidence cannot satisfy the live integration acceptance gate.
+
+### S1 implementation checkpoint
+
+- EventKit calendar listing, explicit permission request, date-range read, and settings recovery.
+- User-approved OS full-access exception; the app exposes no external write operation.
+- Person-scoped selection, stable occurrence provenance, change token, and atomic CAS mirror persistence.
+- Duplicate/stale/invalid-batch rejection, range-scoped reconciliation, preserved cache on failure/restart.
+- Source labels, multiple all-day events, expanded timeline for midnight/off-hours, and manual refresh.
+- Fixture tests cover Rust storage/projection and the actual Dart/JSON/C ABI boundary.
+- Live EventKit permission/read behavior, recurring identity, DST, S3 create PoC, and three-day dogfood remain unverified.
 
 ## Existing Personal Day Baseline
 
@@ -73,14 +82,25 @@ cross-phase coverage is defined in the slice plan and does not change these stat
 | --- | --- | --- |
 | Phase 0 — Architecture PoCs | Partial | macOS embedded Turso and Flutter↔Rust boundary validated; other PoCs remain |
 | Phase 1 — Personal Day | Partial | Technical vertical slice works; product breadth and dogfood remain |
-| Phase 2 — Connected Floe | Not started | Connector framework and external sources remain |
+| Phase 2 — Connected Floe | Partial | S1 EventKit read path implemented; live validation and other connectors remain |
 | Phase 3 — Personal Memory | Not started | Memory, people, relationships, and identity resolution remain |
 | Phase 3.5 — Expert Ecosystem | Not started | Package, permissions, sandbox, SDK, and marketplace remain |
 | Phase 4 — Cross-device | Not started | Sync, Device Agent, and native packaging remain |
 | Phase 5 — Ambient Floe | Not started | Wake word, transcription, handoff, and interventions remain |
 | Phase 6 — Hosted/Self-host | Not started | Server, accounts, deployment, and administration remain |
 
-## Validation Baseline
+## S1 Automated Validation
+
+2026-09-04, macOS arm64. Dependency mode: fixture for connector behavior;
+EventKit native adapter compilation only, not a live read.
+
+- Rust: 20 tests passing (`cargo test --workspace`).
+- Flutter: 38 tests passing, including actual native FFI tests (none skipped).
+- Clippy: clean with warnings denied; Flutter analyzer: clean.
+- macOS: debug app builds with Calendar entitlement and EventKit usage strings.
+- No external calendar data collected or changed; live acceptance remains 0/4.
+
+## Previous Validation Baseline
 
 Last recorded baseline: 2026-09-03. These results are preserved from the previous
 progress record, not rerun or newly verified by the 2026-09-04 planning change.
@@ -94,10 +114,10 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 
 ## Next Priorities
 
-1. Start S1 by selecting a Calendar provider through a bounded read/create PoC.
-2. Connect a fixture Calendar source through Rust storage/snapshot to Flutter.
-3. Replace the fixture with the real read-only provider and verify S1-A1–A4.
-4. Record the live demo and S1 dogfood evidence, then proceed to S2 and S3.
+1. Run the dedicated-calendar live permission/read checklist in `docs/validation/s1-calendar.md`.
+2. Validate recurring-event identity, timezone boundaries, edits/deletions, and signed-build restart/recovery.
+3. With separate explicit approval, complete the bounded S3 create-capability PoC.
+4. Record S1-A1–A4 evidence and three-day dogfood before advancing acceptance.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,
 dense-day folding, and the separate two-week Personal Day dogfood. If one blocks

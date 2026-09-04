@@ -37,7 +37,7 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
-        for table in ["captures", "events", "tasks", "notes"] {
+        for table in ["captures", "events", "tasks", "notes", "calendar_mirrors"] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
                 (),
@@ -57,6 +57,48 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub async fn calendar_mirror(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<floe_domain::CalendarMirror>, CoreError> {
+        self.get("calendar_mirrors", person_id.to_string()).await
+    }
+
+    pub async fn put_calendar_mirror(
+        &self,
+        person_id: PersonId,
+        mirror: &floe_domain::CalendarMirror,
+        previous: Option<&floe_domain::CalendarMirror>,
+    ) -> Result<(), CoreError> {
+        let payload = to_string(mirror).map_err(storage_error)?;
+        let connection = self.connection().await?;
+        let changed = if let Some(previous) = previous {
+            connection.execute(
+                "UPDATE calendar_mirrors SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
+                (payload, person_id.to_string(), person_id.to_string(), to_string(previous).map_err(storage_error)?),
+            ).await.map_err(storage_error)?
+        } else {
+            connection.execute(
+                "INSERT OR IGNORE INTO calendar_mirrors(id, person_id, payload) VALUES (?, ?, ?)",
+                (person_id.to_string(), person_id.to_string(), payload),
+            ).await.map_err(storage_error)?
+        };
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "calendar changed during sync; reload and retry",
+            ));
+        }
         Ok(())
     }
 

@@ -20,6 +20,8 @@ pub struct DaySnapshot {
     pub next_event_id: Option<EventId>,
     pub overdue_task_count: usize,
     pub items: Vec<TimelineItem>,
+    #[serde(default)]
+    pub calendar: Option<crate::CalendarConnection>,
 }
 
 pub fn project_day(
@@ -121,6 +123,7 @@ pub fn project_day(
         ),
     });
     DaySnapshot {
+        calendar: None,
         person_id,
         date,
         generated_at: now,

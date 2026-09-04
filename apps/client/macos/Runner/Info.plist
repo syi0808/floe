@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>선택한 캘린더의 일정을 Day Canvas에 표시합니다. macOS는 읽기에 읽기·쓰기 전체 접근을 요구하지만 Floe는 일정을 읽기만 하며 외부 일정을 변경하지 않습니다.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>선택한 캘린더의 일정을 읽어 Day Canvas에 표시합니다. 외부 일정은 변경하지 않습니다.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>

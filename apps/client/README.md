@@ -56,7 +56,22 @@ dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
 the Rust core, which owns all Turso reads and writes. Local data is stored under
 the app's Application Support directory.
 
-## Validate
+## Connected Calendar (S1)
+
+The Day Canvas offers **Calendar 연결**, calendar selection, and manual refresh of
+the selected date. Permission is requested only after the connection disclosure.
+EventKit requires full OS access even for reads; the approved exception does not
+enable external writes in Floe. Use **권한 설정** after denial or revocation.
+
+Rust persists the selection, imported provenance, last successful range/time, and
+typed failures. Relaunch displays cached data; refresh explicitly to recollect it.
+Switching calendars replaces the previous mirror without touching local items.
+This path is macOS-only. Fixture integration tests do not access personal calendars.
+
+Live acceptance, timezone/recurrence limitations, and dogfood steps are tracked in
+[`docs/validation/s1-calendar.md`](../../docs/validation/s1-calendar.md).
+
+## Validation commands
 
 ```sh
 flutter analyze

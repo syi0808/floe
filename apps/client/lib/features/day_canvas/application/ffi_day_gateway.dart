@@ -6,10 +6,12 @@ import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 
 import '../domain/day_models.dart';
 import '../infrastructure/floe_native_bindings.dart';
 import 'day_gateway.dart';
+import 'calendar_gateway.dart';
 
 const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
@@ -24,8 +26,13 @@ final class FfiDayGatewayException implements Exception {
   String toString() => message;
 }
 
-final class FfiDayGateway implements DayGateway {
-  FfiDayGateway._(this._isolate, this._commands, this._clock) {
+final class FfiDayGateway implements DayGateway, CalendarGateway {
+  FfiDayGateway._(
+    this._isolate,
+    this._commands,
+    this._clock,
+    this._calendarAdapter,
+  ) {
     _finalizer.attach(this, _commands, detach: this);
   }
 
@@ -36,6 +43,7 @@ final class FfiDayGateway implements DayGateway {
   final Isolate _isolate;
   final SendPort _commands;
   final DateTime Function() _clock;
+  final CalendarAdapter _calendarAdapter;
   bool _closed = false;
 
   static Future<FfiDayGateway> openDefault() async {
@@ -54,6 +62,7 @@ final class FfiDayGateway implements DayGateway {
     required String libraryPath,
     required String databasePath,
     DateTime Function()? clock,
+    CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
   }) async {
     final ready = ReceivePort();
     final isolate = await Isolate.spawn(_ffiWorkerMain, {
@@ -71,6 +80,7 @@ final class FfiDayGateway implements DayGateway {
       isolate,
       result['commands']! as SendPort,
       clock ?? DateTime.now,
+      calendarAdapter,
     );
   }
 
@@ -164,6 +174,81 @@ final class FfiDayGateway implements DayGateway {
     await reply.first;
     reply.close();
     _isolate.kill(priority: Isolate.immediate);
+  }
+
+  @override
+  Future<List<CalendarChoice>> calendars() => _calendarAdapter.calendars();
+
+  @override
+  Future<void> openCalendarSettings() => _calendarAdapter.openSettings();
+
+  @override
+  Future<DaySnapshot> selectCalendar(
+    CalendarChoice calendar,
+    DayQuery query,
+  ) async {
+    final data = await _request(
+      'execute',
+      _commandRequest(query, {
+        'type': 'select_calendar',
+        'provider': calendar.provider,
+        'calendar_id': calendar.id,
+        'calendar_name': calendar.name,
+      }),
+    );
+    return _decodeSnapshot(_asMap(data['snapshot']));
+  }
+
+  @override
+  Future<DaySnapshot> syncCalendar(DayQuery query) async {
+    final current = await loadDay(query);
+    final connection = current.calendar;
+    if (connection == null) return current;
+    try {
+      final records = await _calendarAdapter
+          .read(connection.id, query)
+          .timeout(const Duration(seconds: 20));
+      final data = await _request(
+        'execute',
+        _commandRequest(query, {
+          'type': 'import_calendar',
+          'expected_revision': connection.revision,
+          'occurred_at': _timestamp(_clock()),
+          'range': {
+            'start_date': _date(query.date),
+            'end_date_exclusive': _date(
+              DateTime.utc(
+                query.date.year,
+                query.date.month,
+                query.date.day + 1,
+              ),
+            ),
+            'timezone_offset_seconds': query.timezoneOffsetSeconds,
+          },
+          'records': records,
+        }),
+      );
+      return _decodeSnapshot(_asMap(data['snapshot']));
+    } on Object catch (error) {
+      if (error is FfiDayGatewayException && error.code != 'validation') {
+        rethrow;
+      }
+      final code = error is PlatformException
+          ? error.code
+          : 'provider_unavailable';
+      final data = await _request(
+        'execute',
+        _commandRequest(query, {
+          'type': 'calendar_failed',
+          'expected_revision': connection.revision,
+          'failure':
+              ['permission_denied', 'calendar_unavailable'].contains(code)
+              ? code
+              : 'provider_unavailable',
+        }),
+      );
+      return _decodeSnapshot(_asMap(data['snapshot']));
+    }
   }
 
   Future<Map<String, dynamic>> _request(
@@ -285,6 +370,9 @@ DaySnapshot _decodeSnapshot(Map<String, dynamic> json) {
     nowEventId: json['now_event_id'] as String?,
     nextEventId: json['next_event_id'] as String?,
     overdueTaskCount: json['overdue_task_count']! as int,
+    calendar: json['calendar'] == null
+        ? null
+        : _decodeCalendar(_asMap(json['calendar'])),
   );
 }
 
@@ -314,6 +402,10 @@ DayItem _decodeItem(Map<String, dynamic> json) {
 EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
   final schedule = _asMap(json['schedule']);
   final isAllDay = schedule['kind'] == 'all_day';
+  final provenance = _asMap(json['source']);
+  final source = provenance['kind'] == 'calendar'
+      ? _asMap(provenance['source'])
+      : null;
   return EventItem(
     id: json['id']! as String,
     title: json['title']! as String,
@@ -327,8 +419,24 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
           as String,
     ),
     isAllDay: isAllDay,
+    calendarName: source?['calendar_name'] as String?,
+    externalId: source?['external_id'] as String?,
+    provider: source?['provider'] as String?,
+    timezone: schedule['timezone'] as String?,
   );
 }
+
+CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
+    CalendarConnection(
+      id: json['calendar_id']! as String,
+      name: json['calendar_name']! as String,
+      provider: json['provider']! as String,
+      revision: json['revision']! as int,
+      lastSuccessAt: _optionalTimestamp(json['last_success_at']),
+      error: json['error'] as String?,
+      rangeStart: (json['last_range'] as Map?)?['start_date'] as String?,
+      rangeEnd: (json['last_range'] as Map?)?['end_date_exclusive'] as String?,
+    );
 
 TaskPriority _priority(String value) => switch (value) {
   'low' => TaskPriority.low,

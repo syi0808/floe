@@ -29,6 +29,8 @@ pub struct DaySnapshotDto {
     pub next_event_id: Option<String>,
     pub overdue_task_count: u32,
     pub items: Vec<TimelineItemDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<floe_domain::CalendarConnection>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +73,7 @@ pub enum EventScheduleDto {
 pub enum SourceRefDto {
     Manual,
     Capture { capture_id: String },
+    Calendar { source: floe_domain::CalendarSource },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -156,8 +159,31 @@ pub struct CommandRequestDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarRecordDto {
+    pub external_id: String,
+    pub external_revision: String,
+    pub title: String,
+    pub schedule: EventScheduleDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
+    SelectCalendar {
+        provider: floe_domain::CalendarProvider,
+        calendar_id: String,
+        calendar_name: String,
+    },
+    ImportCalendar {
+        expected_revision: u64,
+        range: floe_domain::CalendarRange,
+        records: Vec<CalendarRecordDto>,
+        occurred_at: String,
+    },
+    CalendarFailed {
+        expected_revision: u64,
+        failure: floe_domain::CalendarFailure,
+    },
     SubmitCapture {
         input: String,
         occurred_at: String,

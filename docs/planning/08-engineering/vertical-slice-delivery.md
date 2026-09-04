@@ -47,6 +47,9 @@ macOS EventKit/OS Calendar를 우선 검토하되 provider는 아직 확정하�
 실제 읽기와 S3의 생성 권한을 짧은 PoC로 확인하고 선택 이유를 기록한다.
 다른 provider가 필요하면 native Rust/Go 실행 경계를 유지하며 계획을 갱신한다.
 S1 자체는 읽기 전용으로 동작하며 쓰기 권한을 미리 요구하지 않는다.
+단, 2026-09-04 사용자 승인에 따라 읽기에도 전체 접근이 필요한 EventKit의
+OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지 않는다.
+선택 근거와 미검증 PoC는 [ADR 0007](../../decisions/0007-eventkit-calendar-read.md)을 따른다.
 
 ### Acceptance criteria
 

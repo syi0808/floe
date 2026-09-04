@@ -174,6 +174,62 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
     let mut capture = None;
 
     match request.command {
+        CommandDto::SelectCalendar {
+            provider,
+            calendar_id,
+            calendar_name,
+        } => {
+            handle
+                .runtime
+                .block_on(handle.core.select_calendar(
+                    person_id,
+                    provider,
+                    calendar_id,
+                    calendar_name,
+                ))
+                .map_err(core_error)?;
+        }
+        CommandDto::ImportCalendar {
+            expected_revision,
+            range,
+            records,
+            occurred_at,
+        } => {
+            let records = records
+                .into_iter()
+                .map(|record| {
+                    Ok(floe_domain::CalendarRecord {
+                        external_id: record.external_id,
+                        external_revision: record.external_revision,
+                        title: record.title,
+                        schedule: record.schedule.try_into().map_err(conversion_error)?,
+                    })
+                })
+                .collect::<BridgeResult<Vec<_>>>()?;
+            handle
+                .runtime
+                .block_on(handle.core.import_calendar(
+                    person_id,
+                    expected_revision,
+                    range,
+                    records,
+                    parse_time(&occurred_at, "occurred_at")?,
+                ))
+                .map_err(core_error)?;
+        }
+        CommandDto::CalendarFailed {
+            expected_revision,
+            failure,
+        } => {
+            handle
+                .runtime
+                .block_on(handle.core.record_calendar_failure(
+                    person_id,
+                    expected_revision,
+                    failure,
+                ))
+                .map_err(core_error)?;
+        }
         CommandDto::SubmitCapture { input, occurred_at } => {
             let occurred_at = parse_time(&occurred_at, "occurred_at")?;
             let value = handle

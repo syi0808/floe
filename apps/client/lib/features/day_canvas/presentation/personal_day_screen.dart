@@ -8,9 +8,11 @@ import '../../../app/floe_motion.dart';
 import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
 import '../application/day_gateway.dart';
+import '../application/calendar_gateway.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
 import 'day_appearance.dart';
+import 'calendar_panel.dart';
 
 enum _DestinationView { today, tasks, notes }
 
@@ -148,6 +150,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _DayToolbar(controller, narrow: narrow),
+              if (widget.gateway case final CalendarGateway calendarGateway)
+                CalendarPanel(
+                  gateway: calendarGateway,
+                  query: controller.query,
+                  connection: snapshot.calendar,
+                  onChanged: controller.load,
+                ),
               _content(narrow, snapshot),
             ],
           ),
@@ -1644,8 +1653,24 @@ class _Timeline extends StatelessWidget {
     required this.snapshot,
     required this.onOpenTask,
   });
-  static const firstHour = 8;
-  static const lastHour = 19;
+  int get firstHour => items
+      .whereType<EventItem>()
+      .where((event) => !event.isAllDay)
+      .fold(
+        8,
+        (hour, event) => _dayMinutes(event.startsAt) ~/ 60 < hour
+            ? (_dayMinutes(event.startsAt) ~/ 60).clamp(0, 23)
+            : hour,
+      );
+  int get lastHour => items
+      .whereType<EventItem>()
+      .where((event) => !event.isAllDay)
+      .fold(
+        19,
+        (hour, event) => _dayMinutes(event.startsAt) ~/ 60 + 1 > hour
+            ? (_dayMinutes(event.startsAt) ~/ 60 + 1).clamp(1, 24)
+            : hour,
+      );
   static const hourExtent = 64.0;
   final List<DayItem> items;
   final DaySnapshot snapshot;
@@ -1656,12 +1681,8 @@ class _Timeline extends StatelessWidget {
     final events =
         items.whereType<EventItem>().where((event) => !event.isAllDay).toList()
           ..sort((left, right) => left.startsAt.compareTo(right.startsAt));
-    final visible = events
-        .where(
-          (event) =>
-              event.startsAt.hour < lastHour && event.endsAt.hour >= firstHour,
-        )
-        .toList();
+    final visible = events;
+    final timelineHeight = (lastHour - firstHour) * hourExtent;
     final current = events
         .where(
           (event) =>
@@ -1694,7 +1715,7 @@ class _Timeline extends StatelessWidget {
                 .toList(),
           ),
           SizedBox(
-            height: 704,
+            height: timelineHeight,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
@@ -1714,15 +1735,16 @@ class _Timeline extends StatelessWidget {
                 for (final event in visible)
                   _TimelineBlock(
                     item: event,
+                    timezoneOffsetSeconds: snapshot.timezoneOffsetSeconds,
                     top: (_minutes(event.startsAt) / 60 * hourExtent + 4).clamp(
                       4,
-                      650,
+                      timelineHeight - 54,
                     ),
                     onOpenTask: onOpenTask,
                   ),
                 if (_showsCurrentTime)
                   _TimelineNowMarker(
-                    now: snapshot.generatedAt,
+                    now: _wallTime(snapshot.generatedAt),
                     top: _minutes(snapshot.generatedAt) / 60 * hourExtent,
                   ),
                 if (suggestion != null && hasBreakWindow)
@@ -1737,7 +1759,7 @@ class _Timeline extends StatelessWidget {
                                     60 *
                                     hourExtent -
                                 26)
-                            .clamp(0, 652),
+                            .clamp(0, timelineHeight - 52),
                     width: markerSize,
                     height: markerSize,
                     child: _TimelineSuggestionButton(item: suggestion),
@@ -1751,7 +1773,7 @@ class _Timeline extends StatelessWidget {
   }
 
   bool get _showsCurrentTime {
-    final now = snapshot.generatedAt;
+    final now = _wallTime(snapshot.generatedAt);
     return now.year == snapshot.date.year &&
         now.month == snapshot.date.month &&
         now.day == snapshot.date.day &&
@@ -1759,8 +1781,20 @@ class _Timeline extends StatelessWidget {
         now.hour < lastHour;
   }
 
-  static int _minutes(DateTime value) =>
-      value.hour * 60 + value.minute - firstHour * 60;
+  DateTime _wallTime(DateTime value) =>
+      value.toUtc().add(Duration(seconds: snapshot.timezoneOffsetSeconds));
+
+  int _dayMinutes(DateTime value) => _wallTime(value)
+      .difference(
+        DateTime.utc(
+          snapshot.date.year,
+          snapshot.date.month,
+          snapshot.date.day,
+        ),
+      )
+      .inMinutes;
+
+  int _minutes(DateTime value) => _dayMinutes(value) - firstHour * 60;
 }
 
 extension<T> on Iterable<T> {
@@ -1778,7 +1812,7 @@ class _AllDayStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final mobile = MediaQuery.sizeOf(context).width <= 780;
     return Container(
-      height: 50,
+      constraints: const BoxConstraints(minHeight: 50),
       padding: EdgeInsets.only(left: mobile ? 14 : 22, right: mobile ? 14 : 16),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: FloePalette.neutral200)),
@@ -1790,41 +1824,34 @@ class _AllDayStrip extends StatelessWidget {
             child: Text('All-day', style: FloeType.body.copyWith(fontSize: 13)),
           ),
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) => Align(
-                alignment: Alignment.centerLeft,
-                child: events.isEmpty
-                    ? const SizedBox.shrink()
-                    : SizedBox(
-                        width: mobile
-                            ? constraints.maxWidth.clamp(0, 230)
-                            : (constraints.maxWidth * .72).clamp(0, 320),
-                        height: 34,
-                        child: FloeSquircle(
-                          size: FloeSquircleSize.md,
-                          fill: FloePalette.mint50,
-                          borderColor: FloePalette.mint100,
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: Row(
-                            children: [
-                              const _ToneDot(color: Color(0xFF43B590)),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  events.first.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: mobile ? 12 : 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final event in events)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Tooltip(
+                      message: event.externalId ?? event.title,
+                      child: FloeSquircle(
+                        size: FloeSquircleSize.md,
+                        fill: FloePalette.mint50,
+                        borderColor: FloePalette.mint100,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        child: Text(
+                          '${event.title}${event.calendarName == null ? '' : ' · ${event.sourceLabel}'}',
+                          style: TextStyle(
+                            height: 1.2,
+                            fontSize: mobile ? 12 : 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-              ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -1895,8 +1922,10 @@ class _TimelineBlock extends StatelessWidget {
     required this.item,
     required this.top,
     required this.onOpenTask,
+    required this.timezoneOffsetSeconds,
   });
   final EventItem item;
+  final int timezoneOffsetSeconds;
   final double top;
   final ValueChanged<TaskItem> onOpenTask;
 
@@ -1946,7 +1975,9 @@ class _TimelineBlock extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _timeRange(item.startsAt, item.endsAt),
+                    '${_timeRange(item.startsAt.toUtc().add(Duration(seconds: timezoneOffsetSeconds)), item.endsAt.toUtc().add(Duration(seconds: timezoneOffsetSeconds)))}${item.calendarName == null ? '' : ' · ${item.sourceLabel}'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: compact ? 10 : 12,
                       height: 1.2,
@@ -2349,11 +2380,16 @@ class _DayRow extends StatelessWidget {
           color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
         ),
       ),
-      trailing: FloeButton.icon(
-        tooltip: '${item.title} 삭제',
-        onPressed: disabled ? null : () => _confirmDelete(context),
-        icon: const Icon(Icons.more_horiz, size: 20),
-      ),
+      trailing: item is EventItem && (item as EventItem).externalId != null
+          ? const Tooltip(
+              message: '외부 캘린더에서 관리하는 읽기 전용 일정',
+              child: Icon(Icons.lock_outline, size: 18),
+            )
+          : FloeButton.icon(
+              tooltip: '${item.title} 삭제',
+              onPressed: disabled ? null : () => _confirmDelete(context),
+              icon: const Icon(Icons.more_horiz, size: 20),
+            ),
     );
   }
 
