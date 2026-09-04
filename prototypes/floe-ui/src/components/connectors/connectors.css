@@ -81,7 +81,7 @@
   left: 15px;
   bottom: 19px;
   border-radius: 50%;
-  background: var(--primary-400);
+  background: var(--primary-600);
   box-shadow: 0 0 0 5px var(--primary-50);
 }
 .connector-service-card:hover .connector-service-orbit,
