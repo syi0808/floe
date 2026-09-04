@@ -1,5 +1,5 @@
 import { CalendarDateToolbar } from './components/calendar/CalendarDateToolbar.jsx';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './calendar.css';
 import { layoutTimedEvents } from './calendar-layout.js';
 import {
@@ -43,6 +43,7 @@ export function CalendarScreen({ page, onNavigate }) {
   );
   const timer = useRef(null);
   const toastTimer = useRef(null);
+  const announceRead = useRef(false);
   const date = new Date(Date.UTC(2026, 8, 4 + dayOffset));
   const dateLabel = date.toLocaleDateString('en-US', {
     weekday: 'short',
@@ -85,27 +86,34 @@ export function CalendarScreen({ page, onNavigate }) {
     }
   }, [page, pixelsPerMinute, phase === 'loadError']);
 
-  function notify(message) {
+  const notify = useCallback((message) => {
     clearTimeout(toastTimer.current);
     setToast(message);
     toastTimer.current = setTimeout(() => setToast(''), 4500);
-  }
+  }, []);
 
-  function refresh(offset = dayOffset, announce = true) {
-    clearTimeout(timer.current);
-    clearTimeout(toastTimer.current);
-    setToast('');
-    setModal(null);
-    setPhase('syncing');
+  useEffect(() => {
+    if (phase !== 'syncing') return;
+    const offset = dayOffset;
+    const announce = announceRead.current;
     timer.current = setTimeout(() => {
       setPhase(offset === 0 ? 'connected' : 'empty');
       setReadDates((current) => [...new Set([...current, offset])]);
       if (announce) notify('All calendars refreshed. Your local tasks and notes are unchanged.');
     }, 1100);
+    return () => clearTimeout(timer.current);
+  }, [phase, dayOffset, notify]);
+
+  function refresh(offset = dayOffset, announce = true) {
+    clearTimeout(toastTimer.current);
+    setToast('');
+    setModal(null);
+    announceRead.current = announce;
+    setDayOffset(offset);
+    setPhase('syncing');
   }
 
   function moveDay(offset) {
-    clearTimeout(timer.current);
     setDayOffset(offset);
     if (hasConnection && !['revoked', 'missing', 'offline', 'loadError'].includes(phase))
       refresh(offset, false);

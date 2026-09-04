@@ -61,7 +61,7 @@ no lab, state dropdown, badge or link to the old reference.
 | --- | --- |
 | `connected` (default) | Unified sample events; no healthy-status banner/badge on Today |
 | `disconnected` | Optional connection invitation; local items remain usable |
-| `syncing` | Cache retained under calendar-local loading overlay, duplicate refresh disabled |
+| `syncing` | Cache retained under calendar-local loading overlay; completes after 1.1 seconds even on direct URL entry, duplicate refresh disabled |
 | `cached` | Saved data with collection time and refresh action |
 | `offline` | Last good cache, failure timestamp and retry |
 | `denied` | Local day and permission recovery |
