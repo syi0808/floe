@@ -101,14 +101,15 @@ list without resetting calendar state. No page-level back links are reintroduced
 
 `ConnectorList({ services, onSelect })` partitions records into Connected services
 and Available services. `ConnectorServiceCard({ service, onSelect })` emits the service
-ID on click/Enter/Space. A service record has `id`, `name`, Lucide `icon`, `readOnly`,
-`connected`, `description`, `status` and `tone` (connected/neutral/warning). The grid
+ID on click/Enter/Space. A service record has `id`, `name`, Lucide `icon` and
+`connected`. Cards show only the service icon and name; metadata, permissions and
+sync status belong in the service detail, with no card footer link. The grid
 adapts to available width; the whole card is a named button with focus styling.
 Both depend on `styles.css` and `components/connectors/connectors.css`.
 
 Only macOS Calendar is currently supported. iCloud and Google are accounts inside
 that connection, not separate direct integrations. Disconnect moves macOS Calendar
-to Available services; access warnings stay on its connected card. Selecting an
+to Available services; access warnings remain in the service detail. Selecting an
 available card opens the existing detail/setup flow rather than granting access.
 
 | Unit | Contract and review boundary | Main selectors |

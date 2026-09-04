@@ -20,10 +20,10 @@
       "export": "ConnectorServiceCard",
       "source": "src/components/connectors/ConnectorServiceCard.jsx",
       "kind": "control",
-      "responsibility": "Service icon, summary and status with full-card detail navigation",
+      "responsibility": "Service icon and name with full-card detail navigation",
       "props": ["service", "onSelect"],
       "stateOwner": "caller: service",
-      "states": ["connected", "available", "warning", "refreshing", "hover", "focus"],
+      "states": ["connected", "available", "hover", "focus"],
       "styles": ["src/styles.css", "src/components/connectors/connectors.css"],
       "status": "prototype",
       "spec": "../../docs/design/prototype-components.md"

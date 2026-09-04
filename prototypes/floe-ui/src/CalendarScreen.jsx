@@ -142,18 +142,7 @@ export function CalendarScreen({ page, onNavigate }) {
               id: 'macos-calendar',
               name: 'macOS Calendar',
               icon: CalendarDays,
-              readOnly: true,
               connected: hasConnection,
-              description: hasConnection
-                ? `${calendars.length} calendars · ${new Set(calendars.map((calendar) => calendar.account)).size} accounts`
-                : 'Calendars already on this Mac',
-              status: hasConnection ? statusLabel : 'Not connected',
-              tone:
-                statusTone === 'warning'
-                  ? 'warning'
-                  : hasConnection && !statusTone
-                    ? 'connected'
-                    : 'neutral',
             },
           ]}
           onSelect={() => onNavigate('calendar-connection')}
