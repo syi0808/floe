@@ -77,6 +77,7 @@ These are the nontrivial data contracts used by the calendar:
 | `SquircleButton` | Real button; forwards native attributes/events/ref, defaults to type button | `.sq-button`, button variants |
 | `SquircleBlock` | Shape wrapper; `asChild` preserves semantic child element | Caller classes |
 | `CheckControl` | Controlled `checked`, accessible `label`, emits `onClick`; aria-pressed toggle | `.check-control`, `.check-visual` |
+| `DotSpinner` | Eight 4px circles in a 32px ring, continuous 900ms rotation; optional screen-reader-only label with status role; static under reduced motion | `.floe-dot-spinner`, `.floe-dot-spinner-ring` |
 | `Modal` | Mount opens native dialog, locks body scroll; Escape/backdrop/X calls `onClose`; unmount restores focus/scroll; unique title ID | `.s1-dialog`, `.s1-modal*` |
 | `GlobalSidebar` | Controlled screen and `onNavigate(destination)`; icon-only names, tooltips, aria-current | `.sidebar-shell`, `.global-sidebar`, `.global-nav`, `.nav-link`, `.brand` |
 
@@ -115,6 +116,8 @@ through this API; Continue to permission changes content without closing the she
 Loading and empty states occupy the whole box without shifting the calendar. Empty
 background remains inert, aria-hidden and blurred. Existing CSS selectors and DOM
 wrappers are retained; extraction must not add layout wrappers to the timeline.
+Calendar loading uses DotSpinner without visible text; the status label remains
+available to assistive technology.
 
 CalendarConnections uses matching 23px violet icons for the boundary and offline
 cards. Its permission callout has 6px vertical padding, 12px top margin and top-aligned

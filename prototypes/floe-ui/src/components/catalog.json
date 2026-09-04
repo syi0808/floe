@@ -3,6 +3,19 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "dot-spinner",
+      "export": "DotSpinner",
+      "source": "src/components/ui/DotSpinner.jsx",
+      "kind": "feedback",
+      "responsibility": "Eight rotating dots with nonvisual loading status",
+      "props": ["label"],
+      "stateOwner": "none",
+      "states": ["spinning", "reduced motion (static)"],
+      "styles": ["src/styles.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
       "id": "app",
       "export": "App",
       "source": "src/App.jsx",

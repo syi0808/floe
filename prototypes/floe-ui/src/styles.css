@@ -37,6 +37,40 @@
   box-sizing: border-box;
 }
 
+.floe-dot-spinner,
+.floe-dot-spinner-ring {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+}
+.floe-dot-spinner {
+  color: var(--primary-600);
+  flex-shrink: 0;
+}
+.floe-dot-spinner-ring {
+  position: relative;
+  animation: floe-dots-rotate 900ms linear infinite;
+}
+.floe-dot-spinner-ring > span {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+@keyframes floe-dots-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .floe-dot-spinner-ring {
+    animation: none;
+  }
+}
+
 @media (forced-colors: none) {
   ::-webkit-scrollbar {
     width: 10px;

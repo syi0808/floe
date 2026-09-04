@@ -1,4 +1,4 @@
-import { LoaderCircle } from 'lucide-react';
+import { DotSpinner } from '../ui/DotSpinner.jsx';
 import { CalendarSurface as Surface } from './CalendarSurface.jsx';
 import { CalendarEvent } from './CalendarEvent.jsx';
 import { TimelineZoom } from './TimelineZoom.jsx';
@@ -25,9 +25,8 @@ export function CalendarAgenda({
   return (
     <Surface className="s1-agenda">
       {phase === 'syncing' && (
-        <div className="s1-calendar-loading" role="status">
-          <LoaderCircle size={25} className="s1-spin" aria-hidden="true" />
-          <span>Loading calendar…</span>
+        <div className="s1-calendar-loading">
+          <DotSpinner label="Loading calendar…" />
         </div>
       )}
       <div inert={!hasCache && phase !== 'syncing'} aria-hidden={!hasCache && phase !== 'syncing'}>
