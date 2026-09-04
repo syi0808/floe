@@ -918,19 +918,21 @@ export function CalendarScreen({ page, onNavigate }) {
               </div>
               <details className="s1-source-details">
                 <summary>Source details</summary>
-                <dl>
-                  <dt>Connection / Person</dt>
-                  <dd>demo-macos / You</dd>
-                  <dt>External occurrence ID</dt>
-                  <dd>
-                    fixture:{detailCalendar.id}:{modal.id}:2026-09-
-                    {String(4 + dayOffset).padStart(2, '0')}
-                  </dd>
-                  <dt>Change token</dt>
-                  <dd>fixture-revision-04</dd>
-                  <dt>Integration</dt>
-                  <dd>Fixture · not a live EventKit record</dd>
-                </dl>
+                <SquircleBlock radius={22} asChild>
+                  <dl>
+                    <dt>Connection / Person</dt>
+                    <dd>demo-macos / You</dd>
+                    <dt>External occurrence ID</dt>
+                    <dd>
+                      fixture:{detailCalendar.id}:{modal.id}:2026-09-
+                      {String(4 + dayOffset).padStart(2, '0')}
+                    </dd>
+                    <dt>Change token</dt>
+                    <dd>fixture-revision-04</dd>
+                    <dt>Integration</dt>
+                    <dd>Fixture · not a live EventKit record</dd>
+                  </dl>
+                </SquircleBlock>
               </details>
               <div className="s1-modal-actions">
                 <SquircleButton className="primary-button" onClick={() => setModal(null)}>
