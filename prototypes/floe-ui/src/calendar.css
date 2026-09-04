@@ -452,10 +452,6 @@
   padding: 10px 0;
   font-size: 13px;
 }
-.s1-capture > span {
-  font-size: 10px;
-  color: var(--ink-tertiary);
-}
 .s1-capture .sq-button {
   width: 38px;
   min-height: 38px;
@@ -885,9 +881,6 @@
     left: 57px;
     right: 12px;
     padding: 18px 10px;
-  }
-  .s1-capture > span {
-    display: none;
   }
   .s1-modal {
     padding: 18px 22px 24px;

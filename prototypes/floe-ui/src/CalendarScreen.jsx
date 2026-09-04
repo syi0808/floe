@@ -596,7 +596,6 @@ export function CalendarScreen({ page, onNavigate }) {
                 placeholder="A thought for your day…"
                 aria-label="Capture a local note"
               />
-              <span>Only in Floe</span>
               <SquircleButton disabled={!capture.trim()} type="submit" aria-label="Save local note">
                 <ArrowRight size={18} />
               </SquircleButton>
