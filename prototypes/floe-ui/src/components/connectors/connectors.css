@@ -40,12 +40,12 @@
   padding: 24px;
   min-width: 0;
   text-align: left;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: transparent;
+  box-shadow: none;
 }
 .connector-service-card.sq-button:hover {
   background: var(--primary-50);
-  box-shadow: inset 0 0 0 1px var(--primary-200);
+  box-shadow: none;
 }
 .connector-service-icon {
   display: inline-flex;

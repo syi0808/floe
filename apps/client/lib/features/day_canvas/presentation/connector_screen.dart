@@ -117,8 +117,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         SizedBox(height: 16),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 280),
-          child: FloeSquircle(
+          child: Material(
+            type: MaterialType.transparency,
             child: InkWell(
+              customBorder: floeSquircleBorder(FloeSquircleSize.lg),
               onTap: () => setState(() => detail = true),
               hoverColor: FloePalette.primary50,
               child: Padding(
