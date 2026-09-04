@@ -173,6 +173,7 @@ impl FloeCore {
             .await?
             .ok_or_else(|| not_found("event", event_id))?;
         ensure_revision(event.revision, expected_revision)?;
+        ensure_local_event(&event)?;
         event.update(title, schedule, now)?;
         self.store.put_event(&event).await?;
         Ok(event)
@@ -245,6 +246,7 @@ impl FloeCore {
                     .await?
                     .ok_or_else(|| not_found("event", id))?;
                 ensure_revision(value.revision, expected_revision)?;
+                ensure_local_event(&value)?;
                 value.deleted_at = Some(now);
                 value.updated_at = now;
                 value.revision = value.revision.next();
@@ -312,6 +314,19 @@ fn ensure_revision(actual: Revision, expected: Revision) -> Result<(), CoreError
             .with_metadata("expected", expected.0.to_string())
             .with_metadata("actual", actual.0.to_string()))
     }
+}
+
+fn ensure_local_event(event: &Event) -> Result<(), CoreError> {
+    if matches!(
+        event.source,
+        SourceRef::Calendar(_) | SourceRef::External(_)
+    ) {
+        return Err(CoreError::new(
+            ErrorCode::Validation,
+            "external calendar events are read-only",
+        ));
+    }
+    Ok(())
 }
 
 fn not_found(kind: &str, id: impl std::fmt::Display) -> CoreError {

@@ -26,6 +26,16 @@ pub enum SourceRef {
     Manual,
     Capture(CaptureId),
     Calendar(crate::CalendarSource),
+    External(ExternalSource),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExternalSource {
+    pub connection_id: String,
+    pub provider: String,
+    pub resource_type: String,
+    pub external_id: String,
+    pub external_revision: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

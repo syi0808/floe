@@ -74,6 +74,7 @@ pub enum SourceRefDto {
     Manual,
     Capture { capture_id: String },
     Calendar { source: floe_domain::CalendarSource },
+    External { source: floe_domain::ExternalSource },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

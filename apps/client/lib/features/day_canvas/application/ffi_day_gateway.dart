@@ -403,7 +403,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
   final schedule = _asMap(json['schedule']);
   final isAllDay = schedule['kind'] == 'all_day';
   final provenance = _asMap(json['source']);
-  final source = provenance['kind'] == 'calendar'
+  final source = ['calendar', 'external'].contains(provenance['kind'])
       ? _asMap(provenance['source'])
       : null;
   return EventItem(
@@ -419,7 +419,9 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
           as String,
     ),
     isAllDay: isAllDay,
-    calendarName: source?['calendar_name'] as String?,
+    calendarName: source == null
+        ? null
+        : source['calendar_name'] as String? ?? '이전 외부 연결',
     externalId: source?['external_id'] as String?,
     provider: source?['provider'] as String?,
     timezone: schedule['timezone'] as String?,

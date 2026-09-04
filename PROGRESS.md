@@ -104,8 +104,8 @@ cross-phase coverage is defined in the slice plan and does not change these stat
 2026-09-04, macOS arm64. Dependency mode: fixture for connector behavior;
 EventKit native adapter compilation only, not a live read.
 
-- Rust: 20 tests passing (`cargo test --workspace`).
-- Flutter: 38 tests passing, including actual native FFI tests (none skipped).
+- Rust: 22 tests passing (`cargo test --workspace`, including existing External-source compatibility).
+- Flutter: 39 tests passing, including actual native FFI tests and load-error recovery (none skipped).
 - Clippy: clean with warnings denied; Flutter analyzer: clean.
 - macOS: debug app builds with Calendar entitlement and EventKit usage strings.
 - No external calendar data collected or changed; live acceptance remains 0/4.
@@ -126,7 +126,25 @@ EventKit native adapter compilation only, not a live read.
   collected or modified in this run. S1-A1–A4 stay pending; resume with a visible
   connection/permission result supplied by the user or working UI automation.
 
-## Previous Validation Baseline
+## Local-data Compatibility Fix — 2026-09-04
+
+- User reported only the retry button was visible. An isolated diagnostic copy of
+  the existing store reproduced `storage: unknown variant External` through the
+  bundled C ABI. This is independent of the UI automation timeout noted above.
+- Added lossless `External` source decoding/encoding and a separate legacy-source
+  wire variant; existing provenance is not rewritten into a newly selected Calendar.
+- Existing external events remain read-only; no stored records are deleted or reset.
+- Day-load failures now show the actual error and retry action instead of an unexplained button.
+- The same diagnostic copy loads successfully with the fixed native library.
+  Regression tests cover old JSON persistence/reopen, provenance round-trip,
+  write rejection, and visible error/retry recovery. No private data is committed.
+- Live EventKit acceptance remains pending; this validates local-data compatibility,
+  not permission grants or provider reads.
+- Rebuilt and signature-verified the debug app, then relaunched it against the
+  existing store. UI inspection now succeeds and shows Day Canvas plus **외부 Calendar
+  연결 / 연결 / 권한 설정**, rather than only retry. The temporary diagnostic copy was removed.
+
+## Historical Personal Day Validation
 
 Last recorded baseline: 2026-09-03. These results are preserved from the previous
 progress record, not rerun or newly verified by the 2026-09-04 planning change.

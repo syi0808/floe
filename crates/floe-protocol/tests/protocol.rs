@@ -14,6 +14,21 @@ fn id(value: &str) -> Uuid {
 }
 
 #[test]
+fn legacy_external_provenance_round_trips_without_assuming_a_calendar_selection() {
+    let stored = json!({"External": {
+        "connection_id": "legacy", "provider": "fixture", "resource_type": "calendar_event",
+        "external_id": "event", "external_revision": "revision"
+    }});
+    let source: SourceRef = serde_json::from_value(stored.clone()).unwrap();
+    let dto: SourceRefDto = source.into();
+    let wire = serde_json::to_value(&dto).unwrap();
+    assert_eq!(wire["kind"], "external");
+    assert_eq!(wire["source"]["connection_id"], "legacy");
+    let restored: SourceRef = dto.try_into().unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), stored);
+}
+
+#[test]
 fn snapshot_has_a_versioned_stable_wire_shape() {
     let snapshot = DaySnapshotDto {
         calendar: None,

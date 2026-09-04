@@ -127,7 +127,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       return const _LoadingDay();
     }
     if (controller.loadState == DayLoadState.failure) {
-      return _FailureDay(retry: controller.load);
+      return _FailureDay(
+        retry: controller.load,
+        message: controller.errorMessage,
+      );
     }
     final snapshot = controller.snapshot!;
     final selectedTask = _taskById(snapshot, selectedTaskId);
@@ -2538,14 +2541,32 @@ class _LoadingDay extends StatelessWidget {
 }
 
 class _FailureDay extends StatelessWidget {
-  const _FailureDay({required this.retry});
+  const _FailureDay({required this.retry, required this.message});
   final VoidCallback retry;
+  final String? message;
   @override
   Widget build(BuildContext context) => Center(
-    child: FloeButton.filled(
-      onPressed: retry,
-      icon: const Icon(Icons.refresh),
-      child: const Text('다시 불러오기'),
+    child: FloeSquircle(
+      padding: const EdgeInsets.all(FloeSpace.xl),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, color: FloePalette.error600),
+          const SizedBox(height: 12),
+          const Text('하루 데이터를 불러오지 못했어요'),
+          const SizedBox(height: 8),
+          SelectableText(
+            message ?? '알 수 없는 오류입니다.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          FloeButton.filled(
+            onPressed: retry,
+            icon: const Icon(Icons.refresh),
+            child: const Text('다시 불러오기'),
+          ),
+        ],
+      ),
     ),
   );
 }

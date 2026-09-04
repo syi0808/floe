@@ -1,12 +1,36 @@
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/floe_mascot.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day_canvas/application/day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 void main() {
+  testWidgets('day load failures show the cause and recover on retry', (
+    tester,
+  ) async {
+    final now = DateTime.utc(2026, 9, 4);
+    await tester.pumpWidget(
+      FloeApp(
+        gateway: _FailOnceGateway(),
+        query: DayQuery(
+          personId: 'person-1',
+          date: now,
+          now: now,
+          timezoneOffsetSeconds: 0,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('하루 데이터를 불러오지 못했어요'), findsOneWidget);
+    expect(find.textContaining('Unsupported source format'), findsOneWidget);
+    await tester.tap(find.text('다시 불러오기'));
+    await tester.pumpAndSettle();
+    expect(find.text('오늘은 아직 비어 있어요'), findsOneWidget);
+    expect(find.textContaining('Unsupported source format'), findsNothing);
+  });
   testWidgets('renders empty day and classifies a typed capture', (
     tester,
   ) async {
@@ -250,3 +274,18 @@ void main() {
 
 String _dateLabel(DateTime value) =>
     '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value.month - 1]} ${value.day}';
+
+class _FailOnceGateway implements DayGateway {
+  bool failed = false;
+  @override
+  Future<DaySnapshot> loadDay(DayQuery query) async {
+    if (!failed) {
+      failed = true;
+      throw const FormatException('Unsupported source format');
+    }
+    return FakeDayGateway().loadDay(query);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
