@@ -21,7 +21,7 @@
 App → GlobalSidebar + screen controllers
 CalendarScreen → ConnectorList → ConnectorServiceCard
                → CalendarConnections / CalendarDateToolbar / CalendarAgenda
-               → CalendarContextRail + CalendarCapture + CalendarStatusBanner
+               → CalendarContextRail + CalendarStatusBanner
                → CalendarDialogs → Modal + one dialog-content component
 CalendarAgenda → CalendarAllDay + TimelineZoom + CalendarEvent + CalendarEmptyState
 TaskDetail → SubtaskList → CheckControl
@@ -91,7 +91,6 @@ accepts a node or a render function `({ close }) => content`. Content actions mu
 `close()` for dismissal or `close(action)` to run a confirming mutation after exit;
 that action must unmount the modal. CalendarDialogs wires every dismissing action
 through this API; Continue to permission changes content without closing the shell.
-`CalendarCapture` similarly generates its label/input association so instances do not collide.
 
 ## Calendar components
 
@@ -100,7 +99,7 @@ through this API; Continue to permission changes content without closing the she
 `App` supplies `notify(title, description, tone = 'success', action?)` to CalendarScreen.
 An optional action is `{ label, onClick }`; task completion/incompletion supplies Undo.
 Actions sit to the right of the message, centered with the icon and close button.
-Note capture, manual refresh and disconnect use `ToastViewport`, portaled to the body,
+Manual refresh and disconnect use `ToastViewport`, portaled to the body,
 instead of the old dark bottom banner. Persistent calendar warning/recovery banners
 remain inline and unchanged. This is a custom React/CSS implementation without Sonner;
 Flutter is unchanged.
@@ -154,8 +153,7 @@ available card opens the existing detail/setup flow rather than granting access.
 | `CalendarEvent` | Receives laid-out event, resolved calendar, zoom and disabled flag; `onSelect(event)`. Preserves exact start/end, column spacing, height-based density and full accessible name | `.s1-event*`, `[data-density]`, `[data-overlapping]`, `.tone-dot` |
 | `TimelineZoom` | Controlled value; emits numeric `onChange(value)`; native keyboard slider and accessible magnification text | `.s1-timeline-tools`, `.s1-zoom-*` |
 | `CalendarEmptyState` | Phase/date copy with one `onAction`; controller chooses connect, read or navigate. Agenda owns whether it is shown | `.s1-empty-day`, `.s1-empty-content` |
-| `CalendarContextRail` | Controlled task and notes; emits boolean task change and navigation destination. Local copy is still prototype content | `.s1-side-stack`, `.s1-local-task`, `.s1-personal-note`, `.s1-captured-note`, `.s1-provenance-hint` |
-| `CalendarCapture` | Controlled draft; emits raw `onChange(value)` and nonempty trimmed `onSubmit(value)`; parent saves and clears | `.s1-capture-card`, `.s1-capture` |
+| `CalendarContextRail` | Controlled task and static note context; emits boolean task change and navigation destination. Local copy is still prototype content | `.s1-side-stack`, `.s1-local-task`, `.s1-personal-note`, `.s1-provenance-hint` |
 | `CalendarConnections` | Controlled inventory, phase/status and collected dates; emits dialog ID and refresh; no permissions or mutations | `.s1-connections-layout`, `.s1-connection-record`, `.s1-connected-calendars`, `.s1-facts`, `.s1-actions` |
 | `CalendarStatusBanner` | Supported phase selects status/alert copy and supplied recovery callback. Connected/empty are not valid banner inputs | `.s1-banner`, `.s1-banner-action` |
 | `CalendarDialogs` | Routes a non-null selection into shared Modal + content. Does not change phase or clear data itself | Shared modal layout |
@@ -228,7 +226,7 @@ State lists are review prompts, not generated acceptance evidence.
   empty overlay and manual refresh; scroll/zoom and local data survive navigation.
 - Dialogs: open, close, Escape/backdrop, focus return, source disclosure, permission
   denial/recovery and disconnect; no external writes.
-- Local capture/task: trim/empty guard, save feedback and task checkbox.
+- Local task: task checkbox and completion feedback.
 - Tasks: subtask toggle and suggestion dismissal. Notes: search/filter/clear/new draft.
 - Progress and responsive shell: no missing imports, preserved layout and named controls.
 

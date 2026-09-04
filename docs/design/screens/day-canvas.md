@@ -15,7 +15,6 @@ Local toolbar: date · Today · Day/Week/Month
 │ Current-time marker              │ Related note  │
 │ Optional anchored Floe button    │               │
 └──────────────────────────────────┴───────────────┘
-Universal Capture
 ```
 
 The timeline is primary. The rail order is tasks, related note/context, then Floe. Rail cards use one shared system.
@@ -39,19 +38,19 @@ A time-specific suggestion appears first as one 52×52 white `sq-md` button with
 
 ## Narrow composition
 
-Order content as toolbar, Now/Next, timeline, high-priority tasks, optional suggestion, related note, and capture. Secondary tasks and detail collapse behind explicit controls. No horizontal timeline scrolling is required for the primary day view.
+Order content as toolbar, Now/Next, timeline, high-priority tasks, optional suggestion, and related note. Secondary tasks and detail collapse behind explicit controls. No horizontal timeline scrolling is required for the primary day view.
 
 ## Interaction
 
 - Date movement preserves focus and announces the new date.
 - Selecting an item opens semantic detail without losing timeline position.
 - Completing a task updates locally and offers undo.
-- Capture preserves original input and uses the classification flow.
+- The calendar has no bottom capture input; create notes from the Notes page.
 - Activating the Floe button opens its anchored proposal; accepting the proposal performs only the explicitly named, policy-approved action.
 
 ## Empty and exceptional states
 
-- Empty day: show calm orientation and capture, not filler recommendations.
+- Empty day: show calm orientation, not filler recommendations.
 - Conflict: explain which items conflict before offering a resolution.
 - Overdue: use explicit language plus warning styling.
 - Offline or stale: retain local content and identify unavailable actions.

@@ -17,7 +17,7 @@
 | 요소 | 이전 Flutter | 변경 |
 |---|---|---|
 | Shell | 별도 최대 콘텐츠 폭, 좁은 고정 rail | HTML의 1500 frame, 120/36 inset, 7:3 rail, 24 gap |
-| Mobile | 고정 capture가 캘린더를 가림 | capture는 context 아래 문서 흐름, navigation만 고정 |
+| Mobile | 하단 입력 영역이 캘린더 공간을 차지함 | capture 입력창 제거, navigation만 고정 |
 | Empty day | 별도 Now/Next hero | 동일한 빈 타임라인 구조 유지 |
 | Squircle | ContinuousRectangleBorder, 0폭 hairline | Figma smoothing 0.82, semantic radius, BorderSide.none |
 | Typography | OS 기본 폰트와 Material 기본 스타일 | 번들 Pretendard, 명시적 크기·행간·굵기 |
@@ -47,7 +47,7 @@
 - HTML의 Progress는 개발 상태 dashboard이다. Flutter에는 기존 제품 navigation 3개만 유지한다.
 - HTML Tasks는 고정된 상세 예시다. Flutter는 실제 task collection에서 상세로 이동한다. 캡처에서는 `Prepare launch brief` 항목을 선택한다.
 - 실제 core 모델에는 note excerpt / category, task description / subtasks, event tone이 아직 없다. `DayAppearance`는 선택적인 presentation metadata이며 DB schema를 바꾸거나 임의의 예시를 실제 사용자 데이터로 넣지 않는다.
-- Preview의 subtask checkbox는 메모리 상태만 바꾼다. 실제 task 완료·삭제·capture는 기존 gateway를 유지한다.
+- Preview의 subtask checkbox는 메모리 상태만 바꾼다. 실제 task 완료·삭제와 Notes 메모 생성은 기존 gateway를 유지한다.
 - Add break는 확인 후 gateway로 실제 이벤트를 추가한다. 중복/겹침을 검사하고 20분 창이 없으면 launcher를 숨긴다. AI 모델이 계산한 제안이 아니라 로컬 일정 간격 기반 UI이다.
 - Week/Month, 노트 작성 및 상세 편집은 기존 미연결 상태를 유지한다. 이 작업은 backend 기능 완성이 아닌 UI parity 작업이다.
 

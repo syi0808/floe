@@ -1,7 +1,7 @@
 import { ArrowRight, Link2 } from 'lucide-react';
 import { CalendarSurface as Surface } from './CalendarSurface.jsx';
 
-export function CalendarContextRail({ taskDone, onTaskChange, localNotes, hasCache, onNavigate }) {
+export function CalendarContextRail({ taskDone, onTaskChange, hasCache, onNavigate }) {
   return (
     <aside className="s1-side-stack">
       <Surface>
@@ -29,11 +29,6 @@ export function CalendarContextRail({ taskDone, onTaskChange, localNotes, hasCac
         <p className="s1-personal-note">
           Leave a little room between things. Not every empty space needs filling.
         </p>
-        {localNotes.map((note, index) => (
-          <p className="s1-captured-note" key={index}>
-            {note}
-          </p>
-        ))}
       </Surface>
       {hasCache && (
         <div className="s1-provenance-hint">

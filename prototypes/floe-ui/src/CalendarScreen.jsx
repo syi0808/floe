@@ -15,7 +15,6 @@ import { CalendarSurface as Surface } from './components/calendar/CalendarSurfac
 import { CalendarStatusBanner } from './components/calendar/CalendarStatusBanner.jsx';
 import { CalendarAgenda } from './components/calendar/CalendarAgenda.jsx';
 import { CalendarContextRail } from './components/calendar/CalendarContextRail.jsx';
-import { CalendarCapture } from './components/calendar/CalendarCapture.jsx';
 import { CalendarConnections } from './components/calendar/CalendarConnections.jsx';
 import { CalendarDialogs } from './components/calendar/CalendarDialogs.jsx';
 
@@ -32,8 +31,6 @@ export function CalendarScreen({ page, onNavigate, notify }) {
   const scrollMinute = useRef(8 * 60);
   const [modal, setModal] = useState(null);
   const [taskDone, setTaskDone] = useState(false);
-  const [capture, setCapture] = useState('');
-  const [localNotes, setLocalNotes] = useState([]);
   const [readDates, setReadDates] = useState(() =>
     ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'uncollected'].includes(
       phase,
@@ -224,20 +221,10 @@ export function CalendarScreen({ page, onNavigate, notify }) {
                   onClick: () => setTaskDone(!completed),
                 });
               }}
-              localNotes={localNotes}
               hasCache={hasCache}
               onNavigate={onNavigate}
             />
           </div>
-          <CalendarCapture
-            value={capture}
-            onChange={setCapture}
-            onSubmit={(value) => {
-              setLocalNotes((items) => [...items, value]);
-              setCapture('');
-              notify('Note saved', 'Saved in Floe. No calendar changes.');
-            }}
-          />
         </>
       )}
 

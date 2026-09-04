@@ -29,7 +29,7 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 
 | Surface | Content and actions |
 | --- | --- |
-| Today | Date, refresh all calendars for that date, all-day/timed events, local task/note context and capture |
+| Today | Date, refresh all calendars for that date, all-day/timed events, local task/note context |
 | Connect / Settings | Responsive icon-card grid of connected and available services; selecting macOS Calendar opens its detail |
 | macOS Calendar service detail | All included calendars/accounts, device/Person, stored dates, collection status, refresh, permission recovery, integration-wide disconnect; sidebar Connect returns to the list |
 | Local-load failure | Inspectable error and retry; no unexplained lone button |
@@ -74,7 +74,7 @@ no lab, state dropdown, badge or link to the old reference.
 | `loadError` | Local-load error and retry |
 
 Query states are static fixtures, not actual provider failure injection. Successful
-refreshes and local capture use non-blocking live-region messages. State resets on
+refreshes use non-blocking live-region messages. State resets on
 reload, not navigation. Local notes survive simulated integration disconnection.
 
 ## Data and implementation boundary

@@ -250,30 +250,6 @@
       "spec": "../../docs/design/prototype-components.md"
     },
     {
-      "id": "calendar-capture",
-      "export": "CalendarCapture",
-      "source": "src/components/calendar/CalendarCapture.jsx",
-      "kind": "control",
-      "responsibility": "Controlled local-note capture with trim and empty-submit guard",
-      "props": [
-        "value",
-        "onChange",
-        "onSubmit"
-      ],
-      "stateOwner": "caller: value; self: generated input ID",
-      "states": [
-        "empty",
-        "draft",
-        "submit"
-      ],
-      "styles": [
-        "src/styles.css",
-        "src/calendar.css"
-      ],
-      "status": "prototype",
-      "spec": "../../docs/design/prototype-components.md"
-    },
-    {
       "id": "calendar-connections",
       "export": "CalendarConnections",
       "source": "src/components/calendar/CalendarConnections.jsx",
@@ -308,7 +284,6 @@
       "props": [
         "taskDone",
         "onTaskChange",
-        "localNotes",
         "hasCache",
         "onNavigate"
       ],
@@ -710,7 +685,7 @@
       "props": [
         "onNavigate"
       ],
-      "stateOwner": "self: suggestion, reason, tasks, break and capture",
+      "stateOwner": "self: suggestion, reason, tasks, break",
       "states": [],
       "styles": [
         "src/styles.css"

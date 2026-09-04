@@ -1,13 +1,10 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowUp,
-  Check,
   ChevronLeft,
   ChevronRight,
   Clock3,
   NotebookPen,
-  Plus,
   X,
 } from 'lucide-react';
 import {
@@ -29,8 +26,6 @@ export function TodayScreen({ onNavigate }) {
   const [reasonOpen, setReasonOpen] = useState(false);
   const [breakAdded, setBreakAdded] = useState(false);
   const [tasks, setTasks] = useState(initialTasks);
-  const [capture, setCapture] = useState('');
-  const [capturedText, setCapturedText] = useState('');
 
   const dayEvents = useMemo(() => {
     if (!breakAdded) return events;
@@ -57,14 +52,6 @@ export function TodayScreen({ onNavigate }) {
     setBreakAdded(true);
     setSuggestionOpen(false);
     setReasonOpen(false);
-  }
-
-  function submitCapture(event) {
-    event.preventDefault();
-    const value = capture.trim();
-    if (!value) return;
-    setCapturedText(value);
-    setCapture('');
   }
 
   return (
@@ -118,45 +105,6 @@ export function TodayScreen({ onNavigate }) {
           <NoteCard />
         </aside>
       </div>
-
-      <form className="capture-form" onSubmit={submitCapture}>
-        <SquircleSurface
-          radius={SQUIRCLE_RADIUS.field}
-          className="capture-border"
-          contentClassName="capture-bar"
-        >
-          {capturedText ? (
-            <div className="capture-feedback" role="status">
-              <Check size={18} />
-              <span>Captured “{capturedText}”</span>
-              <button type="button" onClick={() => setCapturedText('')} aria-label="Dismiss">
-                <X size={17} />
-              </button>
-            </div>
-          ) : (
-            <>
-              <Plus size={22} className="capture-plus" />
-              <label className="sr-only" htmlFor="capture-input">
-                Capture an item
-              </label>
-              <input
-                id="capture-input"
-                value={capture}
-                onChange={(event) => setCapture(event.target.value)}
-                placeholder="Capture an event, task, or thought"
-              />
-              <SquircleButton
-                className="capture-submit"
-                aria-label="Capture"
-                disabled={!capture.trim()}
-                type="submit"
-              >
-                <ArrowUp size={19} />
-              </SquircleButton>
-            </>
-          )}
-        </SquircleSurface>
-      </form>
     </div>
   );
 }

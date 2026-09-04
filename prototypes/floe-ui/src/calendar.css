@@ -666,14 +666,6 @@
   color: var(--ink-secondary);
   letter-spacing: -0.01em;
 }
-.s1-captured-note {
-  font-size: 13px;
-  line-height: 1.7;
-  margin: 10px 0;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-  overflow-wrap: anywhere;
-}
 .s1-provenance-hint {
   display: flex;
   gap: 10px;
@@ -685,35 +677,6 @@
 .s1-provenance-hint svg {
   flex-shrink: 0;
   margin-top: calc((1lh - 15px) / 2);
-}
-.s1-capture-card {
-  margin-top: 24px;
-}
-.s1-capture-card .s1-surface-content {
-  padding: 12px 20px;
-}
-.s1-capture {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.s1-capture label {
-  font-size: 24px;
-  color: var(--primary-600);
-}
-.s1-capture input {
-  border: 0;
-  background: transparent;
-  flex: 1;
-  width: 0;
-  min-width: 0;
-  padding: 10px 0;
-  font-size: 13px;
-}
-.s1-capture .sq-button {
-  width: 38px;
-  min-height: 38px;
-  padding: 0;
 }
 .s1-empty-day {
   position: absolute;

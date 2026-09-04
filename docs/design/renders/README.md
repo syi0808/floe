@@ -8,7 +8,7 @@ These renders use the four September 2026 shared mockups as visual input and app
 
 All four screens share one canonical application shell, navigation geometry, content inset, typography, and continuous-corner squircle hierarchy. Detail and timeline views also share the same 70/30 grid. Timeline suggestions use one anchored Floe button and a non-modal popover rather than a detached modal or speech bubble.
 
-- `day-canvas.png` — default Today state with timeline, contextual rail, and universal capture.
+- `day-canvas.png` — default Today state with timeline and contextual rail. The historical render still includes the now-removed bottom capture input.
 - `task-detail.png` — task content, subtasks, related note, and integrated suggestion.
 - `notes.png` — supporting Notes collection with restrained categorical tint.
 - `assistant-confirmation.png` — non-modal anchored proposal opened from the timeline Floe button.

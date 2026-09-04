@@ -41,8 +41,7 @@ not certification of live EventKit acceptance.
 
 The home route now owns a custom `FloeToastHost` (no new dependency). Task completion
 and incomplete feedback retain Undo; unavailable actions use information toasts.
-Capture/classification and note creation use success toasts instead of replacing the
-capture field with a confirmation banner. Manual day refresh announces success only
+Note creation in Notes uses success toasts. The calendar has no bottom capture input. Manual day refresh announces success only
 after a successful load without a calendar error. Persistent recovery notices remain
 inline, and dialogs stay above the toast host.
 
@@ -53,7 +52,7 @@ also pauses expiry. Close and Escape dismiss; reduced motion skips transitions.
 Accessible navigation keeps actionable toasts until dismissed or acted upon.
 Desktop width is 356px at bottom-right; narrow screens use 16px gutters above
 navigation. Keyboard and safe-area insets are respected, and long
-content scrolls within the available height. The capture input stays available.
+content scrolls within the available height. The calendar workspace uses the space previously occupied by the capture input.
 
 Collapsed rear surfaces take the front card's height, not their own content height.
 The render layout measures natural heights before applying interpolated surface

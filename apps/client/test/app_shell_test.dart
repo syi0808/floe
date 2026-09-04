@@ -59,37 +59,24 @@ void main() {
     expect(find.text('Undo'), findsNothing);
   });
 
-  testWidgets(
-    'capture success keeps the input available and refresh uses toast',
-    (tester) async {
-      tester.view.physicalSize = Size(1440, 900);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(FloeApp(gateway: FakeDayGateway()));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(Key('capture-field')),
-        'Keep a little room',
-      );
-      await tester.testTextInput.receiveAction(TextInputAction.done);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Thought'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Classify and add'));
-      await tester.pumpAndSettle();
-      expect(find.text('Saved in Floe'), findsOneWidget);
-      final field = tester.widget<TextField>(find.byKey(Key('capture-field')));
-      expect(field.enabled, isTrue);
-      expect(field.controller!.text, isEmpty);
-      await tester.tap(find.byTooltip('Refresh calendar'));
-      await tester.pumpAndSettle();
-      expect(find.text('Calendars refreshed'), findsOneWidget);
-      await tester.pump(Duration(seconds: 5));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('calendar has no capture input and refresh uses toast', (
+    tester,
+  ) async {
+    tester.view.physicalSize = Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(FloeApp(gateway: FakeDayGateway()));
+    await tester.pumpAndSettle();
+    expect(find.byKey(Key('capture-field')), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.byTooltip('Refresh calendar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Calendars refreshed'), findsOneWidget);
+    await tester.pump(Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('calendar navigation distinguishes selected dates from today', (
     tester,
@@ -189,7 +176,11 @@ void main() {
       );
       expect(find.byTooltip('Settings'), findsOneWidget);
       final timeline = find.byKey(const Key('timeline-card'));
-      expect(tester.getRect(timeline).bottom, lessThan(height - 60));
+      expect(find.byType(TextField), findsNothing);
+      expect(
+        tester.getRect(timeline).bottom,
+        lessThanOrEqualTo(height - (width <= 780 ? 96 : 24)),
+      );
       expect(tester.getRect(timeline).top, lessThan(140));
       expect(
         find.ancestor(

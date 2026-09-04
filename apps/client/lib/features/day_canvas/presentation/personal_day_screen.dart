@@ -36,7 +36,6 @@ class PersonalDayScreen extends StatefulWidget {
 
 class _PersonalDayScreenState extends State<PersonalDayScreen> {
   late final PersonalDayController controller;
-  final captureController = TextEditingController();
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
 
@@ -51,7 +50,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
 
   @override
   void dispose() {
-    captureController.dispose();
     controller.dispose();
     super.dispose();
   }
@@ -95,21 +93,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     if (destination != _DestinationView.today || selectedTaskId != null) {
       return SingleChildScrollView(padding: padding, child: workspace);
     }
-    return Padding(
-      padding: padding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(child: workspace),
-          SizedBox(height: narrow ? 16 : 22),
-          _CaptureBar(
-            textController: captureController,
-            pending: controller.commandPending,
-            submit: _capture,
-          ),
-        ],
-      ),
-    );
+    return Padding(padding: padding, child: workspace);
   }
 
   Widget _fillDay(Widget child) =>
@@ -275,38 +259,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         if (mounted) controller.setTaskCompleted(task, !completed);
       },
     );
-  }
-
-  Future<void> _capture() async {
-    final input = captureController.text.trim();
-    if (!await controller.submitCapture(captureController.text) || !mounted) {
-      return;
-    }
-    final dialog = _ClassificationDialog(
-      capture: controller.pendingCapture!,
-      now: controller.pendingCapture!.capturedAt,
-      classify: controller.classify,
-    );
-    final saved = MediaQuery.sizeOf(context).width < 720
-        ? await showModalBottomSheet<bool>(
-            context: context,
-            isScrollControlled: true,
-            useSafeArea: true,
-            backgroundColor: Colors.transparent,
-            builder: (context) => dialog,
-          )
-        : await showFloeDialog<bool>(
-            context,
-            (context) => Center(child: dialog),
-            barrierDismissible: false,
-          );
-    if (saved == true && mounted) {
-      captureController.clear();
-      FloeToastHost.of(context).show(
-        title: AppLocalizations.of(context).savedInFloe,
-        description: input,
-      );
-    }
   }
 
   Future<bool> _createNote(String content) async {
@@ -1569,77 +1521,6 @@ class _DayRow extends StatelessWidget {
   }
 }
 
-class _CaptureBar extends StatelessWidget {
-  const _CaptureBar({
-    required this.textController,
-    required this.pending,
-    required this.submit,
-  });
-  final TextEditingController textController;
-  final bool pending;
-  final VoidCallback submit;
-
-  @override
-  Widget build(BuildContext context) => FloeSquircle(
-    size: FloeSquircleSize.field,
-    padding: EdgeInsets.fromLTRB(18, 9, 11, 9),
-    child: Row(
-      children: [
-        Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
-        SizedBox(width: 14),
-        Expanded(
-          child: TextField(
-            key: Key('capture-field'),
-            controller: textController,
-            enabled: !pending,
-            style: TextStyle(
-              fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
-            ),
-            onSubmitted: (value) {
-              if (!pending && value.trim().isNotEmpty) submit();
-            },
-            decoration: InputDecoration(
-              hintText: AppLocalizations.of(context).aThoughtForYourDay,
-              hintStyle: TextStyle(color: FloePalette.neutral500),
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        ),
-        SizedBox(width: 14),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: textController,
-          builder: (context, value, _) {
-            final enabled = !pending && value.text.trim().isNotEmpty;
-            return Tooltip(
-              message: AppLocalizations.of(context).saveCapture,
-              child: SizedBox.square(
-                dimension: 44,
-                child: FloeButton.outlined(
-                  style: OutlinedButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    shape: floeSquircleBorder(FloeSquircleSize.md),
-                  ),
-                  onPressed: enabled ? submit : null,
-                  child: pending
-                      ? SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(LucideIcons.arrowRight, size: 19),
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    ),
-  );
-}
-
 class _FailureDay extends StatelessWidget {
   const _FailureDay({required this.retry, required this.message});
   final VoidCallback retry;
@@ -1701,295 +1582,12 @@ class _ErrorNotice extends StatelessWidget {
   );
 }
 
-enum _Kind { event, task, note }
-
-class _ClassificationDialog extends StatefulWidget {
-  const _ClassificationDialog({
-    required this.capture,
-    required this.now,
-    required this.classify,
-  });
-  final CaptureReceipt capture;
-  final DateTime now;
-  final Future<bool> Function(ClassificationDraft) classify;
-  @override
-  State<_ClassificationDialog> createState() => _ClassificationDialogState();
-}
-
-class _ClassificationDialogState extends State<_ClassificationDialog> {
-  _Kind? kind;
-  late final TextEditingController text = TextEditingController(
-    text: widget.capture.originalInput,
-  );
-  bool pending = false;
-  late TimeOfDay startTime = TimeOfDay.fromDateTime(
-    widget.now.add(Duration(hours: 1)),
-  );
-  late TimeOfDay endTime = TimeOfDay.fromDateTime(
-    widget.now.add(Duration(hours: 2)),
-  );
-  DateTime? taskDeadline;
-  String? validationError;
-
-  @override
-  void dispose() {
-    text.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: Colors.transparent,
-    child: FloeSquircle(
-      size: FloeSquircleSize.xl,
-      padding: EdgeInsets.all(FloeSpace.xl),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 440),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                AppLocalizations.of(context).whereShouldThisGo,
-                style: FloeType.headlineLarge,
-              ),
-              SizedBox(height: FloeSpace.lg),
-              Text(
-                AppLocalizations.of(context).originalInput,
-                style: FloeType.label,
-              ),
-              SizedBox(height: FloeSpace.xs),
-              Text(widget.capture.originalInput, style: FloeType.bodyLarge),
-              SizedBox(height: FloeSpace.lg),
-              SegmentedButton<_Kind>(
-                segments: [
-                  ButtonSegment(
-                    value: _Kind.event,
-                    label: Text(AppLocalizations.of(context).event),
-                  ),
-                  ButtonSegment(
-                    value: _Kind.task,
-                    label: Text(AppLocalizations.of(context).task),
-                  ),
-                  ButtonSegment(
-                    value: _Kind.note,
-                    label: Text(AppLocalizations.of(context).thought),
-                  ),
-                ],
-                selected: kind == null ? {} : {kind!},
-                emptySelectionAllowed: true,
-                onSelectionChanged: pending
-                    ? null
-                    : (value) => setState(() {
-                        kind = value.isEmpty ? null : value.first;
-                        validationError = null;
-                      }),
-              ),
-              SizedBox(height: FloeSpace.base),
-              TextField(
-                controller: text,
-                decoration: InputDecoration(
-                  labelText: kind == _Kind.event
-                      ? AppLocalizations.of(context).title
-                      : AppLocalizations.of(context).content,
-                  errorText: validationError,
-                ),
-              ),
-              SizedBox(height: FloeSpace.md),
-              FloeAnimatedSwap(
-                child: switch (kind) {
-                  _Kind.event => _EventFields(
-                    key: ValueKey('event-fields'),
-                    start: startTime,
-                    end: endTime,
-                    onStart: (value) => setState(() => startTime = value),
-                    onEnd: (value) => setState(() => endTime = value),
-                  ),
-                  _Kind.task => _TaskFields(
-                    key: ValueKey('task-fields'),
-                    deadline: taskDeadline,
-                    onChanged: (value) => setState(() => taskDeadline = value),
-                    baseDate: widget.now,
-                  ),
-                  _Kind.note ||
-                  null => SizedBox.shrink(key: ValueKey('note-fields')),
-                },
-              ),
-              SizedBox(height: FloeSpace.lg),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  FloeButton.text(
-                    onPressed: pending
-                        ? null
-                        : () => Navigator.pop(context, false),
-                    child: Text(AppLocalizations.of(context).later),
-                  ),
-                  SizedBox(width: FloeSpace.sm),
-                  FloeButton.filled(
-                    onPressed: pending || kind == null ? null : _submit,
-                    child: Text(AppLocalizations.of(context).classifyAndAdd),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-
-  Future<void> _submit() async {
-    final value = text.text.trim();
-    if (value.isEmpty) {
-      setState(
-        () =>
-            validationError = AppLocalizations.of(context).pleaseEnterSomeText,
-      );
-      return;
-    }
-    final start = _onDate(widget.now, startTime);
-    final end = _onDate(widget.now, endTime);
-    if (kind == _Kind.event && !end.isAfter(start)) {
-      setState(
-        () =>
-            validationError = AppLocalizations.of(context)
-                .endTimeMustBeAfterStartTime,
-      );
-      return;
-    }
-    setState(() {
-      pending = true;
-      validationError = null;
-    });
-    final draft = switch (kind!) {
-      _Kind.event => EventDraft(title: value, startsAt: start, endsAt: end),
-      _Kind.task => TaskDraft(title: value, deadline: taskDeadline),
-      _Kind.note => NoteDraft(content: value),
-    };
-    final success = await widget.classify(draft);
-    if (mounted && success) Navigator.pop(context, true);
-    if (mounted) setState(() => pending = false);
-  }
-}
-
-class _EventFields extends StatelessWidget {
-  const _EventFields({
-    required this.start,
-    required this.end,
-    required this.onStart,
-    required this.onEnd,
-    super.key,
-  });
-  final TimeOfDay start;
-  final TimeOfDay end;
-  final ValueChanged<TimeOfDay> onStart;
-  final ValueChanged<TimeOfDay> onEnd;
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: _TimeField(
-          label: AppLocalizations.of(context).start,
-          value: start,
-          onChanged: onStart,
-        ),
-      ),
-      SizedBox(width: FloeSpace.md),
-      Expanded(
-        child: _TimeField(
-          label: AppLocalizations.of(context).end,
-          value: end,
-          onChanged: onEnd,
-        ),
-      ),
-    ],
-  );
-}
-
-class _TimeField extends StatelessWidget {
-  const _TimeField({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-  final String label;
-  final TimeOfDay value;
-  final ValueChanged<TimeOfDay> onChanged;
-  @override
-  Widget build(BuildContext context) => FloeButton.outlined(
-    onPressed: () async {
-      final selected = await showTimePicker(
-        context: context,
-        initialTime: value,
-      );
-      if (selected != null) onChanged(selected);
-    },
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [Text(label), Text(value.format(context))],
-    ),
-  );
-}
-
-class _TaskFields extends StatelessWidget {
-  const _TaskFields({
-    required this.deadline,
-    required this.onChanged,
-    required this.baseDate,
-    super.key,
-  });
-  final DateTime? deadline;
-  final ValueChanged<DateTime?> onChanged;
-  final DateTime baseDate;
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Checkbox(
-        value: deadline != null,
-        onChanged: (checked) => checked == true
-            ? onChanged(
-                DateTime(baseDate.year, baseDate.month, baseDate.day, 18),
-              )
-            : onChanged(null),
-      ),
-      Text(AppLocalizations.of(context).setADueDate),
-      Spacer(),
-      if (deadline != null)
-        FloeButton.text(
-          onPressed: () async {
-            final selected = await showDatePicker(
-              context: context,
-              firstDate: DateTime(baseDate.year, baseDate.month, baseDate.day),
-              lastDate: DateTime(baseDate.year + 5),
-              initialDate: deadline!,
-            );
-            if (selected != null) {
-              onChanged(
-                DateTime(selected.year, selected.month, selected.day, 18),
-              );
-            }
-          },
-          child: Text(
-            DateFormat.MMMd(AppLocalizations.of(context).localeName)
-                .add_Hm()
-                .format(deadline!),
-          ),
-        ),
-    ],
-  );
-}
-
 void _showComingSoon(BuildContext context) {
   FloeToastHost.of(context).show(
     title: AppLocalizations.of(context).thisFeatureIsNotAvailableYet,
     tone: FloeToastTone.info,
   );
 }
-
-DateTime _onDate(DateTime date, TimeOfDay time) =>
-    DateTime(date.year, date.month, date.day, time.hour, time.minute);
 
 String _time(BuildContext context, DateTime value) =>
     MaterialLocalizations.of(context).formatTimeOfDay(
