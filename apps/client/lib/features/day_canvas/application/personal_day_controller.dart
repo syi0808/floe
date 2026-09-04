@@ -37,8 +37,7 @@ final class PersonalDayController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final result =
-          sync && snapshot?.calendar != null && _gateway is CalendarGateway
+      final result = sync && _gateway is CalendarGateway
           ? await (_gateway as CalendarGateway).syncCalendar(query)
           : await _gateway.loadDay(query);
       if (_disposed || generation != _loadGeneration) return;
@@ -93,7 +92,7 @@ final class PersonalDayController extends ChangeNotifier {
       now: DateTime.now(),
       timezoneOffsetSeconds: DateTime.now().timeZoneOffset.inSeconds,
     );
-    load();
+    refresh();
   }
 
   void goToday() {
@@ -104,7 +103,7 @@ final class PersonalDayController extends ChangeNotifier {
       now: now,
       timezoneOffsetSeconds: now.timeZoneOffset.inSeconds,
     );
-    load();
+    refresh();
   }
 
   void clearError() {

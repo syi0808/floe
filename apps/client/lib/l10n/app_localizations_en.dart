@@ -36,6 +36,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get today => 'Today';
 
   @override
+  String get goToToday => 'Go to today';
+
+  @override
   String get tasks => 'Tasks';
 
   @override
@@ -410,7 +413,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get yourOwnRhythm => 'Your own rhythm';
 
   @override
-  String get noTasksForToday => 'No tasks for today.';
+  String get noTasksForSelectedDay => 'No tasks for this day.';
 
   @override
   String get seeYourTasks => 'See your tasks';

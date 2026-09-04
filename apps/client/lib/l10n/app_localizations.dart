@@ -142,6 +142,12 @@ abstract class AppLocalizations {
   /// **'Today'**
   String get today;
 
+  /// No description provided for @goToToday.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to today'**
+  String get goToToday;
+
   /// No description provided for @tasks.
   ///
   /// In en, this message translates to:
@@ -838,11 +844,11 @@ abstract class AppLocalizations {
   /// **'Your own rhythm'**
   String get yourOwnRhythm;
 
-  /// No description provided for @noTasksForToday.
+  /// No description provided for @noTasksForSelectedDay.
   ///
   /// In en, this message translates to:
-  /// **'No tasks for today.'**
-  String get noTasksForToday;
+  /// **'No tasks for this day.'**
+  String get noTasksForSelectedDay;
 
   /// No description provided for @seeYourTasks.
   ///

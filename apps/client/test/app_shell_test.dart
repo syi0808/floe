@@ -4,8 +4,46 @@ import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dar
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 
 void main() {
+  testWidgets('calendar navigation distinguishes selected dates from today', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    await tester.pumpWidget(
+      FloeApp(
+        gateway: FakeDayGateway(),
+        query: DayQuery(
+          personId: 'test',
+          date: today,
+          now: now,
+          timezoneOffsetSeconds: now.timeZoneOffset.inSeconds,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Calendar'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
+    await tester.tap(find.byTooltip('Next day'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        DateFormat.MMMEd('en').format(today.add(const Duration(days: 1))),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Today'), findsNothing);
+    expect(find.text('Go to today'), findsOneWidget);
+    await tester.tap(find.text('Go to today'));
+    await tester.pumpAndSettle();
+    expect(find.text(DateFormat.MMMEd('en').format(today)), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
+    expect(find.text('Go to today'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final width in [390.0, 1440.0, 1920.0]) {
     testWidgets('workspace fills the window without a frame at $width', (
       tester,

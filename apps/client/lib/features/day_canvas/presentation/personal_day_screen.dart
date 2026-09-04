@@ -411,7 +411,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
   _DestinationView get view => widget.view;
 
   String get label => switch (view) {
-    _DestinationView.today => AppLocalizations.of(context).today,
+    _DestinationView.today => AppLocalizations.of(context).calendar,
     _DestinationView.tasks => AppLocalizations.of(context).tasks,
     _DestinationView.notes => AppLocalizations.of(context).notes,
     _DestinationView.connections => AppLocalizations.of(context).connect,
@@ -531,8 +531,15 @@ class _DayToolbar extends StatelessWidget {
               fontWeight: FontWeight.w400,
             ),
           ),
-          onPressed: controller.goToday,
-          child: Text(AppLocalizations.of(context).today),
+          onPressed:
+              DateUtils.isSameDay(controller.query.date, controller.query.now)
+              ? null
+              : controller.goToday,
+          child: Text(
+            DateUtils.isSameDay(controller.query.date, controller.query.now)
+                ? AppLocalizations.of(context).today
+                : AppLocalizations.of(context).goToToday,
+          ),
         ),
       ],
     );

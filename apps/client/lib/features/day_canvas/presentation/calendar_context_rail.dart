@@ -41,7 +41,7 @@ class CalendarContextRail extends StatelessWidget {
               SizedBox(height: 20),
               if (tasks.isEmpty)
                 Text(
-                  AppLocalizations.of(context).noTasksForToday,
+                  AppLocalizations.of(context).noTasksForSelectedDay,
                   style: TextStyle(fontSize: 13, color: FloePalette.neutral600),
                 ),
               for (final task in tasks.take(3))
