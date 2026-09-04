@@ -9,6 +9,9 @@ export function ConnectorServiceCard({ service, onSelect }) {
       onClick={() => onSelect(service.id)}
       aria-label={service.name}
     >
+      <span className="connector-service-orbit" aria-hidden="true">
+        <span />
+      </span>
       <SquircleBlock radius={16} className="connector-service-icon" asChild>
         <span>
           <Icon size={27} aria-hidden="true" />
