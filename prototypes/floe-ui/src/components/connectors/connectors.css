@@ -33,9 +33,6 @@
   gap: 20px;
 }
 .connector-service-card.sq-button {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -43,51 +40,12 @@
   padding: 24px;
   min-width: 0;
   text-align: left;
-  background: linear-gradient(135deg, var(--surface) 35%, var(--primary-50));
+  background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--border);
 }
 .connector-service-card.sq-button:hover {
-  background: linear-gradient(135deg, var(--surface) 10%, var(--primary-50));
+  background: var(--primary-50);
   box-shadow: inset 0 0 0 1px var(--primary-200);
-}
-.connector-service-orbit {
-  position: absolute;
-  z-index: -1;
-  pointer-events: none;
-  width: 144px;
-  height: 144px;
-  right: -36px;
-  top: -44px;
-  border: 1px solid var(--primary-200);
-  border-radius: 50%;
-  opacity: 0.5;
-  transition: transform 240ms ease-out, opacity 240ms ease-out;
-}
-.connector-service-orbit::before,
-.connector-service-orbit::after {
-  content: '';
-  position: absolute;
-  inset: 20px;
-  border: 1px solid var(--primary-200);
-  border-radius: 50%;
-}
-.connector-service-orbit::after {
-  inset: 40px;
-}
-.connector-service-orbit > span {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  left: 15px;
-  bottom: 19px;
-  border-radius: 50%;
-  background: var(--primary-600);
-  box-shadow: 0 0 0 5px var(--primary-50);
-}
-.connector-service-card:hover .connector-service-orbit,
-.connector-service-card:focus-visible .connector-service-orbit {
-  transform: rotate(12deg);
-  opacity: 0.85;
 }
 .connector-service-icon {
   display: inline-flex;
@@ -102,4 +60,9 @@
 .connector-service-card strong {
   margin-top: 4px;
   font-size: 16px;
+}
+.connector-service-description {
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }

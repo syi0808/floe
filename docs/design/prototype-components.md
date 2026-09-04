@@ -102,12 +102,11 @@ connections button with an underline hover effect, emitting `onBack` to return t
 
 `ConnectorList({ services, onSelect })` partitions records into Connected services
 and Available services. `ConnectorServiceCard({ service, onSelect })` emits the service
-ID on click/Enter/Space. A service record has `id`, `name`, Lucide `icon` and
-`connected`. Cards show only the service icon and name; metadata, permissions and
-sync status belong in the service detail, with no card footer link. A subtle lavender
-gradient and decorative concentric rings give cards visual identity without adding
-metadata. Rings respond to hover/focus and are hidden from assistive technology;
-the global reduced-motion rule suppresses their transition. The grid
+ID on click/Enter/Space. A service record has `id`, `name`, Lucide `icon`,
+`connected` and an optional `description` explaining its purpose. Cards show the
+icon, name and short description on a plain surface, with no decorative patterns.
+Counts, permissions and sync status belong in the service detail, with no card
+footer link. The grid
 adapts to available width; the whole card is a named button with focus styling.
 Both depend on `styles.css` and `components/connectors/connectors.css`.
 

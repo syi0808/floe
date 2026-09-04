@@ -141,6 +141,7 @@ export function CalendarScreen({ page, onNavigate }) {
             {
               id: 'macos-calendar',
               name: 'macOS Calendar',
+              description: 'Bring events from your Mac into your day.',
               icon: CalendarDays,
               connected: hasConnection,
             },

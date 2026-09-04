@@ -20,7 +20,7 @@
       "export": "ConnectorServiceCard",
       "source": "src/components/connectors/ConnectorServiceCard.jsx",
       "kind": "control",
-      "responsibility": "Service icon and name with full-card detail navigation",
+      "responsibility": "Service icon, name and optional purpose description with full-card detail navigation",
       "props": ["service", "onSelect"],
       "stateOwner": "caller: service",
       "states": ["connected", "available", "hover", "focus"],
