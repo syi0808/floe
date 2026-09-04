@@ -957,7 +957,6 @@ function Modal({ title, children, onClose }) {
     >
       <SquircleSurface radius={34} className="s1-modal-border" contentClassName="s1-modal">
         <div className="s1-modal-heading">
-          <span className="s1-eyebrow">Floe / Calendar</span>
           <SquircleButton aria-label="Close dialog" className="icon-button" onClick={onClose}>
             <X size={19} />
           </SquircleButton>

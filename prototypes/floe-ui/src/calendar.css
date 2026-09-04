@@ -558,6 +558,12 @@
   padding: 10px 0;
   margin-top: 22px;
 }
+.s1-danger-link:hover,
+.s1-danger-link:focus-visible {
+  color: #7e2723;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
 .s1-violet {
   color: var(--primary-600);
   margin-bottom: 16px;
@@ -630,7 +636,7 @@
 .s1-modal-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   margin-bottom: 15px;
 }
