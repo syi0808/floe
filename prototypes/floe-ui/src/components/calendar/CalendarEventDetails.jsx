@@ -1,5 +1,5 @@
 import { Clock3, LockKeyhole } from 'lucide-react';
-import { SquircleBlock, SquircleButton } from '../../primitives.jsx';
+import { SquircleBlock } from '../../primitives.jsx';
 
 export function CalendarEventDetails({
   event,
@@ -8,7 +8,6 @@ export function CalendarEventDetails({
   dateShort,
   dayOffset,
   stale,
-  onClose,
 }) {
   return (
     <>
@@ -84,11 +83,6 @@ export function CalendarEventDetails({
           </dl>
         </SquircleBlock>
       </details>
-      <div className="s1-modal-actions">
-        <SquircleButton className="primary-button" onClick={() => onClose()}>
-          Back to my day
-        </SquircleButton>
-      </div>
     </>
   );
 }

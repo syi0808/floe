@@ -205,5 +205,5 @@ State lists are review prompts, not generated acceptance evidence.
 No native acceptance status changes as a result of this refactor.
 
 Page-level back links are removed from the Connections list and Task Detail. Service
-details retain Back to connections for parent-list navigation. Dialog dismissal
-actions such as Back to my day remain available.
+details retain Back to connections for parent-list navigation. Event details use
+the shared dialog's upper-right close button without a duplicate footer action.

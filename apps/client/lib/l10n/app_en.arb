@@ -97,7 +97,6 @@
   "externalOccurrenceId": "External occurrence ID",
   "revision": "Revision",
   "integration": "Integration",
-  "backToMyDay": "Back to my day",
   "couldNotConnectOrCollectEventsCheck": "Could not connect or collect events. Check calendar access and try again.",
   "connectCalendar": "Connect Calendar",
   "eventsFromTheSelectedCalendarAreSaved": "Events from the selected calendars are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Deselecting a calendar removes its local copy.",

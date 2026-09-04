@@ -190,14 +190,6 @@ class CalendarEventDetails extends StatelessWidget {
           ),
         ),
       ],
-      SizedBox(height: 24),
-      Align(
-        alignment: Alignment.centerRight,
-        child: FilledButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text(AppLocalizations.of(context).backToMyDay),
-        ),
-      ),
     ],
   );
 }

@@ -54,7 +54,6 @@ export function CalendarDialogs({
               dateShort={dateShort}
               dayOffset={dayOffset}
               stale={stale}
-              onClose={close}
             />
           )}
         </>

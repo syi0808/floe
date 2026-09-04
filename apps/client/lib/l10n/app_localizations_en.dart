@@ -311,9 +311,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get integration => 'Integration';
 
   @override
-  String get backToMyDay => 'Back to my day';
-
-  @override
   String get couldNotConnectOrCollectEventsCheck =>
       'Could not connect or collect events. Check calendar access and try again.';
 

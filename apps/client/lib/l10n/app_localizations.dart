@@ -676,12 +676,6 @@ abstract class AppLocalizations {
   /// **'Integration'**
   String get integration;
 
-  /// No description provided for @backToMyDay.
-  ///
-  /// In en, this message translates to:
-  /// **'Back to my day'**
-  String get backToMyDay;
-
   /// No description provided for @couldNotConnectOrCollectEventsCheck.
   ///
   /// In en, this message translates to:
