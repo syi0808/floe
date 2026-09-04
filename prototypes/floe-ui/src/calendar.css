@@ -188,6 +188,12 @@
   font-weight: 550;
   text-align: left;
 }
+.s1-all-day button:hover:not(:disabled),
+.s1-all-day button:focus-visible:not(:disabled) {
+  color: var(--primary-600);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
 .s1-all-day small {
   font-weight: 400;
 }
