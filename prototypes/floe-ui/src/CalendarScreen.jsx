@@ -19,7 +19,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
-import { SquircleButton, SquircleSurface } from './primitives.jsx';
+import { SquircleBlock, SquircleButton, SquircleSurface } from './primitives.jsx';
 import mascotUrl from '../../../assets/floe-mascot.svg?url';
 import './calendar.css';
 
@@ -187,16 +187,16 @@ export function CalendarScreen({ page, onNavigate }) {
           <div className="s1-connections-layout">
             <Surface>
               <div className="s1-card-heading">
-                <span className="s1-provider-icon">
+                <SquircleBlock className="s1-provider-icon">
                   <CalendarDays size={25} />
-                </span>
+                </SquircleBlock>
                 <div>
                   <h2>macOS Calendar</h2>
                   <p>Calendars already on this Mac</p>
                 </div>
-                <span className="s1-pill">
+                <SquircleBlock className="s1-pill" radius={8}>
                   <LockKeyhole size={12} /> Read-only
-                </span>
+                </SquircleBlock>
               </div>
               <p className="s1-body-copy">
                 Bring all calendars on this Mac into one day. Floe reads their events; it never
@@ -214,10 +214,12 @@ export function CalendarScreen({ page, onNavigate }) {
                       : 'All available calendars are included after granting access'}
                   </small>
                 </div>
-                <span className={`s1-status ${statusTone}`}>
-                  <span />
-                  {statusLabel}
-                </span>
+                {!['connected', 'empty'].includes(phase) && (
+                  <span className={`s1-status ${statusTone}`}>
+                    <span />
+                    {statusLabel}
+                  </span>
+                )}
               </div>
               {hasConnection && (
                 <ul className="s1-connected-calendars" aria-label="Connected calendars">
@@ -307,10 +309,6 @@ export function CalendarScreen({ page, onNavigate }) {
                   Your last saved events remain visible, with their collection time. Revoking
                   permission stops new reads; it does not erase the saved copy.
                 </p>
-                <small>
-                  Local storage uses the current unencrypted database. No calendar data is sent to
-                  an AI model in S1.
-                </small>
               </Surface>
             </div>
           </div>
