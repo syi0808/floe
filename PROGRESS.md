@@ -48,6 +48,14 @@ macOS 26.2 (25C56), arm64. Connector integration is fixture; EventKit is SDK/bui
 - Fixture tests cover Rust storage/projection and the actual Dart/JSON/C ABI boundary.
 - Live EventKit permission/read behavior, recurring identity, DST, S3 create PoC, and three-day dogfood remain unverified.
 
+### S1 UI reference
+
+The HTML prototype now includes the connected Today page, connection management,
+seven popup flows, twelve state previews, and simulated external update/deletion.
+[UI specification](docs/design/s1-calendar-ui.md) records behavior, responsive checks,
+and proposed-vs-native boundaries. This changes the design reference only; native
+implementation and live acceptance counts are unchanged.
+
 ## Existing Personal Day Baseline
 
 ADR 0004 remains partially delivered, not accepted. Existing delivered work is

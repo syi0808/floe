@@ -11,6 +11,7 @@ import {
   Clock3,
   Filter,
   ListTodo,
+  Link2,
   MoreHorizontal,
   NotebookPen,
   Plus,
@@ -22,6 +23,7 @@ import {
 import mascotUrl from '../../../assets/floe-mascot.svg?url';
 import { events, initialNotes, initialSubtasks, initialTasks } from './data.js';
 import { ProgressScreen } from './ProgressScreen.jsx';
+import { CalendarScreen } from './CalendarScreen.jsx';
 import {
   SQUIRCLE_RADIUS,
   SquircleBlock,
@@ -33,6 +35,7 @@ const navigationItems = [
   { id: 'today', label: 'Today', icon: CalendarDays },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
   { id: 'notes', label: 'Notes', icon: NotebookPen },
+  { id: 'connections', label: 'Connect', icon: Link2 },
   { id: 'progress', label: 'Progress', icon: BarChart3 },
 ];
 
@@ -54,11 +57,15 @@ export function App() {
           className="settings-action"
           aria-label="Settings"
           title="Settings"
+          onClick={() => setScreen('connections')}
         >
           <Settings size={20} strokeWidth={1.8} />
         </SquircleButton>
-        <div className="screen-region" key={screen}>
-          {screen === 'today' && <TodayScreen onNavigate={setScreen} />}
+        <div className="screen-region">
+          <div hidden={!['today', 'connections'].includes(screen)}>
+            <CalendarScreen page={screen === 'connections' ? 'connections' : 'day'} onNavigate={setScreen} />
+          </div>
+          {screen === 'reference' && <TodayScreen onNavigate={setScreen} />}
           {screen === 'tasks' && <TaskDetail onBack={() => setScreen('today')} />}
           {screen === 'notes' && <NotesCollection />}
           {screen === 'progress' && <ProgressScreen />}
