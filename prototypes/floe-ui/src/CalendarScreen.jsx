@@ -1,5 +1,5 @@
 import { CalendarDateToolbar } from './components/calendar/CalendarDateToolbar.jsx';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import './calendar.css';
 import { layoutTimedEvents } from './calendar-layout.js';
 import {
@@ -8,7 +8,7 @@ import {
   externalEvents,
   getAllDayEvents,
 } from './components/calendar/calendar-fixtures.js';
-import { CalendarDays, Check, Database, X } from 'lucide-react';
+import { CalendarDays, Database } from 'lucide-react';
 import { ConnectorList } from './components/connectors/ConnectorList.jsx';
 import { SquircleButton } from './primitives.jsx';
 import { CalendarSurface as Surface } from './components/calendar/CalendarSurface.jsx';
@@ -21,7 +21,7 @@ import { CalendarDialogs } from './components/calendar/CalendarDialogs.jsx';
 
 const timedEvents = layoutTimedEvents(externalEvents);
 
-export function CalendarScreen({ page, onNavigate }) {
+export function CalendarScreen({ page, onNavigate, notify }) {
   const [phase, setPhase] = useState(() => {
     const scenario = new URLSearchParams(window.location.search).get('state');
     return Object.hasOwn(scenarios, scenario) ? scenario : 'connected';
@@ -31,7 +31,6 @@ export function CalendarScreen({ page, onNavigate }) {
   const timelineScroll = useRef(null);
   const scrollMinute = useRef(8 * 60);
   const [modal, setModal] = useState(null);
-  const [toast, setToast] = useState('');
   const [taskDone, setTaskDone] = useState(false);
   const [capture, setCapture] = useState('');
   const [localNotes, setLocalNotes] = useState([]);
@@ -43,7 +42,6 @@ export function CalendarScreen({ page, onNavigate }) {
       : [],
   );
   const timer = useRef(null);
-  const toastTimer = useRef(null);
   const announceRead = useRef(false);
   const date = new Date(Date.UTC(2026, 8, 4 + dayOffset));
   const dateLabel = date.toLocaleDateString('en-US', {
@@ -76,7 +74,6 @@ export function CalendarScreen({ page, onNavigate }) {
   useEffect(
     () => () => {
       clearTimeout(timer.current);
-      clearTimeout(toastTimer.current);
     },
     [],
   );
@@ -87,12 +84,6 @@ export function CalendarScreen({ page, onNavigate }) {
     }
   }, [page, pixelsPerMinute, phase === 'loadError']);
 
-  const notify = useCallback((message) => {
-    clearTimeout(toastTimer.current);
-    setToast(message);
-    toastTimer.current = setTimeout(() => setToast(''), 4500);
-  }, []);
-
   useEffect(() => {
     if (phase !== 'syncing') return;
     const offset = dayOffset;
@@ -100,14 +91,12 @@ export function CalendarScreen({ page, onNavigate }) {
     timer.current = setTimeout(() => {
       setPhase(offset === 0 ? 'connected' : 'empty');
       setReadDates((current) => [...new Set([...current, offset])]);
-      if (announce) notify('All calendars refreshed. Your local tasks and notes are unchanged.');
+      if (announce) notify('Calendars refreshed', 'Your local tasks and notes are unchanged.');
     }, 1100);
     return () => clearTimeout(timer.current);
   }, [phase, dayOffset, notify]);
 
   function refresh(offset = dayOffset, announce = true) {
-    clearTimeout(toastTimer.current);
-    setToast('');
     setModal(null);
     announceRead.current = announce;
     setDayOffset(offset);
@@ -240,20 +229,10 @@ export function CalendarScreen({ page, onNavigate }) {
             onSubmit={(value) => {
               setLocalNotes((items) => [...items, value]);
               setCapture('');
-              notify('Note saved in Floe. No calendar changes.');
+              notify('Note saved', 'Saved in Floe. No calendar changes.');
             }}
           />
         </>
-      )}
-
-      {toast && (
-        <div className="s1-toast" role="status">
-          <Check size={17} />
-          {toast}
-          <button aria-label="Dismiss message" onClick={() => setToast('')}>
-            <X size={16} />
-          </button>
-        </div>
       )}
 
       {modal && (
@@ -276,7 +255,7 @@ export function CalendarScreen({ page, onNavigate }) {
             setPhase('disconnected');
             setReadDates([]);
             setModal(null);
-            notify('Disconnected. Your local tasks and notes are still here.');
+            notify('Calendar disconnected', 'Your local tasks and notes are still here.', 'info');
           }}
         />
       )}

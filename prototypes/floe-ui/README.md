@@ -24,6 +24,9 @@ detail. Task Detail, Notes and Progress remain available.
 - **Local data:** captured notes and tasks survive navigation and Calendar disconnection.
   S1 has no model suggestions or external write actions. The external-change lab and
   earlier-reference link are removed from the UI.
+- **Toasts:** save a note, refresh calendars or disconnect to see custom floating
+  feedback. Save several notes quickly to review the three-card stack; hover or
+  focus it to expand and pause dismissal. No Sonner dependency; Flutter is unchanged.
 
 All data, permission dialogs, settings handoffs, and refreshes are **simulated**.
 Nothing touches EventKit, accounts, or the real Floe database. Prototype state is

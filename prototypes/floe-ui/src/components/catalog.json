@@ -3,6 +3,19 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "toast-viewport",
+      "export": "ToastViewport",
+      "source": "src/components/ui/ToastViewport.jsx",
+      "kind": "feedback",
+      "responsibility": "Portaled notification stack with timed dismissal and hover/focus expansion",
+      "props": ["toasts", "onDismiss", "heights", "onMeasure"],
+      "stateOwner": "App: queue and measurements; private cards: remaining lifetime and exit; viewport: interaction pause",
+      "states": ["success", "info", "three stacked", "hover expanded", "keyboard focus", "dismiss", "auto-dismiss", "hidden document", "mobile", "reduced motion"],
+      "styles": ["src/styles.css", "src/components/ui/toast.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
       "id": "connector-list",
       "export": "ConnectorList",
       "source": "src/components/connectors/ConnectorList.jsx",
@@ -48,7 +61,7 @@
       "kind": "screen",
       "responsibility": "Screen navigation and persistent calendar mounting",
       "props": [],
-      "stateOwner": "self: screen",
+      "stateOwner": "self: screen, toast queue and measurements",
       "states": [],
       "styles": [
         "src/styles.css"
@@ -64,7 +77,8 @@
       "responsibility": "Calendar state machine, simulated reads, dates, drafts, zoom and navigation",
       "props": [
         "page",
-        "onNavigate"
+        "onNavigate",
+        "notify"
       ],
       "stateOwner": "self: phase, dates, timers, dialog, local data, zoom and scroll",
       "states": [],

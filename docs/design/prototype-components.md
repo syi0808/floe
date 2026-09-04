@@ -36,7 +36,8 @@ UI and feature components → primitives.jsx
    read browser query parameters.
 2. `CalendarScreen` stays mounted while switching Today/Connect/other navigation.
    It owns phase, collected dates, current date, zoom/scroll refs, note draft, local
-   notes, local task, dialog selection and notification lifetime. Do not move these
+   notes, local task and dialog selection. App owns the notification queue so feedback
+   survives navigation; private ToastCard timers own notification lifetime. Do not move these
    into conditionally mounted cards: doing so loses state on navigation.
 3. Task and Notes screens retain their existing local state lifetime: navigation away
    unmounts them. This refactor does not introduce persistence or change that behavior.
@@ -93,6 +94,26 @@ through this API; Continue to permission changes content without closing the she
 `CalendarCapture` similarly generates its label/input association so instances do not collide.
 
 ## Calendar components
+
+### Prototype toast feedback
+
+`App` supplies `notify(title, description, tone = 'success')` to CalendarScreen.
+Note capture, manual refresh and disconnect use `ToastViewport`, portaled to the body,
+instead of the old dark bottom banner. Persistent calendar warning/recovery banners
+remain inline and unchanged. This is a custom React/CSS implementation without Sonner;
+Flutter is unchanged.
+
+The viewport retains the newest three notifications. White 356px cards use a 16px
+radius, subtle border/shadow, success or information icon, title, description and
+close button. Desktop placement is bottom-right; at 780px and below, cards span the
+screen with 16px gutters above the bottom navigation and safe-area inset. Cards stack
+upward with 9px offsets and expand to measured heights with 10px gaps on hover/focus.
+Each card expires after 4.5 seconds of unpaused time. Hover, focus and a hidden document
+pause expiry; dismissal fades for 180ms. Escape inside the stack dismisses the newest
+card. Status announcements do not move focus. Reduced motion disables animation.
+
+Review by saving three notes quickly, hovering/focusing the stack, closing cards,
+switching screens and waiting for expiry; also review refresh and disconnect copy.
 
 Connect navigation and Settings open `ConnectorList`, not the macOS detail page.
 Selecting a service opens its detail (`calendar-connection` for macOS Calendar),

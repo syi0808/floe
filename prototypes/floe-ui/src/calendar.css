@@ -884,33 +884,6 @@
 .s1-connection-note p {
   margin: 0;
 }
-.s1-toast {
-  position: fixed;
-  bottom: 26px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 35;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(90vw, 550px);
-  width: max-content;
-  padding: 16px 20px;
-  background: var(--ink);
-  color: white;
-  font-size: 12px;
-  line-height: 1.6;
-  box-shadow: 0 8px 24px #15182b18;
-}
-.s1-toast svg {
-  flex-shrink: 0;
-}
-.s1-toast button {
-  background: transparent;
-  color: white;
-  padding: 4px;
-  display: flex;
-}
 .s1-dialog {
   padding: 0;
   border: 0;
@@ -1144,9 +1117,6 @@
   }
   .s1-banner-action.sq-button {
     margin-left: 25px;
-  }
-  .s1-toast {
-    bottom: 96px;
   }
   .s1-connections-layout > .s1-side-stack {
     grid-template-columns: minmax(0, 1fr);

@@ -1,0 +1,99 @@
+.floe-toast-region {
+  position: fixed;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  width: min(356px, calc(100vw - 32px));
+  z-index: 90;
+  pointer-events: none;
+}
+.floe-toast-stack {
+  position: relative;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  pointer-events: auto;
+  transition: height 220ms var(--ease-out);
+}
+.floe-toast {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 17px 14px 17px 17px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 4px 12px #15182b06, 0 12px 36px #15182b12;
+  transform-origin: bottom center;
+  transform: translateY(calc(-1 * var(--offset))) scale(var(--scale));
+  transition: transform 220ms var(--ease-out), opacity 180ms ease;
+  animation: floe-toast-enter 240ms var(--ease-out);
+}
+.floe-toast[data-leaving='true'] {
+  opacity: 0;
+  transform: translateY(12px) scale(0.97);
+  pointer-events: none;
+}
+.floe-toast[data-covered='true'] > * {
+  opacity: 0;
+}
+.floe-toast-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #23795e;
+  background: var(--mint-50);
+}
+.floe-toast-icon.info {
+  color: var(--primary-600);
+  background: var(--primary-50);
+}
+.floe-toast-copy {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.floe-toast-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.floe-toast-copy p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+.floe-toast-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-tertiary);
+  cursor: pointer;
+}
+.floe-toast-close:hover { background: var(--surface-subtle); color: var(--ink); }
+.floe-toast-close:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+@keyframes floe-toast-enter {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+}
+@media (max-width: 780px) {
+  .floe-toast-region {
+    right: 16px;
+    bottom: calc(96px + env(safe-area-inset-bottom));
+    width: calc(100vw - 32px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .floe-toast, .floe-toast-stack { animation: none; transition: none; }
+}
