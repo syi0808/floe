@@ -1001,6 +1001,9 @@
 .s1-source-details dt {
   margin-top: 12px;
 }
+.s1-source-details dt:first-child {
+  margin-top: 0;
+}
 .s1-source-details dd {
   margin: 5px 0 0;
   font-family: ui-monospace, monospace;
