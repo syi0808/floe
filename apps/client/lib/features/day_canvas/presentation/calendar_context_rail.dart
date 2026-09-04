@@ -39,15 +39,6 @@ class CalendarContextRail extends StatelessWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
               SizedBox(height: 20),
-              Text(
-                AppLocalizations.of(context).aFewThingsThatBelongToYou,
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.8,
-                  color: FloePalette.neutral600,
-                ),
-              ),
-              SizedBox(height: 20),
               if (tasks.isEmpty)
                 Text(
                   AppLocalizations.of(context).noTasksForToday,
@@ -107,15 +98,6 @@ class CalendarContextRail extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.9,
-                  color: FloePalette.neutral600,
-                ),
-              ),
-              SizedBox(height: 24),
-              Text(
-                AppLocalizations.of(context).savedInFloeStaysWhenYouDisconnect,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.7,
                   color: FloePalette.neutral600,
                 ),
               ),

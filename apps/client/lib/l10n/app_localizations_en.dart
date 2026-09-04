@@ -319,7 +319,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get eventsFromTheSelectedCalendarAreSaved =>
-      'Events from the selected calendar are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Selecting a different calendar replaces the previous local copy.';
+      'Events from the selected calendars are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Deselecting a calendar removes its local copy.';
 
   @override
   String get continueAction => 'Continue';
@@ -329,7 +329,7 @@ class AppLocalizationsEn extends AppLocalizations {
       'No calendars are available. Add a calendar in macOS Calendar first.';
 
   @override
-  String get chooseACalendar => 'Choose a calendar';
+  String get chooseACalendar => 'Choose calendars';
 
   @override
   String get calendarAccessWasDeniedOrRevokedAllow =>
@@ -357,14 +357,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'Bring your calendar into one day. Floe reads events; it never creates, edits, or deletes anything in Calendar.';
 
   @override
-  String get connectedCalendar => 'Connected calendar';
+  String get connectedCalendar => 'Connected calendars';
 
   @override
   String get makeRoomForYourDay => 'Make room for your day.';
 
   @override
   String get chooseACalendarToStartThisClient =>
-      'Choose a calendar to start. This client currently supports one calendar at a time.';
+      'Choose one or more calendars to bring their events into your day.';
 
   @override
   String get person => 'Person';
@@ -396,10 +396,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get yourOwnRhythm => 'Your own rhythm';
 
   @override
-  String get aFewThingsThatBelongToYou =>
-      'A few things that belong to you, not your calendar.';
-
-  @override
   String get noTasksForToday => 'No tasks for today.';
 
   @override
@@ -411,10 +407,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get leaveALittleRoomBetweenThingsNot =>
       'Leave a little room between things. Not every empty space needs filling.';
-
-  @override
-  String get savedInFloeStaysWhenYouDisconnect =>
-      'Saved in Floe · stays when you disconnect';
 
   @override
   String get wonderingWhereAnEventCameFromOpen =>

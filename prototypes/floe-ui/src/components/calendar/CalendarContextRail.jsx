@@ -8,7 +8,6 @@ export function CalendarContextRail({ taskDone, onTaskChange, localNotes, hasCac
         <div className="s1-card-heading">
           <h2>Your own rhythm</h2>
         </div>
-        <p className="s1-body-copy">A few things that belong to you, not your calendar.</p>
         <label className={`s1-local-task ${taskDone ? 'done' : ''}`}>
           <input
             type="checkbox"
@@ -35,7 +34,6 @@ export function CalendarContextRail({ taskDone, onTaskChange, localNotes, hasCac
             {note}
           </p>
         ))}
-        <small>Saved in Floe · stays when you disconnect</small>
       </Surface>
       {hasCache && (
         <div className="s1-provenance-hint">
