@@ -3,6 +3,32 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "connector-list",
+      "export": "ConnectorList",
+      "source": "src/components/connectors/ConnectorList.jsx",
+      "kind": "composition",
+      "responsibility": "Connected and available service grids; emits service selection",
+      "props": ["services", "onSelect"],
+      "stateOwner": "caller: service records and navigation",
+      "states": ["connected services", "no connections", "available services"],
+      "styles": ["src/styles.css", "src/components/connectors/connectors.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
+      "id": "connector-service-card",
+      "export": "ConnectorServiceCard",
+      "source": "src/components/connectors/ConnectorServiceCard.jsx",
+      "kind": "control",
+      "responsibility": "Service icon, summary and status with full-card detail navigation",
+      "props": ["service", "onSelect"],
+      "stateOwner": "caller: service",
+      "states": ["connected", "available", "warning", "refreshing", "hover", "focus"],
+      "styles": ["src/styles.css", "src/components/connectors/connectors.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
       "id": "dot-spinner",
       "export": "DotSpinner",
       "source": "src/components/ui/DotSpinner.jsx",

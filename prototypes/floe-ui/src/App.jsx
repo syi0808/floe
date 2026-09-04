@@ -18,7 +18,10 @@ export function App() {
         className="app-frame"
         contentClassName="app-window"
       >
-        <GlobalSidebar screen={screen} onNavigate={setScreen} />
+        <GlobalSidebar
+          screen={screen === 'calendar-connection' ? 'connections' : screen}
+          onNavigate={setScreen}
+        />
         <SquircleButton
           className="settings-action"
           aria-label="Settings"
@@ -28,9 +31,9 @@ export function App() {
           <Settings size={20} strokeWidth={1.8} />
         </SquircleButton>
         <div className="screen-region">
-          <div hidden={!['today', 'connections'].includes(screen)}>
+          <div hidden={!['today', 'connections', 'calendar-connection'].includes(screen)}>
             <CalendarScreen
-              page={screen === 'connections' ? 'connections' : 'day'}
+              page={['connections', 'calendar-connection'].includes(screen) ? screen : 'day'}
               onNavigate={setScreen}
             />
           </div>

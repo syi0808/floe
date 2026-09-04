@@ -8,7 +8,8 @@ import {
   externalEvents,
   getAllDayEvents,
 } from './components/calendar/calendar-fixtures.js';
-import { Check, Database, X } from 'lucide-react';
+import { CalendarDays, Check, Database, X } from 'lucide-react';
+import { ConnectorList } from './components/connectors/ConnectorList.jsx';
 import { SquircleButton } from './primitives.jsx';
 import { CalendarSurface as Surface } from './components/calendar/CalendarSurface.jsx';
 import { CalendarStatusBanner } from './components/calendar/CalendarStatusBanner.jsx';
@@ -135,6 +136,29 @@ export function CalendarScreen({ page, onNavigate }) {
   return (
     <div className="s1-screen">
       {page === 'connections' ? (
+        <ConnectorList
+          services={[
+            {
+              id: 'macos-calendar',
+              name: 'macOS Calendar',
+              icon: CalendarDays,
+              readOnly: true,
+              connected: hasConnection,
+              description: hasConnection
+                ? `${calendars.length} calendars · ${new Set(calendars.map((calendar) => calendar.account)).size} accounts`
+                : 'Calendars already on this Mac',
+              status: hasConnection ? statusLabel : 'Not connected',
+              tone:
+                statusTone === 'warning'
+                  ? 'warning'
+                  : hasConnection && !statusTone
+                    ? 'connected'
+                    : 'neutral',
+            },
+          ]}
+          onSelect={() => onNavigate('calendar-connection')}
+        />
+      ) : page === 'calendar-connection' ? (
         <CalendarConnections
           hasConnection={hasConnection}
           phase={phase}

@@ -30,7 +30,8 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 | Surface | Content and actions |
 | --- | --- |
 | Today | Date, refresh all calendars for that date, all-day/timed events, local task/note context and capture |
-| Connect / Settings | All included calendars/accounts, device/Person, stored dates, collection status, refresh, permission recovery, integration-wide disconnect |
+| Connect / Settings | Responsive icon-card grid of connected and available services; selecting macOS Calendar opens its detail |
+| macOS Calendar service detail | All included calendars/accounts, device/Person, stored dates, collection status, refresh, permission recovery, integration-wide disconnect; sidebar Connect returns to the list |
 | Local-load failure | Inspectable error and retry; no unexplained lone button |
 | Connection disclosure | Explicit all-calendar scope and read-only behavior; continue or cancel |
 | OS handoff simulation | Allow connects all calendars directly; denial leaves a recoverable local day |

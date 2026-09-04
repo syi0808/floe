@@ -19,7 +19,8 @@
 
 ```text
 App → GlobalSidebar + screen controllers
-CalendarScreen → CalendarConnections / CalendarDateToolbar / CalendarAgenda
+CalendarScreen → ConnectorList → ConnectorServiceCard
+               → CalendarConnections / CalendarDateToolbar / CalendarAgenda
                → CalendarContextRail + CalendarCapture + CalendarStatusBanner
                → CalendarDialogs → Modal + one dialog-content component
 CalendarAgenda → CalendarAllDay + TimelineZoom + CalendarEvent + CalendarEmptyState
@@ -92,6 +93,23 @@ through this API; Continue to permission changes content without closing the she
 `CalendarCapture` similarly generates its label/input association so instances do not collide.
 
 ## Calendar components
+
+Connect navigation and Settings open `ConnectorList`, not the macOS detail page.
+Selecting a service opens its detail (`calendar-connection` for macOS Calendar),
+while Connect stays active in the sidebar. Clicking Connect again returns to the
+list without resetting calendar state. No page-level back links are reintroduced.
+
+`ConnectorList({ services, onSelect })` partitions records into Connected services
+and Available services. `ConnectorServiceCard({ service, onSelect })` emits the service
+ID on click/Enter/Space. A service record has `id`, `name`, Lucide `icon`, `readOnly`,
+`connected`, `description`, `status` and `tone` (connected/neutral/warning). The grid
+adapts to available width; the whole card is a named button with focus styling.
+Both depend on `styles.css` and `components/connectors/connectors.css`.
+
+Only macOS Calendar is currently supported. iCloud and Google are accounts inside
+that connection, not separate direct integrations. Disconnect moves macOS Calendar
+to Available services; access warnings stay on its connected card. Selecting an
+available card opens the existing detail/setup flow rather than granting access.
 
 | Unit | Contract and review boundary | Main selectors |
 | --- | --- | --- |

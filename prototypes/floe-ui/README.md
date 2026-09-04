@@ -3,7 +3,8 @@
 Interactive browser prototype for the squircle-first Floe interface. Today now opens
 the S1 unified Calendar reference: one day across all connected calendars, read-only event
 details, local tasks and notes, and recoverable connection states. Connect (or the
-settings icon) opens Calendar management. Task Detail, Notes and Progress remain available.
+settings icon) opens a service-card grid; select macOS Calendar to open its management
+detail. Task Detail, Notes and Progress remain available.
 
 ## Explore S1
 
@@ -13,7 +14,8 @@ settings icon) opens Calendar management. Task Detail, Notes and Progress remain
 - **Full day:** scroll inside the calendar from 00:00 to 24:00. Zoom to 3× or 12× to
   inspect short events. Five-minute fixtures at 12:30 and 23:55 retain exact duration;
   see [event density rules](../../docs/design/calendar-event-layout.md).
-- **Connect / Settings:** inspect all included calendars/accounts and stored dates;
+- **Connect / Settings:** choose a connected or available service from the grid, then
+  inspect its included calendars/accounts and stored dates;
   refresh all calendars, manage permission recovery, or simulate integration-wide
   disconnection. There is no single-calendar selection or switching flow.
 - **State review:** no prototype controls appear on the page. Development URLs such
@@ -51,7 +53,7 @@ npm run build
 
 ## Component boundaries
 
-Reusable UI lives in `src/components/{ui,shell,calendar,tasks,notes,progress}`.
+Reusable UI lives in `src/components/{ui,shell,connectors,calendar,tasks,notes,progress}`.
 Screens own state and compose these units; `reference` holds the historical Today view.
 See the [as-built component map](../../docs/design/prototype-components.md) for props,
 state ownership, style boundaries and reverse-spec guidance. The machine-readable
