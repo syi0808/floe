@@ -110,6 +110,22 @@ EventKit native adapter compilation only, not a live read.
 - macOS: debug app builds with Calendar entitlement and EventKit usage strings.
 - No external calendar data collected or changed; live acceptance remains 0/4.
 
+### Follow-up test run
+
+2026-09-04 14:05 KST, source `8fafc96` (implementation `0d52e26`), same macOS environment:
+
+- `cargo test --workspace`: 20 passed; `cargo build -p floe-ffi`: passed.
+- `flutter test`: 38 passed, no skips, including native FFI and Calendar fixture tests.
+- Clippy with warnings denied, Flutter analyzer, and debug app signature verification pass.
+- Existing debug app launches; process sampling shows the main thread waiting normally
+  in the AppKit event loop rather than blocked in Calendar code.
+- Live UI automation is blocked: Computer Use repeatedly returns `-10005 timeoutReached`
+  while acquiring the Floe window, including by resolved bundle ID `app.floe.floeClient`.
+  This is not evidence of an EventKit permission/read failure or a successful UI demo.
+- No Calendar permission prompt was accepted, no calendar selected, and no live data
+  collected or modified in this run. S1-A1–A4 stay pending; resume with a visible
+  connection/permission result supplied by the user or working UI automation.
+
 ## Previous Validation Baseline
 
 Last recorded baseline: 2026-09-03. These results are preserved from the previous
