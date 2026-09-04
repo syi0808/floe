@@ -990,6 +990,15 @@ p {
   min-height: 40px;
   font-size: 13px;
 }
+.inline-actions .sq-button.quiet-action {
+  padding: 0 12px;
+  background: transparent;
+  box-shadow: none;
+}
+.inline-actions .sq-button.quiet-action:hover:not(:disabled),
+.inline-actions .sq-button.quiet-action:focus-visible:not(:disabled) {
+  background: var(--surface-subtle);
+}
 
 .tinted-violet {
   background: var(--primary-100);
@@ -999,8 +1008,14 @@ p {
   background: var(--primary-50);
 }
 
-.related-note {
-  min-height: 250px;
+.rail-card.related-note {
+  min-height: 0;
+  padding: 20px;
+  gap: 12px;
+}
+.rail-card.related-note small {
+  margin-top: 0;
+  align-self: start;
 }
 
 .notes-toolbar h1 {
