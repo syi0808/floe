@@ -12,6 +12,79 @@ import '../../../app/floe_squircle.dart';
 import '../application/calendar_gateway.dart';
 import '../domain/day_models.dart';
 
+class _ConnectedCalendars extends StatelessWidget {
+  const _ConnectedCalendars({required this.calendars});
+
+  final List<ConnectedCalendar> calendars;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    final accounts = <String?, List<ConnectedCalendar>>{};
+    for (final calendar in calendars) {
+      (accounts[calendar.account] ??= []).add(calendar);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          strings.connectedCalendarCount(calendars.length),
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        SizedBox(height: 24),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = ((constraints.maxWidth + 24) / 284).floor().clamp(
+              1,
+              3,
+            );
+            final width = (constraints.maxWidth - 24 * (columns - 1)) / columns;
+            return Wrap(
+              spacing: 24,
+              runSpacing: 24,
+              children: [
+                for (final account in accounts.entries)
+                  SizedBox(
+                    width: width,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${account.key ?? strings.calendarAccountFallback} · ${account.value.length}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.7,
+                            fontWeight: FontWeight.w600,
+                            color: FloePalette.neutral600,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        for (final calendar in account.value)
+                          Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: FloeIconText(
+                              icon: Icon(
+                                LucideIcons.calendar,
+                                size: 15,
+                                color: FloePalette.primary500,
+                              ),
+                              text: calendar.title,
+                              gap: 10,
+                              style: TextStyle(fontSize: 13, height: 1.7),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
 class CalendarPanel extends StatefulWidget {
   const CalendarPanel({
     super.key,
@@ -232,10 +305,13 @@ class _CalendarPanelState extends State<CalendarPanel> {
             ),
           ),
           SizedBox(height: 12),
-          Text(
-            connection?.name ?? AppLocalizations.of(context).makeRoomForYourDay,
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-          ),
+          if (connection == null)
+            Text(
+              AppLocalizations.of(context).makeRoomForYourDay,
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+            )
+          else
+            _ConnectedCalendars(calendars: connection.connectedCalendars),
           SizedBox(height: 12),
           Text(
             connection == null

@@ -450,14 +450,20 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
 CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
     CalendarConnection(
       id: json['calendar_id']! as String,
-      name: (json['calendars'] as List?)?.isNotEmpty == true
-          ? (json['calendars'] as List)
-                .map((calendar) => calendar['calendar_name'] as String)
-                .join(', ')
-          : json['calendar_name']! as String,
+      name: json['calendar_name']! as String,
       calendarIds:
           (json['calendars'] as List?)
               ?.map((calendar) => calendar['calendar_id'] as String)
+              .toList() ??
+          const [],
+      calendars:
+          (json['calendars'] as List?)
+              ?.map(
+                (calendar) => ConnectedCalendar(
+                  id: calendar['calendar_id'] as String,
+                  name: calendar['calendar_name'] as String,
+                ),
+              )
               .toList() ??
           const [],
       provider: json['provider']! as String,

@@ -760,6 +760,18 @@ abstract class AppLocalizations {
   /// **'Connected calendars'**
   String get connectedCalendar;
 
+  /// No description provided for @connectedCalendarCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 calendar} other{{count} calendars}}'**
+  String connectedCalendarCount(int count);
+
+  /// No description provided for @calendarAccountFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'Other calendars'**
+  String get calendarAccountFallback;
+
   /// No description provided for @makeRoomForYourDay.
   ///
   /// In en, this message translates to:

@@ -41,6 +41,65 @@ class PanelCalendarGateway implements CalendarGateway {
 }
 
 void main() {
+  for (final width in [390.0, 1200.0]) {
+    testWidgets('groups connected calendars without merging names at $width', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(Size(width, 1200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final date = DateTime.utc(2026, 9, 4);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: CalendarPanel(
+                gateway: PanelCalendarGateway(),
+                query: DayQuery(
+                  personId: 'test',
+                  date: date,
+                  now: date,
+                  timezoneOffsetSeconds: 0,
+                ),
+                connection: const CalendarConnection(
+                  id: 'home',
+                  name: 'Old aggregate title',
+                  provider: 'event_kit',
+                  revision: 1,
+                  calendars: [
+                    ConnectedCalendar(id: 'home', name: 'iCloud · Home'),
+                    ConnectedCalendar(
+                      id: 'work',
+                      name: 'iCloud · Work, planning · 팀 일정',
+                    ),
+                    ConnectedCalendar(
+                      id: 'birthdays',
+                      name: 'long-account-address@example.com · Home',
+                    ),
+                    ConnectedCalendar(id: 'legacy', name: 'Local calendar'),
+                  ],
+                ),
+                onChanged: () async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('4 calendars'), findsOneWidget);
+      expect(find.text('iCloud · 2'), findsOneWidget);
+      expect(find.text('long-account-address@example.com · 1'), findsOneWidget);
+      expect(find.text('Other calendars · 1'), findsOneWidget);
+      expect(find.text('Home'), findsNWidgets(2));
+      expect(find.text('Work, planning · 팀 일정'), findsOneWidget);
+      expect(find.text('Local calendar'), findsOneWidget);
+      expect(find.text('Old aggregate title'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets(
     'preselects calendars, requires a selection, saves multiple, and cancels',
     (tester) async {

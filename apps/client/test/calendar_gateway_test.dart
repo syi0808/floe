@@ -99,6 +99,10 @@ void main() {
         gateway = await open();
         snapshot = await gateway.loadDay(query);
         expect(snapshot.calendar!.selectedCalendarIds, ['home', 'work']);
+        expect(
+          snapshot.calendar!.connectedCalendars.map((calendar) => calendar.name),
+          ['Home', 'Work'],
+        );
         adapter.records = [];
         adapter.deniedCalendarId = 'work';
         snapshot = await gateway.syncCalendar(query);

@@ -22,6 +22,7 @@ export function CalendarConnections({
   onRefresh,
   onBack,
 }) {
+  const accounts = Object.groupBy(calendars, (calendar) => calendar.account);
   return (
     <>
       <button type="button" className="s1-text-link s1-connection-back" onClick={onBack}>
@@ -50,13 +51,13 @@ export function CalendarConnections({
             <div>
               <span className="s1-meta-label">Connected calendars</span>
               <strong>
-                {hasConnection ? 'All calendars on this Mac' : 'Nothing connected yet'}
-              </strong>
-              <small>
                 {hasConnection
-                  ? '3 calendars · 2 accounts'
-                  : 'All available calendars are included after granting access'}
-              </small>
+                  ? `${calendars.length} calendars · ${Object.keys(accounts).length} accounts`
+                  : 'Nothing connected yet'}
+              </strong>
+              {!hasConnection && (
+                <small>All available calendars are included after granting access</small>
+              )}
             </div>
             {!['connected', 'empty'].includes(phase) && (
               <span className={`s1-status ${statusTone}`}>
@@ -66,15 +67,21 @@ export function CalendarConnections({
             )}
           </div>
           {hasConnection && (
-            <ul className="s1-connected-calendars" aria-label="Connected calendars">
-              {calendars.map((item) => (
-                <li key={item.id}>
-                  <span className={'tone-dot ' + item.color} />
-                  <strong>{item.name}</strong>
-                  <small>{item.account}</small>
-                </li>
+            <div className="s1-calendar-accounts" aria-label="Connected calendars">
+              {Object.entries(accounts).map(([account, items]) => (
+                <section className="s1-calendar-account" key={account} aria-label={account}>
+                  <h3>{account} <span>{items.length}</span></h3>
+                  <ul className="s1-connected-calendars">
+                    {items.map((item) => (
+                      <li key={item.id}>
+                        <span className={'tone-dot ' + item.color} aria-hidden="true" />
+                        <strong>{item.name}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               ))}
-            </ul>
+            </div>
           )}
           <dl className="s1-facts">
             <div>

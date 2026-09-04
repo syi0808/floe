@@ -115,6 +115,23 @@ final class DaySnapshot {
   final CalendarConnection? calendar;
 }
 
+final class ConnectedCalendar {
+  const ConnectedCalendar({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  String? get account {
+    final separator = name.indexOf(' · ');
+    return separator > 0 ? name.substring(0, separator) : null;
+  }
+
+  String get title {
+    final separator = name.indexOf(' · ');
+    return separator > 0 ? name.substring(separator + 3) : name;
+  }
+}
+
 final class CalendarConnection {
   const CalendarConnection({
     required this.id,
@@ -126,6 +143,7 @@ final class CalendarConnection {
     this.rangeStart,
     this.rangeEnd,
     this.calendarIds = const [],
+    this.calendars = const [],
   });
   final String id;
   final String name;
@@ -136,8 +154,14 @@ final class CalendarConnection {
   final String? rangeStart;
   final String? rangeEnd;
   final List<String> calendarIds;
-  List<String> get selectedCalendarIds =>
-      calendarIds.isEmpty ? [id] : calendarIds;
+  final List<ConnectedCalendar> calendars;
+  List<ConnectedCalendar> get connectedCalendars =>
+      calendars.isEmpty ? [ConnectedCalendar(id: id, name: name)] : calendars;
+  List<String> get selectedCalendarIds => calendars.isNotEmpty
+      ? calendars.map((calendar) => calendar.id).toList()
+      : calendarIds.isEmpty
+      ? [id]
+      : calendarIds;
 }
 
 final class CaptureReceipt {

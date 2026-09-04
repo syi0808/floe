@@ -111,6 +111,11 @@
   "calendarsAlreadyOnThisMac": "Calendars already on this Mac",
   "bringYourCalendarIntoOneDayFloe": "Bring your calendar into one day. Floe reads events; it never creates, edits, or deletes anything in Calendar.",
   "connectedCalendar": "Connected calendars",
+  "connectedCalendarCount": "{count, plural, =1{1 calendar} other{{count} calendars}}",
+  "@connectedCalendarCount": {
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "calendarAccountFallback": "Other calendars",
   "makeRoomForYourDay": "Make room for your day.",
   "chooseACalendarToStartThisClient": "Choose one or more calendars to bring their events into your day.",
   "person": "Person",

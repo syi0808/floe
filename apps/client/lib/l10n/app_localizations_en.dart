@@ -360,6 +360,20 @@ class AppLocalizationsEn extends AppLocalizations {
   String get connectedCalendar => 'Connected calendars';
 
   @override
+  String connectedCalendarCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count calendars',
+      one: '1 calendar',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get calendarAccountFallback => 'Other calendars';
+
+  @override
   String get makeRoomForYourDay => 'Make room for your day.';
 
   @override
