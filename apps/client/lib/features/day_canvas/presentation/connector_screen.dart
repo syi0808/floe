@@ -120,6 +120,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           child: Material(
             type: MaterialType.transparency,
             child: InkWell(
+              mouseCursor: WidgetStateMouseCursor.clickable,
               customBorder: floeSquircleBorder(FloeSquircleSize.lg),
               onTap: () => setState(() => detail = true),
               hoverColor: FloePalette.primary50,

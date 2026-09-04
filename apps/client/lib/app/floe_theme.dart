@@ -50,6 +50,7 @@ abstract final class FloeTheme {
         trackVisibility: const WidgetStatePropertyAll(false),
       ),
       sliderTheme: const SliderThemeData(
+        mouseCursor: WidgetStateMouseCursor.clickable,
         trackHeight: 4,
         activeTrackColor: FloePalette.primary200,
         inactiveTrackColor: FloePalette.primary100,
@@ -184,9 +185,16 @@ abstract final class FloeTheme {
         ),
       ),
       checkboxTheme: CheckboxThemeData(
+        mouseCursor: WidgetStateMouseCursor.clickable,
         shape: floeSquircleBorder(FloeSquircleSize.xs),
         side: const BorderSide(color: FloePalette.neutral300, width: 1.5),
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      ),
+      listTileTheme: const ListTileThemeData(
+        mouseCursor: WidgetStateMouseCursor.clickable,
+      ),
+      popupMenuTheme: const PopupMenuThemeData(
+        mouseCursor: WidgetStateMouseCursor.clickable,
       ),
       dialogTheme: DialogThemeData(
         constraints: BoxConstraints(minWidth: 280, maxWidth: 540),

@@ -54,15 +54,18 @@ class CalendarContextRail extends StatelessWidget {
                           : (value) => complete(task, value!),
                     ),
                     Expanded(
-                      child: GestureDetector(
-                        onTap: () => onOpenTask(task),
-                        child: Text(
-                          task.title,
-                          style: TextStyle(
-                            fontSize: 13,
-                            decoration: task.isCompleted
-                                ? TextDecoration.lineThrough
-                                : null,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () => onOpenTask(task),
+                          child: Text(
+                            task.title,
+                            style: TextStyle(
+                              fontSize: 13,
+                              decoration: task.isCompleted
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
                           ),
                         ),
                       ),

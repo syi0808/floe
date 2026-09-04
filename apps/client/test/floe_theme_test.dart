@@ -4,6 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('interactive themes use a pointer only while enabled', () {
+    final theme = FloeTheme.light;
+    final cursors = [
+      theme.filledButtonTheme.style!.mouseCursor!,
+      theme.outlinedButtonTheme.style!.mouseCursor!,
+      theme.textButtonTheme.style!.mouseCursor!,
+      theme.iconButtonTheme.style!.mouseCursor!,
+      theme.segmentedButtonTheme.style!.mouseCursor!,
+      theme.checkboxTheme.mouseCursor!,
+      theme.sliderTheme.mouseCursor!,
+      theme.listTileTheme.mouseCursor!,
+      theme.popupMenuTheme.mouseCursor!,
+    ];
+
+    for (final cursor in cursors) {
+      expect(cursor.resolve({}), SystemMouseCursors.click);
+      expect(cursor.resolve({WidgetState.hovered}), SystemMouseCursors.click);
+      expect(cursor.resolve({WidgetState.disabled}), SystemMouseCursors.basic);
+    }
+  });
+
   testWidgets('tooltips wait two seconds before appearing on hover', (
     tester,
   ) async {

@@ -403,6 +403,7 @@ class CalendarEventCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(height < 24 ? 3 : 16),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
+            mouseCursor: WidgetStateMouseCursor.clickable,
             onTap: () => openCalendarEvent(context, event, snapshot),
             hoverColor: tone.border,
             child: height < 24 * textScale

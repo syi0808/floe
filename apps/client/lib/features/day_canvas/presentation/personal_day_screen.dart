@@ -950,6 +950,7 @@ class _NotePreviewCard extends StatelessWidget {
       fill: Color.lerp(Colors.white, tone.fill, .4)!,
       borderColor: tone.border,
       child: InkWell(
+        mouseCursor: WidgetStateMouseCursor.clickable,
         onTap: onOpen,
         customBorder: floeSquircleBorder(FloeSquircleSize.lg),
         child: Padding(
