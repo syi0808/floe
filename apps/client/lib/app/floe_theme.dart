@@ -36,6 +36,7 @@ abstract final class FloeTheme {
       focusColor: FloePalette.primary50,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: FloePalette.neutral25,
+      tooltipTheme: const TooltipThemeData(waitDuration: Duration(seconds: 2)),
       scrollbarTheme: ScrollbarThemeData(
         thickness: const WidgetStatePropertyAll(4),
         radius: const Radius.circular(8),
