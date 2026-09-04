@@ -116,6 +116,10 @@ Loading and empty states occupy the whole box without shifting the calendar. Emp
 background remains inert, aria-hidden and blurred. Existing CSS selectors and DOM
 wrappers are retained; extraction must not add layout wrappers to the timeline.
 
+CalendarConnections uses matching 23px violet icons for the boundary and offline
+cards. Its permission callout has 6px vertical padding, 12px top margin and top-aligned
+icon/text; this compact spacing is scoped to `.s1-connection-note`, not modal callouts.
+
 ## Tasks, notes and progress
 
 | Unit | State / interaction | Main selectors |

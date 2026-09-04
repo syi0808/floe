@@ -772,6 +772,17 @@
   font-size: 12px;
   line-height: 1.75;
 }
+.s1-connection-note {
+  padding-block: 6px;
+  margin: 12px 0 0;
+  align-items: flex-start;
+}
+.s1-connection-note > svg {
+  margin-top: 0;
+}
+.s1-connection-note p {
+  margin: 0;
+}
 .s1-toast {
   position: fixed;
   bottom: 26px;

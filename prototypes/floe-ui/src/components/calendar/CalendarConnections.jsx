@@ -6,6 +6,7 @@ import {
   LockKeyhole,
   ShieldCheck,
   Unplug,
+  WifiOff,
 } from 'lucide-react';
 import { SquircleBlock, SquircleButton } from '../../primitives.jsx';
 import { CalendarSurface as Surface } from './CalendarSurface.jsx';
@@ -140,8 +141,8 @@ export function CalendarConnections({
               All calendars available through macOS Calendar are included. Titles, times, time
               zones, and source identifiers stay on this Mac.
             </p>
-            <div className="s1-note">
-              <Info size={16} />
+            <div className="s1-note s1-connection-note">
+              <Info size={16} aria-hidden="true" />
               <p>
                 macOS calls this “Full Access,” even for reading. That OS permission does not enable
                 writes in Floe.
@@ -149,6 +150,7 @@ export function CalendarConnections({
             </div>
           </Surface>
           <Surface>
+            <WifiOff size={23} className="s1-violet" aria-hidden="true" />
             <h2>What happens offline?</h2>
             <p className="s1-body-copy">
               Your last saved events remain visible, with their collection time. Revoking permission
