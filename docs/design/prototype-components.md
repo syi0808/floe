@@ -80,8 +80,14 @@ These are the nontrivial data contracts used by the calendar:
 | `Modal` | Mount opens native dialog, locks body scroll; Escape/backdrop/X calls `onClose`; unmount restores focus/scroll; unique title ID | `.s1-dialog`, `.s1-modal*` |
 | `GlobalSidebar` | Controlled screen and `onNavigate(destination)`; icon-only names, tooltips, aria-current | `.sidebar-shell`, `.global-sidebar`, `.global-nav`, `.nav-link`, `.brand` |
 
-`Modal` intentionally keeps the existing appearance/motion, including reduced-motion
-behavior. The shared shell now uses a generated title ID instead of a fixed DOM ID.
+`Modal` uses a generated title ID instead of a fixed DOM ID. Closing keeps the native
+dialog, focus containment and body scroll lock mounted for a 180ms scale/fade exit,
+then calls `onClose`. Reduced motion closes immediately. A 240ms fallback handles
+missing animation-end events; repeated clicks are ignored during exit. `children`
+accepts a node or a render function `({ close }) => content`. Content actions must use
+`close()` for dismissal or `close(action)` to run a confirming mutation after exit;
+that action must unmount the modal. CalendarDialogs wires every dismissing action
+through this API; Continue to permission changes content without closing the shell.
 `CalendarCapture` similarly generates its label/input association so instances do not collide.
 
 ## Calendar components

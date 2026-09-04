@@ -773,9 +773,10 @@
         "children",
         "onClose"
       ],
-      "stateOwner": "self: dialog ref and generated title ID; caller: mount/unmount",
+      "stateOwner": "self: dialog ref, title ID, exit state and completion timer; caller: unmount after close callback",
       "states": [
         "mounted/open",
+        "closing (180ms, duplicate actions blocked)",
         "Escape",
         "backdrop click",
         "close",

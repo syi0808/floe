@@ -32,24 +32,32 @@ export function CalendarDialogs({
       }
       onClose={() => onClose()}
     >
-      {modal === 'disclosure' && (
-        <CalendarDisclosure onClose={onClose} onPermission={onPermission} />
-      )}
-      {modal === 'permission' && <CalendarPermission onDeny={onDeny} onRefresh={onRefresh} />}
-      {modal === 'settings' && <CalendarAccessRecovery onClose={onClose} onRefresh={onRefresh} />}
-      {modal === 'disconnect' && (
-        <CalendarDisconnect onClose={onClose} onDisconnect={onDisconnect} />
-      )}
-      {typeof modal === 'object' && (
-        <CalendarEventDetails
-          event={modal}
-          calendar={detailCalendar}
-          dateLabel={dateLabel}
-          dateShort={dateShort}
-          dayOffset={dayOffset}
-          stale={stale}
-          onClose={onClose}
-        />
+      {({ close }) => (
+        <>
+          {modal === 'disclosure' && (
+            <CalendarDisclosure onClose={close} onPermission={onPermission} />
+          )}
+          {modal === 'permission' && (
+            <CalendarPermission onDeny={() => close(onDeny)} onRefresh={() => close(onRefresh)} />
+          )}
+          {modal === 'settings' && (
+            <CalendarAccessRecovery onClose={close} onRefresh={() => close(onRefresh)} />
+          )}
+          {modal === 'disconnect' && (
+            <CalendarDisconnect onClose={close} onDisconnect={() => close(onDisconnect)} />
+          )}
+          {typeof modal === 'object' && (
+            <CalendarEventDetails
+              event={modal}
+              calendar={detailCalendar}
+              dateLabel={dateLabel}
+              dateShort={dateShort}
+              dayOffset={dayOffset}
+              stale={stale}
+              onClose={close}
+            />
+          )}
+        </>
       )}
     </Modal>
   );
