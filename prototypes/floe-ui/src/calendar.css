@@ -838,10 +838,10 @@
   animation: s1-backdrop-enter 200ms ease-out;
 }
 .s1-dialog[open][data-closing] {
-  animation: s1-dialog-exit 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  animation: s1-dialog-exit 120ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 .s1-dialog[open][data-closing]::backdrop {
-  animation: s1-backdrop-exit 180ms ease-in forwards;
+  animation: s1-backdrop-exit 120ms ease-in forwards;
 }
 @keyframes s1-dialog-exit {
   to {

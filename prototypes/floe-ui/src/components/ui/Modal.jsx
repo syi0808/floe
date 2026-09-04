@@ -25,7 +25,7 @@ export function Modal({ title, children, onClose }) {
       return;
     }
     setClosing(true);
-    closeTimer.current = setTimeout(finishClose, 240);
+    closeTimer.current = setTimeout(finishClose, 180);
   }
 
   useEffect(() => {

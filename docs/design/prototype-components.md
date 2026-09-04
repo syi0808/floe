@@ -83,8 +83,8 @@ These are the nontrivial data contracts used by the calendar:
 | `GlobalSidebar` | Controlled screen and `onNavigate(destination)`; icon-only names, tooltips, aria-current | `.sidebar-shell`, `.global-sidebar`, `.global-nav`, `.nav-link`, `.brand` |
 
 `Modal` uses a generated title ID instead of a fixed DOM ID. Closing keeps the native
-dialog, focus containment and body scroll lock mounted for a 180ms scale/fade exit,
-then calls `onClose`. Reduced motion closes immediately. A 240ms fallback handles
+dialog, focus containment and body scroll lock mounted for a 120ms scale/fade exit,
+then calls `onClose`. Reduced motion closes immediately. A 180ms fallback handles
 missing animation-end events; repeated clicks are ignored during exit. `children`
 accepts a node or a render function `({ close }) => content`. Content actions must use
 `close()` for dismissal or `close(action)` to run a confirming mutation after exit;

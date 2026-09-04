@@ -49,7 +49,7 @@ Popup entry uses a 240ms ease-out scale (0.96 → 1), 8px upward settling and op
 with a 200ms backdrop fade. No overshoot, content staggering or layout animation.
 Reduced-motion disables both animations. The shared dialog handles all popup types;
 changing content inside an already-open dialog does not replay entry. Closing uses a
-180ms ease-in fade with scale 1 → 0.97 and 6px downward movement; backdrop fades with
+120ms ease-in fade with scale 1 → 0.97 and 6px downward movement; backdrop fades with
 it. X, Escape, backdrop and dismissing content actions share the same exit. Focus and
 scroll lock remain until exit completes; reduced-motion closes immediately. This follows
 the restrained scale and easing guidance in
