@@ -12,9 +12,9 @@ export function App() {
   const [toasts, setToasts] = useState([]);
   const [heights, setHeights] = useState({});
   const toastId = useRef(0);
-  const notify = useCallback((title, description, tone = 'success') => {
+  const notify = useCallback((title, description, tone = 'success', action) => {
     const id = ++toastId.current;
-    setToasts((current) => [...current.slice(-2), { id, title, description, tone }]);
+    setToasts((current) => [...current.slice(-2), { id, title, description, tone, action }]);
     setHeights((current) => Object.fromEntries(Object.entries(current).filter(([key]) => Number(key) > id - 3)));
   }, []);
   const dismissToast = useCallback((id) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);

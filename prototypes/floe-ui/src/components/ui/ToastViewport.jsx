@@ -3,14 +3,15 @@ import { createPortal } from 'react-dom';
 import { Check, Info, X } from 'lucide-react';
 import './toast.css';
 
-function ToastCard({ toast, index, offset, expanded, paused, onDismiss, onMeasure }) {
+function ToastCard({ toast, index, offset, height, expanded, paused, onDismiss, onMeasure }) {
   const card = useRef(null);
   const remaining = useRef(4500);
   const [leaving, setLeaving] = useState(false);
+  const actionUsed = useRef(false);
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => {
-      onMeasure(toast.id, entry.target.offsetHeight);
+      onMeasure(toast.id, entry.target.offsetHeight + 2);
     });
     observer.observe(card.current);
     return () => observer.disconnect();
@@ -33,24 +34,36 @@ function ToastCard({ toast, index, offset, expanded, paused, onDismiss, onMeasur
   const Icon = toast.tone === 'info' ? Info : Check;
   return (
     <li
-      ref={card}
       className="floe-toast"
       data-leaving={leaving}
       data-covered={!expanded && index > 0}
       style={{
         '--offset': `${expanded ? offset : index * 9}px`,
         '--scale': expanded ? 1 : 1 - index * 0.045,
+        height,
         zIndex: 3 - index,
       }}
     >
-      <div className={`floe-toast-icon ${toast.tone}`}><Icon size={17} aria-hidden="true" /></div>
-      <div className="floe-toast-copy" role="status" aria-atomic="true">
-        <strong>{toast.title}</strong>
-        <p>{toast.description}</p>
+      <div ref={card} className="floe-toast-content">
+        <div className={`floe-toast-icon ${toast.tone}`}><Icon size={17} aria-hidden="true" /></div>
+        <div className="floe-toast-copy" role="status" aria-atomic="true">
+          <strong>{toast.title}</strong>
+          {toast.description && <p>{toast.description}</p>}
+        </div>
+        {toast.action && (
+          <button type="button" className="floe-toast-action" disabled={leaving} onClick={() => {
+            if (actionUsed.current) return;
+            actionUsed.current = true;
+            setLeaving(true);
+            toast.action.onClick();
+          }}>
+            {toast.action.label}
+          </button>
+        )}
+        <button type="button" className="floe-toast-close" aria-label={`Dismiss: ${toast.title}`} onClick={() => setLeaving(true)}>
+          <X size={14} aria-hidden="true" />
+        </button>
       </div>
-      <button type="button" className="floe-toast-close" aria-label={`Dismiss: ${toast.title}`} onClick={() => setLeaving(true)}>
-        <X size={14} aria-hidden="true" />
-      </button>
     </li>
   );
 }
@@ -90,7 +103,7 @@ export function ToastViewport({ toasts, onDismiss, heights, onMeasure }) {
         onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
-            const closeButtons = event.currentTarget.querySelectorAll('button');
+            const closeButtons = event.currentTarget.querySelectorAll('.floe-toast-close');
             closeButtons[0]?.focus();
             closeButtons[0]?.click();
           }
@@ -105,6 +118,7 @@ export function ToastViewport({ toasts, onDismiss, heights, onMeasure }) {
               toast={toast}
               index={index}
               offset={currentOffset}
+              height={(expanded ? heights[toast.id] : heights[ordered[0].id]) || 88}
               expanded={expanded}
               paused={expanded || hidden}
               onDismiss={onDismiss}

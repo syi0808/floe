@@ -217,7 +217,13 @@ export function CalendarScreen({ page, onNavigate, notify }) {
             )}
             <CalendarContextRail
               taskDone={taskDone}
-              onTaskChange={setTaskDone}
+              onTaskChange={(completed) => {
+                setTaskDone(completed);
+                notify(completed ? 'Task completed' : 'Task marked incomplete', null, 'success', {
+                  label: 'Undo',
+                  onClick: () => setTaskDone(!completed),
+                });
+              }}
               localNotes={localNotes}
               hasCache={hasCache}
               onNavigate={onNavigate}

@@ -27,6 +27,8 @@ detail. Task Detail, Notes and Progress remain available.
 - **Toasts:** save a note, refresh calendars or disconnect to see custom floating
   feedback. Save several notes quickly to review the three-card stack; hover or
   focus it to expand and pause dismissal. No Sonner dependency; Flutter is unchanged.
+  Toggle a local task to try the trailing Undo action. Mixed-height cards match the
+  front card while collapsed and recover their natural heights when expanded.
 
 All data, permission dialogs, settings handoffs, and refreshes are **simulated**.
 Nothing touches EventKit, accounts, or the real Floe database. Prototype state is

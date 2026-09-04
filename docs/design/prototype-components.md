@@ -97,7 +97,9 @@ through this API; Continue to permission changes content without closing the she
 
 ### Prototype toast feedback
 
-`App` supplies `notify(title, description, tone = 'success')` to CalendarScreen.
+`App` supplies `notify(title, description, tone = 'success', action?)` to CalendarScreen.
+An optional action is `{ label, onClick }`; task completion/incompletion supplies Undo.
+Actions sit to the right of the message, centered with the icon and close button.
 Note capture, manual refresh and disconnect use `ToastViewport`, portaled to the body,
 instead of the old dark bottom banner. Persistent calendar warning/recovery banners
 remain inline and unchanged. This is a custom React/CSS implementation without Sonner;
@@ -112,8 +114,15 @@ Each card expires after 4.5 seconds of unpaused time. Hover, focus and a hidden 
 pause expiry; dismissal fades for 180ms. Escape inside the stack dismisses the newest
 card. Status announcements do not move focus. Reduced motion disables animation.
 
+Collapsed cards all use the front card's height; expanded cards restore their own
+natural heights. A ResizeObserver measures the inner content independently from the
+animated outer surface to avoid feeding constrained heights back into measurements.
+Rear content is clipped and fades in late during expansion. The stack's contiguous
+hover region includes the gaps between expanded cards. Escape targets Close, never Undo.
+
 Review by saving three notes quickly, hovering/focusing the stack, closing cards,
 switching screens and waiting for expiry; also review refresh and disconnect copy.
+Toggle the local task to review trailing Undo and mixed-height stacks in both orders.
 
 Connect navigation and Settings open `ConnectorList`, not the macOS detail page.
 Selecting a service opens its detail (`calendar-connection` for macOS Calendar),
