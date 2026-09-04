@@ -169,9 +169,9 @@
   grid-column: 2;
 }
 .s1-all-day > span:first-child {
-  grid-row: 1 / span 2;
-  align-self: start;
-  padding-top: 4px;
+  grid-row: 1;
+  align-self: center;
+  line-height: 20px;
   width: 53px;
   flex-shrink: 0;
   font-size: 11px;
@@ -188,6 +188,13 @@
   font-size: 12px;
   font-weight: 550;
   text-align: left;
+  line-height: 20px;
+}
+.s1-all-day button > .tone-dot {
+  margin-top: 0;
+}
+.s1-all-day button > small {
+  line-height: 20px;
 }
 .s1-quiet-action.sq-button {
   justify-content: flex-start;
@@ -326,6 +333,13 @@
   flex-shrink: 0;
   color: var(--ink-tertiary);
   margin-top: 2px;
+}
+.s1-event.sq-button[data-density='compact'] {
+  align-items: center;
+}
+.s1-event[data-density='compact'] > .tone-dot,
+.s1-event[data-density='compact'] > svg {
+  margin-top: 0;
 }
 .s1-cached-grid .s1-event {
   background: var(--surface-subtle);
