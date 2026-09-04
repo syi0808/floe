@@ -142,7 +142,6 @@ export function CalendarScreen({ page, onNavigate }) {
           statusLabel={statusLabel}
           readDates={readDates}
           calendars={calendars}
-          onNavigate={onNavigate}
           onOpenDialog={setModal}
           onRefresh={() => refresh()}
         />

@@ -688,14 +688,6 @@
   gap: 24px;
   align-items: start;
 }
-.s1-back {
-  margin: -4px 0 24px;
-}
-.s1-back:hover > span,
-.s1-back:focus-visible > span {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
 .s1-provider-icon,
 .s1-modal-icon {
   display: inline-flex;

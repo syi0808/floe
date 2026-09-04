@@ -104,7 +104,7 @@ through this API; Continue to permission changes content without closing the she
 | `CalendarEmptyState` | Phase/date copy with one `onAction`; controller chooses connect, read or navigate. Agenda owns whether it is shown | `.s1-empty-day`, `.s1-empty-content` |
 | `CalendarContextRail` | Controlled task and notes; emits boolean task change and navigation destination. Local copy is still prototype content | `.s1-side-stack`, `.s1-local-task`, `.s1-personal-note`, `.s1-captured-note`, `.s1-provenance-hint` |
 | `CalendarCapture` | Controlled draft; emits raw `onChange(value)` and nonempty trimmed `onSubmit(value)`; parent saves and clears | `.s1-capture-card`, `.s1-capture` |
-| `CalendarConnections` | Controlled inventory, phase/status and collected dates; emits dialog ID, refresh, navigation; no permissions or mutations | `.s1-connections-layout`, `.s1-connection-record`, `.s1-connected-calendars`, `.s1-facts`, `.s1-actions` |
+| `CalendarConnections` | Controlled inventory, phase/status and collected dates; emits dialog ID and refresh; no permissions or mutations | `.s1-connections-layout`, `.s1-connection-record`, `.s1-connected-calendars`, `.s1-facts`, `.s1-actions` |
 | `CalendarStatusBanner` | Supported phase selects status/alert copy and supplied recovery callback. Connected/empty are not valid banner inputs | `.s1-banner`, `.s1-banner-action` |
 | `CalendarDialogs` | Routes a non-null selection into shared Modal + content. Does not change phase or clear data itself | Shared modal layout |
 | `CalendarDisclosure` | Read scope / read-only explanation; close or permission callback | `.s1-modal-icon`, `.s1-permission-list`, `.s1-note`, `.s1-modal-actions` |
@@ -127,7 +127,7 @@ icon/text; this compact spacing is scoped to `.s1-connection-note`, not modal ca
 
 | Unit | State / interaction | Main selectors |
 | --- | --- | --- |
-| `TaskDetail` | Owns fixture subtasks and suggestion visibility; back callback | `.task-detail-screen`, `.task-panel`, `.task-metadata`, `.detail-layout` |
+| `TaskDetail` | Owns fixture subtasks and suggestion visibility; options remain right-aligned | `.task-detail-screen`, `.task-panel`, `.task-metadata`, `.detail-layout` |
 | `SubtaskList` | Controlled list; `onToggle(id)` | `.subtask-list`, `.subtask-row` |
 | `TaskSuggestionCard` | Parent mounts/hides; emits dismiss. Review now and Snooze remain visual-only, as before | `.detail-suggestion`, `.suggestion-heading`, `.inline-actions` |
 | `NotesCollection` | Owns notes/search/filter; existing New note creates a single Untitled draft | `.notes-screen`, `.notes-toolbar`, `.notes-grid`, `.notes-empty` |
@@ -181,3 +181,6 @@ State lists are review prompts, not generated acceptance evidence.
 - Progress and responsive shell: no missing imports, preserved layout and named controls.
 
 No native acceptance status changes as a result of this refactor.
+
+Page-level back links are removed from Connect and Task Detail. Use primary navigation
+to change pages; dialog dismissal actions such as Back to my day remain available.

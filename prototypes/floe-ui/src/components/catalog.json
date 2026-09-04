@@ -246,7 +246,6 @@
         "statusLabel",
         "readDates",
         "calendars",
-        "onNavigate",
         "onOpenDialog",
         "onRefresh"
       ],
@@ -721,9 +720,7 @@
       "source": "src/components/tasks/TaskDetail.jsx",
       "kind": "screen",
       "responsibility": "Task fixture with subtasks and dismissible suggestion",
-      "props": [
-        "onBack"
-      ],
+      "props": [],
       "stateOwner": "self: subtasks and suggestionVisible",
       "states": [],
       "styles": [

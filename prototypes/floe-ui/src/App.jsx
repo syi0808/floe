@@ -35,7 +35,7 @@ export function App() {
             />
           </div>
           {screen === 'reference' && <TodayScreen onNavigate={setScreen} />}
-          {screen === 'tasks' && <TaskDetail onBack={() => setScreen('today')} />}
+          {screen === 'tasks' && <TaskDetail />}
           {screen === 'notes' && <NotesCollection />}
           {screen === 'progress' && <ProgressScreen />}
         </div>

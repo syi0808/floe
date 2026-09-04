@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   ArrowRight,
   CalendarDays,
   Info,
@@ -18,15 +17,11 @@ export function CalendarConnections({
   statusLabel,
   readDates,
   calendars,
-  onNavigate,
   onOpenDialog,
   onRefresh,
 }) {
   return (
     <>
-      <button className="back-action s1-back" onClick={() => onNavigate('today')}>
-        <ArrowLeft size={16} /> <span>Back to your day</span>
-      </button>
       <div className="s1-connections-layout">
         <Surface>
           <div className="s1-card-heading">

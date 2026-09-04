@@ -1,11 +1,11 @@
 import { TaskSuggestionCard } from './TaskSuggestionCard.jsx';
 import { useState } from 'react';
-import { ArrowLeft, MoreHorizontal, Plus } from 'lucide-react';
+import { MoreHorizontal, Plus } from 'lucide-react';
 import { SQUIRCLE_RADIUS, SquircleButton, SquircleSurface } from '../../primitives.jsx';
 import { initialSubtasks } from '../../data.js';
 import { SubtaskList } from './SubtaskList.jsx';
 
-export function TaskDetail({ onBack }) {
+export function TaskDetail() {
   const [subtasks, setSubtasks] = useState(initialSubtasks);
   const [suggestionVisible, setSuggestionVisible] = useState(true);
 
@@ -20,10 +20,6 @@ export function TaskDetail({ onBack }) {
   return (
     <div className="task-detail-screen">
       <section className="local-toolbar task-toolbar">
-        <button type="button" className="back-action" onClick={onBack}>
-          <ArrowLeft size={19} />
-          Back to today
-        </button>
         <SquircleButton className="icon-button" aria-label="Task options">
           <MoreHorizontal size={21} />
         </SquircleButton>

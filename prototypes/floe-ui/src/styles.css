@@ -357,7 +357,6 @@ p {
 }
 
 .quiet-action,
-.back-action,
 .violet-action,
 .add-subtask,
 .reason-link,
@@ -368,7 +367,6 @@ p {
 }
 
 .quiet-action:hover,
-.back-action:hover,
 .add-subtask:hover,
 .card-footer-action:hover {
   color: var(--ink);
@@ -931,14 +929,7 @@ p {
 
 .task-toolbar {
   border-bottom: 0;
-}
-
-.back-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 44px;
-  font-size: 14px;
+  justify-content: flex-end;
 }
 
 .detail-layout {
