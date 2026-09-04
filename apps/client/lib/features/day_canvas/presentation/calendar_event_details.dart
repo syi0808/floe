@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -32,43 +34,47 @@ class CalendarEventDetails extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              event.calendarName ?? 'Saved in Floe',
-              style: const TextStyle(color: FloePalette.neutral600),
+              event.calendarName ?? AppLocalizations.of(context).savedInFloe,
+              style: TextStyle(color: FloePalette.neutral600),
             ),
           ),
-          if (event.externalId != null) const FloeReadOnlyPill(),
+          if (event.externalId != null) FloeReadOnlyPill(),
         ],
       ),
-      const SizedBox(height: 24),
+      SizedBox(height: 24),
       FloeSquircle(
         size: FloeSquircleSize.field,
         fill: FloePalette.primary50,
         borderWidth: 0,
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(20),
         child: Row(
           children: [
-            const Icon(
-              LucideIcons.clock,
-              color: FloePalette.primary600,
-              size: 20,
-            ),
-            const SizedBox(width: 16),
+            Icon(LucideIcons.clock, color: FloePalette.primary600, size: 20),
+            SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    calendarRange(event, snapshot.timezoneOffsetSeconds),
-                    style: const TextStyle(
+                    calendarRange(
+                      context,
+                      event,
+                      snapshot.timezoneOffsetSeconds,
+                    ),
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
                       color: FloePalette.primary700,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  SizedBox(height: 6),
                   Text(
-                    '${snapshot.date.month}/${snapshot.date.day} · ${event.timezone ?? 'Local time'}',
-                    style: const TextStyle(
+                    AppLocalizations.of(context).dateAndZone(
+                      DateFormat.yMMMd(AppLocalizations.of(context).localeName)
+                          .format(snapshot.date),
+                      event.timezone ?? AppLocalizations.of(context).localTime,
+                    ),
+                    style: TextStyle(
                       fontSize: 12,
                       color: FloePalette.primary700,
                     ),
@@ -79,83 +85,97 @@ class CalendarEventDetails extends StatelessWidget {
           ],
         ),
       ),
-      const SizedBox(height: 24),
+      SizedBox(height: 24),
       for (final entry in <String, String>{
-        'Source time zone': event.timezone ?? 'Local time',
+        AppLocalizations.of(context).sourceTimeZone:
+            event.timezone ?? AppLocalizations.of(context).localTime,
         if (snapshot.calendar?.lastSuccessAt != null)
-          'Last collected': snapshot.calendar!.lastSuccessAt!
-              .toLocal()
-              .toString(),
+          AppLocalizations.of(context).lastCollected: formatTimestamp(
+            context,
+            snapshot.calendar!.lastSuccessAt!,
+          ),
         if (event.isAllDay)
-          'All-day boundary':
-              '${event.endsAt.toIso8601String().split('T').first} · exclusive',
+          AppLocalizations.of(context)
+              .allDayBoundary: AppLocalizations.of(context).exclusiveDate(
+            DateFormat.yMMMd(AppLocalizations.of(context).localeName)
+                .format(event.endsAt),
+          ),
       }.entries)
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: EdgeInsets.symmetric(vertical: 10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Text(
                   entry.key,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: FloePalette.neutral600,
-                  ),
+                  style: TextStyle(fontSize: 12, color: FloePalette.neutral600),
                 ),
               ),
               Expanded(
-                child: Text(entry.value, style: const TextStyle(fontSize: 12)),
+                child: Text(entry.value, style: TextStyle(fontSize: 12)),
               ),
             ],
           ),
         ),
       if (event.externalId != null) ...[
-        const SizedBox(height: 24),
-        const FloeInfoNote(
+        SizedBox(height: 24),
+        FloeInfoNote(
           icon: LucideIcons.lockKeyhole,
-          text: 'Manage this event in its original calendar. Floe has no edit or delete action for imported events.',
+          text: AppLocalizations.of(context)
+              .manageThisEventInItsOriginalCalendar,
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
             tilePadding: EdgeInsets.zero,
-            title: const Text('Source details', style: TextStyle(fontSize: 12)),
+            title: Text(
+              AppLocalizations.of(context).sourceDetails,
+              style: TextStyle(fontSize: 12),
+            ),
             children: [
               FloeSquircle(
                 size: FloeSquircleSize.field,
                 fill: FloePalette.neutral50,
                 borderWidth: 0,
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     for (final entry in <String, String>{
-                      'Connection / Person':
+                      AppLocalizations.of(context).connectionPerson:
                           '${snapshot.calendar?.id ?? '—'} / ${snapshot.personId}',
-                      'External occurrence ID': event.externalId!,
-                      'Revision': '${event.revision}',
-                      'Integration': event.provider ?? 'Calendar',
+                      AppLocalizations.of(context).externalOccurrenceId:
+                          event.externalId!,
+                      AppLocalizations.of(context).revision:
+                          '${event.revision}',
+                      AppLocalizations.of(context).integration:
+                          event.provider ??
+                          AppLocalizations.of(context).calendar,
                     }.entries)
                       Padding(
                         padding: EdgeInsets.only(
-                          top: entry.key == 'Connection / Person' ? 0 : 12,
+                          top:
+                              entry.key ==
+                                  AppLocalizations.of(context).connectionPerson
+                              ? 0
+                              : 12,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
                               entry.key,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
                                 color: FloePalette.neutral600,
                               ),
                             ),
-                            const SizedBox(height: 5),
+                            SizedBox(height: 5),
                             Text(
                               entry.value,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
                                 fontFamily: 'monospace',
                               ),
@@ -170,12 +190,12 @@ class CalendarEventDetails extends StatelessWidget {
           ),
         ),
       ],
-      const SizedBox(height: 24),
+      SizedBox(height: 24),
       Align(
         alignment: Alignment.centerRight,
         child: FilledButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Back to my day'),
+          child: Text(AppLocalizations.of(context).backToMyDay),
         ),
       ),
     ],

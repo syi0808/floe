@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>선택한 캘린더의 일정을 Day Canvas에 표시합니다. macOS는 읽기에 읽기·쓰기 전체 접근을 요구하지만 Floe는 일정을 읽기만 하며 외부 일정을 변경하지 않습니다.</string>
+    <string>Show calendar events in your day. macOS requires Full Access even for reading, but Floe only reads events and never changes your calendars.</string>
     <key>NSCalendarsUsageDescription</key>
-    <string>선택한 캘린더의 일정을 읽어 Day Canvas에 표시합니다. 외부 일정은 변경하지 않습니다.</string>
+    <string>Read calendar events to show them in your day. Floe never changes your calendars.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>

@@ -1,3 +1,7 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
+
 import '../domain/day_models.dart';
 
 class CalendarPlacement {
@@ -75,6 +79,12 @@ String calendarTime(DateTime value, int offset) {
   return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 }
 
-String calendarRange(EventItem event, int offset) => event.isAllDay
-    ? 'All day'
+String calendarRange(BuildContext context, EventItem event, int offset) =>
+    event.isAllDay
+    ? AppLocalizations.of(context).allDay
     : '${calendarTime(event.startsAt, offset)} – ${calendarTime(event.endsAt, offset)}';
+
+String formatTimestamp(BuildContext context, DateTime value) =>
+    DateFormat.yMMMd(AppLocalizations.of(context).localeName)
+        .add_jm()
+        .format(value.toLocal());

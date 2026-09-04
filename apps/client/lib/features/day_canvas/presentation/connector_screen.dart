@@ -1,3 +1,4 @@
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -35,12 +36,12 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           Align(
             alignment: Alignment.centerLeft,
             child: FloeTextLink(
-              label: 'Back to connections',
+              label: AppLocalizations.of(context).backToConnections,
               icon: LucideIcons.arrowLeft,
               onPressed: () => setState(() => detail = false),
             ),
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           if (widget.gateway != null)
             CalendarPanel(
               gateway: widget.gateway!,
@@ -49,41 +50,39 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
               onChanged: widget.onChanged,
             )
           else
-            const FloeSquircle(
+            FloeSquircle(
               padding: EdgeInsets.all(24),
               child: Text(
-                'Calendar integration is unavailable in this preview. Use the native macOS client to connect.',
+                AppLocalizations.of(context)
+                    .calendarIntegrationIsUnavailableInThisPreview,
               ),
             ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           LayoutBuilder(
             builder: (context, constraints) {
               final cards = [
                 _InfoCard(
                   icon: LucideIcons.shieldCheck,
-                  title: 'A clear boundary.',
-                  text: 'Events are saved on this Mac. Floe never creates, edits, or deletes events in your connected calendar.',
-                  note: 'macOS calls this “Full Access,” even for reading. That OS permission does not enable writes in Floe.',
+                  title: AppLocalizations.of(context).aClearBoundary,
+                  text: AppLocalizations.of(context)
+                      .eventsAreSavedOnThisMacFloe,
+                  note: AppLocalizations.of(context)
+                      .macosCallsThisFullAccessEvenFor,
                 ),
                 _InfoCard(
                   icon: LucideIcons.wifiOff,
-                  title: 'What happens offline?',
-                  text: 'Your last saved events remain visible, with their collection time. Revoking permission stops new reads; it does not erase the saved copy.',
+                  title: AppLocalizations.of(context).whatHappensOffline,
+                  text: AppLocalizations.of(context)
+                      .yourLastSavedEventsRemainVisibleWith,
                 ),
               ];
               return constraints.maxWidth < 700
-                  ? Column(
-                      children: [
-                        cards[0],
-                        const SizedBox(height: 20),
-                        cards[1],
-                      ],
-                    )
+                  ? Column(children: [cards[0], SizedBox(height: 20), cards[1]])
                   : Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(child: cards[0]),
-                        const SizedBox(width: 20),
+                        SizedBox(width: 20),
                         Expanded(child: cards[1]),
                       ],
                     );
@@ -95,39 +94,39 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Connections',
+        Text(
+          AppLocalizations.of(context).connections,
           style: TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.w700,
             letterSpacing: -1,
           ),
         ),
-        const SizedBox(height: 12),
-        const Text(
-          'Manage the services that bring context to your day.',
+        SizedBox(height: 12),
+        Text(
+          AppLocalizations.of(context).manageTheServicesThatBringContextTo,
           style: TextStyle(color: FloePalette.neutral600),
         ),
-        const SizedBox(height: 36),
+        SizedBox(height: 36),
         Text(
           widget.connection == null
-              ? 'Available services'
-              : 'Connected services   1',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ? AppLocalizations.of(context).availableServices
+              : AppLocalizations.of(context).connectedServicesCount(1),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 280),
+          constraints: BoxConstraints(maxWidth: 280),
           child: FloeSquircle(
             child: InkWell(
               onTap: () => setState(() => detail = true),
               hoverColor: FloePalette.primary50,
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: EdgeInsets.all(24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const FloeSquircle(
+                    FloeSquircle(
                       size: FloeSquircleSize.md,
                       fill: FloePalette.primary50,
                       borderWidth: 0,
@@ -138,17 +137,18 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                         color: FloePalette.primary600,
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'macOS Calendar',
+                    SizedBox(height: 20),
+                    Text(
+                      AppLocalizations.of(context).macosCalendar,
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Bring events from your Mac into your day.',
+                    SizedBox(height: 12),
+                    Text(
+                      AppLocalizations.of(context)
+                          .bringEventsFromYourMacIntoYour,
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.6,
@@ -179,29 +179,26 @@ class _InfoCard extends StatelessWidget {
   final String? note;
   @override
   Widget build(BuildContext context) => FloeSquircle(
-    padding: const EdgeInsets.all(24),
+    padding: EdgeInsets.all(24),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(icon, color: FloePalette.primary600, size: 23),
-        const SizedBox(height: 20),
+        SizedBox(height: 20),
         Text(
           title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         Text(
           text,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 13,
             height: 1.8,
             color: FloePalette.neutral600,
           ),
         ),
-        if (note != null) ...[
-          const SizedBox(height: 20),
-          FloeInfoNote(text: note!),
-        ],
+        if (note != null) ...[SizedBox(height: 20), FloeInfoNote(text: note!)],
       ],
     ),
   );

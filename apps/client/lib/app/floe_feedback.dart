@@ -1,3 +1,5 @@
+import 'package:floe_client/l10n/app_localizations.dart';
+
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -28,10 +30,10 @@ class FloeTextLink extends StatelessWidget {
     onPressed: onPressed,
     style: ButtonStyle(
       alignment: Alignment.centerLeft,
-      padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-      minimumSize: const WidgetStatePropertyAll(Size(0, 32)),
+      padding: WidgetStatePropertyAll(EdgeInsets.zero),
+      minimumSize: WidgetStatePropertyAll(Size(0, 32)),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+      backgroundColor: WidgetStatePropertyAll(Colors.transparent),
       foregroundColor: WidgetStatePropertyAll(color),
       textStyle: WidgetStateProperty.resolveWith(
         (states) => TextStyle(
@@ -48,8 +50,8 @@ class FloeTextLink extends StatelessWidget {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (leading != null) ...[leading!, const SizedBox(width: 8)],
-        if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 8)],
+        if (leading != null) ...[leading!, SizedBox(width: 8)],
+        if (icon != null) ...[Icon(icon, size: 16), SizedBox(width: 8)],
         Flexible(child: Text(label)),
       ],
     ),
@@ -66,7 +68,7 @@ class _FloeDotSpinnerState extends State<FloeDotSpinner>
     with SingleTickerProviderStateMixin {
   late final AnimationController animation = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1100),
+    duration: Duration(milliseconds: 1100),
   );
   @override
   void didChangeDependencies() {
@@ -86,7 +88,7 @@ class _FloeDotSpinnerState extends State<FloeDotSpinner>
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Loading calendar',
+    label: AppLocalizations.of(context).loadingCalendar,
     liveRegion: true,
     child: RotationTransition(
       turns: animation,
@@ -126,14 +128,12 @@ Future<T?> showFloeDialog<T>(
     PageRouteBuilder<T>(
       opaque: false,
       barrierDismissible: barrierDismissible,
-      barrierLabel: 'Dismiss dialog',
+      barrierLabel: AppLocalizations.of(context).dismissDialog,
       barrierColor: FloePalette.neutral950.withValues(alpha: .28),
-      transitionDuration: reduced
-          ? Duration.zero
-          : const Duration(milliseconds: 240),
+      transitionDuration: reduced ? Duration.zero : Duration(milliseconds: 240),
       reverseTransitionDuration: reduced
           ? Duration.zero
-          : const Duration(milliseconds: 120),
+          : Duration(milliseconds: 120),
       pageBuilder: (context, animation, secondaryAnimation) => builder(context),
       transitionsBuilder: (context, animation, secondaryAnimation, child) =>
           AnimatedBuilder(
@@ -172,10 +172,10 @@ class FloeDetailDialog extends StatelessWidget {
   final List<Widget> children;
   @override
   Widget build(BuildContext context) => Dialog(
-    constraints: const BoxConstraints(maxWidth: 540),
-    insetPadding: const EdgeInsets.all(24),
+    constraints: BoxConstraints(maxWidth: 540),
+    insetPadding: EdgeInsets.all(24),
     child: SingleChildScrollView(
-      padding: const EdgeInsets.all(32),
+      padding: EdgeInsets.all(32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -185,7 +185,7 @@ class FloeDetailDialog extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -1,
@@ -193,13 +193,13 @@ class FloeDetailDialog extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Close',
+                tooltip: AppLocalizations.of(context).close,
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(LucideIcons.x, size: 20),
+                icon: Icon(LucideIcons.x, size: 20),
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: 24),
           ...children,
         ],
       ),
@@ -217,19 +217,19 @@ class FloeInfoNote extends StatelessWidget {
   final IconData icon;
   @override
   Widget build(BuildContext context) => Container(
-    decoration: const BoxDecoration(
+    decoration: BoxDecoration(
       border: Border(left: BorderSide(color: FloePalette.primary200, width: 2)),
     ),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(icon, size: 18, color: FloePalette.primary600),
-        const SizedBox(width: 12),
+        SizedBox(width: 12),
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               height: 1.7,
               color: FloePalette.neutral600,
@@ -244,7 +244,7 @@ class FloeInfoNote extends StatelessWidget {
 class FloeReadOnlyPill extends StatelessWidget {
   const FloeReadOnlyPill({super.key});
   @override
-  Widget build(BuildContext context) => const FloeSquircle(
+  Widget build(BuildContext context) => FloeSquircle(
     size: FloeSquircleSize.sm,
     fill: FloePalette.neutral50,
     borderWidth: 0,
@@ -254,7 +254,10 @@ class FloeReadOnlyPill extends StatelessWidget {
       children: [
         Icon(LucideIcons.lockKeyhole, size: 12),
         SizedBox(width: 4),
-        Text('Read-only', style: TextStyle(fontSize: 10)),
+        Text(
+          AppLocalizations.of(context).readOnly,
+          style: TextStyle(fontSize: 10),
+        ),
       ],
     ),
   );

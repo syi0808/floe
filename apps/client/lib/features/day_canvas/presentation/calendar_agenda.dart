@@ -1,3 +1,5 @@
+import 'package:floe_client/l10n/app_localizations.dart';
+
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -94,7 +96,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
         now.month == snapshot.date.month &&
         now.day == snapshot.date.day;
     return FloeSquircle(
-      key: const Key('timeline-card'),
+      key: Key('timeline-card'),
       child: Stack(
         children: [
           ImageFiltered(
@@ -109,19 +111,19 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                 child: Column(
                   children: [
                     Padding(
-                      padding: const EdgeInsets.symmetric(
+                      padding: EdgeInsets.symmetric(
                         horizontal: 20,
                         vertical: 16,
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const SizedBox(
+                          SizedBox(
                             width: 72,
                             child: Padding(
                               padding: EdgeInsets.only(top: 8),
                               child: Text(
-                                'All day',
+                                AppLocalizations.of(context).allDay,
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: FloePalette.neutral600,
@@ -134,7 +136,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 if (allDay.isEmpty)
-                                  const SizedBox(height: 24, child: Text('—')),
+                                  SizedBox(height: 24, child: Text('—')),
                                 for (final event in allDay)
                                   FloeTextLink(
                                     color: FloePalette.neutral950,
@@ -164,9 +166,9 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         ],
                       ),
                     ),
-                    const Divider(height: 1),
+                    Divider(height: 1),
                     Padding(
-                      padding: const EdgeInsets.symmetric(
+                      padding: EdgeInsets.symmetric(
                         horizontal: 20,
                         vertical: 8,
                       ),
@@ -174,17 +176,18 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           IconButton(
-                            tooltip: 'Zoom out',
+                            tooltip: AppLocalizations.of(context).zoomOut,
                             onPressed: zoom <= 1
                                 ? null
                                 : () => setZoom(zoom - 1),
-                            icon: const Icon(LucideIcons.zoomOut, size: 16),
+                            icon: Icon(LucideIcons.zoomOut, size: 16),
                           ),
                           SizedBox(
                             width: 150,
                             child: Slider(
                               semanticFormatterCallback: (value) =>
-                                  '${value.round()} times',
+                                  AppLocalizations.of(context)
+                                      .zoomTimes(value.round()),
                               min: 1,
                               max: 12,
                               divisions: 11,
@@ -193,18 +196,18 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                             ),
                           ),
                           IconButton(
-                            tooltip: 'Zoom in',
+                            tooltip: AppLocalizations.of(context).zoomIn,
                             onPressed: zoom >= 12
                                 ? null
                                 : () => setZoom(zoom + 1),
-                            icon: const Icon(LucideIcons.zoomIn, size: 16),
+                            icon: Icon(LucideIcons.zoomIn, size: 16),
                           ),
                           SizedBox(
                             width: 32,
                             child: Text(
                               '${zoom.round()}×',
                               textAlign: TextAlign.end,
-                              style: const TextStyle(fontSize: 11),
+                              style: TextStyle(fontSize: 11),
                             ),
                           ),
                         ],
@@ -216,7 +219,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         controller: scroll,
                         thumbVisibility: true,
                         child: SingleChildScrollView(
-                          key: const Key('calendar-scroll'),
+                          key: Key('calendar-scroll'),
                           controller: scroll,
                           child: LayoutBuilder(
                             builder: (context, constraints) => SizedBox(
@@ -234,7 +237,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                       left: 16,
                                       child: Text(
                                         '${hour.toString().padLeft(2, '0')}:00',
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 10,
                                           height: 1.2,
                                           color: FloePalette.neutral600,
@@ -284,7 +287,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                 snapshot.generatedAt,
                                                 snapshot.timezoneOffsetSeconds,
                                               ),
-                                              style: const TextStyle(
+                                              style: TextStyle(
                                                 fontSize: 10,
                                                 color: FloePalette.primary600,
                                               ),
@@ -293,12 +296,12 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                           Container(
                                             width: 5,
                                             height: 5,
-                                            decoration: const BoxDecoration(
+                                            decoration: BoxDecoration(
                                               shape: BoxShape.circle,
                                               color: FloePalette.primary500,
                                             ),
                                           ),
-                                          const Expanded(
+                                          Expanded(
                                             child: Divider(
                                               color: FloePalette.primary500,
                                               height: 1,
@@ -325,36 +328,42 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                 color: FloePalette.neutral0.withValues(alpha: .55),
                 child: Center(
                   child: widget.loading
-                      ? const FloeDotSpinner()
+                      ? FloeDotSpinner()
                       : Padding(
-                          padding: const EdgeInsets.all(24),
+                          padding: EdgeInsets.all(24),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const FloeMascot(size: 38),
-                              const SizedBox(height: 20),
-                              const Text(
-                                'A little breathing room.',
+                              FloeMascot(size: 38),
+                              SizedBox(height: 20),
+                              Text(
+                                AppLocalizations.of(context)
+                                    .aLittleBreathingRoom,
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              SizedBox(height: 12),
                               Text(
                                 snapshot.calendar == null
-                                    ? '오늘은 아직 비어 있어요'
-                                    : 'No saved events for this day.',
+                                    ? AppLocalizations.of(context)
+                                          .yourDayIsStillEmpty
+                                    : AppLocalizations.of(context)
+                                          .noSavedEventsForThisDay,
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 13,
                                   color: FloePalette.neutral600,
                                 ),
                               ),
-                              const SizedBox(height: 20),
+                              SizedBox(height: 20),
                               OutlinedButton(
                                 onPressed: widget.onConnections,
-                                child: const Text('View connected calendars'),
+                                child: Text(
+                                  AppLocalizations.of(context)
+                                      .viewConnectedCalendars,
+                                ),
                               ),
                             ],
                           ),
@@ -383,7 +392,7 @@ class CalendarEventCard extends StatelessWidget {
     final tone = DayAppearance.tone(context, event.id, ItemTone.blue);
     final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
     final label =
-        '${event.title} · ${calendarRange(event, snapshot.timezoneOffsetSeconds)}';
+        '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds)}';
     return Tooltip(
       message: label,
       child: Semantics(
@@ -400,14 +409,14 @@ class CalendarEventCard extends StatelessWidget {
                 ? Align(
                     alignment: Alignment.centerLeft,
                     child: Container(
-                      margin: const EdgeInsets.only(left: 4),
+                      margin: EdgeInsets.only(left: 4),
                       width: 3,
                       height: height * .7,
                       color: tone.accent,
                     ),
                   )
                 : Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding: EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
                       children: [
                         Container(
@@ -418,7 +427,7 @@ class CalendarEventCard extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 10),
+                        SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -428,22 +437,23 @@ class CalendarEventCard extends StatelessWidget {
                                 event.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
                                   height: 1.2,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
                               if (height >= 42 * textScale) ...[
-                                const SizedBox(height: 3),
+                                SizedBox(height: 3),
                                 Text(
                                   calendarRange(
+                                    context,
                                     event,
                                     snapshot.timezoneOffsetSeconds,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 11,
                                     height: 1.2,
                                     color: FloePalette.neutral600,
@@ -452,12 +462,12 @@ class CalendarEventCard extends StatelessWidget {
                               ],
                               if (height >= 58 * textScale &&
                                   event.calendarName != null) ...[
-                                const SizedBox(height: 3),
+                                SizedBox(height: 3),
                                 Text(
                                   event.calendarName!,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 10,
                                     height: 1.2,
                                     color: FloePalette.neutral600,
@@ -468,7 +478,7 @@ class CalendarEventCard extends StatelessWidget {
                           ),
                         ),
                         if (event.externalId != null && height >= 30)
-                          const Padding(
+                          Padding(
                             padding: EdgeInsets.only(left: 6),
                             child: Icon(
                               LucideIcons.lockKeyhole,

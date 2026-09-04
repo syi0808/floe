@@ -88,7 +88,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     final override = Platform.environment['FLOE_CORE_LIBRARY_PATH'];
     if (override != null && override.isNotEmpty) return override;
     if (!Platform.isMacOS) {
-      throw UnsupportedError('FfiDayGateway는 현재 macOS만 지원합니다.');
+      throw UnsupportedError('FfiDayGateway currently supports macOS only.');
     }
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
     return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
@@ -255,7 +255,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     String operation,
     Map<String, dynamic> request,
   ) async {
-    if (_closed) throw StateError('FfiDayGateway가 이미 닫혔습니다.');
+    if (_closed) throw StateError('FfiDayGateway is already closed.');
     final reply = ReceivePort();
     _commands.send({
       'operation': operation,
@@ -267,7 +267,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     if (result['status'] != 'ok') {
       throw FfiDayGatewayException(
         'ffi',
-        result['message']?.toString() ?? 'Rust core 호출에 실패했습니다.',
+        result['message']?.toString() ?? 'The Rust core request failed.',
       );
     }
     return _unwrapEnvelope(result['response']! as String);
@@ -325,14 +325,14 @@ Map<String, dynamic> _unwrapEnvelope(String source) {
   if (envelope['schema_version'] != _protocolVersion) {
     throw const FfiDayGatewayException(
       'unsupported_version',
-      '지원하지 않는 Rust protocol 버전입니다.',
+      'Unsupported Rust protocol version.',
     );
   }
   if (envelope['status'] == 'error') {
     throw _exceptionFromEnvelope(envelope);
   }
   if (envelope['status'] != 'ok') {
-    throw const FormatException('알 수 없는 Rust response status입니다.');
+    throw const FormatException('Unknown Rust response status.');
   }
   return _asMap(envelope['data']);
 }
@@ -341,7 +341,7 @@ FfiDayGatewayException _exceptionFromEnvelope(Map<String, dynamic> envelope) {
   final error = envelope['error'] is Map ? _asMap(envelope['error']) : envelope;
   return FfiDayGatewayException(
     error['code']?.toString() ?? 'internal',
-    error['message']?.toString() ?? 'Rust core를 열 수 없습니다.',
+    error['message']?.toString() ?? 'Could not open Rust core.',
   );
 }
 
@@ -356,7 +356,7 @@ DaySnapshot _decodeSnapshot(Map<String, dynamic> json) {
   if (json['schema_version'] != _protocolVersion) {
     throw const FfiDayGatewayException(
       'unsupported_version',
-      '지원하지 않는 DaySnapshot 버전입니다.',
+      'Unsupported DaySnapshot version.',
     );
   }
   return DaySnapshot(
@@ -395,7 +395,7 @@ DayItem _decodeItem(Map<String, dynamic> json) {
       revision: json['revision']! as int,
       createdAt: createdAt,
     ),
-    _ => throw FormatException('알 수 없는 timeline item kind: ${json['kind']}'),
+    _ => throw FormatException('Unknown timeline item kind: ${json['kind']}'),
   };
 }
 
@@ -421,7 +421,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
     isAllDay: isAllDay,
     calendarName: source == null
         ? null
-        : source['calendar_name'] as String? ?? '이전 외부 연결',
+        : source['calendar_name'] as String? ?? 'Previous calendar connection',
     externalId: source?['external_id'] as String?,
     provider: source?['provider'] as String?,
     timezone: schedule['timezone'] as String?,
@@ -444,7 +444,7 @@ TaskPriority _priority(String value) => switch (value) {
   'low' => TaskPriority.low,
   'normal' => TaskPriority.normal,
   'high' => TaskPriority.high,
-  _ => throw FormatException('알 수 없는 task priority: $value'),
+  _ => throw FormatException('Unknown task priority: $value'),
 };
 
 DateTime? _optionalTimestamp(Object? value) =>
@@ -473,7 +473,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
   try {
     bindings = FloeNativeBindings(configuration['library_path']! as String);
     if (bindings.protocolVersion() != _protocolVersion) {
-      throw StateError('Rust protocol 버전이 Flutter와 일치하지 않습니다.');
+      throw StateError('Rust protocol version does not match Flutter.');
     }
     final path = (configuration['database_path']! as String).toNativeUtf8();
     final error = calloc<Pointer<Utf8>>();
@@ -484,7 +484,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
         final source = pointer == nullptr ? null : pointer.toDartString();
         if (pointer != nullptr) bindings.freeString(pointer);
         throw source == null
-            ? StateError('Rust core를 열 수 없습니다.')
+            ? StateError('Could not open Rust core.')
             : _exceptionFromEnvelope(_asMap(jsonDecode(source)));
       }
     } finally {
@@ -519,7 +519,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
             ? bindings.loadDay(handle, input)
             : bindings.execute(handle, input);
         if (output == nullptr) {
-          throw StateError('Rust core가 빈 response를 반환했습니다.');
+          throw StateError('Rust core returned an empty response.');
         }
         reply.send({'status': 'ok', 'response': output.toDartString()});
       } finally {

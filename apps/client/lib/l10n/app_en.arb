@@ -1,0 +1,265 @@
+{
+  "@@locale": "en",
+  "settings": "Settings",
+  "calendarCouldNotBeCollectedCheckAccess": "Calendar could not be collected. Check access and try again.",
+  "showingSavedEventsCalendarChangesCouldNot": "Showing saved events. Calendar changes could not be collected.",
+  "manageConnection": "Manage connection",
+  "taskCompleted": "Task completed.",
+  "taskMarkedIncomplete": "Task marked incomplete.",
+  "undo": "Undo",
+  "today": "Today",
+  "tasks": "Tasks",
+  "notes": "Notes",
+  "connect": "Connect",
+  "previousDay": "Previous day",
+  "nextDay": "Next day",
+  "refreshCalendar": "Refresh calendar",
+  "task": "Task",
+  "newTask": "New task",
+  "noTasksYet": "No tasks yet.",
+  "personal": "Personal",
+  "searchNotes": "Search notes",
+  "filter": "Filter",
+  "newNote": "New note",
+  "noNotesFound": "No notes found",
+  "tryADifferentSearchOrClearThe": "Try a different search or clear the current filter.",
+  "clearFilters": "Clear filters",
+  "writeAThoughtDecisionOrDetailTo": "Write a thought, decision, or detail to remember.",
+  "couldNotSavePleaseTryAgain": "Could not save. Please try again.",
+  "cancel": "Cancel",
+  "saving": "Saving…",
+  "saveNote": "Save note",
+  "noDescriptionYet": "No description yet.",
+  "due": "Due",
+  "noDueDate": "No due date",
+  "timeContext": "Time context",
+  "notScheduled": "Not scheduled",
+  "calendar": "Calendar",
+  "subtasks": "Subtasks",
+  "noSubtasksYet": "No subtasks yet.",
+  "addASubtask": "Add a subtask",
+  "floeSuggests": "Floe suggests",
+  "dismissSuggestion": "Dismiss suggestion",
+  "reviewTheContextBeforeStartingThisTask": "Review the context before starting this task?",
+  "reviewNow": "Review now",
+  "snooze": "Snooze",
+  "noLinkedNotes": "No linked notes.",
+  "updatedThisMorning": "Updated this morning",
+  "taskOptions": "Task options",
+  "markIncomplete": "Mark incomplete",
+  "completeTask": "Complete task",
+  "personalNote": "Personal note",
+  "close": "Close",
+  "thisIsYourOriginalNoteEditingIs": "This is your original note. Editing is not available yet.",
+  "reviewWithFloe": "Review with Floe",
+  "timeNotSet": "Time not set",
+  "todaySThought": "Today's thought",
+  "event": "Event",
+  "note": "Note",
+  "readOnlyEventManagedInItsOriginal": "Read-only event managed in its original calendar",
+  "deleteThisItem": "Delete this item?",
+  "delete": "Delete",
+  "dismissCapture": "Dismiss capture",
+  "aThoughtForYourDay": "A thought for your day...",
+  "saveCapture": "Save capture",
+  "couldNotLoadYourDay": "Could not load your day",
+  "anUnknownErrorOccurred": "An unknown error occurred.",
+  "tryAgain": "Try again",
+  "whereShouldThisGo": "Where should this go?",
+  "originalInput": "Original input",
+  "thought": "Thought",
+  "title": "Title",
+  "content": "Content",
+  "later": "Later",
+  "classifyAndAdd": "Classify and add",
+  "pleaseEnterSomeText": "Please enter some text.",
+  "endTimeMustBeAfterStartTime": "End time must be after start time.",
+  "start": "Start",
+  "end": "End",
+  "setADueDate": "Set a due date",
+  "thisFeatureIsNotAvailableYet": "This feature is not available yet.",
+  "allDay": "All day",
+  "zoomOut": "Zoom out",
+  "zoomIn": "Zoom in",
+  "aLittleBreathingRoom": "A little breathing room.",
+  "yourDayIsStillEmpty": "Your day is still empty.",
+  "noSavedEventsForThisDay": "No saved events for this day.",
+  "viewConnectedCalendars": "View connected calendars",
+  "savedInFloe": "Saved in Floe",
+  "sourceTimeZone": "Source time zone",
+  "localTime": "Local time",
+  "lastCollected": "Last collected",
+  "allDayBoundary": "All-day boundary",
+  "manageThisEventInItsOriginalCalendar": "Manage this event in its original calendar. Floe has no edit or delete action for imported events.",
+  "sourceDetails": "Source details",
+  "connectionPerson": "Connection / Person",
+  "externalOccurrenceId": "External occurrence ID",
+  "revision": "Revision",
+  "integration": "Integration",
+  "backToMyDay": "Back to my day",
+  "couldNotConnectOrCollectEventsCheck": "Could not connect or collect events. Check calendar access and try again.",
+  "connectCalendar": "Connect Calendar",
+  "eventsFromTheSelectedCalendarAreSaved": "Events from the selected calendar are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Selecting a different calendar replaces the previous local copy.",
+  "continueAction": "Continue",
+  "noCalendarsAreAvailableAddACalendar": "No calendars are available. Add a calendar in macOS Calendar first.",
+  "chooseACalendar": "Choose a calendar",
+  "calendarAccessWasDeniedOrRevokedAllow": "Calendar access was denied or revoked. Allow access in Settings, then try again.",
+  "theSelectedCalendarIsUnavailablePleaseReconnect": "The selected calendar is unavailable. Please reconnect.",
+  "couldNotCollectEventsShowingTheLast": "Could not collect events. Showing the last saved data.",
+  "notCollectedYet": "Not collected yet",
+  "macosCalendar": "macOS Calendar",
+  "calendarsAlreadyOnThisMac": "Calendars already on this Mac",
+  "bringYourCalendarIntoOneDayFloe": "Bring your calendar into one day. Floe reads events; it never creates, edits, or deletes anything in Calendar.",
+  "connectedCalendar": "Connected calendar",
+  "makeRoomForYourDay": "Make room for your day.",
+  "chooseACalendarToStartThisClient": "Choose a calendar to start. This client currently supports one calendar at a time.",
+  "person": "Person",
+  "youThisDevice": "You · this device",
+  "storedRangeLabel": "Stored range",
+  "storedRange": "{start} – {end} (exclusive)",
+  "lastSuccessfulRead": "Last successful read",
+  "refreshSelectedDay": "Refresh selected day",
+  "reconnectOrChange": "Reconnect or change",
+  "manageAccess": "Manage access",
+  "yourOwnRhythm": "Your own rhythm",
+  "aFewThingsThatBelongToYou": "A few things that belong to you, not your calendar.",
+  "noTasksForToday": "No tasks for today.",
+  "seeYourTasks": "See your tasks",
+  "aNoteToSelf": "A note to self",
+  "leaveALittleRoomBetweenThingsNot": "Leave a little room between things. Not every empty space needs filling.",
+  "savedInFloeStaysWhenYouDisconnect": "Saved in Floe · stays when you disconnect",
+  "wonderingWhereAnEventCameFromOpen": "Wondering where an event came from?\nOpen it to see its source and time zone.",
+  "backToConnections": "Back to connections",
+  "calendarIntegrationIsUnavailableInThisPreview": "Calendar integration is unavailable in this preview. Use the native macOS client to connect.",
+  "aClearBoundary": "A clear boundary.",
+  "eventsAreSavedOnThisMacFloe": "Events are saved on this Mac. Floe never creates, edits, or deletes events in your connected calendar.",
+  "macosCallsThisFullAccessEvenFor": "macOS calls this “Full Access,” even for reading. That OS permission does not enable writes in Floe.",
+  "whatHappensOffline": "What happens offline?",
+  "yourLastSavedEventsRemainVisibleWith": "Your last saved events remain visible, with their collection time. Revoking permission stops new reads; it does not erase the saved copy.",
+  "connections": "Connections",
+  "manageTheServicesThatBringContextTo": "Manage the services that bring context to your day.",
+  "availableServices": "Available services",
+  "bringEventsFromYourMacIntoYour": "Bring events from your Mac into your day.",
+  "loadingCalendar": "Loading calendar",
+  "dismissDialog": "Dismiss dialog",
+  "readOnly": "Read-only",
+  "couldNotStartFloeCore": "Could not start Floe Core",
+  "taskSummary": "{remaining, plural, =0{No tasks remaining} one{1 task remaining} other{{remaining} tasks remaining}} · {total} total",
+  "@taskSummary": {
+    "placeholders": {
+      "remaining": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  },
+  "notesCount": "All notes · {count}",
+  "@notesCount": {
+    "placeholders": {
+      "count": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  },
+  "dueAt": "Due {time}",
+  "@dueAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "overdueItem": "{label} · {subtitle} · Overdue",
+  "@overdueItem": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "subtitle": {
+        "type": "String"
+      }
+    }
+  },
+  "deleteItemLabel": "Delete {title}",
+  "@deleteItemLabel": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "deleteItemMessage": "“{title}” will be removed from your day.",
+  "@deleteItemMessage": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "capturedText": "Captured “{text}”",
+  "@capturedText": {
+    "placeholders": {
+      "text": {
+        "type": "String"
+      }
+    }
+  },
+  "lastCollectedCache": "Last collected {time} · saved data",
+  "@lastCollectedCache": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "@storedRange": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "exclusiveDate": "{date} · exclusive",
+  "@exclusiveDate": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "dateAndZone": "{date} · {zone}",
+  "@dateAndZone": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      },
+      "zone": {
+        "type": "String"
+      }
+    }
+  },
+  "zoomTimes": "{value, plural, one{1 time} other{{value} times}}",
+  "@zoomTimes": {
+    "placeholders": {
+      "value": {
+        "type": "int"
+      }
+    }
+  },
+  "connectedServicesCount": "Connected services · {count}",
+  "@connectedServicesCount": {
+    "placeholders": {
+      "count": {
+        "type": "int",
+        "format": "decimalPattern"
+      }
+    }
+  }
+}

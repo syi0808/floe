@@ -1,3 +1,4 @@
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 
 import 'app/floe_app.dart';
@@ -23,21 +24,26 @@ class _StartupErrorApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
     theme: FloeTheme.light,
-    home: Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.error_outline, size: 32),
-                const SizedBox(height: 16),
-                const Text('Floe Core를 시작하지 못했어요'),
-                const SizedBox(height: 8),
-                SelectableText(message, textAlign: TextAlign.center),
-              ],
+    locale: const Locale('en'),
+    supportedLocales: AppLocalizations.supportedLocales,
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    home: Builder(
+      builder: (context) => Scaffold(
+        body: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.error_outline, size: 32),
+                  SizedBox(height: 16),
+                  Text(AppLocalizations.of(context).couldNotStartFloeCore),
+                  SizedBox(height: 8),
+                  SelectableText(message, textAlign: TextAlign.center),
+                ],
+              ),
             ),
           ),
         ),

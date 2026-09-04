@@ -15,6 +15,14 @@ flutter pub get
 flutter run -d macos
 ```
 
+## Localization
+
+The client defaults to English regardless of the operating system language. App-owned UI strings live in `lib/l10n/app_en.arb`, including accessibility labels, errors, and parameterized/plural messages. User-authored tasks, notes, and imported calendar content are never translated.
+
+Run `flutter gen-l10n` after editing ARB resources; commit the generated `app_localizations*.dart` files with the resources. Add an `app_<locale>.arb` file to support another language and pass the desired locale to `FloeApp(locale: ...)`. Flutter delegates localize built-in controls and dialogs; `intl` formats dates and collection timestamps. The calendar grid intentionally uses 24-hour time. There is no language picker yet.
+
+Native macOS permission descriptions are English in `macos/Runner/Info.plist`; future native translations belong in localized `InfoPlist.strings` files, not Dart ARB resources. Gateway diagnostics also use English, while the UI presents localized recovery messages.
+
 ## Compare with the HTML prototype
 
 ```sh
@@ -55,7 +63,7 @@ the app's Application Support directory.
 
 ## Connected Calendar (S1)
 
-Connect → macOS Calendar offers **Calendar 연결**, calendar selection, and manual refresh of
+Connect → macOS Calendar offers **Connect Calendar**, calendar selection, and manual refresh of
 the selected date. Permission is requested only after the connection disclosure.
 EventKit requires full OS access even for reads; the approved exception does not
 enable external writes in Floe. Use **권한 설정** after denial or revocation.

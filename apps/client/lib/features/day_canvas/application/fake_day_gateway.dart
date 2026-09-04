@@ -14,7 +14,7 @@ final class FakeDayGateway implements DayGateway {
   @override
   Future<CaptureReceipt> submitCapture(String input, DayQuery query) async {
     final value = input.trim();
-    if (value.isEmpty) throw const FormatException('내용을 입력해 주세요.');
+    if (value.isEmpty) throw const FormatException('Please enter some text.');
     return CaptureReceipt(
       id: 'capture-${_nextId++}',
       originalInput: value,
@@ -84,7 +84,7 @@ final class FakeDayGateway implements DayGateway {
 
   String _required(String value) {
     final trimmed = value.trim();
-    if (trimmed.isEmpty) throw const FormatException('내용을 입력해 주세요.');
+    if (trimmed.isEmpty) throw const FormatException('Please enter some text.');
     return trimmed;
   }
 

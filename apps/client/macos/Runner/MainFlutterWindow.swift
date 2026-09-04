@@ -122,7 +122,7 @@ final class CalendarBridge {
       "timezone": (event.timeZone ?? TimeZone.current).identifier
     ]
     let title = event.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedTitle = title?.isEmpty == false ? title! : "(제목 없음)"
+    let normalizedTitle = title?.isEmpty == false ? title! : "(Untitled)"
     let revisionData = try! JSONSerialization.data(withJSONObject: [
       "title": normalizedTitle, "schedule": schedule,
       "modified": event.lastModifiedDate.map { formatter.string(from: $0) } ?? ""
@@ -137,6 +137,6 @@ final class CalendarBridge {
   }
 
   private func failure(_ code: String) -> FlutterError {
-    FlutterError(code: code, message: "Calendar 연결을 확인하고 다시 시도해 주세요.", details: nil)
+    FlutterError(code: code, message: "Check your Calendar connection and try again.", details: nil)
   }
 }

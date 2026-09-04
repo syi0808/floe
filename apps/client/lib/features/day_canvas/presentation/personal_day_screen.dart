@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -111,8 +113,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                       top: narrow ? 10 : 30,
                       right: narrow ? 8 : 36,
                       child: FloeButton.icon(
-                        tooltip: '설정',
-                        style: const ButtonStyle(
+                        tooltip: AppLocalizations.of(context).settings,
+                        style: ButtonStyle(
                           backgroundColor: WidgetStatePropertyAll(
                             Colors.transparent,
                           ),
@@ -122,7 +124,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                         ),
                         onPressed: () =>
                             _selectDestination(_DestinationView.connections),
-                        icon: const Icon(LucideIcons.settings, size: 20),
+                        icon: Icon(LucideIcons.settings, size: 20),
                       ),
                     ),
                   ],
@@ -159,7 +161,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           date: controller.query.date,
           generatedAt: controller.query.now,
           timezoneOffsetSeconds: controller.query.timezoneOffsetSeconds,
-          items: const [],
+          items: [],
         );
     final selectedTask = _taskById(snapshot, selectedTaskId);
     if (selectedTask != null) {
@@ -183,24 +185,26 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
               _DayToolbar(controller, narrow: narrow),
               if (snapshot.calendar?.error != null)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
+                  padding: EdgeInsets.only(bottom: 16),
                   child: FloeSquircle(
                     fill: FloePalette.amber50,
-                    padding: const EdgeInsets.all(16),
+                    padding: EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           snapshot.calendar!.lastSuccessAt == null
-                              ? 'Calendar could not be collected. Check access and try again.'
-                              : 'Showing saved events. Calendar changes could not be collected.',
-                          style: const TextStyle(
+                              ? AppLocalizations.of(context)
+                                    .calendarCouldNotBeCollectedCheckAccess
+                              : AppLocalizations.of(context)
+                                    .showingSavedEventsCalendarChangesCouldNot,
+                          style: TextStyle(
                             fontSize: 13,
                             color: FloePalette.neutral600,
                           ),
                         ),
                         FloeTextLink(
-                          label: 'Manage connection',
+                          label: AppLocalizations.of(context).manageConnection,
                           onPressed: () =>
                               _selectDestination(_DestinationView.connections),
                         ),
@@ -218,7 +222,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             onOpen: (task) => setState(() => selectedTaskId = task.id),
             onDelete: controller.deleteItem,
           ),
-          _DestinationView.connections => const SizedBox.shrink(),
+          _DestinationView.connections => SizedBox.shrink(),
           _DestinationView.notes => _NotesScreen(
             notes: snapshot.items.whereType<NoteItem>().toList(),
             narrow: narrow,
@@ -232,7 +236,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final primary = CalendarAgenda(
-      key: const PageStorageKey('calendar-agenda'),
+      key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
@@ -260,7 +264,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(flex: 7, child: primary),
-            const SizedBox(width: 24),
+            SizedBox(width: 24),
             SizedBox(
               width: ((constraints.maxWidth - 24) * 0.3).clamp(
                 288,
@@ -288,9 +292,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(completed ? '할 일을 완료했어요.' : '완료를 취소했어요.'),
+          content: Text(
+            completed
+                ? AppLocalizations.of(context).taskCompleted
+                : AppLocalizations.of(context).taskMarkedIncomplete,
+          ),
           action: SnackBarAction(
-            label: '실행 취소',
+            label: AppLocalizations.of(context).undo,
             onPressed: () => controller.setTaskCompleted(task, !completed),
           ),
         ),
@@ -353,7 +361,7 @@ class _AdaptiveNavigation extends StatelessWidget {
         child: FloeSquircle(
           size: FloeSquircleSize.lg,
           elevation: 4,
-          padding: const EdgeInsets.all(7),
+          padding: EdgeInsets.all(7),
           child: Row(
             children: [
               for (final view in _DestinationView.values)
@@ -376,16 +384,16 @@ class _AdaptiveNavigation extends StatelessWidget {
       width: 64,
       child: Column(
         children: [
-          const SizedBox(height: 4),
-          const FloeMascot(size: 40),
-          const SizedBox(height: 32),
+          SizedBox(height: 4),
+          FloeMascot(size: 40),
+          SizedBox(height: 32),
           for (final view in _DestinationView.values) ...[
             _DestinationButton(
               view: view,
               selected: selected == view,
               onPressed: () => onSelected(view),
             ),
-            const SizedBox(height: FloeSpace.sm),
+            SizedBox(height: FloeSpace.sm),
           ],
         ],
       ),
@@ -415,10 +423,10 @@ class _DestinationButtonState extends State<_DestinationButton> {
   _DestinationView get view => widget.view;
 
   String get label => switch (view) {
-    _DestinationView.today => 'Today',
-    _DestinationView.tasks => 'Tasks',
-    _DestinationView.notes => 'Notes',
-    _DestinationView.connections => 'Connect',
+    _DestinationView.today => AppLocalizations.of(context).today,
+    _DestinationView.tasks => AppLocalizations.of(context).tasks,
+    _DestinationView.notes => AppLocalizations.of(context).notes,
+    _DestinationView.connections => AppLocalizations.of(context).connect,
   };
 
   IconData get icon => switch (view) {
@@ -487,7 +495,9 @@ class _DayToolbar extends StatelessWidget {
           FloeSquircle(
             size: FloeSquircleSize.md,
             child: FloeButton.icon(
-              tooltip: direction == -1 ? '이전 날' : '다음 날',
+              tooltip: direction == -1
+                  ? AppLocalizations.of(context).previousDay
+                  : AppLocalizations.of(context).nextDay,
               constraints: BoxConstraints.tightFor(
                 width: compact ? 40 : 44,
                 height: compact ? 40 : 44,
@@ -512,7 +522,7 @@ class _DayToolbar extends StatelessWidget {
         SizedBox(width: narrow ? 2 : 14),
         Flexible(
           child: Text(
-            _date(controller.query.date),
+            _date(context, controller.query.date),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: FloeType.headline.copyWith(
@@ -525,7 +535,7 @@ class _DayToolbar extends StatelessWidget {
         FloeButton.text(
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,
-            minimumSize: const Size(0, 40),
+            minimumSize: Size(0, 40),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             textStyle: TextStyle(
               fontFamily: 'Pretendard',
@@ -534,21 +544,21 @@ class _DayToolbar extends StatelessWidget {
             ),
           ),
           onPressed: controller.goToday,
-          child: const Text('Today'),
+          child: Text(AppLocalizations.of(context).today),
         ),
       ],
     );
     return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 16),
+      padding: EdgeInsets.only(top: 12, bottom: 16),
       child: Row(
         children: [
           Expanded(child: leading),
           IconButton(
-            tooltip: 'Refresh calendar',
+            tooltip: AppLocalizations.of(context).refreshCalendar,
             onPressed: controller.loadState == DayLoadState.loading
                 ? null
                 : controller.refresh,
-            icon: const Icon(LucideIcons.refreshCw, size: 18),
+            icon: Icon(LucideIcons.refreshCw, size: 18),
           ),
         ],
       ),
@@ -584,10 +594,14 @@ class _TasksScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('할 일', style: FloeType.display),
-                  const SizedBox(height: FloeSpace.xs),
                   Text(
-                    '남은 할 일 $remaining개 · 전체 ${tasks.length}개',
+                    AppLocalizations.of(context).task,
+                    style: FloeType.display,
+                  ),
+                  SizedBox(height: FloeSpace.xs),
+                  Text(
+                    AppLocalizations.of(context)
+                        .taskSummary(remaining, tasks.length),
                     style: FloeType.body,
                   ),
                 ],
@@ -595,22 +609,25 @@ class _TasksScreen extends StatelessWidget {
             ),
             FloeButton.filled(
               onPressed: () => _showComingSoon(context),
-              icon: const Icon(Icons.add),
-              child: const Text('새 할 일'),
+              icon: Icon(Icons.add),
+              child: Text(AppLocalizations.of(context).newTask),
             ),
           ],
         ),
-        const SizedBox(height: FloeSpace.xl),
+        SizedBox(height: FloeSpace.xl),
         FloeSquircle(
-          padding: const EdgeInsets.symmetric(
+          padding: EdgeInsets.symmetric(
             horizontal: FloeSpace.lg,
             vertical: FloeSpace.sm,
           ),
           child: tasks.isEmpty
-              ? const Padding(
+              ? Padding(
                   padding: EdgeInsets.symmetric(vertical: FloeSpace.xxxl),
                   child: Center(
-                    child: Text('아직 할 일이 없어요.', style: FloeType.body),
+                    child: Text(
+                      AppLocalizations.of(context).noTasksYet,
+                      style: FloeType.body,
+                    ),
                   ),
                 )
               : Column(
@@ -625,7 +642,7 @@ class _TasksScreen extends StatelessWidget {
                         onOpen: () => onOpen(task),
                       ),
                       if (index < tasks.length - 1)
-                        const Divider(height: 1, indent: 56),
+                        Divider(height: 1, indent: 56),
                     ],
                   ],
                 ),
@@ -689,33 +706,25 @@ class _NotesScreenState extends State<_NotesScreen> {
           ].any((text) => text.toLowerCase().contains(query));
     }).toList();
     final heading = Text(
-      'All notes · ${widget.notes.length}',
-      style: const TextStyle(
-        fontSize: 18,
-        height: 1.2,
-        fontWeight: FontWeight.w600,
-      ),
+      AppLocalizations.of(context).notesCount(widget.notes.length),
+      style: TextStyle(fontSize: 18, height: 1.2, fontWeight: FontWeight.w600),
     );
     final searchField = FloeSquircle(
       size: FloeSquircleSize.field,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: EdgeInsets.symmetric(horizontal: 14),
       child: SizedBox(
         height: 50,
         child: Row(
           children: [
-            const Icon(
-              LucideIcons.search,
-              size: 19,
-              color: FloePalette.neutral600,
-            ),
-            const SizedBox(width: 10),
+            Icon(LucideIcons.search, size: 19, color: FloePalette.neutral600),
+            SizedBox(width: 10),
             Expanded(
               child: TextField(
                 controller: search,
                 onChanged: (_) => setState(() {}),
-                style: const TextStyle(fontSize: 16),
-                decoration: const InputDecoration(
-                  hintText: 'Search notes',
+                style: TextStyle(fontSize: 16),
+                decoration: InputDecoration(
+                  hintText: AppLocalizations.of(context).searchNotes,
                   filled: false,
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
@@ -734,19 +743,19 @@ class _NotesScreenState extends State<_NotesScreen> {
         backgroundColor: personalOnly
             ? FloePalette.primary100
             : FloePalette.neutral0,
-        side: const BorderSide(color: FloePalette.neutral200),
+        side: BorderSide(color: FloePalette.neutral200),
       ),
       onPressed: () => setState(() => personalOnly = !personalOnly),
-      icon: const Icon(LucideIcons.filter, size: 18),
-      child: const Text('Filter'),
+      icon: Icon(LucideIcons.filter, size: 18),
+      child: Text(AppLocalizations.of(context).filter),
     );
     final create = FloeButton.filled(
       style: FilledButton.styleFrom(
         shape: floeSquircleBorder(FloeSquircleSize.md),
       ),
       onPressed: widget.pending ? null : _create,
-      icon: const Icon(LucideIcons.plus, size: 18),
-      child: const Text('New note'),
+      icon: Icon(LucideIcons.plus, size: 18),
+      child: Text(AppLocalizations.of(context).newNote),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -758,13 +767,13 @@ class _NotesScreenState extends State<_NotesScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     heading,
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     searchField,
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     Row(
                       children: [
                         Expanded(child: filter),
-                        const SizedBox(width: 10),
+                        SizedBox(width: 10),
                         Expanded(child: create),
                       ],
                     ),
@@ -774,9 +783,9 @@ class _NotesScreenState extends State<_NotesScreen> {
                   children: [
                     Expanded(child: heading),
                     SizedBox(width: 240, child: searchField),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     filter,
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     create,
                   ],
                 ),
@@ -784,16 +793,19 @@ class _NotesScreenState extends State<_NotesScreen> {
         SizedBox(height: widget.narrow ? 4 : 8),
         if (notes.isEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 120),
+            padding: EdgeInsets.symmetric(vertical: 120),
             child: Center(
               child: Column(
                 children: [
-                  const Icon(LucideIcons.search, size: 24),
-                  const SizedBox(height: 12),
-                  const Text('No notes found', style: FloeType.headline),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Try a different search or clear the current filter.',
+                  Icon(LucideIcons.search, size: 24),
+                  SizedBox(height: 12),
+                  Text(
+                    AppLocalizations.of(context).noNotesFound,
+                    style: FloeType.headline,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    AppLocalizations.of(context).tryADifferentSearchOrClearThe,
                     textAlign: TextAlign.center,
                   ),
                   FloeButton.text(
@@ -801,7 +813,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                       search.clear();
                       personalOnly = false;
                     }),
-                    child: const Text('Clear filters'),
+                    child: Text(AppLocalizations.of(context).clearFilters),
                   ),
                 ],
               ),
@@ -880,11 +892,11 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
   Widget build(BuildContext context) => PopScope(
     canPop: !pending,
     child: AlertDialog(
-      title: const Text('New note'),
+      title: Text(AppLocalizations.of(context).newNote),
       content: SizedBox(
         width: 420,
         child: TextField(
-          key: const Key('new-note-content'),
+          key: Key('new-note-content'),
           controller: content,
           autofocus: true,
           enabled: !pending,
@@ -892,19 +904,26 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
           maxLines: 8,
           onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
-            hintText: 'Write a thought, decision, or detail to remember.',
-            errorText: failed ? 'Could not save. Please try again.' : null,
+            hintText: AppLocalizations.of(context)
+                .writeAThoughtDecisionOrDetailTo,
+            errorText: failed
+                ? AppLocalizations.of(context).couldNotSavePleaseTryAgain
+                : null,
           ),
         ),
       ),
       actions: [
         FloeButton.text(
           onPressed: pending ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(AppLocalizations.of(context).cancel),
         ),
         FloeButton.filled(
           onPressed: pending || content.text.trim().isEmpty ? null : _save,
-          child: Text(pending ? 'Saving…' : 'Save note'),
+          child: Text(
+            pending
+                ? AppLocalizations.of(context).saving
+                : AppLocalizations.of(context).saveNote,
+          ),
         ),
       ],
     ),
@@ -937,10 +956,11 @@ class _NotePreviewCard extends StatelessWidget {
                   Row(
                     children: [
                       _ToneDot(color: tone.accent),
-                      const SizedBox(width: 10),
+                      SizedBox(width: 10),
                       Text(
-                        appearance?.category ?? 'Personal',
-                        style: const TextStyle(
+                        appearance?.category ??
+                            AppLocalizations.of(context).personal,
+                        style: TextStyle(
                           fontSize: 12,
                           height: 1.2,
                           fontWeight: FontWeight.w600,
@@ -949,7 +969,7 @@ class _NotePreviewCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 20),
+                  SizedBox(height: 20),
                   Text(
                     note.title,
                     style: FloeType.headline.copyWith(
@@ -957,16 +977,16 @@ class _NotePreviewCard extends StatelessWidget {
                       height: 1.2,
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  SizedBox(height: 14),
                   Text(
                     appearance?.excerpt ?? '',
                     style: FloeType.body.copyWith(height: 1.65),
                   ),
-                  const Spacer(),
-                  const SizedBox(height: 24),
+                  Spacer(),
+                  SizedBox(height: 24),
                   Text(
-                    appearance?.timestamp ?? _date(note.createdAt),
-                    style: const TextStyle(
+                    appearance?.timestamp ?? _date(context, note.createdAt),
+                    style: TextStyle(
                       fontSize: 12,
                       height: 1.2,
                       color: FloePalette.neutral500,
@@ -1010,7 +1030,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               horizontal: MediaQuery.sizeOf(context).width <= 430 ? 21 : 23,
               vertical: MediaQuery.sizeOf(context).width <= 430 ? 25 : 27,
             )
-          : const EdgeInsets.all(43),
+          : EdgeInsets.all(43),
       child: ConstrainedBox(
         constraints: BoxConstraints(minHeight: widget.narrow ? 0 : 634),
         child: Column(
@@ -1018,12 +1038,15 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           children: [
             Row(
               children: [
-                const _ToneDot(color: FloePalette.blue500),
-                const SizedBox(width: 12),
-                Text('Task', style: FloeType.body.copyWith(height: 1.15)),
+                _ToneDot(color: FloePalette.blue500),
+                SizedBox(width: 12),
+                Text(
+                  AppLocalizations.of(context).task,
+                  style: FloeType.body.copyWith(height: 1.15),
+                ),
               ],
             ),
-            const SizedBox(height: 18),
+            SizedBox(height: 18),
             Text(
               widget.task.title,
               style: TextStyle(
@@ -1034,51 +1057,60 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                 color: FloePalette.neutral950,
               ),
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: 24),
             Text(
-              appearance?.description ?? '아직 설명이 없어요.',
+              appearance?.description ??
+                  AppLocalizations.of(context).noDescriptionYet,
               style: FloeType.body.copyWith(fontSize: 16, height: 1.65),
             ),
-            const SizedBox(height: 34),
+            SizedBox(height: 34),
             _LabeledValue(
-              label: 'Due',
-              value: widget.task.deadline == null ? 'No due date' : 'Today',
+              label: AppLocalizations.of(context).due,
+              value: widget.task.deadline == null
+                  ? AppLocalizations.of(context).noDueDate
+                  : AppLocalizations.of(context).today,
               color: FloePalette.primary600,
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _LabeledValue(
-              label: 'Time context',
-              value: appearance?.timeContext ?? 'Not scheduled',
+              label: AppLocalizations.of(context).timeContext,
+              value:
+                  appearance?.timeContext ??
+                  AppLocalizations.of(context).notScheduled,
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             _LabeledValue(
-              label: 'Calendar',
-              value: appearance?.project ?? 'Personal',
+              label: AppLocalizations.of(context).calendar,
+              value:
+                  appearance?.project ?? AppLocalizations.of(context).personal,
               color: FloePalette.mint700,
             ),
-            const SizedBox(height: 32),
-            const Divider(height: 1, color: FloePalette.neutral200),
-            const SizedBox(height: 26),
-            const Text(
-              'Subtasks',
+            SizedBox(height: 32),
+            Divider(height: 1, color: FloePalette.neutral200),
+            SizedBox(height: 26),
+            Text(
+              AppLocalizations.of(context).subtasks,
               style: TextStyle(
                 fontSize: 17,
                 height: 1.2,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             if (appearance == null || appearance.subtasks.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 20),
-                child: Text('아직 하위 작업이 없어요.', style: FloeType.body),
+                child: Text(
+                  AppLocalizations.of(context).noSubtasksYet,
+                  style: FloeType.body,
+                ),
               ),
             for (final subtask
                 in appearance?.subtasks ??
                     <({String title, String duration, bool done})>[])
               Container(
-                constraints: const BoxConstraints(minHeight: 62),
-                decoration: const BoxDecoration(
+                constraints: BoxConstraints(minHeight: 62),
+                decoration: BoxDecoration(
                   border: Border(
                     bottom: BorderSide(color: FloePalette.neutral200),
                   ),
@@ -1108,10 +1140,10 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: 8),
                     Text(
                       subtask.duration,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
                         color: FloePalette.neutral600,
                       ),
@@ -1119,7 +1151,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   ],
                 ),
               ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
               child: FloeButton.text(
@@ -1128,8 +1160,8 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   padding: EdgeInsets.zero,
                   foregroundColor: FloePalette.primary600,
                 ),
-                icon: const Icon(LucideIcons.plus, size: 18),
-                child: const Text('Add a subtask'),
+                icon: Icon(LucideIcons.plus, size: 18),
+                child: Text(AppLocalizations.of(context).addASubtask),
               ),
             ),
           ],
@@ -1147,11 +1179,11 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               children: [
                 Row(
                   children: [
-                    const FloeMascot(size: 38),
-                    const SizedBox(width: 10),
-                    const Expanded(
+                    FloeMascot(size: 38),
+                    SizedBox(width: 10),
+                    Expanded(
                       child: Text(
-                        'Floe suggests',
+                        AppLocalizations.of(context).floeSuggests,
                         style: TextStyle(
                           fontSize: 13,
                           color: FloePalette.primary600,
@@ -1162,26 +1194,27 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     FloeSquircle(
                       size: FloeSquircleSize.md,
                       child: FloeButton.icon(
-                        tooltip: 'Dismiss suggestion',
+                        tooltip: AppLocalizations.of(context).dismissSuggestion,
                         style: IconButton.styleFrom(
-                          fixedSize: const Size.square(36),
-                          minimumSize: const Size.square(36),
+                          fixedSize: Size.square(36),
+                          minimumSize: Size.square(36),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         onPressed: () =>
                             setState(() => suggestionVisible = false),
-                        icon: const Icon(LucideIcons.x, size: 18),
+                        icon: Icon(LucideIcons.x, size: 18),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
+                SizedBox(height: 18),
                 Text(
                   appearance?.suggestion ??
-                      'Review the context before starting this task?',
+                      AppLocalizations.of(context)
+                          .reviewTheContextBeforeStartingThisTask,
                   style: FloeType.body.copyWith(height: 1.55),
                 ),
-                const SizedBox(height: 18),
+                SizedBox(height: 18),
                 Wrap(
                   alignment: WrapAlignment.end,
                   spacing: 12,
@@ -1189,21 +1222,21 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     FloeButton.filled(
                       onPressed: () =>
                           setState(() => suggestionVisible = false),
-                      child: const Text('Review now'),
+                      child: Text(AppLocalizations.of(context).reviewNow),
                     ),
                     FloeButton.text(
                       style: TextButton.styleFrom(
-                        minimumSize: const Size(0, 40),
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        minimumSize: Size(0, 40),
+                        padding: EdgeInsets.symmetric(horizontal: 12),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        textStyle: const TextStyle(
+                        textStyle: TextStyle(
                           fontFamily: 'Pretendard',
                           fontSize: 13,
                         ),
                       ),
                       onPressed: () =>
                           setState(() => suggestionVisible = false),
-                      child: const Text('Snooze'),
+                      child: Text(AppLocalizations.of(context).snooze),
                     ),
                   ],
                 ),
@@ -1217,22 +1250,23 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           borderColor: FloePalette.primary100,
           padding: EdgeInsets.all(widget.narrow ? 23 : 27),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(),
+            constraints: BoxConstraints(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Notes',
+                Text(
+                  AppLocalizations.of(context).notes,
                   style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 18),
+                SizedBox(height: 18),
                 Text(
-                  appearance?.note ?? '연결된 노트가 없어요.',
+                  appearance?.note ??
+                      AppLocalizations.of(context).noLinkedNotes,
                   style: FloeType.body.copyWith(height: 1.7),
                 ),
-                const SizedBox(height: 20),
-                const Text(
-                  'Updated this morning',
+                SizedBox(height: 20),
+                Text(
+                  AppLocalizations.of(context).updatedThisMorning,
                   style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
                 ),
               ],
@@ -1245,14 +1279,14 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: EdgeInsets.symmetric(vertical: 12),
           child: Row(
             children: [
-              const Spacer(),
+              Spacer(),
               FloeSquircle(
                 size: FloeSquircleSize.md,
                 child: PopupMenuButton<bool>(
-                  tooltip: 'Task options',
+                  tooltip: AppLocalizations.of(context).taskOptions,
                   onSelected: (completed) =>
                       widget.onComplete(widget.task, completed),
                   itemBuilder: (context) => [
@@ -1260,13 +1294,13 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                       value: !widget.task.isCompleted,
                       child: Text(
                         widget.task.isCompleted
-                            ? 'Mark incomplete'
-                            : 'Complete task',
+                            ? AppLocalizations.of(context).markIncomplete
+                            : AppLocalizations.of(context).completeTask,
                       ),
                     ),
                   ],
                   shape: floeSquircleBorder(FloeSquircleSize.md),
-                  icon: const Icon(LucideIcons.ellipsis, size: 21),
+                  icon: Icon(LucideIcons.ellipsis, size: 21),
                 ),
               ),
             ],
@@ -1288,7 +1322,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(child: primary),
-                const SizedBox(width: 24),
+                SizedBox(width: 24),
                 SizedBox(
                   width: ((constraints.maxWidth - 24) * .3).clamp(
                     288,
@@ -1357,38 +1391,41 @@ class _NoteDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FloeSquircle(
     size: FloeSquircleSize.xl,
-    padding: const EdgeInsets.all(FloeSpace.xl),
+    padding: EdgeInsets.all(FloeSpace.xl),
     child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 640),
+      constraints: BoxConstraints(maxWidth: 640),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text('개인 노트', style: FloeType.label),
-              const Spacer(),
+              Text(
+                AppLocalizations.of(context).personalNote,
+                style: FloeType.label,
+              ),
+              Spacer(),
               FloeButton.icon(
-                tooltip: '닫기',
+                tooltip: AppLocalizations.of(context).close,
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close),
+                icon: Icon(Icons.close),
               ),
             ],
           ),
-          const SizedBox(height: FloeSpace.base),
+          SizedBox(height: FloeSpace.base),
           Text(note.title, style: FloeType.display),
-          const SizedBox(height: FloeSpace.sm),
-          Text(_date(note.createdAt), style: FloeType.numeric),
-          const SizedBox(height: FloeSpace.xl),
-          const Text(
-            '사용자가 남긴 원문입니다. 편집 기능은 다음 단계에서 연결됩니다.',
+          SizedBox(height: FloeSpace.sm),
+          Text(_date(context, note.createdAt), style: FloeType.numeric),
+          SizedBox(height: FloeSpace.xl),
+          Text(
+            AppLocalizations.of(context).thisIsYourOriginalNoteEditingIs,
             style: FloeType.bodyLarge,
           ),
-          const SizedBox(height: FloeSpace.xl),
+          SizedBox(height: FloeSpace.xl),
           FloeButton.outlined(
             onPressed: () => _showComingSoon(context),
-            icon: const FloeMascot(size: 24),
-            child: const Text('Floe와 함께 보기'),
+            icon: FloeMascot(size: 24),
+            child: Text(AppLocalizations.of(context).reviewWithFloe),
           ),
         ],
       ),
@@ -1402,7 +1439,7 @@ class _ToneDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-    child: const SizedBox.square(dimension: 10),
+    child: SizedBox.square(dimension: 10),
   );
 }
 
@@ -1430,15 +1467,17 @@ class _DayRow extends StatelessWidget {
         task.deadline?.isBefore(snapshot.generatedAt) == true;
     final subtitle = switch (item) {
       EventItem(:final startsAt, :final endsAt) =>
-        '${_time(startsAt)}–${_time(endsAt)}',
+        '${_time(context, startsAt)}–${_time(context, endsAt)}',
       TaskItem(:final deadline) =>
-        deadline == null ? '시간 미정' : '마감 ${_time(deadline)}',
-      NoteItem() => '오늘의 생각',
+        deadline == null
+            ? AppLocalizations.of(context).timeNotSet
+            : AppLocalizations.of(context).dueAt(_time(context, deadline)),
+      NoteItem() => AppLocalizations.of(context).todaySThought,
     };
     final label = switch (item) {
-      EventItem() => '일정',
-      TaskItem() => '할 일',
-      NoteItem() => '노트',
+      EventItem() => AppLocalizations.of(context).event,
+      TaskItem() => AppLocalizations.of(context).task,
+      NoteItem() => AppLocalizations.of(context).note,
     };
     return ListTile(
       onTap: onOpen,
@@ -1476,20 +1515,23 @@ class _DayRow extends StatelessWidget {
         ),
       ),
       subtitle: Text(
-        overdue ? '$label · $subtitle · 기한 지남' : '$label · $subtitle',
+        overdue
+            ? AppLocalizations.of(context).overdueItem(label, subtitle)
+            : '$label · $subtitle',
         style: FloeType.body.copyWith(
           color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
         ),
       ),
       trailing: item is EventItem && (item as EventItem).externalId != null
-          ? const Tooltip(
-              message: '외부 캘린더에서 관리하는 읽기 전용 일정',
+          ? Tooltip(
+              message: AppLocalizations.of(context)
+                  .readOnlyEventManagedInItsOriginal,
               child: Icon(Icons.lock_outline, size: 18),
             )
           : FloeButton.icon(
-              tooltip: '${item.title} 삭제',
+              tooltip: AppLocalizations.of(context).deleteItemLabel(item.title),
               onPressed: disabled ? null : () => _confirmDelete(context),
-              icon: const Icon(Icons.more_horiz, size: 20),
+              icon: Icon(Icons.more_horiz, size: 20),
             ),
     );
   }
@@ -1498,17 +1540,19 @@ class _DayRow extends StatelessWidget {
     final confirmed = await showFloeDialog<bool>(
       context,
       (context) => AlertDialog(
-        title: const Text('항목을 삭제할까요?'),
-        content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
+        title: Text(AppLocalizations.of(context).deleteThisItem),
+        content: Text(
+          AppLocalizations.of(context).deleteItemMessage(item.title),
+        ),
         actions: [
           FloeButton.text(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
+            child: Text(AppLocalizations.of(context).cancel),
           ),
           FloeButton.filled(
             onPressed: () => Navigator.pop(context, true),
             style: FloeTheme.destructiveButtonStyle,
-            child: const Text('삭제'),
+            child: Text(AppLocalizations.of(context).delete),
           ),
         ],
       ),
@@ -1534,7 +1578,7 @@ class _CaptureBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FloeSquircle(
     size: FloeSquircleSize.field,
-    padding: const EdgeInsets.fromLTRB(18, 9, 11, 9),
+    padding: EdgeInsets.fromLTRB(18, 9, 11, 9),
     child: capturedText != null
         ? Semantics(
             liveRegion: true,
@@ -1542,23 +1586,23 @@ class _CaptureBar extends StatelessWidget {
               height: 48,
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     LucideIcons.check,
                     size: 18,
                     color: FloePalette.primary600,
                   ),
-                  const SizedBox(width: 14),
+                  SizedBox(width: 14),
                   Expanded(
                     child: Text(
-                      'Captured “$capturedText”',
+                      AppLocalizations.of(context).capturedText(capturedText!),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   FloeButton.icon(
-                    tooltip: 'Dismiss capture',
+                    tooltip: AppLocalizations.of(context).dismissCapture,
                     onPressed: dismiss,
-                    icon: const Icon(LucideIcons.x, size: 17),
+                    icon: Icon(LucideIcons.x, size: 17),
                   ),
                 ],
               ),
@@ -1566,15 +1610,11 @@ class _CaptureBar extends StatelessWidget {
           )
         : Row(
             children: [
-              const Icon(
-                LucideIcons.plus,
-                size: 22,
-                color: FloePalette.primary600,
-              ),
-              const SizedBox(width: 14),
+              Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
+              SizedBox(width: 14),
               Expanded(
                 child: TextField(
-                  key: const Key('capture-field'),
+                  key: Key('capture-field'),
                   controller: textController,
                   enabled: !pending,
                   style: TextStyle(
@@ -1583,8 +1623,8 @@ class _CaptureBar extends StatelessWidget {
                   onSubmitted: (value) {
                     if (!pending && value.trim().isNotEmpty) submit();
                   },
-                  decoration: const InputDecoration(
-                    hintText: 'A thought for your day...',
+                  decoration: InputDecoration(
+                    hintText: AppLocalizations.of(context).aThoughtForYourDay,
                     hintStyle: TextStyle(color: FloePalette.neutral500),
                     filled: false,
                     border: InputBorder.none,
@@ -1594,13 +1634,13 @@ class _CaptureBar extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              SizedBox(width: 14),
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: textController,
                 builder: (context, value, _) {
                   final enabled = !pending && value.text.trim().isNotEmpty;
                   return Tooltip(
-                    message: '캡처 저장',
+                    message: AppLocalizations.of(context).saveCapture,
                     child: SizedBox.square(
                       dimension: 44,
                       child: FloeButton.outlined(
@@ -1610,13 +1650,13 @@ class _CaptureBar extends StatelessWidget {
                         ),
                         onPressed: enabled ? submit : null,
                         child: pending
-                            ? const SizedBox.square(
+                            ? SizedBox.square(
                                 dimension: 16,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(LucideIcons.arrowRight, size: 19),
+                            : Icon(LucideIcons.arrowRight, size: 19),
                       ),
                     ),
                   );
@@ -1634,23 +1674,23 @@ class _FailureDay extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
     child: FloeSquircle(
-      padding: const EdgeInsets.all(FloeSpace.xl),
+      padding: EdgeInsets.all(FloeSpace.xl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline, color: FloePalette.error600),
-          const SizedBox(height: 12),
-          const Text('하루 데이터를 불러오지 못했어요'),
-          const SizedBox(height: 8),
+          Icon(Icons.error_outline, color: FloePalette.error600),
+          SizedBox(height: 12),
+          Text(AppLocalizations.of(context).couldNotLoadYourDay),
+          SizedBox(height: 8),
           SelectableText(
-            message ?? '알 수 없는 오류입니다.',
+            message ?? AppLocalizations.of(context).anUnknownErrorOccurred,
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: 16),
           FloeButton.filled(
             onPressed: retry,
-            icon: const Icon(Icons.refresh),
-            child: const Text('다시 불러오기'),
+            icon: Icon(Icons.refresh),
+            child: Text(AppLocalizations.of(context).tryAgain),
           ),
         ],
       ),
@@ -1664,21 +1704,24 @@ class _ErrorNotice extends StatelessWidget {
   final VoidCallback dismiss;
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: FloeSpace.base),
+    padding: EdgeInsets.only(top: FloeSpace.base),
     child: FloeSquircle(
       size: FloeSquircleSize.md,
       fill: FloePalette.error50,
       borderColor: FloePalette.coral100,
-      padding: const EdgeInsets.symmetric(
+      padding: EdgeInsets.symmetric(
         horizontal: FloeSpace.base,
         vertical: FloeSpace.sm,
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline, color: FloePalette.error600),
-          const SizedBox(width: FloeSpace.md),
+          Icon(Icons.error_outline, color: FloePalette.error600),
+          SizedBox(width: FloeSpace.md),
           Expanded(child: Text(message)),
-          FloeButton.text(onPressed: dismiss, child: const Text('닫기')),
+          FloeButton.text(
+            onPressed: dismiss,
+            child: Text(AppLocalizations.of(context).close),
+          ),
         ],
       ),
     ),
@@ -1707,10 +1750,10 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
   );
   bool pending = false;
   late TimeOfDay startTime = TimeOfDay.fromDateTime(
-    widget.now.add(const Duration(hours: 1)),
+    widget.now.add(Duration(hours: 1)),
   );
   late TimeOfDay endTime = TimeOfDay.fromDateTime(
-    widget.now.add(const Duration(hours: 2)),
+    widget.now.add(Duration(hours: 2)),
   );
   DateTime? taskDeadline;
   String? validationError;
@@ -1726,25 +1769,40 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
     color: Colors.transparent,
     child: FloeSquircle(
       size: FloeSquircleSize.xl,
-      padding: const EdgeInsets.all(FloeSpace.xl),
+      padding: EdgeInsets.all(FloeSpace.xl),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
+        constraints: BoxConstraints(maxWidth: 440),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('어디에 담을까요?', style: FloeType.headlineLarge),
-              const SizedBox(height: FloeSpace.lg),
-              const Text('입력 원문', style: FloeType.label),
-              const SizedBox(height: FloeSpace.xs),
+              Text(
+                AppLocalizations.of(context).whereShouldThisGo,
+                style: FloeType.headlineLarge,
+              ),
+              SizedBox(height: FloeSpace.lg),
+              Text(
+                AppLocalizations.of(context).originalInput,
+                style: FloeType.label,
+              ),
+              SizedBox(height: FloeSpace.xs),
               Text(widget.capture.originalInput, style: FloeType.bodyLarge),
-              const SizedBox(height: FloeSpace.lg),
+              SizedBox(height: FloeSpace.lg),
               SegmentedButton<_Kind>(
-                segments: const [
-                  ButtonSegment(value: _Kind.event, label: Text('일정')),
-                  ButtonSegment(value: _Kind.task, label: Text('할 일')),
-                  ButtonSegment(value: _Kind.note, label: Text('생각')),
+                segments: [
+                  ButtonSegment(
+                    value: _Kind.event,
+                    label: Text(AppLocalizations.of(context).event),
+                  ),
+                  ButtonSegment(
+                    value: _Kind.task,
+                    label: Text(AppLocalizations.of(context).task),
+                  ),
+                  ButtonSegment(
+                    value: _Kind.note,
+                    label: Text(AppLocalizations.of(context).thought),
+                  ),
                 ],
                 selected: kind == null ? {} : {kind!},
                 emptySelectionAllowed: true,
@@ -1755,35 +1813,37 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
                         validationError = null;
                       }),
               ),
-              const SizedBox(height: FloeSpace.base),
+              SizedBox(height: FloeSpace.base),
               TextField(
                 controller: text,
                 decoration: InputDecoration(
-                  labelText: kind == _Kind.event ? '제목' : '내용',
+                  labelText: kind == _Kind.event
+                      ? AppLocalizations.of(context).title
+                      : AppLocalizations.of(context).content,
                   errorText: validationError,
                 ),
               ),
-              const SizedBox(height: FloeSpace.md),
+              SizedBox(height: FloeSpace.md),
               FloeAnimatedSwap(
                 child: switch (kind) {
                   _Kind.event => _EventFields(
-                    key: const ValueKey('event-fields'),
+                    key: ValueKey('event-fields'),
                     start: startTime,
                     end: endTime,
                     onStart: (value) => setState(() => startTime = value),
                     onEnd: (value) => setState(() => endTime = value),
                   ),
                   _Kind.task => _TaskFields(
-                    key: const ValueKey('task-fields'),
+                    key: ValueKey('task-fields'),
                     deadline: taskDeadline,
                     onChanged: (value) => setState(() => taskDeadline = value),
                     baseDate: widget.now,
                   ),
                   _Kind.note ||
-                  null => const SizedBox.shrink(key: ValueKey('note-fields')),
+                  null => SizedBox.shrink(key: ValueKey('note-fields')),
                 },
               ),
-              const SizedBox(height: FloeSpace.lg),
+              SizedBox(height: FloeSpace.lg),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -1791,12 +1851,12 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
                     onPressed: pending
                         ? null
                         : () => Navigator.pop(context, false),
-                    child: const Text('나중에'),
+                    child: Text(AppLocalizations.of(context).later),
                   ),
-                  const SizedBox(width: FloeSpace.sm),
+                  SizedBox(width: FloeSpace.sm),
                   FloeButton.filled(
                     onPressed: pending || kind == null ? null : _submit,
-                    child: const Text('분류하여 추가'),
+                    child: Text(AppLocalizations.of(context).classifyAndAdd),
                   ),
                 ],
               ),
@@ -1810,13 +1870,20 @@ class _ClassificationDialogState extends State<_ClassificationDialog> {
   Future<void> _submit() async {
     final value = text.text.trim();
     if (value.isEmpty) {
-      setState(() => validationError = '내용을 입력해 주세요.');
+      setState(
+        () =>
+            validationError = AppLocalizations.of(context).pleaseEnterSomeText,
+      );
       return;
     }
     final start = _onDate(widget.now, startTime);
     final end = _onDate(widget.now, endTime);
     if (kind == _Kind.event && !end.isAfter(start)) {
-      setState(() => validationError = '종료 시간은 시작 시간보다 늦어야 해요.');
+      setState(
+        () =>
+            validationError = AppLocalizations.of(context)
+                .endTimeMustBeAfterStartTime,
+      );
       return;
     }
     setState(() {
@@ -1850,11 +1917,19 @@ class _EventFields extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     children: [
       Expanded(
-        child: _TimeField(label: '시작', value: start, onChanged: onStart),
+        child: _TimeField(
+          label: AppLocalizations.of(context).start,
+          value: start,
+          onChanged: onStart,
+        ),
       ),
-      const SizedBox(width: FloeSpace.md),
+      SizedBox(width: FloeSpace.md),
       Expanded(
-        child: _TimeField(label: '종료', value: end, onChanged: onEnd),
+        child: _TimeField(
+          label: AppLocalizations.of(context).end,
+          value: end,
+          onChanged: onEnd,
+        ),
       ),
     ],
   );
@@ -1906,8 +1981,8 @@ class _TaskFields extends StatelessWidget {
               )
             : onChanged(null),
       ),
-      const Text('마감 설정'),
-      const Spacer(),
+      Text(AppLocalizations.of(context).setADueDate),
+      Spacer(),
       if (deadline != null)
         FloeButton.text(
           onPressed: () async {
@@ -1923,25 +1998,35 @@ class _TaskFields extends StatelessWidget {
               );
             }
           },
-          child: Text('${deadline!.month}월 ${deadline!.day}일 18:00'),
+          child: Text(
+            DateFormat.MMMd(AppLocalizations.of(context).localeName)
+                .add_Hm()
+                .format(deadline!),
+          ),
         ),
     ],
   );
 }
 
 void _showComingSoon(BuildContext context) {
-  ScaffoldMessenger.of(context)
-      .showSnackBar(const SnackBar(content: Text('이 화면은 다음 단계에서 연결할게요.')));
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(AppLocalizations.of(context).thisFeatureIsNotAvailableYet),
+    ),
+  );
 }
 
 DateTime _onDate(DateTime date, TimeOfDay time) =>
     DateTime(date.year, date.month, date.day, time.hour, time.minute);
 
-String _time(DateTime value) =>
-    '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+String _time(BuildContext context, DateTime value) =>
+    MaterialLocalizations.of(context).formatTimeOfDay(
+      TimeOfDay.fromDateTime(value),
+      alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+    );
 
-String _date(DateTime value) =>
-    '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value.month - 1]} ${value.day}';
+String _date(BuildContext context, DateTime value) =>
+    DateFormat.MMMEd(AppLocalizations.of(context).localeName).format(value);
 
 TaskItem? _taskById(DaySnapshot snapshot, String? id) {
   if (id == null) return null;

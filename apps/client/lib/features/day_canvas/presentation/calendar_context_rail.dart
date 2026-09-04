@@ -1,3 +1,4 @@
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -29,27 +30,27 @@ class CalendarContextRail extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FloeSquircle(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Your own rhythm',
+              Text(
+                AppLocalizations.of(context).yourOwnRhythm,
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 20),
-              const Text(
-                'A few things that belong to you, not your calendar.',
+              SizedBox(height: 20),
+              Text(
+                AppLocalizations.of(context).aFewThingsThatBelongToYou,
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.8,
                   color: FloePalette.neutral600,
                 ),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               if (tasks.isEmpty)
-                const Text(
-                  'No tasks for today.',
+                Text(
+                  AppLocalizations.of(context).noTasksForToday,
                   style: TextStyle(fontSize: 13, color: FloePalette.neutral600),
                 ),
               for (final task in tasks.take(3))
@@ -77,40 +78,41 @@ class CalendarContextRail extends StatelessWidget {
                     ),
                   ],
                 ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               FloeTextLink(
-                label: 'See your tasks',
+                label: AppLocalizations.of(context).seeYourTasks,
                 icon: LucideIcons.arrowRight,
                 onPressed: onTasks,
               ),
             ],
           ),
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
         FloeSquircle(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'A note to self',
+              Text(
+                AppLocalizations.of(context).aNoteToSelf,
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               Text(
                 DayAppearance.of(context)?.dailyNote ??
                     (notes.isEmpty
-                        ? 'Leave a little room between things. Not every empty space needs filling.'
+                        ? AppLocalizations.of(context)
+                              .leaveALittleRoomBetweenThingsNot
                         : notes.first.title),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   height: 1.9,
                   color: FloePalette.neutral600,
                 ),
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'Saved in Floe · stays when you disconnect',
+              SizedBox(height: 24),
+              Text(
+                AppLocalizations.of(context).savedInFloeStaysWhenYouDisconnect,
                 style: TextStyle(
                   fontSize: 11,
                   height: 1.7,
@@ -120,8 +122,8 @@ class CalendarContextRail extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 24),
-        const Padding(
+        SizedBox(height: 24),
+        Padding(
           padding: EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -130,7 +132,8 @@ class CalendarContextRail extends StatelessWidget {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Wondering where an event came from?\nOpen it to see its source and time zone.',
+                  AppLocalizations.of(context)
+                      .wonderingWhereAnEventCameFromOpen,
                   style: TextStyle(
                     fontSize: 11,
                     height: 1.8,
