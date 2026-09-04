@@ -273,7 +273,8 @@
         "readDates",
         "calendars",
         "onOpenDialog",
-        "onRefresh"
+        "onRefresh",
+        "onBack"
       ],
       "stateOwner": "caller: phase and connection records",
       "states": [],

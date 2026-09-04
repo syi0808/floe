@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ArrowRight,
   CalendarDays,
   Info,
@@ -19,9 +20,14 @@ export function CalendarConnections({
   calendars,
   onOpenDialog,
   onRefresh,
+  onBack,
 }) {
   return (
     <>
+      <button type="button" className="s1-text-link s1-connection-back" onClick={onBack}>
+        <ArrowLeft size={16} aria-hidden="true" />
+        <span>Back to connections</span>
+      </button>
       <div className="s1-connections-layout">
         <Surface>
           <div className="s1-card-heading">

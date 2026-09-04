@@ -97,7 +97,8 @@ through this API; Continue to permission changes content without closing the she
 Connect navigation and Settings open `ConnectorList`, not the macOS detail page.
 Selecting a service opens its detail (`calendar-connection` for macOS Calendar),
 while Connect stays active in the sidebar. Clicking Connect again returns to the
-list without resetting calendar state. No page-level back links are reintroduced.
+list without resetting calendar state. Service details also provide a Back to
+connections button with an underline hover effect, emitting `onBack` to return to the list.
 
 `ConnectorList({ services, onSelect })` partitions records into Connected services
 and Available services. `ConnectorServiceCard({ service, onSelect })` emits the service
@@ -201,5 +202,6 @@ State lists are review prompts, not generated acceptance evidence.
 
 No native acceptance status changes as a result of this refactor.
 
-Page-level back links are removed from Connect and Task Detail. Use primary navigation
-to change pages; dialog dismissal actions such as Back to my day remain available.
+Page-level back links are removed from the Connections list and Task Detail. Service
+details retain Back to connections for parent-list navigation. Dialog dismissal
+actions such as Back to my day remain available.

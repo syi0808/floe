@@ -157,6 +157,7 @@ export function CalendarScreen({ page, onNavigate }) {
           calendars={calendars}
           onOpenDialog={setModal}
           onRefresh={() => refresh()}
+          onBack={() => onNavigate('connections')}
         />
       ) : (
         <>

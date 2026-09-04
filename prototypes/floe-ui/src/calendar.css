@@ -564,6 +564,12 @@
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+.s1-connection-back {
+  margin-bottom: 24px;
+  min-height: 32px;
+  color: var(--ink-secondary);
+  font-size: 14px;
+}
 .s1-personal-note {
   font-size: 14px;
   line-height: 1.9;
