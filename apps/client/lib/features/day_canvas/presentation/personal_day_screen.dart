@@ -410,6 +410,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
         borderWidth: focused ? 2 : 0,
         child: InkWell(
           statesController: states,
+          mouseCursor: WidgetStateMouseCursor.clickable,
           onTap: widget.onPressed,
           onHover: (value) => setState(() => hovered = value),
           onFocusChange: (value) => setState(() => focused = value),
@@ -2001,6 +2002,7 @@ class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
             : FloePalette.primary200,
         child: InkWell(
           statesController: states,
+          mouseCursor: WidgetStateMouseCursor.clickable,
           onHover: (value) => setState(() => hovered = value),
           onFocusChange: (value) => setState(() => focused = value),
           onTap: () async {

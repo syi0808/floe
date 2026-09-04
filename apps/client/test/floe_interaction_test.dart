@@ -10,6 +10,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:figma_squircle/figma_squircle.dart';
 
 void main() {
+  test('button themes use pointer only for enabled buttons', () {
+    final theme = FloeTheme.light;
+    for (final style in [
+      theme.filledButtonTheme.style!,
+      theme.outlinedButtonTheme.style!,
+      theme.textButtonTheme.style!,
+      theme.iconButtonTheme.style!,
+      theme.segmentedButtonTheme.style!,
+    ]) {
+      expect(
+        style.mouseCursor!.resolve({WidgetState.hovered}),
+        SystemMouseCursors.click,
+      );
+      expect(
+        style.mouseCursor!.resolve({WidgetState.disabled}),
+        SystemMouseCursors.basic,
+      );
+    }
+  });
+
   for (final variant in ['filled', 'outlined', 'text', 'icon']) {
     testWidgets('$variant shares scale, disabled and cancellation behavior', (
       tester,

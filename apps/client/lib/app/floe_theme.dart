@@ -72,6 +72,7 @@ abstract final class FloeTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           textStyle: const WidgetStatePropertyAll(
             TextStyle(
@@ -92,6 +93,7 @@ abstract final class FloeTheme {
       ),
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           textStyle: const WidgetStatePropertyAll(
             TextStyle(
               fontFamily: 'Pretendard',
@@ -111,6 +113,7 @@ abstract final class FloeTheme {
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
           backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
@@ -123,6 +126,7 @@ abstract final class FloeTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           textStyle: const WidgetStatePropertyAll(
             TextStyle(
@@ -144,6 +148,7 @@ abstract final class FloeTheme {
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
+          mouseCursor: WidgetStateMouseCursor.clickable,
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(_segmentForeground),
           backgroundColor: WidgetStateProperty.resolveWith(_segmentBackground),
