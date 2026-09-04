@@ -8,6 +8,38 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:figma_squircle/figma_squircle.dart';
 
 void main() {
+  testWidgets(
+    'screen entrance replays only for navigation and respects reduced motion',
+    (tester) async {
+      Widget screen(String identity, {bool reduced = false}) => MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: reduced),
+          child: FloeScreenEntrance(
+            identity: identity,
+            child: const Text('Content'),
+          ),
+        ),
+      );
+      await tester.pumpWidget(screen('today'));
+      await tester.pumpAndSettle();
+      final opacity = find.descendant(
+        of: find.byType(FloeScreenEntrance),
+        matching: find.byType(Opacity),
+      );
+      expect(tester.widget<Opacity>(opacity).opacity, 1);
+      await tester.pumpWidget(screen('today'));
+      expect(tester.widget<Opacity>(opacity).opacity, 1);
+      await tester.pumpWidget(screen('notes'));
+      expect(tester.widget<Opacity>(opacity).opacity, 0);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Opacity>(opacity).opacity, 1);
+      await tester.pumpWidget(screen('tasks', reduced: true));
+      expect(opacity, findsNothing);
+      expect(find.text('Content'), findsOneWidget);
+      await tester.pumpAndSettle();
+    },
+  );
+
   test('theme removes ripple and resolves quiet hover states', () {
     final theme = FloeTheme.light;
     final textStyle = theme.textButtonTheme.style!;

@@ -30,6 +30,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   final captureController = TextEditingController();
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
+  String? capturedText;
 
   @override
   void initState() {
@@ -83,7 +84,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              _workspace(narrow),
+                              FloeScreenEntrance(
+                                identity: selectedTaskId ?? destination,
+                                child: _workspace(narrow),
+                              ),
                               if (destination == _DestinationView.today &&
                                   selectedTaskId == null)
                                 Padding(
@@ -94,6 +98,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                                     textController: captureController,
                                     pending: controller.commandPending,
                                     submit: _capture,
+                                    capturedText: capturedText,
+                                    dismiss: () =>
+                                        setState(() => capturedText = null),
                                   ),
                                 ),
                             ],
@@ -174,6 +181,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           _DestinationView.notes => _NotesScreen(
             notes: snapshot.items.whereType<NoteItem>().toList(),
             narrow: narrow,
+            onCreate: _createNote,
+            pending: controller.commandPending,
           ),
         },
       ],
@@ -246,6 +255,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 
   Future<void> _capture() async {
+    final input = captureController.text.trim();
     if (!await controller.submitCapture(captureController.text) || !mounted) {
       return;
     }
@@ -276,7 +286,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
               child,
             ) => FloeFadeScaleTransition(animation: animation, child: child),
           );
-    if (saved == true) captureController.clear();
+    if (saved == true && mounted) {
+      captureController.clear();
+      setState(() => capturedText = input);
+    }
+  }
+
+  Future<bool> _createNote(String content) async {
+    if (controller.commandPending) return false;
+    if (!await controller.submitCapture(content)) return false;
+    return controller.classify(NoteDraft(content: content));
   }
 
   Future<void> _reserveBreak(EventItem event) async {
@@ -361,7 +380,7 @@ class _AdaptiveNavigation extends StatelessWidget {
   }
 }
 
-class _DestinationButton extends StatelessWidget {
+class _DestinationButton extends StatefulWidget {
   const _DestinationButton({
     required this.view,
     required this.selected,
@@ -371,6 +390,16 @@ class _DestinationButton extends StatelessWidget {
   final _DestinationView view;
   final bool selected;
   final VoidCallback onPressed;
+
+  @override
+  State<_DestinationButton> createState() => _DestinationButtonState();
+}
+
+class _DestinationButtonState extends State<_DestinationButton> {
+  bool hovered = false;
+  bool focused = false;
+  bool get selected => widget.selected;
+  _DestinationView get view => widget.view;
 
   String get label => switch (view) {
     _DestinationView.today => 'Today',
@@ -388,37 +417,47 @@ class _DestinationButton extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     selected: selected,
     button: true,
-    child: FloeSquircle(
-      size: FloeSquircleSize.md,
-      fill: selected ? FloePalette.primary100 : Colors.transparent,
-      borderWidth: 0,
-      child: InkWell(
-        onTap: selected ? null : onPressed,
-        customBorder: floeSquircleBorder(FloeSquircleSize.md),
-        child: SizedBox(
-          width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
-          height: MediaQuery.sizeOf(context).width <= 780 ? 58 : 56,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 19,
-                color: selected
-                    ? FloePalette.primary700
-                    : FloePalette.neutral600,
-              ),
-              const SizedBox(height: FloeSpace.xs),
-              Text(
-                label,
-                style: FloeType.label.copyWith(
-                  fontSize: 10,
+    child: PressableScale(
+      scale: 0.98,
+      child: FloeSquircle(
+        size: FloeSquircleSize.md,
+        fill: selected
+            ? FloePalette.primary100
+            : hovered
+            ? FloePalette.neutral100
+            : Colors.transparent,
+        borderColor: focused ? FloePalette.primary600 : Colors.transparent,
+        borderWidth: focused ? 2 : 0,
+        child: InkWell(
+          onTap: widget.onPressed,
+          onHover: (value) => setState(() => hovered = value),
+          onFocusChange: (value) => setState(() => focused = value),
+          customBorder: floeSquircleBorder(FloeSquircleSize.md),
+          child: SizedBox(
+            width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
+            height: MediaQuery.sizeOf(context).width <= 780 ? 58 : 56,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 19,
                   color: selected
                       ? FloePalette.primary700
                       : FloePalette.neutral600,
                 ),
-              ),
-            ],
+                const SizedBox(height: FloeSpace.xs),
+                Text(
+                  label,
+                  style: FloeType.label.copyWith(
+                    fontSize: 10,
+                    color: selected
+                        ? FloePalette.primary700
+                        : FloePalette.neutral600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -639,9 +678,16 @@ class _TasksScreen extends StatelessWidget {
 }
 
 class _NotesScreen extends StatefulWidget {
-  const _NotesScreen({required this.notes, required this.narrow});
+  const _NotesScreen({
+    required this.notes,
+    required this.narrow,
+    required this.onCreate,
+    required this.pending,
+  });
   final List<NoteItem> notes;
   final bool narrow;
+  final Future<bool> Function(String) onCreate;
+  final bool pending;
   @override
   State<_NotesScreen> createState() => _NotesScreenState();
 }
@@ -649,6 +695,21 @@ class _NotesScreen extends StatefulWidget {
 class _NotesScreenState extends State<_NotesScreen> {
   final search = TextEditingController();
   bool personalOnly = false;
+
+  Future<void> _create() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _NewNoteDialog(save: widget.onCreate),
+    );
+    if (saved == true && mounted) {
+      setState(() {
+        search.clear();
+        personalOnly = false;
+      });
+    }
+  }
+
   @override
   void dispose() {
     search.dispose();
@@ -725,7 +786,7 @@ class _NotesScreenState extends State<_NotesScreen> {
       style: FilledButton.styleFrom(
         shape: floeSquircleBorder(FloeSquircleSize.md),
       ),
-      onPressed: () => _showComingSoon(context),
+      onPressed: widget.pending ? null : _create,
       icon: const Icon(LucideIcons.plus, size: 18),
       label: const Text('New note'),
     );
@@ -764,10 +825,28 @@ class _NotesScreenState extends State<_NotesScreen> {
         ),
         SizedBox(height: widget.narrow ? 4 : 8),
         if (notes.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 120),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 120),
             child: Center(
-              child: Text('No notes found', style: FloeType.headline),
+              child: Column(
+                children: [
+                  const Icon(LucideIcons.search, size: 24),
+                  const SizedBox(height: 12),
+                  const Text('No notes found', style: FloeType.headline),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Try a different search or clear the current filter.',
+                    textAlign: TextAlign.center,
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      search.clear();
+                      personalOnly = false;
+                    }),
+                    child: const Text('Clear filters'),
+                  ),
+                ],
+              ),
             ),
           )
         else
@@ -800,6 +879,78 @@ class _NotesScreenState extends State<_NotesScreen> {
       ],
     );
   }
+}
+
+class _NewNoteDialog extends StatefulWidget {
+  const _NewNoteDialog({required this.save});
+  final Future<bool> Function(String) save;
+
+  @override
+  State<_NewNoteDialog> createState() => _NewNoteDialogState();
+}
+
+class _NewNoteDialogState extends State<_NewNoteDialog> {
+  final content = TextEditingController();
+  bool pending = false;
+  bool failed = false;
+
+  @override
+  void dispose() {
+    content.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (pending || content.text.trim().isEmpty) return;
+    setState(() {
+      pending = true;
+      failed = false;
+    });
+    final saved = await widget.save(content.text.trim());
+    if (!mounted) return;
+    if (saved) {
+      Navigator.pop(context, true);
+    } else {
+      setState(() {
+        pending = false;
+        failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !pending,
+    child: AlertDialog(
+      title: const Text('New note'),
+      content: SizedBox(
+        width: 420,
+        child: TextField(
+          key: const Key('new-note-content'),
+          controller: content,
+          autofocus: true,
+          enabled: !pending,
+          minLines: 3,
+          maxLines: 8,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            hintText: 'Write a thought, decision, or detail to remember.',
+            errorText: failed ? 'Could not save. Please try again.' : null,
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: pending ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: pending || content.text.trim().isEmpty ? null : _save,
+          child: Text(pending ? 'Saving…' : 'Save note'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _NotePreviewCard extends StatelessWidget {
@@ -1850,26 +2001,37 @@ class _TimelineSuggestionButton extends StatefulWidget {
 
 class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
   bool open = false;
+  bool hovered = false;
+  bool focused = false;
   @override
   Widget build(BuildContext context) => Tooltip(
     message: 'Floe 제안 열기',
-    child: FloeSquircle(
-      size: FloeSquircleSize.floating,
-      elevation: 4,
-      fill: open ? FloePalette.primary50 : FloePalette.neutral0,
-      borderWidth: open ? 2 : 1,
-      borderColor: open ? FloePalette.primary600 : FloePalette.primary200,
-      child: InkWell(
-        onTap: () async {
-          if (open) return;
-          setState(() => open = true);
-          await _showTimelineSuggestion(context, widget.item);
-          if (mounted) setState(() => open = false);
-        },
-        customBorder: floeSquircleBorder(FloeSquircleSize.floating),
-        child: Center(
-          child: FloeMascot(
-            size: MediaQuery.sizeOf(context).width <= 430 ? 31 : 34,
+    child: PressableScale(
+      scale: 0.98,
+      child: FloeSquircle(
+        size: FloeSquircleSize.floating,
+        elevation: 4,
+        fill: open || hovered || focused
+            ? FloePalette.primary50
+            : FloePalette.neutral0,
+        borderWidth: open || hovered || focused ? 2 : 1,
+        borderColor: open || hovered || focused
+            ? FloePalette.primary600
+            : FloePalette.primary200,
+        child: InkWell(
+          onHover: (value) => setState(() => hovered = value),
+          onFocusChange: (value) => setState(() => focused = value),
+          onTap: () async {
+            if (open) return;
+            setState(() => open = true);
+            await _showTimelineSuggestion(context, widget.item);
+            if (mounted) setState(() => open = false);
+          },
+          customBorder: floeSquircleBorder(FloeSquircleSize.floating),
+          child: Center(
+            child: FloeMascot(
+              size: MediaQuery.sizeOf(context).width <= 430 ? 31 : 34,
+            ),
           ),
         ),
       ),
@@ -2239,69 +2401,108 @@ class _CaptureBar extends StatelessWidget {
     required this.textController,
     required this.pending,
     required this.submit,
+    required this.capturedText,
+    required this.dismiss,
   });
   final TextEditingController textController;
   final bool pending;
   final VoidCallback submit;
+  final String? capturedText;
+  final VoidCallback dismiss;
 
   @override
   Widget build(BuildContext context) => FloeSquircle(
     size: FloeSquircleSize.field,
     padding: const EdgeInsets.fromLTRB(18, 9, 11, 9),
-    child: Row(
-      children: [
-        const Icon(LucideIcons.plus, size: 22, color: FloePalette.primary600),
-        const SizedBox(width: 14),
-        Expanded(
-          child: TextField(
-            key: const Key('capture-field'),
-            controller: textController,
-            enabled: !pending,
-            style: TextStyle(
-              fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
-            ),
-            onSubmitted: (value) {
-              if (!pending && value.trim().isNotEmpty) submit();
-            },
-            decoration: const InputDecoration(
-              hintText: 'Capture an event, task, or thought',
-              hintStyle: TextStyle(color: FloePalette.neutral500),
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        ),
-        const SizedBox(width: 14),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: textController,
-          builder: (context, value, _) {
-            final enabled = !pending && value.text.trim().isNotEmpty;
-            return Tooltip(
-              message: '캡처 저장',
-              child: SizedBox.square(
-                dimension: 44,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    shape: floeSquircleBorder(FloeSquircleSize.md),
+    child: capturedText != null
+        ? Semantics(
+            liveRegion: true,
+            child: SizedBox(
+              height: 48,
+              child: Row(
+                children: [
+                  const Icon(
+                    LucideIcons.check,
+                    size: 18,
+                    color: FloePalette.primary600,
                   ),
-                  onPressed: enabled ? submit : null,
-                  child: pending
-                      ? const SizedBox.square(
-                          dimension: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(LucideIcons.arrowUp, size: 19),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      'Captured “$capturedText”',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Dismiss capture',
+                    onPressed: dismiss,
+                    icon: const Icon(LucideIcons.x, size: 17),
+                  ),
+                ],
+              ),
+            ),
+          )
+        : Row(
+            children: [
+              const Icon(
+                LucideIcons.plus,
+                size: 22,
+                color: FloePalette.primary600,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: TextField(
+                  key: const Key('capture-field'),
+                  controller: textController,
+                  enabled: !pending,
+                  style: TextStyle(
+                    fontSize: MediaQuery.sizeOf(context).width <= 430 ? 13 : 16,
+                  ),
+                  onSubmitted: (value) {
+                    if (!pending && value.trim().isNotEmpty) submit();
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'Capture an event, task, or thought',
+                    hintStyle: TextStyle(color: FloePalette.neutral500),
+                    filled: false,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ),
               ),
-            );
-          },
-        ),
-      ],
-    ),
+              const SizedBox(width: 14),
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: textController,
+                builder: (context, value, _) {
+                  final enabled = !pending && value.text.trim().isNotEmpty;
+                  return Tooltip(
+                    message: '캡처 저장',
+                    child: SizedBox.square(
+                      dimension: 44,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          shape: floeSquircleBorder(FloeSquircleSize.md),
+                        ),
+                        onPressed: enabled ? submit : null,
+                        child: pending
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(LucideIcons.arrowUp, size: 19),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
   );
 }
 

@@ -23,6 +23,16 @@ This separate entry point uses an in-memory gateway with September 3 sample cont
 
 The Tasks destination retains the working task collection. Open a task to compare its detail with the HTML Tasks screen. The HTML-only Progress dashboard is not a product destination in this app.
 
+### Interaction parity
+
+- Navigation replays the prototype's 180 ms fade/3 px entrance without animating ordinary data updates; reduced motion disables the entrance.
+- Navigation and the Floe suggestion anchor provide hover, keyboard-focus, and press feedback. Selecting the current destination also returns from task detail.
+- Notes supports search, Personal filtering, and Clear filters. New note opens an autofocus editor and saves through the capture/classification gateway, with empty-input prevention, pending protection, and retry feedback. Saving clears filters so the new note is visible; cancelling does not create an item.
+- Capture retains the real classification flow, then shows dismissible, screen-reader-announced success feedback only after saving.
+- Week/Month, settings, and other prototype placeholder actions remain out of scope; no fake calendar views or backend fields are introduced.
+
+Run `flutter test test/visual_interaction_test.dart test/floe_interaction_test.dart test/widget_test.dart test/visual_capture_test.dart` for interaction and responsive-layout regression coverage.
+
 See `../../docs/design/flutter-visual-parity.md` for the paired screenshots, measured layout contract, and reproduction steps.
 
 ```sh

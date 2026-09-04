@@ -17,6 +17,59 @@ abstract final class FloeMotion {
       MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 }
 
+final class FloeScreenEntrance extends StatefulWidget {
+  const FloeScreenEntrance({
+    required this.identity,
+    required this.child,
+    super.key,
+  });
+
+  final Object identity;
+  final Widget child;
+
+  @override
+  State<FloeScreenEntrance> createState() => _FloeScreenEntranceState();
+}
+
+final class _FloeScreenEntranceState extends State<FloeScreenEntrance>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController animation = AnimationController(
+    vsync: this,
+    duration: FloeMotion.selectionDuration,
+  )..forward();
+
+  @override
+  void didUpdateWidget(FloeScreenEntrance oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.identity != oldWidget.identity) animation.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (FloeMotion.reduceMotion(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: animation,
+      child: widget.child,
+      builder: (context, child) {
+        final progress = FloeMotion.easeOut.transform(animation.value);
+        return Opacity(
+          opacity: progress,
+          child: Transform.translate(
+            offset: Offset(0, 3 * (1 - progress)),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
 final class PressableScale extends StatefulWidget {
   const PressableScale({
     required this.child,

@@ -39,6 +39,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('우유 사기'), findsOneWidget);
     expect(find.byType(Checkbox), findsAtLeastNWidgets(1));
+    expect(find.text('Captured “우유 사기”'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Dismiss capture'));
+    await tester.tap(find.byTooltip('Dismiss capture'));
+    await tester.pumpAndSettle();
+    expect(find.text('Captured “우유 사기”'), findsNothing);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('capture-field')))
+          .controller!
+          .text,
+      isEmpty,
+    );
   });
 
   testWidgets('today navigation resets a moved date', (tester) async {
