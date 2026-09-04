@@ -37,7 +37,14 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
-        for table in ["captures", "events", "tasks", "notes", "calendar_mirrors"] {
+        for table in [
+            "captures",
+            "events",
+            "tasks",
+            "notes",
+            "calendar_mirrors",
+            "focus_preferences",
+        ] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
                 (),
@@ -64,6 +71,48 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub async fn focus_preference(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<floe_domain::FocusPreference>, CoreError> {
+        self.get("focus_preferences", person_id.to_string()).await
+    }
+
+    pub async fn put_focus_preference(
+        &self,
+        value: &floe_domain::FocusPreference,
+        previous: Option<&floe_domain::FocusPreference>,
+    ) -> Result<(), CoreError> {
+        let connection = self.connection().await?;
+        let payload = to_string(value).map_err(storage_error)?;
+        let person = value.person_id.to_string();
+        let changed = if let Some(previous) = previous {
+            connection.execute(
+                "UPDATE focus_preferences SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
+                (payload, person.clone(), person, to_string(previous).map_err(storage_error)?),
+            ).await.map_err(storage_error)?
+        } else {
+            connection.execute(
+                "INSERT OR IGNORE INTO focus_preferences(id, person_id, payload) VALUES (?, ?, ?)",
+                (person.clone(), person, payload),
+            ).await.map_err(storage_error)?
+        };
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "focus preference changed; reload and retry",
+            ));
+        }
         Ok(())
     }
 

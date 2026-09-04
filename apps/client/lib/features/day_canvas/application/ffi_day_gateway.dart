@@ -12,6 +12,8 @@ import '../domain/day_models.dart';
 import '../infrastructure/floe_native_bindings.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
+import 'focus_gateway.dart';
+import '../domain/focus_models.dart';
 
 const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
@@ -26,7 +28,7 @@ final class FfiDayGatewayException implements Exception {
   String toString() => message;
 }
 
-final class FfiDayGateway implements DayGateway, CalendarGateway {
+final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -174,6 +176,52 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     await reply.first;
     reply.close();
     _isolate.kill(priority: Isolate.immediate);
+  }
+
+  Future<Map<String, dynamic>> _focusRequest(
+    DayQuery query,
+    Map<String, dynamic> command,
+  ) async {
+    try {
+      return await _request('execute', _commandRequest(query, command));
+    } on FfiDayGatewayException catch (error) {
+      throw FocusGatewayException(error.code);
+    }
+  }
+
+  @override
+  Future<FocusPreference?> loadFocusPreference(DayQuery query) async {
+    final result = await _focusRequest(query, {'type': 'get_focus_preference'});
+    final value = result['focus_preference'];
+    return value == null ? null : FocusPreference.fromJson(_asMap(value));
+  }
+
+  @override
+  Future<FocusPreference> saveFocusPreference(
+    DayQuery query,
+    int expectedRevision,
+    FocusPreferenceValue? value,
+  ) async {
+    final result = await _focusRequest(query, {
+      'type': 'set_focus_preference',
+      'expected_revision': expectedRevision,
+      'value': value?.toJson(),
+    });
+    return FocusPreference.fromJson(_asMap(result['focus_preference']));
+  }
+
+  @override
+  Future<FocusProposal> suggestFocus(
+    DayQuery query,
+    String model, {
+    bool allowExternal = false,
+  }) async {
+    final result = await _focusRequest(query, {
+      'type': 'suggest_focus',
+      'model': model,
+      'allow_external': allowExternal,
+    });
+    return FocusProposal.fromJson(_asMap(result['focus_proposal']));
   }
 
   @override

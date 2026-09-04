@@ -45,6 +45,11 @@ fn core_error(value: CoreError) -> ErrorDto {
             ErrorCode::NotFound => ErrorCodeDto::NotFound,
             ErrorCode::Conflict => ErrorCodeDto::Conflict,
             ErrorCode::Storage => ErrorCodeDto::Storage,
+            ErrorCode::ModelUnavailable => ErrorCodeDto::ModelUnavailable,
+            ErrorCode::ExternalTransferDenied => ErrorCodeDto::ExternalTransferDenied,
+            ErrorCode::ModelTimeout => ErrorCodeDto::ModelTimeout,
+            ErrorCode::InvalidProposal => ErrorCodeDto::InvalidProposal,
+            ErrorCode::NoFocusSlot => ErrorCodeDto::NoFocusSlot,
         },
         message: value.message,
         field: None,
@@ -172,8 +177,51 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
     parse_time(&request.day.now, "day.now")?;
     let mut changed_item = None;
     let mut capture = None;
+    let mut focus_preference = None;
+    let mut focus_proposal = None;
 
     match request.command {
+        CommandDto::GetFocusPreference => {
+            focus_preference = handle
+                .runtime
+                .block_on(handle.core.focus_preference(person_id))
+                .map_err(core_error)?;
+        }
+        CommandDto::SetFocusPreference {
+            expected_revision,
+            value,
+        } => {
+            focus_preference = Some(
+                handle
+                    .runtime
+                    .block_on(handle.core.set_focus_preference(
+                        person_id,
+                        expected_revision,
+                        value,
+                        parse_time(&request.day.now, "day.now")?,
+                    ))
+                    .map_err(core_error)?,
+            );
+        }
+        CommandDto::SuggestFocus {
+            model,
+            allow_external,
+        } => {
+            let model =
+                floe_core::GatewayScheduleModel::new(model, allow_external).map_err(core_error)?;
+            focus_proposal = Some(
+                handle
+                    .runtime
+                    .block_on(handle.core.suggest_focus(
+                        person_id,
+                        parse_date(&request.day.date)?,
+                        request.day.timezone_offset_seconds,
+                        parse_time(&request.day.now, "day.now")?,
+                        &model,
+                    ))
+                    .map_err(core_error)?,
+            );
+        }
         CommandDto::SelectCalendars {
             provider,
             calendars,
@@ -438,6 +486,8 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
         snapshot: snapshot(handle, person_id, &request.day)?,
         changed_item,
         capture,
+        focus_preference,
+        focus_proposal,
     })
 }
 

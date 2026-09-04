@@ -83,6 +83,23 @@ Reusable Flutter boundaries and parity rules: [Flutter prototype parity](../../d
 Live acceptance, timezone/recurrence limitations, and dogfood steps are tracked in
 [`docs/validation/s1-calendar.md`](../../docs/validation/s1-calendar.md).
 
+## Contextual Focus (S2)
+
+Today's context rail opens **When should I focus today?**. Save/edit/delete one
+focus-window preference; Rust owns persistence and validation. A suggestion shows
+time, reason, context sources and any Calendar-cache warning without creating an
+event or task. Unsaved changes must be saved before requesting a new proposal.
+
+Network inference uses the [Go gateway](../../server/README.md), not direct
+Flutter/Rust provider calls. Enter a configured target ID, optionally prefilled
+using `--dart-define=FLOE_INFERENCE_TARGET=local-focus`. The app and Go process
+must share `FLOE_INFERENCE_TOKEN` through the launch environment. Remote/API
+targets require explicit external-transfer consent. OAuth/Apple native adapters
+and product credential setup UI are not yet implemented.
+
+See [S2 validation](../../docs/validation/s2-focus.md) for the separate full
+Flutter/Rust/Go smoke test and pending live-model/UI evaluation.
+
 ## Validation commands
 
 ```sh

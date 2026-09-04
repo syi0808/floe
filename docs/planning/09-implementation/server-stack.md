@@ -2,6 +2,15 @@
 
 > Status: Recommended baseline
 
+## S2 implementation boundary
+
+[ADR 0009](../../decisions/0009-contextual-focus-suggestion.md) brings forward only
+the thin Go inference module under `server/`. The first process is a manually
+launched, authenticated loopback gateway for one local operator. It does not
+implement accounts, sync, hosted authorization or the full S4 server. Network
+provider execution is centralized; domain model choice and device-only inference
+are not moved into a mandatory remote routing path.
+
 ## Goals
 
 - self-host가 어렵지 않을 것

@@ -1,6 +1,6 @@
 # Floe Progress
 
-> Last updated: 2026-09-04
+> Last updated: 2026-09-05
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
@@ -13,14 +13,57 @@ verified criteria, not estimated implementation percentages.
 
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
-| S1 — Calendar read | Implementing | Fixture end-to-end; EventKit app builds | 0/4 | Live permission/read/create PoC and dogfood | Connect a dedicated macOS Calendar |
-| S2 — Contextual suggestion | Planned | None | 0/4 | S1 Verified; model provider selection | Source-backed focus-time suggestion |
+| S1 — Calendar read | Deferred | Fixture end-to-end; EventKit app builds | 0/4 | Live verification remains prerequisite; user-directed S2 start | Connect a dedicated macOS Calendar |
+| S2 — Contextual suggestion | Implementing | Flutter/Rust/Go end-to-end fixture; API/Ollama HTTP fixtures | 0/4 | S1 Verified; real-model evaluation and manual UI review | Configure one target and evaluate a focus proposal |
 | S3 — Approved action | Planned | None | 0/5 | S2 Verified; create capability | Approve, create externally, re-import |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+The user approved the [Go inference boundary](docs/decisions/0009-contextual-focus-suggestion.md)
+and starting S2 implementation before S1's live gate. S1 is deferred, not accepted;
+its unfinished criteria still block S2 verification. S2 is the only active
+implementation slice. This does not advance S4 server/sync acceptance.
+
+## S2 Implementation Checkpoint — 2026-09-05
+
+- Rust/Turso owns one Person-scoped user-entered focus preference, revision/CAS,
+  edit/delete and restart persistence. Deleted values are excluded from context.
+- A bounded Schedule view omits titles, notes, task content, Person/account IDs
+  and credentials. The model selects only host-generated slots; Rust validates
+  schema, time, evidence, and unchanged source state. No event/task mutation.
+- Flutter exposes preference management and focus proposals with source labels,
+  cache warning, unsaved-change protection, external consent, retry and pending UI.
+- The Floe-owned Go gateway has API-key/OpenAI-compatible and local Ollama adapters,
+  authenticated loopback transport, explicit target selection, deadlines/cancellation,
+  body/concurrency limits, redacted errors and no retry/redirect/cloud fallback.
+- No CLIProxyAPI dependency. OAuth, Apple native inference, credential registration
+  UI/vault, streaming, usage accounting and hosted/multi-user operation remain deferred.
+
+### S2 validation evidence
+
+Environment: macOS arm64, Go 1.25.5, 2026-09-05 KST. Fixture model/provider and
+isolated stores only. The full bridge test starts the actual Go service and feeds
+its response through Rust validation and Flutter decoding; it does not bypass the
+gateway. Source: S2 implementation working tree based on `ec607ec`.
+
+- `cargo test --workspace`: 32 passed; Clippy with warnings denied passes.
+- `go test -race ./...`: 11 passed; `go vet ./...` passes.
+- `flutter test`: 49 passed; separate cross-language inference smoke: 1 passed.
+- Flutter analyzer passes; macOS debug build and strict app signature verification pass.
+- No live Calendar collection, external inference, provider credentials or model
+  download was performed. Actual model quality and UI dogfood remain pending.
+- [Validation runbook](docs/validation/s2-focus.md) covers live model evaluation,
+  manual UI review and the three-day post-verification S2 dogfood.
+
+| Criterion | Result | Automated evidence | Remaining gate |
+| --- | --- | --- | --- |
+| S2-A1 | Pending | Core/FFI/controller CRUD, CAS, Person separation and reopen tests | Native UI save/edit/delete/restart walkthrough |
+| S2-A2 | Pending | Full Flutter → Rust → Go → model fixture → validated proposal | Actual provider/model, source-grounded reason evaluation |
+| S2-A3 | Pending | Malformed/fabricated output, slot/source bounds, context isolation, non-mutation tests | Real-model output and native UI verification |
+| S2-A4 | Pending | Timeout/cancellation, malformed/refusal/tool output, empty day/deleted preference and retry fixtures | Live evaluation matrix and known-quality-limit review |
 
 ## Acceptance Evidence
 
@@ -93,7 +136,7 @@ prioritized; MVP acceptance and its two-week dogfood requirement remain separate
 | Day Canvas | Partial; non-blocking breadth deferred | Now/Next, unified local projection, empty and overdue states | Conflict UX, editing, folding, interventions |
 | Universal Capture | Partial | Typed capture, original input, explicit classification, provenance | Voice/STT, correction flow, semantic candidates |
 | Local Personal-Day Store | Partial | Rust-owned Turso, CRUD core, deterministic snapshots, reopen persistence | Encryption, export/forget, sync, multi-person management |
-| Minimal Assistant | Not started | — | Manager, contextual suggestions, Action Proposal/Policy execution |
+| Minimal Assistant | Partial | Bounded Schedule Expert, preference and Go inference fixture path | Real-model evaluation; approval/Policy execution |
 
 ## Roadmap Status
 
@@ -105,11 +148,11 @@ cross-phase coverage is defined in the slice plan and does not change these stat
 | Phase 0 — Architecture PoCs | Partial | macOS embedded Turso and Flutter↔Rust boundary validated; other PoCs remain |
 | Phase 1 — Personal Day | Partial | Technical vertical slice works; product breadth and dogfood remain |
 | Phase 2 — Connected Floe | Partial | S1 EventKit read path implemented; live validation and other connectors remain |
-| Phase 3 — Personal Memory | Not started | Memory, people, relationships, and identity resolution remain |
+| Phase 3 — Personal Memory | Partial | One explicit focus preference; broader memory, people and identity resolution remain |
 | Phase 3.5 — Expert Ecosystem | Not started | Package, permissions, sandbox, SDK, and marketplace remain |
 | Phase 4 — Cross-device | Not started | Sync, Device Agent, and native packaging remain |
 | Phase 5 — Ambient Floe | Not started | Wake word, transcription, handoff, and interventions remain |
-| Phase 6 — Hosted/Self-host | Not started | Server, accounts, deployment, and administration remain |
+| Phase 6 — Hosted/Self-host | Partial; S2 inference only | Local Go gateway; hosted server, accounts, deployment and administration remain |
 
 ## S1 Automated Validation
 
@@ -170,10 +213,10 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 
 ## Next Priorities
 
-1. Run the dedicated-calendar live permission/read checklist in `docs/validation/s1-calendar.md`.
-2. Validate recurring-event identity, timezone boundaries, edits/deletions, and signed-build restart/recovery.
-3. With separate explicit approval, complete the bounded S3 create-capability PoC.
-4. Record S1-A1–A4 evidence and three-day dogfood before advancing acceptance.
+1. Configure an already-available model target and run `docs/validation/s2-focus.md` without confusing fixtures with live evaluation.
+2. Complete S1's live Calendar criteria before advancing S2 verification.
+3. Review the native focus UI and record real-model reason quality and failure behavior.
+4. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,
 dense-day folding, and the separate two-week Personal Day dogfood. If one blocks

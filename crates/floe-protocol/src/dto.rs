@@ -172,6 +172,16 @@ pub struct CalendarRecordDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
+    GetFocusPreference,
+    SetFocusPreference {
+        expected_revision: u64,
+        value: Option<floe_domain::FocusPreferenceInput>,
+    },
+    SuggestFocus {
+        model: String,
+        #[serde(default)]
+        allow_external: bool,
+    },
     SelectCalendars {
         provider: floe_domain::CalendarProvider,
         calendars: Vec<floe_domain::CalendarSelection>,
@@ -272,6 +282,10 @@ pub struct MutationResultDto {
     pub snapshot: DaySnapshotDto,
     pub changed_item: Option<TimelineItemDto>,
     pub capture: Option<CaptureDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_preference: Option<floe_domain::FocusPreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_proposal: Option<floe_domain::FocusProposal>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -283,6 +297,11 @@ pub enum ErrorCodeDto {
     Storage,
     Internal,
     UnsupportedVersion,
+    ModelUnavailable,
+    ExternalTransferDenied,
+    ModelTimeout,
+    InvalidProposal,
+    NoFocusSlot,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

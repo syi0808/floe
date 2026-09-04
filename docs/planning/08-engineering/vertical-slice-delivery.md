@@ -80,6 +80,10 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 **의존성:** S1 Verified 이상, 실제 모델 provider 선택.
 
+2026-09-05 사용자 승인으로 S2 구현만 먼저 착수한다. S1 미완료 작업은 Deferred로
+기록하고 검증 prerequisite은 유지한다. 네트워크 inference는 최소 Go gateway로
+분리하며 [ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)를 따른다.
+
 built-in Schedule Expert 하나가 제한된 일정 view를 판단하고 Manager가
 구조화된 제안을 전달한다. 최소 memory는 사용자가 직접 입력한 집중 시간
 선호 한 개로 시작한다. 자동 memory 추출이나 identity resolution은 포함하지 않는다.

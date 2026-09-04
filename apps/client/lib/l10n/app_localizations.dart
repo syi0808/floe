@@ -1036,6 +1036,180 @@ abstract class AppLocalizations {
   /// **'{value, plural, one{1 time} other{{value} times}}'**
   String zoomTimes(int value);
 
+  /// No description provided for @focusTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Find focus time'**
+  String get focusTitle;
+
+  /// No description provided for @focusQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'When should I focus today?'**
+  String get focusQuestion;
+
+  /// No description provided for @focusPreferenceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your focus preference'**
+  String get focusPreferenceTitle;
+
+  /// No description provided for @focusStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start (HH:mm)'**
+  String get focusStart;
+
+  /// No description provided for @focusEnd.
+  ///
+  /// In en, this message translates to:
+  /// **'End (HH:mm)'**
+  String get focusEnd;
+
+  /// No description provided for @focusDuration.
+  ///
+  /// In en, this message translates to:
+  /// **'Duration (minutes)'**
+  String get focusDuration;
+
+  /// No description provided for @focusSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save preference'**
+  String get focusSave;
+
+  /// No description provided for @focusDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete preference'**
+  String get focusDelete;
+
+  /// No description provided for @focusDefaults.
+  ///
+  /// In en, this message translates to:
+  /// **'No saved preference. Uses 09:00–18:00 and 60 minutes by default.'**
+  String get focusDefaults;
+
+  /// No description provided for @focusSource.
+  ///
+  /// In en, this message translates to:
+  /// **'User-entered · this person only'**
+  String get focusSource;
+
+  /// No description provided for @focusDisclosure.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to the local Go inference gateway. The selected target determines the model and provider. Titles, notes, account IDs and provider credentials are not included in model context. Remote API targets require your permission below. Nothing is added to your calendar.'**
+  String get focusDisclosure;
+
+  /// No description provided for @focusModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Configured gateway target ID'**
+  String get focusModel;
+
+  /// No description provided for @focusAllowExternal.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow this request to send the described context to the selected target’s external provider (including a local proxy’s upstream).'**
+  String get focusAllowExternal;
+
+  /// No description provided for @focusExternalDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'This target uses an external provider. Review the configured target and allow external transfer, or select a local target.'**
+  String get focusExternalDenied;
+
+  /// No description provided for @focusInvalidInput.
+  ///
+  /// In en, this message translates to:
+  /// **'Check the focus preference and target ID. IDs contain only letters, numbers, hyphens and underscores.'**
+  String get focusInvalidInput;
+
+  /// No description provided for @focusSuggest.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggest focus time'**
+  String get focusSuggest;
+
+  /// No description provided for @focusReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload preference'**
+  String get focusReload;
+
+  /// No description provided for @focusPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Working… You can close this window; no calendar changes will be made.'**
+  String get focusPending;
+
+  /// No description provided for @focusDirty.
+  ///
+  /// In en, this message translates to:
+  /// **'Save your changes before requesting a suggestion.'**
+  String get focusDirty;
+
+  /// No description provided for @focusInvalidPreference.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a same-day window (00:00–24:00) and a duration of 15–240 minutes that fits inside it.'**
+  String get focusInvalidPreference;
+
+  /// No description provided for @focusModelUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not use the inference target. Check the Go gateway, its authentication token, configured target and provider credentials, then retry.'**
+  String get focusModelUnavailable;
+
+  /// No description provided for @focusModelTimeout.
+  ///
+  /// In en, this message translates to:
+  /// **'The inference target took too long. Try again or select another configured target.'**
+  String get focusModelTimeout;
+
+  /// No description provided for @focusInvalidProposal.
+  ///
+  /// In en, this message translates to:
+  /// **'The model returned an invalid suggestion. Nothing was changed. Try again.'**
+  String get focusInvalidProposal;
+
+  /// No description provided for @focusNoSlot.
+  ///
+  /// In en, this message translates to:
+  /// **'No focus time fits the remaining day and your window. All-day events block the day. Try another date or preference.'**
+  String get focusNoSlot;
+
+  /// No description provided for @focusConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'Your schedule or preference changed. Reload and ask again.'**
+  String get focusConflict;
+
+  /// No description provided for @focusFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not load or save focus data. Reload and try again.'**
+  String get focusFailure;
+
+  /// No description provided for @focusEvidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Schedule context and sources'**
+  String get focusEvidence;
+
+  /// No description provided for @focusReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggestion only · nothing scheduled'**
+  String get focusReadOnly;
+
+  /// No description provided for @focusCalendarWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar data may be missing, incomplete or older than 15 minutes. Refresh Calendar and check availability before using this suggestion.'**
+  String get focusCalendarWarning;
+
   /// No description provided for @connectedServicesCount.
   ///
   /// In en, this message translates to:

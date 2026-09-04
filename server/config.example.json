@@ -1,0 +1,9 @@
+{
+  "targets": {
+    "local-focus": {
+      "provider": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "replace-with-installed-model"
+    }
+  }
+}

@@ -1,0 +1,291 @@
+package inference
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+const testToken = "fixture-gateway-token-at-least-32-bytes"
+const candidate = `{"slot_id":"slot_1","reason":"Unoccupied","source_ids":["schedule"]}`
+
+func fixtureRequest() Request {
+	return Request{SchemaVersion: 1, Target: "focus", Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
+}
+
+func fixtureGateway(test *testing.T, providerName, endpoint string) *Gateway {
+	test.Helper()
+	gateway, err := New(Config{Targets: map[string]Target{"focus": {Provider: providerName, BaseURL: endpoint, Model: "fixture-model", APIKeyEnv: "FIXTURE_KEY"}}}, testToken, func(string) string { return "private-provider-key" })
+	if err != nil {
+		test.Fatal(err)
+	}
+	return gateway
+}
+
+func invoke(gateway *Gateway, input Request) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(input)
+	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	writer := httptest.NewRecorder()
+	gateway.ServeHTTP(writer, request)
+	return writer
+}
+
+func TestOpenAIWireContract(test *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer private-provider-key" {
+			test.Error("wrong provider request")
+		}
+		var body map[string]any
+		if json.NewDecoder(request.Body).Decode(&body) != nil {
+			test.Error("bad request JSON")
+		}
+		if body["model"] != "fixture-model" || body["stream"] != false || body["tools"] != nil {
+			test.Error("unexpected model capabilities")
+		}
+		format := body["response_format"].(map[string]any)
+		if format["type"] != "json_schema" {
+			test.Error("missing schema")
+		}
+		encoded, _ := json.Marshal(body)
+		if strings.Contains(string(encoded), "private-provider-key") {
+			test.Error("credential entered model context")
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": candidate}}}})
+	}))
+	defer upstream.Close()
+	gateway := fixtureGateway(test, "openai_compatible", upstream.URL+"/v1")
+	input := fixtureRequest()
+	input.AllowExternal = true
+	response := invoke(gateway, input)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"target":"focus"`) {
+		test.Fatal(response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		test.Error("response must not be cached")
+	}
+}
+
+func TestExternalConsentPrecedesAnyProviderCall(test *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer upstream.Close()
+	response := invoke(fixtureGateway(test, "openai_compatible", upstream.URL), fixtureRequest())
+	if response.Code != 403 || !strings.Contains(response.Body.String(), "external_transfer_denied") || calls.Load() != 0 {
+		test.Fatal("external transfer was not blocked")
+	}
+}
+
+func TestOllamaPreflightAndStructuredRequest(test *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		if request.URL.Path == "/api/show" {
+			_, _ = writer.Write([]byte(`{}`))
+			return
+		}
+		if request.URL.Path != "/api/chat" {
+			test.Error("wrong path")
+		}
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		if body["format"] == nil || body["stream"] != false || body["tools"] != nil {
+			test.Error("wrong Ollama contract")
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"done": true, "message": map[string]any{"content": candidate}})
+	}))
+	defer upstream.Close()
+	response := invoke(fixtureGateway(test, "ollama", upstream.URL), fixtureRequest())
+	if response.Code != 200 || calls.Load() != 2 {
+		test.Fatal(response.Body.String())
+	}
+}
+
+func TestOllamaCloudAliasNeverReceivesContext(test *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		if request.URL.Path != "/api/show" {
+			test.Error("context sent to cloud alias")
+		}
+		_, _ = writer.Write([]byte(`{"remote_model":"remote","remote_host":"https://example.com"}`))
+	}))
+	defer upstream.Close()
+	if invoke(fixtureGateway(test, "ollama", upstream.URL), fixtureRequest()).Code != 502 || calls.Load() != 1 {
+		test.Fatal("cloud alias accepted")
+	}
+}
+
+func TestAuthenticationOriginAndRequestBounds(test *testing.T) {
+	gateway := fixtureGateway(test, "ollama", "http://127.0.0.1:1")
+	for _, auth := range []string{"", "Bearer wrong", testToken} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/generate", strings.NewReader(`{}`))
+		request.Header.Set("Authorization", auth)
+		writer := httptest.NewRecorder()
+		gateway.ServeHTTP(writer, request)
+		if writer.Code != 401 {
+			test.Error("unauthenticated request accepted")
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/targets", nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	request.Header.Set("Origin", "https://untrusted.example")
+	writer := httptest.NewRecorder()
+	gateway.ServeHTTP(writer, request)
+	if writer.Code != 403 {
+		test.Error("browser origin accepted")
+	}
+	for _, body := range []string{`{} {}`, `{"credential":"secret"}`, strings.Repeat("x", 98305)} {
+		request = httptest.NewRequest(http.MethodPost, "/v1/generate", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+testToken)
+		writer = httptest.NewRecorder()
+		gateway.ServeHTTP(writer, request)
+		if writer.Code != 400 {
+			test.Error("invalid request accepted")
+		}
+	}
+	input := fixtureRequest()
+	input.SchemaVersion = 2
+	if invoke(gateway, input).Code != 400 {
+		test.Error("unsupported version accepted")
+	}
+	input = fixtureRequest()
+	input.Target = "unknown"
+	if invoke(gateway, input).Code != 400 {
+		test.Error("unknown target accepted")
+	}
+}
+
+func TestInventoryDoesNotExposeSecretsOrEndpoints(test *testing.T) {
+	gateway := fixtureGateway(test, "openai_compatible", "https://private.example/v1")
+	request := httptest.NewRequest(http.MethodGet, "/v1/targets", nil)
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	writer := httptest.NewRecorder()
+	gateway.ServeHTTP(writer, request)
+	if writer.Code != 200 {
+		test.Fatal(writer.Body.String())
+	}
+	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", testToken} {
+		if strings.Contains(writer.Body.String(), secret) {
+			test.Error("inventory exposed secret or configuration")
+		}
+	}
+}
+
+func TestMalformedRefusedToolAndOversizedOutput(test *testing.T) {
+	for _, payload := range []string{
+		`not JSON`, `{"choices":[]}`, `{"choices":[{"finish_reason":"length","message":{"content":"{}"}}]}`,
+		`{"choices":[{"finish_reason":"stop","message":{"content":"{}","tool_calls":[{}]}}]}`,
+		`{"choices":[{"finish_reason":"stop","message":{"content":"{}","refusal":"no"}}]}`,
+		`{"choices":[{"finish_reason":"stop","message":{"content":"not JSON"}}]}`,
+		strings.Repeat("x", 1048577),
+	} {
+		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write([]byte(payload)) }))
+		input := fixtureRequest()
+		input.AllowExternal = true
+		response := invoke(fixtureGateway(test, "openai_compatible", upstream.URL), input)
+		upstream.Close()
+		if response.Code != 502 || !strings.Contains(response.Body.String(), "invalid_proposal") {
+			test.Fatal(response.Body.String())
+		}
+	}
+}
+
+func TestProviderErrorsAreRedactedWithoutRetriesOrRedirects(test *testing.T) {
+	for _, status := range []int{302, 401, 429, 500} {
+		var calls atomic.Int32
+		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			calls.Add(1)
+			writer.Header().Set("Location", "/redirected")
+			writer.WriteHeader(status)
+			_, _ = writer.Write([]byte("PRIVATE UPSTREAM ERROR"))
+		}))
+		input := fixtureRequest()
+		input.AllowExternal = true
+		response := invoke(fixtureGateway(test, "openai_compatible", upstream.URL), input)
+		upstream.Close()
+		if response.Code != 502 || calls.Load() != 1 || strings.Contains(response.Body.String(), "PRIVATE") {
+			test.Fatal(response.Body.String())
+		}
+	}
+}
+
+func TestDeadlineAndClientCancellationReachUpstream(test *testing.T) {
+	for _, cancelClient := range []bool{false, true} {
+		started := make(chan struct{})
+		cancelled := make(chan struct{})
+		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.Copy(io.Discard, request.Body)
+			close(started)
+			<-request.Context().Done()
+			close(cancelled)
+		}))
+		gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
+		gateway.timeout = 100 * time.Millisecond
+		input := fixtureRequest()
+		input.AllowExternal = true
+		body, _ := json.Marshal(input)
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(body)).WithContext(ctx)
+		request.Header.Set("Authorization", "Bearer "+testToken)
+		writer := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() { gateway.ServeHTTP(writer, request); close(done) }()
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			test.Fatal("upstream not reached")
+		}
+		if cancelClient {
+			cancel()
+		}
+		select {
+		case <-cancelled:
+		case <-time.After(3 * time.Second):
+			test.Fatal("cancellation not propagated")
+		}
+		<-done
+		cancel()
+		upstream.Close()
+		if !cancelClient && !strings.Contains(writer.Body.String(), "model_timeout") {
+			test.Fatal(writer.Body.String())
+		}
+	}
+}
+
+func TestConcurrencyIsBounded(test *testing.T) {
+	gateway := fixtureGateway(test, "ollama", "http://127.0.0.1:1")
+	for index := 0; index < cap(gateway.active); index++ {
+		gateway.active <- struct{}{}
+	}
+	if invoke(gateway, fixtureRequest()).Code != 429 {
+		test.Fatal("concurrency limit ignored")
+	}
+}
+
+func TestConfigurationRejectsUnsafeDestinationsAndMissingKeys(test *testing.T) {
+	for _, target := range []Target{
+		{Provider: "openai_compatible", BaseURL: "http://example.com/v1", Model: "model"},
+		{Provider: "openai_compatible", BaseURL: "https://user:secret@example.com/v1", Model: "model"},
+		{Provider: "openai_compatible", BaseURL: "https://example.com/v1?key=secret", Model: "model"},
+		{Provider: "ollama", BaseURL: "https://example.com", Model: "model"},
+		{Provider: "ollama", BaseURL: "http://127.0.0.1:11434", Model: "model:cloud"},
+		{Provider: "openai_compatible", BaseURL: "https://example.com", Model: "model", APIKeyEnv: "MISSING_KEY"},
+		{Provider: "unknown", BaseURL: "https://example.com", Model: "model"},
+	} {
+		_, err := New(Config{Targets: map[string]Target{"focus": target}}, testToken, func(string) string { return "" })
+		if err == nil {
+			test.Fatal("unsafe configuration accepted")
+		}
+	}
+	if _, err := New(Config{Targets: map[string]Target{}}, "short", func(string) string { return "" }); err == nil {
+		test.Fatal("weak gateway authentication")
+	}
+}

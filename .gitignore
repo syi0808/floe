@@ -1,4 +1,5 @@
 /target/
+/server/config.local.json
 *.db
 *.db-shm
 *.db-wal

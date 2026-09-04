@@ -561,6 +561,107 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get focusTitle => 'Find focus time';
+
+  @override
+  String get focusQuestion => 'When should I focus today?';
+
+  @override
+  String get focusPreferenceTitle => 'Your focus preference';
+
+  @override
+  String get focusStart => 'Start (HH:mm)';
+
+  @override
+  String get focusEnd => 'End (HH:mm)';
+
+  @override
+  String get focusDuration => 'Duration (minutes)';
+
+  @override
+  String get focusSave => 'Save preference';
+
+  @override
+  String get focusDelete => 'Delete preference';
+
+  @override
+  String get focusDefaults =>
+      'No saved preference. Uses 09:00–18:00 and 60 minutes by default.';
+
+  @override
+  String get focusSource => 'User-entered · this person only';
+
+  @override
+  String get focusDisclosure =>
+      'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to the local Go inference gateway. The selected target determines the model and provider. Titles, notes, account IDs and provider credentials are not included in model context. Remote API targets require your permission below. Nothing is added to your calendar.';
+
+  @override
+  String get focusModel => 'Configured gateway target ID';
+
+  @override
+  String get focusAllowExternal =>
+      'Allow this request to send the described context to the selected target’s external provider (including a local proxy’s upstream).';
+
+  @override
+  String get focusExternalDenied =>
+      'This target uses an external provider. Review the configured target and allow external transfer, or select a local target.';
+
+  @override
+  String get focusInvalidInput =>
+      'Check the focus preference and target ID. IDs contain only letters, numbers, hyphens and underscores.';
+
+  @override
+  String get focusSuggest => 'Suggest focus time';
+
+  @override
+  String get focusReload => 'Reload preference';
+
+  @override
+  String get focusPending =>
+      'Working… You can close this window; no calendar changes will be made.';
+
+  @override
+  String get focusDirty => 'Save your changes before requesting a suggestion.';
+
+  @override
+  String get focusInvalidPreference =>
+      'Enter a same-day window (00:00–24:00) and a duration of 15–240 minutes that fits inside it.';
+
+  @override
+  String get focusModelUnavailable =>
+      'Could not use the inference target. Check the Go gateway, its authentication token, configured target and provider credentials, then retry.';
+
+  @override
+  String get focusModelTimeout =>
+      'The inference target took too long. Try again or select another configured target.';
+
+  @override
+  String get focusInvalidProposal =>
+      'The model returned an invalid suggestion. Nothing was changed. Try again.';
+
+  @override
+  String get focusNoSlot =>
+      'No focus time fits the remaining day and your window. All-day events block the day. Try another date or preference.';
+
+  @override
+  String get focusConflict =>
+      'Your schedule or preference changed. Reload and ask again.';
+
+  @override
+  String get focusFailure =>
+      'Could not load or save focus data. Reload and try again.';
+
+  @override
+  String get focusEvidence => 'Schedule context and sources';
+
+  @override
+  String get focusReadOnly => 'Suggestion only · nothing scheduled';
+
+  @override
+  String get focusCalendarWarning =>
+      'Calendar data may be missing, incomplete or older than 15 minutes. Refresh Calendar and check availability before using this suggestion.';
+
+  @override
   String connectedServicesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);

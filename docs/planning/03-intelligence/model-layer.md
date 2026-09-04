@@ -2,6 +2,18 @@
 
 > Status: Accepted architectural direction
 
+## S2 실행 경계 — 2026-09-05
+
+[ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)에 따라 네트워크 기반
+모델 호출은 Floe 소유의 Go inference gateway로 모은다. 도메인은 target과
+전송 허용 범위를 명시하며, gateway는 인증·transport·timeout·오류 정규화를 맡는다.
+이는 업무 의미나 privacy를 추측하는 중앙 smart router가 아니다.
+
+Apple Foundation Models 같은 기기 내 모델은 native executor 경계로 분리하며
+원격 서버를 필수 경유하지 않는다. CLIProxyAPI 전체 채택과 OAuth adapter는
+보류한다. 현재 구현은 loopback Go service + API/Ollama의 bounded non-streaming
+호출이며, OAuth·native adapter·streaming·사용량 집계는 완료된 것으로 보지 않는다.
+
 ## 핵심 원칙
 
 Floe는 하나의 AI provider에 종속되지 않는다.
