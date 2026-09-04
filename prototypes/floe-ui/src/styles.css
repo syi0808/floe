@@ -172,12 +172,10 @@ p {
 }
 
 .sq-button.nav-link {
-  width: 58px;
-  min-width: 58px;
-  min-height: 56px;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px 4px;
+  width: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 12px;
   background: transparent;
   box-shadow: none;
   color: var(--ink-secondary);

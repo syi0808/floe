@@ -103,11 +103,11 @@ function GlobalSidebar({ screen, onNavigate }) {
               radius={SQUIRCLE_RADIUS.control}
               className={screen === item.id ? 'nav-link active' : 'nav-link'}
               aria-current={screen === item.id ? 'page' : undefined}
+              aria-label={item.label}
               title={item.label}
               onClick={() => onNavigate(item.id)}
             >
               <Icon size={19} strokeWidth={1.8} aria-hidden="true" />
-              <span>{item.label}</span>
             </SquircleButton>
           );
         })}
