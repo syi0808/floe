@@ -1,6 +1,4 @@
 import { useState } from 'react';
-import { Settings } from 'lucide-react';
-import { SquircleButton } from './primitives.jsx';
 import { GlobalSidebar } from './components/shell/GlobalSidebar.jsx';
 import { TodayScreen } from './components/reference/TodayScreen.jsx';
 import { TaskDetail } from './components/tasks/TaskDetail.jsx';
@@ -13,19 +11,11 @@ export function App() {
 
   return (
     <main className="prototype-stage">
-      <div className="app-window">
+      <div className={`app-window ${screen === 'today' ? 'calendar-window' : ''}`}>
         <GlobalSidebar
           screen={screen === 'calendar-connection' ? 'connections' : screen}
           onNavigate={setScreen}
         />
-        <SquircleButton
-          className="settings-action"
-          aria-label="Settings"
-          title="Settings"
-          onClick={() => setScreen('connections')}
-        >
-          <Settings size={20} strokeWidth={1.8} />
-        </SquircleButton>
         <div className="screen-region">
           <div hidden={!['today', 'connections', 'calendar-connection'].includes(screen)}>
             <CalendarScreen

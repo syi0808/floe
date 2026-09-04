@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, ListTodo, Link2, NotebookPen } from 'lucide-react';
+import { BarChart3, CalendarDays, ListTodo, Link2, NotebookPen, Settings } from 'lucide-react';
 import { SQUIRCLE_RADIUS, SquircleButton, SquircleSurface } from '../../primitives.jsx';
 import { mascotUrl } from '../../assets.js';
 
@@ -47,6 +47,9 @@ export function GlobalSidebar({ screen, onNavigate }) {
           );
         })}
       </nav>
+      <SquircleButton className="settings-action nav-link" aria-label="Settings" title="Settings" onClick={() => onNavigate('connections')}>
+        <Settings size={19} strokeWidth={1.8} aria-hidden="true" />
+      </SquircleButton>
     </SquircleSurface>
   );
 }

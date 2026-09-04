@@ -3,6 +3,67 @@
   max-width: 1320px;
   margin: auto;
 }
+.calendar-window {
+  height: 100dvh;
+  overflow: hidden;
+}
+.calendar-window .screen-region,
+.calendar-window .screen-region > div,
+.calendar-window .s1-screen {
+  height: 100%;
+  min-height: 0;
+}
+.calendar-window .s1-screen > :not(.s1-day-layout) {
+  flex-shrink: 0;
+}
+.calendar-window .s1-screen {
+  display: flex;
+  flex-direction: column;
+}
+.calendar-window .s1-day-layout {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+.calendar-window .s1-day-layout > .s1-side-stack {
+  overflow-y: auto;
+  min-height: 0;
+}
+.calendar-window .s1-day-layout > .s1-side-stack > * {
+  flex-shrink: 0;
+}
+.calendar-window .s1-agenda,
+.calendar-window .s1-agenda .s1-surface-content,
+.calendar-window .s1-agenda .s1-surface-content > div[inert],
+.calendar-window .s1-agenda .s1-surface-content > div[aria-hidden] {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.calendar-window .s1-timeline-viewport {
+  flex: 1;
+  min-height: 0;
+}
+.calendar-window .s1-timeline-scroll {
+  height: 100%;
+}
+.calendar-window .s1-all-day {
+  max-height: 120px;
+  overflow-y: auto;
+}
+@media (max-width: 960px) {
+  .calendar-window .s1-day-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 7fr) minmax(0, 3fr);
+  }
+}
+@media (max-width: 780px) {
+  .calendar-window .s1-screen {
+    padding-bottom: 16px;
+  }
+}
 .s1-eyebrow {
   color: var(--primary-600);
   font-size: 10px;

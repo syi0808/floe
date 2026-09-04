@@ -67,58 +67,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           body: SafeArea(
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(
-                      narrow ? FloeSpace.md : 120,
-                      narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
-                      narrow ? FloeSpace.md : 36,
-                      narrow ? 112 : 28,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        FloeScreenEntrance(
-                          identity: selectedTaskId ?? destination,
-                          child: _workspace(narrow),
-                        ),
-                        if (destination == _DestinationView.today &&
-                            selectedTaskId == null)
-                          Padding(
-                            padding: EdgeInsets.only(top: narrow ? 16 : 22),
-                            child: _CaptureBar(
-                              textController: captureController,
-                              pending: controller.commandPending,
-                              submit: _capture,
-                              capturedText: capturedText,
-                              dismiss: () =>
-                                  setState(() => capturedText = null),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+                Positioned.fill(child: _page(narrow)),
                 _AdaptiveNavigation(
                   narrow: narrow,
                   selected: destination,
                   onSelected: _selectDestination,
-                ),
-                Positioned(
-                  top: narrow ? 10 : 30,
-                  right: narrow ? 8 : 36,
-                  child: FloeButton.icon(
-                    tooltip: AppLocalizations.of(context).settings,
-                    style: ButtonStyle(
-                      backgroundColor: WidgetStatePropertyAll(
-                        Colors.transparent,
-                      ),
-                      overlayColor: WidgetStatePropertyAll(Colors.transparent),
-                    ),
-                    onPressed: () =>
-                        _selectDestination(_DestinationView.connections),
-                    icon: Icon(LucideIcons.settings, size: 20),
-                  ),
                 ),
               ],
             ),
@@ -127,6 +80,42 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       },
     ),
   );
+
+  Widget _page(bool narrow) {
+    final padding = EdgeInsets.fromLTRB(
+      narrow ? FloeSpace.md : 120,
+      narrow ? 16 : 24,
+      narrow ? FloeSpace.md : 36,
+      narrow ? 96 : 24,
+    );
+    final workspace = FloeScreenEntrance(
+      identity: selectedTaskId ?? destination,
+      child: _workspace(narrow),
+    );
+    if (destination != _DestinationView.today || selectedTaskId != null) {
+      return SingleChildScrollView(padding: padding, child: workspace);
+    }
+    return Padding(
+      padding: padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: workspace),
+          SizedBox(height: narrow ? 16 : 22),
+          _CaptureBar(
+            textController: captureController,
+            pending: controller.commandPending,
+            submit: _capture,
+            capturedText: capturedText,
+            dismiss: () => setState(() => capturedText = null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _fillDay(Widget child) =>
+      destination == _DestinationView.today ? Expanded(child: child) : child;
 
   Widget _workspace(bool narrow) {
     if (destination == _DestinationView.connections) {
@@ -169,7 +158,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       children: [
         if (controller.errorMessage case final message?)
           _ErrorNotice(message: message, dismiss: controller.clearError),
-        switch (destination) {
+        _fillDay(switch (destination) {
           _DestinationView.today => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -203,7 +192,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                     ),
                   ),
                 ),
-              _content(narrow, snapshot),
+              Expanded(child: _content(narrow, snapshot)),
             ],
           ),
           _DestinationView.tasks => _TasksScreen(
@@ -220,7 +209,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             onCreate: _createNote,
             pending: controller.commandPending,
           ),
-        },
+        }),
       ],
     );
   }
@@ -245,14 +234,14 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              primary,
+              Expanded(flex: 7, child: primary),
               SizedBox(height: narrow ? 16 : 24),
-              rail,
+              Expanded(flex: 3, child: SingleChildScrollView(child: rail)),
             ],
           );
         }
         return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(flex: 7, child: primary),
             SizedBox(width: 24),
@@ -261,7 +250,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                 288,
                 double.infinity,
               ),
-              child: rail,
+              child: SingleChildScrollView(child: rail),
             ),
           ],
         );
@@ -344,6 +333,11 @@ class _AdaptiveNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final settings = FloeButton.icon(
+      tooltip: AppLocalizations.of(context).settings,
+      onPressed: () => onSelected(_DestinationView.connections),
+      icon: Icon(LucideIcons.settings, size: 20),
+    );
     if (narrow) {
       return Positioned(
         right: FloeSpace.md,
@@ -363,6 +357,7 @@ class _AdaptiveNavigation extends StatelessWidget {
                     onPressed: () => onSelected(view),
                   ),
                 ),
+              Expanded(child: settings),
             ],
           ),
         ),
@@ -386,6 +381,8 @@ class _AdaptiveNavigation extends StatelessWidget {
             ),
             SizedBox(height: FloeSpace.sm),
           ],
+          Spacer(),
+          settings,
         ],
       ),
     );

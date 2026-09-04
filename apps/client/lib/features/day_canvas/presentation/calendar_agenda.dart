@@ -84,10 +84,6 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
       snapshot.timezoneOffsetSeconds,
     );
     final empty = events.isEmpty && !widget.loading;
-    final height = (MediaQuery.sizeOf(context).height - 320).clamp(
-      360.0,
-      680.0,
-    );
     final now = snapshot.generatedAt.toUtc().add(
       Duration(seconds: snapshot.timezoneOffsetSeconds),
     );
@@ -110,60 +106,64 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                 ignoring: empty || widget.loading,
                 child: Column(
                   children: [
-                    Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: 72,
-                            child: Padding(
-                              padding: EdgeInsets.only(top: 8),
-                              child: Text(
-                                AppLocalizations.of(context).allDay,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: FloePalette.neutral600,
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: 120),
+                      child: SingleChildScrollView(
+                        primary: false,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 72,
+                              child: Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Text(
+                                  AppLocalizations.of(context).allDay,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: FloePalette.neutral600,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (allDay.isEmpty)
-                                  SizedBox(height: 24, child: Text('—')),
-                                for (final event in allDay)
-                                  FloeTextLink(
-                                    color: FloePalette.neutral950,
-                                    leading: Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: DayAppearance.tone(
-                                          context,
-                                          event.id,
-                                          ItemTone.mint,
-                                        ).accent,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (allDay.isEmpty)
+                                    SizedBox(height: 24, child: Text('—')),
+                                  for (final event in allDay)
+                                    FloeTextLink(
+                                      color: FloePalette.neutral950,
+                                      leading: Container(
+                                        width: 10,
+                                        height: 10,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: DayAppearance.tone(
+                                            context,
+                                            event.id,
+                                            ItemTone.mint,
+                                          ).accent,
+                                        ),
+                                      ),
+                                      label:
+                                          '${event.title}${event.calendarName == null ? '' : '   ${event.calendarName}'}',
+                                      onPressed: () => openCalendarEvent(
+                                        context,
+                                        event,
+                                        snapshot,
                                       ),
                                     ),
-                                    label:
-                                        '${event.title}${event.calendarName == null ? '' : '   ${event.calendarName}'}',
-                                    onPressed: () => openCalendarEvent(
-                                      context,
-                                      event,
-                                      snapshot,
-                                    ),
-                                  ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                     Divider(height: 1),
@@ -213,8 +213,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         ],
                       ),
                     ),
-                    SizedBox(
-                      height: height,
+                    Expanded(
                       child: Scrollbar(
                         controller: scroll,
                         thumbVisibility: true,
@@ -329,7 +328,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                 child: Center(
                   child: widget.loading
                       ? FloeDotSpinner()
-                      : Padding(
+                      : SingleChildScrollView(
+                          primary: false,
                           padding: EdgeInsets.all(24),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
