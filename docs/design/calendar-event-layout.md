@@ -5,7 +5,8 @@
 - The calendar has its own vertical scroll region covering 00:00–24:00. All-day
   events and zoom controls stay outside that region. Initial viewport starts at 08:00;
   date changes retain the viewed time, and zoom retains the top visible time.
-- Base scale is 60px/hour (1px/minute). Zoom options are 1×, 3× and 12×. A five-minute
+- Base scale is 60px/hour (1px/minute). A violet range slider adjusts zoom from 1× to
+  12× in 1× steps, with keyboard support and an accessible value. A five-minute
   event is 5px at 1× and 60px at 12×; never enlarge its actual time block to fit content.
 - Compute top from minutes since midnight and height from end minus start. The hour
   lines and current-time marker share that coordinate system. No rounding to five

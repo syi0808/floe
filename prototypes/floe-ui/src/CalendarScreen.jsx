@@ -18,6 +18,8 @@ import {
   Unplug,
   WifiOff,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { SquircleBlock, SquircleButton, SquircleSurface } from './primitives.jsx';
 import mascotUrl from '../../../assets/floe-mascot.svg?url';
@@ -478,19 +480,23 @@ export function CalendarScreen({ page, onNavigate }) {
                   )}
                 </div>
                 <div className="s1-timeline-tools">
-                  <span>00:00–24:00</span>
-                  <label>
-                    Zoom
-                    <select
-                      aria-label="Timeline zoom"
-                      value={pixelsPerMinute}
-                      onChange={(event) => setPixelsPerMinute(Number(event.target.value))}
-                    >
-                      <option value="1">1×</option>
-                      <option value="3">3×</option>
-                      <option value="12">12× · 5 min</option>
-                    </select>
-                  </label>
+                  <ZoomOut size={15} aria-hidden="true" />
+                  <input
+                    className="s1-zoom-slider"
+                    type="range"
+                    min="1"
+                    max="12"
+                    step="1"
+                    aria-label="Timeline zoom"
+                    aria-valuetext={`${pixelsPerMinute} times magnification`}
+                    value={pixelsPerMinute}
+                    style={{ '--zoom-progress': `${((pixelsPerMinute - 1) / 11) * 100}%` }}
+                    onChange={(event) => setPixelsPerMinute(Number(event.target.value))}
+                  />
+                  <ZoomIn size={15} aria-hidden="true" />
+                  <span className="s1-zoom-value" aria-hidden="true">
+                    {pixelsPerMinute}×
+                  </span>
                 </div>
                 <div className="s1-timeline-viewport">
                   <div
