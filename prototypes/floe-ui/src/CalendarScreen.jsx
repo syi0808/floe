@@ -284,9 +284,12 @@ export function CalendarScreen({ page, onNavigate }) {
                 </SquircleButton>
               </div>
               {hasConnection && (
-                <button className="s1-danger-link" onClick={() => setModal('disconnect')}>
+                <SquircleButton
+                  className="s1-danger-link s1-quiet-action"
+                  onClick={() => setModal('disconnect')}
+                >
                   <Unplug size={14} /> Disconnect from Floe
-                </button>
+                </SquircleButton>
               )}
             </Surface>
             <div className="s1-side-stack">
@@ -394,7 +397,8 @@ export function CalendarScreen({ page, onNavigate }) {
                 <div className="s1-all-day">
                   <span>All day</span>
                   {hasCache ? (
-                    <button
+                    <SquircleButton
+                      className="s1-quiet-action"
                       disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
@@ -409,13 +413,13 @@ export function CalendarScreen({ page, onNavigate }) {
                       }
                     >
                       <span className="tone-dot mint" /> A day for making <small>Personal</small>
-                    </button>
+                    </SquircleButton>
                   ) : (
                     <span className="s1-muted">—</span>
                   )}
                   {hasCache && (
-                    <button
-                      className="s1-more-all-day"
+                    <SquircleButton
+                      className="s1-more-all-day s1-quiet-action"
                       disabled={phase === 'syncing'}
                       onClick={() =>
                         setModal({
@@ -432,7 +436,7 @@ export function CalendarScreen({ page, onNavigate }) {
                       }
                     >
                       <span className="tone-dot violet" /> Research week <small>Day 2 of 3</small>
-                    </button>
+                    </SquircleButton>
                   )}
                 </div>
                 <div
@@ -539,9 +543,12 @@ export function CalendarScreen({ page, onNavigate }) {
                     Finish the launch brief<small>One good thing to move forward</small>
                   </span>
                 </label>
-                <button className="s1-text-link" onClick={() => onNavigate('tasks')}>
+                <SquircleButton
+                  className="s1-text-link s1-quiet-action"
+                  onClick={() => onNavigate('tasks')}
+                >
                   See your tasks <ArrowRight size={15} />
-                </button>
+                </SquircleButton>
               </Surface>
               <Surface>
                 <div className="s1-card-heading">
