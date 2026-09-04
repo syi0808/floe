@@ -56,84 +56,63 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       builder: (context, constraints) {
         final narrow = constraints.maxWidth <= 780;
         return Scaffold(
-          backgroundColor: narrow
-              ? FloePalette.neutral25
-              : const Color(0xFFF5F3FA),
+          backgroundColor: FloePalette.neutral25,
           body: SafeArea(
-            minimum: EdgeInsets.all(narrow ? 0 : FloeSpace.base),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1500),
-                child: FloeSquircle(
-                  size: FloeSquircleSize.frame,
-                  fill: FloePalette.neutral25,
-                  borderWidth: narrow ? 0 : 1,
-                  clipBehavior: narrow ? Clip.none : Clip.antiAlias,
-                  padding: EdgeInsets.all(narrow ? 0 : 1),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: SingleChildScrollView(
-                          padding: EdgeInsets.fromLTRB(
-                            narrow ? FloeSpace.md : 120,
-                            narrow
-                                ? (constraints.maxWidth <= 430 ? 52 : 58)
-                                : 72,
-                            narrow ? FloeSpace.md : 36,
-                            narrow ? 112 : 28,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              FloeScreenEntrance(
-                                identity: selectedTaskId ?? destination,
-                                child: _workspace(narrow),
-                              ),
-                              if (destination == _DestinationView.today &&
-                                  selectedTaskId == null)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    top: narrow ? 16 : 22,
-                                  ),
-                                  child: _CaptureBar(
-                                    textController: captureController,
-                                    pending: controller.commandPending,
-                                    submit: _capture,
-                                    capturedText: capturedText,
-                                    dismiss: () =>
-                                        setState(() => capturedText = null),
-                                  ),
-                                ),
-                            ],
-                          ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(
+                      narrow ? FloeSpace.md : 120,
+                      narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
+                      narrow ? FloeSpace.md : 36,
+                      narrow ? 112 : 28,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        FloeScreenEntrance(
+                          identity: selectedTaskId ?? destination,
+                          child: _workspace(narrow),
                         ),
-                      ),
-                      _AdaptiveNavigation(
-                        narrow: narrow,
-                        selected: destination,
-                        onSelected: _selectDestination,
-                      ),
-                      Positioned(
-                        top: narrow ? 10 : 30,
-                        right: narrow ? 8 : 36,
-                        child: FloeButton.icon(
-                          tooltip: '설정',
-                          style: const ButtonStyle(
-                            backgroundColor: WidgetStatePropertyAll(
-                              Colors.transparent,
-                            ),
-                            overlayColor: WidgetStatePropertyAll(
-                              Colors.transparent,
+                        if (destination == _DestinationView.today &&
+                            selectedTaskId == null)
+                          Padding(
+                            padding: EdgeInsets.only(top: narrow ? 16 : 22),
+                            child: _CaptureBar(
+                              textController: captureController,
+                              pending: controller.commandPending,
+                              submit: _capture,
+                              capturedText: capturedText,
+                              dismiss: () =>
+                                  setState(() => capturedText = null),
                             ),
                           ),
-                          onPressed: () => _showComingSoon(context),
-                          icon: const Icon(LucideIcons.settings, size: 20),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
+                _AdaptiveNavigation(
+                  narrow: narrow,
+                  selected: destination,
+                  onSelected: _selectDestination,
+                ),
+                Positioned(
+                  top: narrow ? 10 : 30,
+                  right: narrow ? 8 : 36,
+                  child: FloeButton.icon(
+                    tooltip: '설정',
+                    style: const ButtonStyle(
+                      backgroundColor: WidgetStatePropertyAll(
+                        Colors.transparent,
+                      ),
+                      overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                    ),
+                    onPressed: () => _showComingSoon(context),
+                    icon: const Icon(LucideIcons.settings, size: 20),
+                  ),
+                ),
+              ],
             ),
           ),
         );

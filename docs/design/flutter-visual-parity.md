@@ -30,9 +30,11 @@
 
 ## 검증 가능한 치수
 
+후속 변경: Flutter는 HTML의 바깥 frame·테두리·16px 여백·1500px 최대 폭을 제거하고 창 전체를 사용한다. 개별 카드와 입력창은 유지한다. macOS 타이틀바는 제목과 배경을 숨기고 기본 창 제어 버튼을 유지한다. 기존 스크린샷 갤러리는 frame 제거 이전 캡처다.
+
 | Today timeline | HTML | Flutter |
 |---|---|---|
-| 1440px viewport, left / top | 137 / 163 | 137 / 163 |
+| 1440px viewport, left / top | 137 / 163 | 120 / 146 |
 | 390px viewport, left / top | 12 / 182 | 12 / 182 |
 | timeline card height | 756 | 756 |
 | all-day / hour step | 50 / 64 | 50 / 64 |

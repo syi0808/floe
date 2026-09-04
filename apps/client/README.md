@@ -6,6 +6,8 @@ The production UI follows the squircle-first HTML reference: a compact desktop r
 
 The app bundles Pretendard, Lucide icons, and the reference mascot SVG. `FloeSquircle` uses `figma_squircle` with corner smoothing `0.82`; a zero-width border is truly absent rather than a hairline.
 
+The app shell fills the window without the HTML prototype's outer frame, border, desktop margin, or 1500 px width cap. Individual cards and fields retain their surfaces. On macOS, content extends into a transparent, title-free titlebar; standard window controls, resizing, and native window dragging remain available.
+
 ## Run on macOS
 
 ```sh

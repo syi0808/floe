@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -68,6 +69,13 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is FloeSquircle && widget.size == FloeSquircleSize.frame,
+          ),
+          findsNothing,
+        );
         await tester.runAsync(() async {
           const loader = SvgAssetLoader('assets/floe-mascot.svg');
           await svg.cache.putIfAbsent(
@@ -80,8 +88,8 @@ void main() {
           final timeline = tester.getRect(
             find.byKey(const Key('timeline-card')),
           );
-          expect(timeline.left, size.width <= 780 ? 12 : 137);
-          expect(timeline.top, size.width <= 780 ? 182 : 163);
+          expect(timeline.left, size.width <= 780 ? 12 : 120);
+          expect(timeline.top, size.width <= 780 ? 182 : 146);
           expect(timeline.height, 756);
           expect(
             tester.getTopLeft(find.byKey(const Key('capture-field'))).dy,
