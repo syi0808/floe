@@ -1,31 +1,30 @@
 # Floe HTML UI Prototype
 
 Interactive browser prototype for the squircle-first Floe interface. Today now opens
-the S1 connected Calendar reference: a quiet source/status row, read-only event
+the S1 unified Calendar reference: one day across all connected calendars, read-only event
 details, local tasks and notes, and recoverable connection states. Connect (or the
-settings icon) opens Calendar management. Task Detail, Notes, Progress, and the
-earlier Personal Day/suggestion reference remain available.
+settings icon) opens Calendar management. Task Detail, Notes and Progress remain available.
 
 ## Explore S1
 
 - **Today:** open an event for provenance, original/display time zones, recurrence,
   and all-day exclusive boundaries. Refresh the selected date; use day arrows to
   distinguish an unread date from a successfully checked empty date.
-- **Connect / Settings:** inspect the selected calendar and stored dates; change it
-  with a confirmation, manage permission recovery, or simulate disconnection.
-- **S1 · Preview states:** opens the Prototype lab with 12 deterministic states:
-  connected, disconnected, syncing, reopened cache, failed read, denied/revoked
-  permission, unavailable calendar, no calendars, empty date, unread date, local-load error.
-- **External changes:** in the lab, simulate a provider edit/deletion, then refresh.
-  The cached view changes only after successful collection. Repeated reads do not
-  append duplicate cards. Local capture/tasks survive Calendar switching/disconnection.
-- **Earlier design:** the lab links to the original Personal Day reference, including
-  the Floe suggestion. S1 itself has no model suggestions or external write actions.
+- **Connect / Settings:** inspect all included calendars/accounts and stored dates;
+  refresh all calendars, manage permission recovery, or simulate integration-wide
+  disconnection. There is no single-calendar selection or switching flow.
+- **State review:** no prototype controls appear on the page. Development URLs such
+  as `/?state=disconnected`, `/?state=offline` and `/?state=revoked` load deterministic
+  fixtures. All 12 state values are listed in the screen/state specification below.
+- **Local data:** captured notes and tasks survive navigation and Calendar disconnection.
+  S1 has no model suggestions or external write actions. The external-change lab and
+  earlier-reference link are removed from the UI.
 
 All data, permission dialogs, settings handoffs, and refreshes are **simulated**.
 Nothing touches EventKit, accounts, or the real Floe database. Prototype state is
 in-memory and resets on browser reload, while navigation within the app preserves it.
-The proposed disconnect UI is not a claim of implemented native functionality.
+The proposed all-calendar scope and disconnect UI are not claims of implemented
+native functionality; the existing native app still uses single-calendar selection.
 
 See [the screen/state specification](../../docs/design/s1-calendar-ui.md) for the
 interaction matrix and implementation boundaries.

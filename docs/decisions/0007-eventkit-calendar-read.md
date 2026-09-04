@@ -29,6 +29,10 @@ S3 must still implement its separate explicit approval and execution boundary.
 
 ## Mirror contract
 
+The single-calendar selection scope below describes the existing native implementation.
+It is superseded as a product target by [ADR 0008](0008-unified-calendar-read.md).
+Migration and live acceptance of the all-calendar scope remain pending.
+
 - One selected calendar per Person. Identity is Person + provider + calendar ID.
 - EventKit local item ID plus original recurrence occurrence date identifies an
   occurrence. SHA-256 of the normalized title/schedule and modification date is

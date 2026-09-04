@@ -50,8 +50,12 @@ macOS 26.2 (25C56), arm64. Connector integration is fixture; EventKit is SDK/bui
 
 ### S1 UI reference
 
-The HTML prototype now includes the connected Today page, connection management,
-seven popup flows, twelve state previews, and simulated external update/deletion.
+The HTML prototype now uses a quiet unified Today view of all connected calendars,
+connection inventory, and five popup flows without an on-page prototype lab.
+User feedback expands the target from one selected calendar to all calendars available
+through macOS Calendar; [ADR 0008](docs/decisions/0008-unified-calendar-read.md) records
+the scope and pending native migration. Existing native single-selection evidence does
+not establish acceptance of this new multi-calendar contract.
 [UI specification](docs/design/s1-calendar-ui.md) records behavior, responsive checks,
 and proposed-vs-native boundaries. This changes the design reference only; native
 implementation and live acceptance counts are unchanged.

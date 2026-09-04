@@ -14,7 +14,6 @@ import {
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
-  Search,
   ShieldCheck,
   Unplug,
   WifiOff,
@@ -46,6 +45,7 @@ const scenarios = {
 const externalEvents = [
   {
     id: 'standup',
+    calendarId: 'work',
     title: 'A little alignment',
     time: '9:30 – 10:00 AM',
     top: 90,
@@ -56,6 +56,7 @@ const externalEvents = [
   },
   {
     id: 'design',
+    calendarId: 'work',
     title: 'Make room for the details',
     time: '11:00 AM – 12:00 PM',
     top: 180,
@@ -65,6 +66,7 @@ const externalEvents = [
   },
   {
     id: 'remote',
+    calendarId: 'team',
     title: 'Across time zones',
     time: '4:00 – 4:45 PM',
     top: 480,
@@ -83,21 +85,23 @@ function Surface({ children, className = '' }) {
 }
 
 export function CalendarScreen({ page, onNavigate }) {
-  const [phase, setPhase] = useState('connected');
-  const [calendar, setCalendar] = useState(calendars[0]);
-  const [dayOffset, setDayOffset] = useState(0);
+  const [phase, setPhase] = useState(() => {
+    const scenario = new URLSearchParams(window.location.search).get('state');
+    return Object.hasOwn(scenarios, scenario) ? scenario : 'connected';
+  });
+  const [dayOffset, setDayOffset] = useState(() => (phase === 'uncollected' ? 1 : 0));
   const [modal, setModal] = useState(null);
-  const [choice, setChoice] = useState('work');
-  const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   const [taskDone, setTaskDone] = useState(false);
   const [capture, setCapture] = useState('');
   const [localNotes, setLocalNotes] = useState([]);
-  const [readDates, setReadDates] = useState([0]);
-  const [cachedCalendarId, setCachedCalendarId] = useState('work');
-  const [changePending, setChangePending] = useState(false);
-  const [externalRevision, setExternalRevision] = useState(0);
-  const lab = useRef(null);
+  const [readDates, setReadDates] = useState(() =>
+    ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'uncollected'].includes(
+      phase,
+    )
+      ? [0]
+      : [],
+  );
   const timer = useRef(null);
   const toastTimer = useRef(null);
   const date = new Date(Date.UTC(2026, 8, 4 + dayOffset));
@@ -115,8 +119,7 @@ export function CalendarScreen({ page, onNavigate }) {
   const hasCache =
     ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing'].includes(phase) &&
     dayOffset === 0 &&
-    readDates.includes(0) &&
-    cachedCalendarId === calendar.id;
+    readDates.includes(0);
   const hasConnection = !['disconnected', 'denied', 'noCalendars'].includes(phase);
   const stale = ['cached', 'offline', 'revoked', 'missing'].includes(phase);
   const statusTone = ['offline', 'revoked', 'missing', 'loadError'].includes(phase)
@@ -124,19 +127,10 @@ export function CalendarScreen({ page, onNavigate }) {
     : ['connected', 'empty'].includes(phase)
       ? ''
       : 'neutral';
-  const visibleEvents = externalEvents
-    .filter((event) => !externalRevision || event.id !== 'standup')
-    .map((event) =>
-      externalRevision && event.id === 'design'
-        ? {
-            ...event,
-            title: 'Design review · updated',
-            time: '11:30 AM – 12:00 PM',
-            top: 210,
-            original: 'Sep 4, 11:30 AM – 12:00 PM KST',
-          }
-        : event,
-    );
+  const detailCalendar =
+    typeof modal === 'object' && modal
+      ? calendars.find((item) => item.id === modal.calendarId)
+      : null;
 
   useEffect(
     () => () => {
@@ -152,46 +146,14 @@ export function CalendarScreen({ page, onNavigate }) {
     toastTimer.current = setTimeout(() => setToast(''), 4500);
   }
 
-  function preview(value) {
+  function refresh() {
     clearTimeout(timer.current);
-    setPhase(value);
-    setModal(null);
-    setToast('');
-    setDayOffset(value === 'uncollected' ? 1 : 0);
-    setReadDates(
-      ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'uncollected'].includes(
-        value,
-      )
-        ? [0]
-        : [],
-    );
-    setCachedCalendarId(calendar.id);
-    setChangePending(false);
-    setExternalRevision(0);
-  }
-
-  function refresh(nextCalendar = calendar) {
-    clearTimeout(timer.current);
-    setCalendar(nextCalendar);
-    const changing = nextCalendar.id !== calendar.id;
-    if (changing) setReadDates([]);
-    if (changing) {
-      setExternalRevision(0);
-      setChangePending(false);
-    }
-    setCachedCalendarId(nextCalendar.id);
     setModal(null);
     setPhase('syncing');
     timer.current = setTimeout(() => {
       setPhase(dayOffset === 0 ? 'connected' : 'empty');
-      setReadDates((current) => [...new Set([...(changing ? [] : current), dayOffset])]);
-      if (changePending && !changing && dayOffset === 0) {
-        setExternalRevision(1);
-        setChangePending(false);
-        notify(
-          'Refreshed · 1 event updated, 1 removed. Other dates and local items are unchanged.',
-        );
-      } else notify('Calendar refreshed. Your local tasks and notes are unchanged.');
+      setReadDates((current) => [...new Set([...current, dayOffset])]);
+      notify('All calendars refreshed. Your local tasks and notes are unchanged.');
     }, 1100);
   }
 
@@ -200,17 +162,6 @@ export function CalendarScreen({ page, onNavigate }) {
     setDayOffset(offset);
     if (hasConnection && !['revoked', 'missing', 'offline', 'loadError'].includes(phase))
       setPhase(readDates.includes(offset) ? (offset === 0 ? 'cached' : 'empty') : 'uncollected');
-  }
-
-  function picker() {
-    setChoice(calendar.id);
-    setSearch('');
-    setModal('picker');
-  }
-
-  function selectCalendar() {
-    if (hasConnection && choice !== calendar.id) setModal('switch');
-    else refresh(calendars.find((item) => item.id === choice));
   }
 
   const statusLabel =
@@ -228,28 +179,6 @@ export function CalendarScreen({ page, onNavigate }) {
 
   return (
     <div className="s1-screen">
-      <header className="s1-heading">
-        <div>
-          <div className="s1-eyebrow">YOUR DAY, WITH CONTEXT</div>
-          <h1>{page === 'connections' ? 'A little more connected.' : 'Space for what matters.'}</h1>
-          <p>
-            {page === 'connections'
-              ? 'Your calendars. On your terms. Always read-only.'
-              : 'Your calendar and your own plans, quietly in one place.'}
-          </p>
-        </div>
-        <button
-          className="s1-demo-label s1-lab-trigger"
-          aria-controls="s1-lab"
-          onClick={() => {
-            lab.current.open = true;
-            lab.current.scrollIntoView({ block: 'center' });
-          }}
-        >
-          <span /> S1 · Preview states
-        </button>
-      </header>
-
       {page === 'connections' ? (
         <>
           <button className="back-action s1-back" onClick={() => onNavigate('today')}>
@@ -270,15 +199,19 @@ export function CalendarScreen({ page, onNavigate }) {
                 </span>
               </div>
               <p className="s1-body-copy">
-                Bring one calendar into your day. Floe reads its events; it never creates, edits, or
-                deletes anything in Calendar.
+                Bring all calendars on this Mac into one day. Floe reads their events; it never
+                creates, edits, or deletes anything in Calendar.
               </p>
               <div className="s1-connection-record">
                 <div>
-                  <span className="s1-meta-label">SELECTED CALENDAR</span>
-                  <strong>{hasConnection ? calendar.name : 'Nothing connected yet'}</strong>
+                  <span className="s1-meta-label">Connected calendars</span>
+                  <strong>
+                    {hasConnection ? 'All calendars on this Mac' : 'Nothing connected yet'}
+                  </strong>
                   <small>
-                    {hasConnection ? calendar.account : 'Choose a calendar after granting access'}
+                    {hasConnection
+                      ? '3 calendars · 2 accounts'
+                      : 'All available calendars are included after granting access'}
                   </small>
                 </div>
                 <span className={`s1-status ${statusTone}`}>
@@ -286,6 +219,17 @@ export function CalendarScreen({ page, onNavigate }) {
                   {statusLabel}
                 </span>
               </div>
+              {hasConnection && (
+                <ul className="s1-connected-calendars" aria-label="Connected calendars">
+                  {calendars.map((item) => (
+                    <li key={item.id}>
+                      <span className={'tone-dot ' + item.color} />
+                      <strong>{item.name}</strong>
+                      <small>{item.account}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <dl className="s1-facts">
                 <div>
                   <dt>Person</dt>
@@ -319,10 +263,16 @@ export function CalendarScreen({ page, onNavigate }) {
               <div className="s1-actions">
                 <SquircleButton
                   className="primary-button"
-                  disabled={phase === 'syncing'}
-                  onClick={() => (hasConnection ? picker() : setModal('disclosure'))}
+                  disabled={phase === 'syncing' || phase === 'loadError'}
+                  onClick={() =>
+                    phase === 'revoked'
+                      ? setModal('settings')
+                      : hasConnection
+                        ? refresh()
+                        : setModal('disclosure')
+                  }
                 >
-                  {hasConnection ? 'Change calendar' : 'Connect Calendar'}
+                  {hasConnection ? 'Refresh all calendars' : 'Connect Calendar'}
                   <ArrowRight size={16} />
                 </SquircleButton>
                 <SquircleButton className="secondary-button" onClick={() => setModal('settings')}>
@@ -340,8 +290,8 @@ export function CalendarScreen({ page, onNavigate }) {
                 <ShieldCheck size={23} className="s1-violet" />
                 <h2>A clear boundary.</h2>
                 <p className="s1-body-copy">
-                  Only the calendar you choose is copied into Floe. Titles, times, time zones, and
-                  source identifiers stay on this Mac.
+                  All calendars available through macOS Calendar are included. Titles, times, time
+                  zones, and source identifiers stay on this Mac.
                 </p>
                 <div className="s1-note">
                   <Info size={16} />
@@ -394,37 +344,16 @@ export function CalendarScreen({ page, onNavigate }) {
                 Today
               </button>
             </div>
-            <span className="s1-timezone">
-              <Clock3 size={14} /> Asia/Seoul · UTC+09
-            </span>
-          </div>
-          <div className="s1-source-bar">
-            <button onClick={() => onNavigate('connections')} className="s1-source-button">
-              <CalendarDays size={16} />
-              <strong>{hasConnection ? calendar.name : 'Calendar'}</strong>
-              <span>{hasConnection ? calendar.account : 'Not connected'}</span>
-              <ChevronRight size={14} />
-            </button>
-            <div className="s1-sync-actions">
-              <span role="status" className={`s1-status ${statusTone}`}>
-                {phase === 'syncing' ? <LoaderCircle size={13} className="s1-spin" /> : <span />}
-                {statusLabel}
-              </span>
-              {hasConnection && (
-                <SquircleButton
-                  className="s1-refresh"
-                  aria-label="Refresh selected date"
-                  disabled={phase === 'syncing' || phase === 'loadError'}
-                  onClick={() =>
-                    ['revoked', 'missing'].includes(phase)
-                      ? setModal(phase === 'revoked' ? 'settings' : 'picker')
-                      : refresh()
-                  }
-                >
-                  <RefreshCw size={15} />
-                </SquircleButton>
-              )}
-            </div>
+            {hasConnection && (
+              <SquircleButton
+                className="s1-refresh"
+                aria-label="Refresh selected date"
+                disabled={phase === 'syncing' || phase === 'loadError'}
+                onClick={() => (phase === 'revoked' ? setModal('settings') : refresh())}
+              >
+                <RefreshCw size={15} />
+              </SquircleButton>
+            )}
           </div>
           {phase !== 'connected' && phase !== 'empty' && (
             <StatusBanner
@@ -433,7 +362,7 @@ export function CalendarScreen({ page, onNavigate }) {
               onConnect={() => setModal('disclosure')}
               onRefresh={() => refresh()}
               onSettings={() => setModal('settings')}
-              onPicker={picker}
+              onPicker={() => onNavigate('connections')}
             />
           )}
           <div className="s1-day-layout">
@@ -457,12 +386,13 @@ export function CalendarScreen({ page, onNavigate }) {
             ) : (
               <Surface className="s1-agenda">
                 <div className="s1-all-day">
-                  <span>ALL DAY</span>
+                  <span>All day</span>
                   {hasCache ? (
                     <button
                       onClick={() =>
                         setModal({
                           id: 'all-day',
+                          calendarId: 'personal',
                           title: 'A day for making',
                           time: 'All day',
                           timezone: 'Asia/Seoul',
@@ -471,8 +401,7 @@ export function CalendarScreen({ page, onNavigate }) {
                         })
                       }
                     >
-                      <span className={`tone-dot ${calendar.color}`} /> A day for making{' '}
-                      <small>{calendar.name}</small>
+                      <span className="tone-dot mint" /> A day for making <small>Personal</small>
                     </button>
                   ) : (
                     <span className="s1-muted">—</span>
@@ -483,6 +412,7 @@ export function CalendarScreen({ page, onNavigate }) {
                       onClick={() =>
                         setModal({
                           id: 'multi-day',
+                          calendarId: 'team',
                           title: 'Research week',
                           time: 'Sep 3–5 · All day',
                           timezone: 'Date-only · no conversion',
@@ -493,8 +423,7 @@ export function CalendarScreen({ page, onNavigate }) {
                         })
                       }
                     >
-                      <span className={`tone-dot ${calendar.color}`} /> Research week{' '}
-                      <small>Day 2 of 3</small>
+                      <span className="tone-dot violet" /> Research week <small>Day 2 of 3</small>
                     </button>
                   )}
                 </div>
@@ -512,19 +441,22 @@ export function CalendarScreen({ page, onNavigate }) {
                     </div>
                   ))}
                   {hasCache &&
-                    visibleEvents.map((event) => (
+                    externalEvents.map((event) => (
                       <SquircleButton
                         key={event.id}
-                        className={`s1-event s1-event-${calendar.color}`}
+                        className={`s1-event s1-event-${calendars.find((item) => item.id === event.calendarId).color}`}
                         style={{ top: event.top }}
                         onClick={() => setModal(event)}
                       >
-                        <span className={`tone-dot ${calendar.color}`} />
+                        <span
+                          className={`tone-dot ${calendars.find((item) => item.id === event.calendarId).color}`}
+                        />
                         <span>
                           <strong>{event.title}</strong>
                           <time>{event.time}</time>
                           <small>
-                            {calendar.name} · {event.detail}
+                            {calendars.find((item) => item.id === event.calendarId).name} ·{' '}
+                            {event.detail}
                             {event.recurring ? ' · Repeats' : ''}
                           </small>
                         </span>
@@ -545,9 +477,9 @@ export function CalendarScreen({ page, onNavigate }) {
                       </h3>
                       <p>
                         {phase === 'syncing'
-                          ? 'Reading the selected calendar. Your own tasks and notes stay available.'
+                          ? 'Reading all connected calendars. Your own tasks and notes stay available.'
                           : phase === 'empty'
-                            ? `No events in ${calendar.name} for ${dateShort}. This date was checked successfully.`
+                            ? `No events across your connected calendars for ${dateShort}. This date was checked successfully.`
                             : phase === 'uncollected'
                               ? 'No events have been collected for this date. It doesn’t mean your calendar is empty.'
                               : 'Your own tasks and notes are ready. Connect a calendar when you want more context.'}
@@ -566,7 +498,7 @@ export function CalendarScreen({ page, onNavigate }) {
                         {phase === 'syncing'
                           ? 'Reading…'
                           : phase === 'empty'
-                            ? 'Check selected calendar'
+                            ? 'View connected calendars'
                             : phase === 'uncollected'
                               ? 'Read this date'
                               : 'Connect Calendar'}
@@ -580,18 +512,12 @@ export function CalendarScreen({ page, onNavigate }) {
                     </div>
                   )}
                 </div>
-                <div className="s1-agenda-footer">
-                  <LockKeyhole size={13} />
-                  <span>External events are read-only.</span>
-                  {hasCache && <span>Saved at 2:28 PM{stale ? ' · may be out of date' : ''}</span>}
-                </div>
               </Surface>
             )}
             <aside className="s1-side-stack">
               <Surface>
                 <div className="s1-card-heading">
                   <h2>Your own rhythm</h2>
-                  <span className="s1-pill">Local</span>
                 </div>
                 <p className="s1-body-copy">A few things that belong to you, not your calendar.</p>
                 <label className={`s1-local-task ${taskDone ? 'done' : ''}`}>
@@ -611,7 +537,6 @@ export function CalendarScreen({ page, onNavigate }) {
               <Surface>
                 <div className="s1-card-heading">
                   <h2>A note to self</h2>
-                  <span className="tone-dot mint" />
                 </div>
                 <p className="s1-personal-note">
                   Leave a little room between things. Not every empty space needs filling.
@@ -662,45 +587,6 @@ export function CalendarScreen({ page, onNavigate }) {
         </>
       )}
 
-      <details className="s1-lab" id="s1-lab" ref={lab}>
-        <summary>
-          <span className="s1-demo-dot" /> Prototype lab{' '}
-          <span>Explore the edges, not just the happy path.</span>
-        </summary>
-        <div className="s1-lab-content">
-          <label htmlFor="s1-scenario">Preview a state</label>
-          <select id="s1-scenario" value={phase} onChange={(event) => preview(event.target.value)}>
-            {Object.entries(scenarios).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <div className="s1-lab-actions">
-            <SquircleButton
-              className="secondary-button"
-              disabled={
-                !hasCache || phase === 'syncing' || changePending || Boolean(externalRevision)
-              }
-              onClick={() => {
-                setChangePending(true);
-                setPhase('cached');
-                notify('Sample provider changed. Refresh to import the update and deletion.');
-              }}
-            >
-              Simulate an external edit & deletion
-            </SquircleButton>
-            {changePending && <span>Pending in sample provider · refresh to import</span>}
-          </div>
-          <p>
-            Sample data only. Permissions, refreshes, and device settings are simulated. State
-            resets on browser reload. No external calendar is accessed or changed.
-          </p>
-          <button className="s1-text-link" onClick={() => onNavigate('reference')}>
-            Open the earlier Personal Day reference <ArrowRight size={14} />
-          </button>
-        </div>
-      </details>
       {toast && (
         <div className="s1-toast" role="status">
           <Check size={17} />
@@ -719,10 +605,8 @@ export function CalendarScreen({ page, onNavigate }) {
               : {
                   disclosure: 'Your calendar, with a clear boundary.',
                   permission: 'A macOS permission, explained.',
-                  picker: 'Which calendar belongs in your day?',
-                  switch: 'Switch your calendar?',
                   settings: 'Let Floe read your calendar again.',
-                  disconnect: 'Disconnect this calendar?',
+                  disconnect: 'Disconnect Calendar?',
                 }[modal]
           }
           onClose={() => setModal(null)}
@@ -733,8 +617,8 @@ export function CalendarScreen({ page, onNavigate }) {
                 <CalendarDays size={30} />
               </div>
               <p className="s1-body-copy">
-                Connect one calendar already on this Mac. Floe will keep a local copy of its events
-                so your day is still there when you’re offline.
+                Connect all calendars already on this Mac. Floe will keep a local copy of their
+                events so your day is still there when you’re offline.
               </p>
               <ul className="s1-permission-list">
                 <li>
@@ -751,8 +635,8 @@ export function CalendarScreen({ page, onNavigate }) {
                 <Info size={18} />
                 <p>
                   macOS requires “Full Access” to read events. You’ll see a read-and-write
-                  permission, but Floe only uses it to read. Only your selected calendar is stored
-                  locally.
+                  permission, but Floe only uses it to read. All available calendars are included,
+                  including calendars added later when you refresh.
                 </p>
               </div>
               <div className="s1-modal-actions">
@@ -767,7 +651,7 @@ export function CalendarScreen({ page, onNavigate }) {
           )}
           {modal === 'permission' && (
             <>
-              <span className="s1-demo-label">SIMULATED OS HANDOFF</span>
+              <span className="s1-demo-label">Simulated OS handoff</span>
               <p className="s1-body-copy">
                 In the app, macOS asks whether Floe can access your calendars here. This preview
                 does not request device permissions.
@@ -776,7 +660,7 @@ export function CalendarScreen({ page, onNavigate }) {
                 <ShieldCheck size={26} />
                 <h3>“Floe” would like full access to Calendar</h3>
                 <p className="s1-body-copy">
-                  Floe reads the calendar you select. It won’t change your external events.
+                  Floe reads all calendars on this Mac. It won’t change your external events.
                 </p>
               </Surface>
               <div className="s1-modal-actions">
@@ -789,132 +673,8 @@ export function CalendarScreen({ page, onNavigate }) {
                 >
                   Simulate denial
                 </SquircleButton>
-                <SquircleButton className="primary-button" onClick={picker}>
+                <SquircleButton className="primary-button" onClick={() => refresh()}>
                   Simulate allow
-                </SquircleButton>
-              </div>
-            </>
-          )}
-          {modal === 'picker' && (
-            <>
-              <p className="s1-body-copy">
-                Choose one calendar. Your other calendars stay outside Floe.
-              </p>
-              <div className="s1-search">
-                <Search size={18} />
-                <input
-                  autoFocus
-                  aria-label="Search calendars"
-                  placeholder="Find a calendar"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-              <fieldset className="s1-calendar-options">
-                <legend className="sr-only">Available calendars</legend>
-                {phase !== 'noCalendars' &&
-                  calendars
-                    .filter((item) =>
-                      `${item.name} ${item.account}`.toLowerCase().includes(search.toLowerCase()),
-                    )
-                    .map((item) => (
-                      <label key={item.id} className={choice === item.id ? 'selected' : ''}>
-                        <input
-                          type="radio"
-                          name="calendar"
-                          value={item.id}
-                          checked={choice === item.id}
-                          onChange={() => setChoice(item.id)}
-                        />
-                        <span className={`tone-dot ${item.color}`} />
-                        <span>
-                          <strong>{item.name}</strong>
-                          <small>{item.account}</small>
-                        </span>
-                        {choice === item.id && <Check size={18} />}
-                      </label>
-                    ))}
-              </fieldset>
-              {(phase === 'noCalendars' ||
-                !calendars.some((item) =>
-                  `${item.name} ${item.account}`.toLowerCase().includes(search.toLowerCase()),
-                )) && (
-                <div className="s1-picker-empty">
-                  <CalendarDays size={25} />
-                  <h3>
-                    {phase === 'noCalendars'
-                      ? 'No calendars on this Mac yet.'
-                      : 'No matching calendars.'}
-                  </h3>
-                  <p>
-                    {phase === 'noCalendars'
-                      ? 'Add an account or a calendar in macOS Calendar, then come back here.'
-                      : 'Try another name. Your selection hasn’t changed.'}
-                  </p>
-                  <button
-                    className="s1-text-link"
-                    onClick={() => {
-                      setSearch('');
-                      if (phase === 'noCalendars') {
-                        setPhase('disconnected');
-                        notify('Demo calendar list restored.');
-                      }
-                    }}
-                  >
-                    {phase === 'noCalendars' ? 'Simulate calendars added' : 'Clear search'}
-                  </button>
-                </div>
-              )}
-              <div className="s1-note">
-                <Database size={16} />
-                <p>
-                  Floe will read {dateShort} in Asia/Seoul. Other dates are collected only when you
-                  refresh them.
-                </p>
-              </div>
-              <div className="s1-modal-actions">
-                <SquircleButton className="secondary-button" onClick={() => setModal(null)}>
-                  Cancel
-                </SquircleButton>
-                <SquircleButton
-                  className="primary-button"
-                  disabled={
-                    phase === 'noCalendars' ||
-                    !calendars.some(
-                      (item) =>
-                        item.id === choice &&
-                        `${item.name} ${item.account}`.toLowerCase().includes(search.toLowerCase()),
-                    )
-                  }
-                  onClick={selectCalendar}
-                >
-                  {hasConnection ? 'Use this calendar' : 'Connect calendar'}
-                </SquircleButton>
-              </div>
-            </>
-          )}
-          {modal === 'switch' && (
-            <>
-              <p className="s1-body-copy">
-                Replace <strong>{calendar.name}</strong> with{' '}
-                <strong>{calendars.find((item) => item.id === choice).name}</strong> in Floe?
-              </p>
-              <div className="s1-note">
-                <Info size={18} />
-                <p>
-                  The saved copy of {calendar.name} will be removed from Floe. Local tasks and notes
-                  stay. Nothing changes in macOS Calendar.
-                </p>
-              </div>
-              <div className="s1-modal-actions">
-                <SquircleButton className="secondary-button" onClick={() => setModal('picker')}>
-                  Go back
-                </SquircleButton>
-                <SquircleButton
-                  className="primary-button"
-                  onClick={() => refresh(calendars.find((item) => item.id === choice))}
-                >
-                  Switch & read
                 </SquircleButton>
               </div>
             </>
@@ -944,8 +704,7 @@ export function CalendarScreen({ page, onNavigate }) {
                 <SquircleButton
                   className="primary-button"
                   onClick={() => {
-                    setPhase(hasCache ? 'cached' : 'disconnected');
-                    picker();
+                    refresh();
                   }}
                 >
                   Simulate access restored <ExternalLink size={15} />
@@ -956,8 +715,8 @@ export function CalendarScreen({ page, onNavigate }) {
           {modal === 'disconnect' && (
             <>
               <p className="s1-body-copy">
-                Remove the saved copy of <strong>{calendar.name}</strong> from this Floe prototype
-                and stop reading it.
+                Remove the saved copies of all connected calendars from this Floe prototype and stop
+                reading them.
               </p>
               <ul className="s1-permission-list">
                 <li>
@@ -977,7 +736,10 @@ export function CalendarScreen({ page, onNavigate }) {
                 <SquircleButton
                   className="s1-danger-button"
                   onClick={() => {
-                    preview('disconnected');
+                    clearTimeout(timer.current);
+                    setPhase('disconnected');
+                    setReadDates([]);
+                    setModal(null);
                     notify('Disconnected. Your local tasks and notes are still here.');
                   }}
                 >
@@ -989,8 +751,8 @@ export function CalendarScreen({ page, onNavigate }) {
           {typeof modal === 'object' && (
             <>
               <div className="s1-detail-source">
-                <span className={`tone-dot ${calendar.color}`} />
-                {calendar.name} · {calendar.account}
+                <span className={`tone-dot ${detailCalendar.color}`} />
+                {detailCalendar.name} · {detailCalendar.account}
                 <span className="s1-pill">
                   <LockKeyhole size={12} /> Read-only
                 </span>
@@ -1046,18 +808,14 @@ export function CalendarScreen({ page, onNavigate }) {
                 <summary>Source details</summary>
                 <dl>
                   <dt>Connection / Person</dt>
-                  <dd>demo-{calendar.id} / You</dd>
+                  <dd>demo-macos / You</dd>
                   <dt>External occurrence ID</dt>
                   <dd>
-                    fixture:{calendar.id}:{modal.id}:2026-09-
+                    fixture:{detailCalendar.id}:{modal.id}:2026-09-
                     {String(4 + dayOffset).padStart(2, '0')}
                   </dd>
                   <dt>Change token</dt>
-                  <dd>
-                    {externalRevision && modal.id === 'design'
-                      ? 'fixture-revision-05'
-                      : 'fixture-revision-04'}
-                  </dd>
+                  <dd>fixture-revision-04</dd>
                   <dt>Integration</dt>
                   <dd>Fixture · not a live EventKit record</dd>
                 </dl>
@@ -1088,7 +846,7 @@ function StatusBanner({ phase, dateLabel, onConnect, onRefresh, onSettings, onPi
     syncing: [
       'neutral',
       LoaderCircle,
-      'Reading your calendar…',
+      'Reading your calendars…',
       'Your last saved events stay visible until this read finishes. No external changes are made.',
     ],
     cached: [
@@ -1126,17 +884,17 @@ function StatusBanner({ phase, dateLabel, onConnect, onRefresh, onSettings, onPi
     missing: [
       'warning',
       CalendarDays,
-      'This calendar is no longer available.',
-      'It may have been removed or its account disconnected. Your last saved copy is unchanged.',
-      'Choose a calendar',
+      'Some calendars need attention.',
+      'An account or calendar may be unavailable. Its saved events remain; other calendars are still included.',
+      'View calendars',
       onPicker,
     ],
     noCalendars: [
       'neutral',
       CalendarDays,
       'No calendars found on this Mac.',
-      'Add one in macOS Calendar, then return to select it. Floe will not create a calendar for you.',
-      'Choose a calendar',
+      'Add one in macOS Calendar, then refresh in Floe. Floe will not create a calendar for you.',
+      'View calendars',
       onPicker,
     ],
     uncollected: [
@@ -1201,7 +959,7 @@ function Modal({ title, children, onClose }) {
     >
       <SquircleSurface radius={34} className="s1-modal-border" contentClassName="s1-modal">
         <div className="s1-modal-heading">
-          <span className="s1-eyebrow">FLOE / CALENDAR</span>
+          <span className="s1-eyebrow">Floe / Calendar</span>
           <SquircleButton aria-label="Close dialog" className="icon-button" onClick={onClose}>
             <X size={19} />
           </SquircleButton>

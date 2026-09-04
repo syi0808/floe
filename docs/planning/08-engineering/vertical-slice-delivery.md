@@ -29,7 +29,7 @@ Calendar Connector → 정규화·출처·Person-scoped store
 → Calendar Connector → 재수집 → Day Canvas 갱신
 ```
 
-첫 루프는 macOS, 한 Person, 선택한 캘린더 하나, built-in Expert 하나,
+첫 루프는 macOS, 한 Person, Calendar connector 하나의 전체 캘린더, built-in Expert 하나,
 집중 일정 생성 action 하나로 제한한다. Flutter는 화면과 승인 입력을 담당하고
 canonical 변경은 Rust typed command를 거친다. Expert는 제한된 view와
 capability를 사용하며 connector 자격증명이나 DB에 직접 접근하지 않는다.
@@ -39,7 +39,15 @@ S1–S3은 앱 실행 중 동작해도 되며, resident Device Agent 경계는 S
 
 ## S1 — Connected Calendar Read
 
-**사용자 결과:** 외부 일정이 출처와 함께 Day Canvas에 표시된다.
+**사용자 결과:** macOS Calendar에 연결된 전체 캘린더의 일정이 하나의 Day Canvas에
+통합 표시된다. 캘린더를 하나 고르거나 전환하지 않으며 각 일정의 출처는 유지한다.
+
+2026-09-04 사용자 피드백에 따라 단일 캘린더 선택 범위를 변경했다.
+계정·캘린더 목록은 연결 관리에서 확인하고, 날짜별 읽기는 전체 연결 범위에 적용한다.
+새 캘린더는 다음 명시적 새로고침에 포함한다. 일부 캘린더 읽기 실패는 다른 캘린더의
+성공 결과를 막지 않으며 실패한 출처의 캐시는 보존한다. 자세한 계약은
+[ADR 0008](../../decisions/0008-unified-calendar-read.md)을 따른다.
+현재 native 구현은 단일 선택 방식이므로 이 변경은 후속 구현·검증이 필요하다.
 
 **의존성:** 기존 Flutter ↔ Rust ↔ Turso 기반.
 
@@ -53,13 +61,14 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 ### Acceptance criteria
 
-- **S1-A1:** 실제 provider 권한 요청·연결·선택·상태 표시가 앱에서 가능하며,
+- **S1-A1:** 실제 provider 권한 요청·전체 캘린더 연결·목록 확인·문제 상태 표시가 앱에서 가능하며,
   거절 또는 권한 철회 시 typed error와 재연결 경로를 제공한다.
-- **S1-A2:** 선택한 날짜 범위의 일정이 stable external ID, connection/Person,
+- **S1-A2:** 전체 연결 캘린더의 선택한 날짜 범위 일정이 stable external ID, connection/Person,
   revision 또는 동등한 변경 식별자, provenance와 함께 저장·표시된다.
-  all-day와 timezone 경계의 표시를 검증한다.
+  calendar ID/account 출처를 구분하고 all-day와 timezone 경계의 표시를 검증한다.
 - **S1-A3:** 재수집해도 중복되지 않고 외부 수정·삭제가 반영된다. 제한된
-  조회 범위 밖의 항목을 삭제된 것으로 잘못 처리하지 않는다.
+  조회 범위 밖이나 실패한 캘린더의 항목을 삭제된 것으로 잘못 처리하지 않는다.
+  새 캘린더 포함, 일부 출처 실패, 사라진 캘린더의 캐시 보존도 검증한다.
 - **S1-A4:** 앱/core 재시작 후 일정이 유지된다. 수집 실패 시 마지막 데이터와
   stale/error 상태를 표시하고 재시도할 수 있다.
 
