@@ -15,7 +15,7 @@ void main() {
       prototypeAppearance(FloeApp(gateway: gateway, query: prototypeQuery)),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Notes'));
+    await tester.tap(find.byTooltip('Notes'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New note'));
     await tester.pumpAndSettle();
@@ -45,7 +45,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('navigation and suggestion show hover feedback', (tester) async {
+  testWidgets('navigation and text links show hover feedback', (tester) async {
     tester.view.physicalSize = const Size(1440, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -59,26 +59,26 @@ void main() {
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     final notesSurface = find
-        .ancestor(of: find.text('Notes'), matching: find.byType(FloeSquircle))
+        .ancestor(
+          of: find.byTooltip('Notes'),
+          matching: find.byType(FloeSquircle),
+        )
         .first;
-    await mouse.moveTo(tester.getCenter(find.text('Notes')));
+    await mouse.moveTo(tester.getCenter(find.byTooltip('Notes')));
     await tester.pumpAndSettle();
     expect(
       tester.widget<FloeSquircle>(notesSurface).fill,
       FloePalette.neutral100,
     );
-    final anchor = find.byTooltip('Floe 제안 열기');
-    final surface = find.descendant(
-      of: anchor,
-      matching: find.byType(FloeSquircle),
+    final link = find.widgetWithText(TextButton, 'See your tasks');
+    await mouse.moveTo(tester.getCenter(link));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextButton>(link).style!.textStyle!.resolve({
+        WidgetState.hovered,
+      })!.decoration,
+      TextDecoration.underline,
     );
-    await mouse.moveTo(tester.getCenter(anchor));
-    await tester.pumpAndSettle();
-    expect(tester.widget<FloeSquircle>(surface).borderWidth, 2);
-    expect(tester.widget<FloeSquircle>(surface).fill, FloePalette.primary50);
-    await mouse.moveTo(Offset.zero);
-    await tester.pumpAndSettle();
-    expect(tester.widget<FloeSquircle>(surface).borderWidth, 1);
     await mouse.removePointer();
   });
 
@@ -95,7 +95,7 @@ void main() {
         prototypeAppearance(FloeApp(gateway: gateway, query: prototypeQuery)),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Notes'));
+      await tester.tap(find.byTooltip('Notes'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'no match');
       await tester.tap(find.text('Filter'));
@@ -150,34 +150,25 @@ void main() {
     });
   }
 
-  testWidgets('anchored suggestion reserves a break through the gateway', (
+  testWidgets('connector card opens detail and returns to list', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(1440, 1100);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final gateway = prototypeGateway();
     await tester.pumpWidget(
-      prototypeAppearance(FloeApp(gateway: gateway, query: prototypeQuery)),
+      prototypeAppearance(
+        FloeApp(gateway: prototypeGateway(), query: prototypeQuery),
+      ),
     );
     await tester.pumpAndSettle();
-    final anchor = tester.getRect(find.byTooltip('Floe 제안 열기'));
-    await tester.tap(find.byTooltip('Floe 제안 열기'));
+    await tester.tap(find.byTooltip('Connect'));
     await tester.pumpAndSettle();
-    expect(
-      tester.getTopLeft(find.text('Floe suggestion')).dx,
-      greaterThan(anchor.left),
-    );
-    await tester.tap(find.text('Add break'));
+    expect(find.text('Connections'), findsOneWidget);
+    expect(find.text('Read-only'), findsNothing);
+    await tester.tap(find.text('macOS Calendar'));
     await tester.pumpAndSettle();
-    final snapshot = await gateway.loadDay(prototypeQuery);
-    final reserved = snapshot.items.whereType<EventItem>().singleWhere(
-      (event) => event.title == 'Reserved break',
-    );
-    expect(reserved.startsAt, DateTime.utc(2026, 9, 3, 15));
-    expect(reserved.endsAt, DateTime.utc(2026, 9, 3, 15, 20));
-    expect(find.byTooltip('Floe 제안 열기'), findsNothing);
+    expect(find.text('A clear boundary.'), findsOneWidget);
+    await tester.tap(find.text('Back to connections'));
+    await tester.pumpAndSettle();
+    expect(find.text('Connections'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -190,7 +181,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Notes'));
+    await tester.tap(find.byTooltip('Notes'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Filter'));
     await tester.pumpAndSettle();

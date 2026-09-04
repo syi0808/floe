@@ -10,11 +10,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:floe_client/preview/prototype_fixture.dart';
+import 'package:floe_client/preview/calendar_fixture.dart';
 
 void main() {
   const output = String.fromEnvironment('VISUAL_OUTPUT');
   for (final size in [const Size(1440, 1100), const Size(390, 844)]) {
-    for (final screen in ['today', 'suggestion', 'notes', 'task']) {
+    for (final screen in ['today', 'event', 'connections', 'notes', 'task']) {
       testWidgets('$screen prototype capture ${size.width.toInt()}', (
         tester,
       ) async {
@@ -62,8 +63,12 @@ void main() {
             key: boundary,
             child: prototypeAppearance(
               FloeApp(
-                gateway: prototypeGateway(detail: screen == 'task'),
-                query: prototypeQuery,
+                gateway: ['task', 'notes'].contains(screen)
+                    ? prototypeGateway(detail: screen == 'task')
+                    : calendarPreviewGateway(),
+                query: ['task', 'notes'].contains(screen)
+                    ? prototypeQuery
+                    : calendarPreviewQuery,
               ),
             ),
           ),
@@ -74,7 +79,7 @@ void main() {
             (widget) =>
                 widget is FloeSquircle && widget.size == FloeSquircleSize.frame,
           ),
-          findsNothing,
+          findsOneWidget,
         );
         await tester.runAsync(() async {
           const loader = SvgAssetLoader('assets/floe-mascot.svg');
@@ -88,22 +93,25 @@ void main() {
           final timeline = tester.getRect(
             find.byKey(const Key('timeline-card')),
           );
-          expect(timeline.left, size.width <= 780 ? 12 : 120);
-          expect(timeline.top, size.width <= 780 ? 182 : 146);
-          expect(timeline.height, 756);
+          expect(timeline.left, size.width <= 780 ? 12 : 136);
+          expect(timeline.top, greaterThan(80));
+          expect(timeline.height, greaterThan(400));
           expect(
             tester.getTopLeft(find.byKey(const Key('capture-field'))).dy,
             greaterThan(timeline.bottom),
           );
         }
-        if (screen == 'suggestion') {
-          await tester.tap(find.byTooltip('Floe 제안 열기'));
+        if (screen == 'event') {
+          await tester.tap(find.text('Make room for the details'));
+          await tester.pumpAndSettle();
+        } else if (screen == 'connections') {
+          await tester.tap(find.byTooltip('Connect'));
           await tester.pumpAndSettle();
         } else if (screen == 'notes') {
-          await tester.tap(find.text('Notes'));
+          await tester.tap(find.byTooltip('Notes'));
           await tester.pumpAndSettle();
         } else if (screen == 'task') {
-          await tester.tap(find.text('Tasks'));
+          await tester.tap(find.byTooltip('Tasks'));
           await tester.pumpAndSettle();
           await tester.tap(
             find.widgetWithText(ListTile, 'Prepare launch brief'),

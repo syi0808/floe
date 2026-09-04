@@ -36,6 +36,28 @@ abstract final class FloeTheme {
       focusColor: FloePalette.primary50,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: FloePalette.neutral25,
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: const WidgetStatePropertyAll(4),
+        radius: const Radius.circular(8),
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) =>
+              states.contains(WidgetState.hovered) ||
+                  states.contains(WidgetState.dragged)
+              ? FloePalette.primary400
+              : FloePalette.primary200,
+        ),
+        trackVisibility: const WidgetStatePropertyAll(false),
+      ),
+      sliderTheme: const SliderThemeData(
+        trackHeight: 4,
+        activeTrackColor: FloePalette.primary200,
+        inactiveTrackColor: FloePalette.primary100,
+        activeTickMarkColor: Colors.transparent,
+        inactiveTickMarkColor: Colors.transparent,
+        thumbColor: FloePalette.primary600,
+        thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+        overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
+      ),
       dividerColor: FloePalette.neutral200,
       textTheme:
           const TextTheme(

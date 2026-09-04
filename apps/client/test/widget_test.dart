@@ -122,7 +122,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Tasks'));
+    await tester.tap(find.byTooltip('Tasks'));
     await tester.pumpAndSettle();
     final deleteButton = find.byTooltip('$title 삭제').last;
     await tester.ensureVisible(deleteButton);
@@ -171,7 +171,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('adapts the timeline and Floe suggestion to a phone', (
+  testWidgets('adapts the timeline and event details to a phone', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -204,17 +204,17 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Today'), findsNWidgets(2));
-    expect(find.text('Tasks'), findsOneWidget);
-    expect(find.text('Notes'), findsOneWidget);
+    expect(find.text('Today'), findsOneWidget);
+    expect(find.byTooltip('Tasks'), findsOneWidget);
+    expect(find.byTooltip('Notes'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
-    expect(find.byTooltip('Floe 제안 열기'), findsOneWidget);
+    expect(find.byType(Slider), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.byTooltip('Floe 제안 열기'));
+    await tester.tap(find.text('디자인 리뷰'));
     await tester.pumpAndSettle();
-    expect(find.text('Reserve a 20-minute break?'), findsOneWidget);
-    expect(find.text('Add break'), findsOneWidget);
+    expect(find.text('09:00 – 10:00'), findsWidgets);
+    expect(find.text('Back to my day'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -256,17 +256,17 @@ void main() {
       FloeMascot.assetPath,
     );
 
-    await tester.tap(find.text('Notes'));
+    await tester.tap(find.byTooltip('Notes'));
     await tester.pumpAndSettle();
     expect(find.text('All notes · 1'), findsOneWidget);
     expect(find.text('출시 회고 메모'), findsOneWidget);
     expect(find.text('일'), findsNothing);
 
-    await tester.tap(find.text('Tasks'));
+    await tester.tap(find.byTooltip('Tasks'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ListTile, '출시 체크리스트 검토'));
     await tester.pumpAndSettle();
-    expect(find.text('Back to today'), findsOneWidget);
+    expect(find.text('Back to today'), findsNothing);
     expect(find.text('Subtasks'), findsOneWidget);
     expect(find.text('Floe suggests'), findsOneWidget);
   });

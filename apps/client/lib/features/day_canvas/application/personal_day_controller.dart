@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../domain/day_models.dart';
 import 'day_gateway.dart';
+import 'calendar_gateway.dart';
 
 enum DayLoadState { loading, ready, failure }
 
@@ -20,21 +21,42 @@ final class PersonalDayController extends ChangeNotifier {
   CaptureReceipt? pendingCapture;
   String? errorMessage;
   bool commandPending = false;
+  int _loadGeneration = 0;
+  bool _disposed = false;
 
   DayQuery get query => _query;
 
-  Future<void> load() async {
+  Future<void> load() => _load(false);
+
+  Future<void> refresh() => _load(true);
+
+  Future<void> _load(bool sync) async {
+    final generation = ++_loadGeneration;
+    final query = _query;
     loadState = DayLoadState.loading;
     errorMessage = null;
     notifyListeners();
     try {
-      snapshot = await _gateway.loadDay(_query);
+      final result =
+          sync && snapshot?.calendar != null && _gateway is CalendarGateway
+          ? await (_gateway as CalendarGateway).syncCalendar(query)
+          : await _gateway.loadDay(query);
+      if (_disposed || generation != _loadGeneration) return;
+      snapshot = result;
       loadState = DayLoadState.ready;
     } on Object catch (error) {
+      if (_disposed || generation != _loadGeneration) return;
       loadState = DayLoadState.failure;
       errorMessage = error.toString();
     }
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _loadGeneration++;
+    super.dispose();
   }
 
   Future<bool> submitCapture(String input) async {

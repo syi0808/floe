@@ -99,9 +99,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('자정 일정'), findsWidgets);
-      expect(find.textContaining('12:00 – 1:00 AM · Fixture'), findsOneWidget);
-      expect(find.text('all-day-1 · Fixture · Test calendar'), findsOneWidget);
-      expect(find.text('all-day-2 · Fixture · Test calendar'), findsOneWidget);
+      expect(find.text('00:00 – 01:00'), findsOneWidget);
+      expect(find.text('all-day-1   Test calendar'), findsOneWidget);
+      expect(find.text('all-day-2   Test calendar'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -166,18 +166,20 @@ void main() {
       MaterialApp(
         theme: FloeTheme.light,
         home: Scaffold(
-          body: CalendarPanel(
-            gateway: gateway,
-            query: query,
-            connection: CalendarConnection(
-              id: 'fixture',
-              name: 'Test calendar',
-              provider: 'fixture',
-              revision: 2,
-              lastSuccessAt: query.now,
-              error: 'permission_denied',
+          body: SingleChildScrollView(
+            child: CalendarPanel(
+              gateway: gateway,
+              query: query,
+              connection: CalendarConnection(
+                id: 'fixture',
+                name: 'Test calendar',
+                provider: 'fixture',
+                revision: 2,
+                lastSuccessAt: query.now,
+                error: 'permission_denied',
+              ),
+              onChanged: () async {},
             ),
-            onChanged: () async {},
           ),
         ),
       ),

@@ -5,6 +5,12 @@ import 'package:flutter/widgets.dart';
 
 Widget prototypeAppearance(Widget child) => DayAppearance(
   tones: const {
+    'making': ItemTone.mint,
+    'research': ItemTone.violet,
+    'standup': ItemTone.blue,
+    'personal-call': ItemTone.mint,
+    'reset': ItemTone.mint,
+    'zones': ItemTone.violet,
     'focus': ItemTone.violet,
     'review': ItemTone.blue,
     'break': ItemTone.violet,

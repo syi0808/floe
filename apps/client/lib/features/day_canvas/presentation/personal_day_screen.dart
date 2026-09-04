@@ -12,9 +12,12 @@ import '../application/calendar_gateway.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
 import 'day_appearance.dart';
-import 'calendar_panel.dart';
+import 'calendar_agenda.dart';
+import 'calendar_context_rail.dart';
+import 'connector_screen.dart';
+import '../../../app/floe_feedback.dart';
 
-enum _DestinationView { today, tasks, notes }
+enum _DestinationView { today, tasks, notes, connections }
 
 class PersonalDayScreen extends StatefulWidget {
   const PersonalDayScreen({
@@ -60,61 +63,71 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         return Scaffold(
           backgroundColor: FloePalette.neutral25,
           body: SafeArea(
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(
-                      narrow ? FloeSpace.md : 120,
-                      narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
-                      narrow ? FloeSpace.md : 36,
-                      narrow ? 112 : 28,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        FloeScreenEntrance(
-                          identity: selectedTaskId ?? destination,
-                          child: _workspace(narrow),
+            child: Padding(
+              padding: EdgeInsets.all(narrow ? 0 : 16),
+              child: FloeSquircle(
+                size: FloeSquircleSize.frame,
+                fill: FloePalette.neutral25,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          narrow ? FloeSpace.md : 120,
+                          narrow ? (constraints.maxWidth <= 430 ? 52 : 58) : 72,
+                          narrow ? FloeSpace.md : 36,
+                          narrow ? 112 : 28,
                         ),
-                        if (destination == _DestinationView.today &&
-                            selectedTaskId == null)
-                          Padding(
-                            padding: EdgeInsets.only(top: narrow ? 16 : 22),
-                            child: _CaptureBar(
-                              textController: captureController,
-                              pending: controller.commandPending,
-                              submit: _capture,
-                              capturedText: capturedText,
-                              dismiss: () =>
-                                  setState(() => capturedText = null),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            FloeScreenEntrance(
+                              identity: selectedTaskId ?? destination,
+                              child: _workspace(narrow),
                             ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                _AdaptiveNavigation(
-                  narrow: narrow,
-                  selected: destination,
-                  onSelected: _selectDestination,
-                ),
-                Positioned(
-                  top: narrow ? 10 : 30,
-                  right: narrow ? 8 : 36,
-                  child: FloeButton.icon(
-                    tooltip: '설정',
-                    style: const ButtonStyle(
-                      backgroundColor: WidgetStatePropertyAll(
-                        Colors.transparent,
+                            if (destination == _DestinationView.today &&
+                                selectedTaskId == null)
+                              Padding(
+                                padding: EdgeInsets.only(top: narrow ? 16 : 22),
+                                child: _CaptureBar(
+                                  textController: captureController,
+                                  pending: controller.commandPending,
+                                  submit: _capture,
+                                  capturedText: capturedText,
+                                  dismiss: () =>
+                                      setState(() => capturedText = null),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                      overlayColor: WidgetStatePropertyAll(Colors.transparent),
                     ),
-                    onPressed: () => _showComingSoon(context),
-                    icon: const Icon(LucideIcons.settings, size: 20),
-                  ),
+                    _AdaptiveNavigation(
+                      narrow: narrow,
+                      selected: destination,
+                      onSelected: _selectDestination,
+                    ),
+                    Positioned(
+                      top: narrow ? 10 : 30,
+                      right: narrow ? 8 : 36,
+                      child: FloeButton.icon(
+                        tooltip: '설정',
+                        style: const ButtonStyle(
+                          backgroundColor: WidgetStatePropertyAll(
+                            Colors.transparent,
+                          ),
+                          overlayColor: WidgetStatePropertyAll(
+                            Colors.transparent,
+                          ),
+                        ),
+                        onPressed: () =>
+                            _selectDestination(_DestinationView.connections),
+                        icon: const Icon(LucideIcons.settings, size: 20),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         );
@@ -123,8 +136,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   );
 
   Widget _workspace(bool narrow) {
-    if (controller.loadState == DayLoadState.loading) {
-      return const _LoadingDay();
+    if (destination == _DestinationView.connections) {
+      return ConnectorScreen(
+        gateway: widget.gateway is CalendarGateway
+            ? widget.gateway as CalendarGateway
+            : null,
+        query: controller.query,
+        connection: controller.snapshot?.calendar,
+        onChanged: controller.load,
+      );
     }
     if (controller.loadState == DayLoadState.failure) {
       return _FailureDay(
@@ -132,14 +152,22 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         message: controller.errorMessage,
       );
     }
-    final snapshot = controller.snapshot!;
+    final snapshot =
+        controller.snapshot ??
+        DaySnapshot(
+          personId: controller.query.personId,
+          date: controller.query.date,
+          generatedAt: controller.query.now,
+          timezoneOffsetSeconds: controller.query.timezoneOffsetSeconds,
+          items: const [],
+        );
     final selectedTask = _taskById(snapshot, selectedTaskId);
     if (selectedTask != null) {
       return _TaskDetailScreen(
         task: selectedTask,
         snapshot: snapshot,
         narrow: narrow,
-        onBack: () => setState(() => selectedTaskId = null),
+
         onComplete: _setTaskCompleted,
       );
     }
@@ -153,12 +181,32 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _DayToolbar(controller, narrow: narrow),
-              if (widget.gateway case final CalendarGateway calendarGateway)
-                CalendarPanel(
-                  gateway: calendarGateway,
-                  query: controller.query,
-                  connection: snapshot.calendar,
-                  onChanged: controller.load,
+              if (snapshot.calendar?.error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: FloeSquircle(
+                    fill: FloePalette.amber50,
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          snapshot.calendar!.lastSuccessAt == null
+                              ? 'Calendar could not be collected. Check access and try again.'
+                              : 'Showing saved events. Calendar changes could not be collected.',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: FloePalette.neutral600,
+                          ),
+                        ),
+                        FloeTextLink(
+                          label: 'Manage connection',
+                          onPressed: () =>
+                              _selectDestination(_DestinationView.connections),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               _content(narrow, snapshot),
             ],
@@ -170,6 +218,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             onOpen: (task) => setState(() => selectedTaskId = task.id),
             onDelete: controller.deleteItem,
           ),
+          _DestinationView.connections => const SizedBox.shrink(),
           _DestinationView.notes => _NotesScreen(
             notes: snapshot.items.whereType<NoteItem>().toList(),
             narrow: narrow,
@@ -182,20 +231,22 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
-    final primary = _PrimaryDay(
+    final primary = CalendarAgenda(
+      key: const PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
-      onOpenTask: (task) => setState(() => selectedTaskId = task.id),
+      loading: controller.loadState == DayLoadState.loading,
+      onConnections: () => _selectDestination(_DestinationView.connections),
     );
-    final rail = _ContextRail(
+    final rail = CalendarContextRail(
       snapshot: snapshot,
       disabled: controller.commandPending,
       complete: _setTaskCompleted,
-      delete: controller.deleteItem,
+      onTasks: () => _selectDestination(_DestinationView.tasks),
       onOpenTask: (task) => setState(() => selectedTaskId = task.id),
     );
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (MediaQuery.sizeOf(context).width <= 1080) {
+        if (MediaQuery.sizeOf(context).width <= 960) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -264,19 +315,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             backgroundColor: Colors.transparent,
             builder: (context) => dialog,
           )
-        : await showGeneralDialog<bool>(
-            context: context,
+        : await showFloeDialog<bool>(
+            context,
+            (context) => Center(child: dialog),
             barrierDismissible: false,
-            barrierColor: FloePalette.neutral950.withValues(alpha: 0.28),
-            transitionDuration: FloeMotion.dialogDuration,
-            pageBuilder: (context, animation, secondaryAnimation) =>
-                Center(child: dialog),
-            transitionBuilder: (
-              context,
-              animation,
-              secondaryAnimation,
-              child,
-            ) => FloeFadeScaleTransition(animation: animation, child: child),
           );
     if (saved == true && mounted) {
       captureController.clear();
@@ -288,27 +330,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     if (controller.commandPending) return false;
     if (!await controller.submitCapture(content)) return false;
     return controller.classify(NoteDraft(content: content));
-  }
-
-  Future<void> _reserveBreak(EventItem event) async {
-    if (controller.commandPending) return;
-    final end = event.endsAt.add(const Duration(minutes: 20));
-    final conflict = controller.snapshot!.items.whereType<EventItem>().any(
-      (candidate) =>
-          !candidate.isAllDay &&
-          candidate.startsAt.isBefore(end) &&
-          candidate.endsAt.isAfter(event.endsAt),
-    );
-    if (conflict) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This time overlaps another event.')),
-      );
-      return;
-    }
-    if (!await controller.submitCapture('Reserved break')) return;
-    await controller.classify(
-      EventDraft(title: 'Reserved break', startsAt: event.endsAt, endsAt: end),
-    );
   }
 }
 
@@ -397,17 +418,20 @@ class _DestinationButtonState extends State<_DestinationButton> {
     _DestinationView.today => 'Today',
     _DestinationView.tasks => 'Tasks',
     _DestinationView.notes => 'Notes',
+    _DestinationView.connections => 'Connect',
   };
 
   IconData get icon => switch (view) {
     _DestinationView.today => LucideIcons.calendarDays,
     _DestinationView.tasks => LucideIcons.listTodo,
     _DestinationView.notes => LucideIcons.notebookPen,
+    _DestinationView.connections => LucideIcons.link,
   };
 
   @override
   Widget build(BuildContext context) => Semantics(
     selected: selected,
+    label: label,
     button: true,
     child: PressableScale(
       scale: 0.98,
@@ -429,28 +453,18 @@ class _DestinationButtonState extends State<_DestinationButton> {
           customBorder: floeSquircleBorder(FloeSquircleSize.md),
           child: SizedBox(
             width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
-            height: MediaQuery.sizeOf(context).width <= 780 ? 58 : 56,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
+            height: 40 + MediaQuery.textScalerOf(context).scale(20),
+            child: Tooltip(
+              message: label,
+              child: Center(
+                child: Icon(
                   icon,
-                  size: 19,
+                  size: 20,
                   color: selected
-                      ? FloePalette.primary700
+                      ? FloePalette.primary600
                       : FloePalette.neutral600,
                 ),
-                const SizedBox(height: FloeSpace.xs),
-                Text(
-                  label,
-                  style: FloeType.label.copyWith(
-                    fontSize: 10,
-                    color: selected
-                        ? FloePalette.primary700
-                        : FloePalette.neutral600,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -524,72 +538,22 @@ class _DayToolbar extends StatelessWidget {
         ),
       ],
     );
-    final views = _CalendarViewSelector(
-      onUnavailable: () => _showComingSoon(context),
-    );
     return Padding(
-      padding: EdgeInsets.only(top: 12, bottom: narrow ? 16 : 12),
-      child: narrow
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                leading,
-                SizedBox(height: compact ? 14 : 12),
-                views,
-              ],
-            )
-          : Row(
-              children: [
-                Expanded(child: leading),
-                const SizedBox(width: 24),
-                SizedBox(width: 300, child: views),
-              ],
-            ),
+      padding: const EdgeInsets.only(top: 12, bottom: 16),
+      child: Row(
+        children: [
+          Expanded(child: leading),
+          IconButton(
+            tooltip: 'Refresh calendar',
+            onPressed: controller.loadState == DayLoadState.loading
+                ? null
+                : controller.refresh,
+            icon: const Icon(LucideIcons.refreshCw, size: 18),
+          ),
+        ],
+      ),
     );
   }
-}
-
-class _CalendarViewSelector extends StatelessWidget {
-  const _CalendarViewSelector({required this.onUnavailable});
-  final VoidCallback onUnavailable;
-
-  @override
-  Widget build(BuildContext context) => FloeSquircle(
-    size: FloeSquircleSize.field,
-    padding: const EdgeInsets.all(5),
-    child: Row(
-      spacing: 4,
-      children: [
-        for (final (index, label) in ['Day', 'Week', 'Month'].indexed)
-          Expanded(
-            child: FloeSquircle(
-              size: FloeSquircleSize.md,
-              fill: index == 0 ? FloePalette.primary100 : Colors.transparent,
-              borderWidth: 0,
-              child: FloeButton.text(
-                onPressed: index == 0 ? null : onUnavailable,
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  foregroundColor: FloePalette.neutral600,
-                  disabledForegroundColor: FloePalette.primary700,
-                  minimumSize: Size(
-                    0,
-                    MediaQuery.sizeOf(context).width <= 430 ? 38 : 40,
-                  ),
-                  textStyle: const TextStyle(
-                    fontFamily: 'Pretendard',
-                    fontSize: 16,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-                child: Text(label),
-              ),
-            ),
-          ),
-      ],
-    ),
-  );
 }
 
 class _TasksScreen extends StatelessWidget {
@@ -691,10 +655,10 @@ class _NotesScreenState extends State<_NotesScreen> {
   bool personalOnly = false;
 
   Future<void> _create() async {
-    final saved = await showDialog<bool>(
-      context: context,
+    final saved = await showFloeDialog<bool>(
+      context,
+      (context) => _NewNoteDialog(save: widget.onCreate),
       barrierDismissible: false,
-      builder: (context) => _NewNoteDialog(save: widget.onCreate),
     );
     if (saved == true && mounted) {
       setState(() {
@@ -1023,13 +987,11 @@ class _TaskDetailScreen extends StatefulWidget {
     required this.task,
     required this.snapshot,
     required this.narrow,
-    required this.onBack,
     required this.onComplete,
   });
   final TaskItem task;
   final DaySnapshot snapshot;
   final bool narrow;
-  final VoidCallback onBack;
   final Future<void> Function(TaskItem, bool) onComplete;
   @override
   State<_TaskDetailScreen> createState() => _TaskDetailScreenState();
@@ -1221,27 +1183,18 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                 ),
                 const SizedBox(height: 18),
                 Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 28,
+                  alignment: WrapAlignment.end,
+                  spacing: 12,
                   children: [
-                    FloeButton.text(
-                      onPressed: () => _showComingSoon(context),
-                      style: TextButton.styleFrom(
-                        foregroundColor: FloePalette.primary600,
-                        minimumSize: const Size(0, 40),
-                        padding: EdgeInsets.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        textStyle: const TextStyle(
-                          fontFamily: 'Pretendard',
-                          fontSize: 13,
-                        ),
-                      ),
+                    FloeButton.filled(
+                      onPressed: () =>
+                          setState(() => suggestionVisible = false),
                       child: const Text('Review now'),
                     ),
                     FloeButton.text(
                       style: TextButton.styleFrom(
                         minimumSize: const Size(0, 40),
-                        padding: EdgeInsets.zero,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         textStyle: const TextStyle(
                           fontFamily: 'Pretendard',
@@ -1264,7 +1217,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           borderColor: FloePalette.primary100,
           padding: EdgeInsets.all(widget.narrow ? 23 : 27),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 196),
+            constraints: const BoxConstraints(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1277,7 +1230,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   appearance?.note ?? '연결된 노트가 없어요.',
                   style: FloeType.body.copyWith(height: 1.7),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 20),
                 const Text(
                   'Updated this morning',
                   style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
@@ -1295,12 +1248,6 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(
             children: [
-              FloeButton.text(
-                onPressed: widget.onBack,
-                style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                icon: const Icon(LucideIcons.arrowLeft, size: 19),
-                child: const Text('Back to today'),
-              ),
               const Spacer(),
               FloeSquircle(
                 size: FloeSquircleSize.md,
@@ -1400,10 +1347,7 @@ Future<void> _openNote(BuildContext context, NoteItem note, bool narrow) async {
       builder: (context) => detail,
     );
   } else {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => Dialog(child: detail),
-    );
+    await showFloeDialog<void>(context, (context) => Dialog(child: detail));
   }
 }
 
@@ -1452,551 +1396,6 @@ class _NoteDetail extends StatelessWidget {
   );
 }
 
-class _PrimaryDay extends StatelessWidget {
-  const _PrimaryDay({required this.snapshot, required this.onOpenTask});
-  final DaySnapshot snapshot;
-  final ValueChanged<TaskItem> onOpenTask;
-  @override
-  Widget build(BuildContext context) {
-    return _Timeline(
-      items: snapshot.items,
-      snapshot: snapshot,
-      onOpenTask: onOpenTask,
-    );
-  }
-}
-
-class _ContextRail extends StatelessWidget {
-  const _ContextRail({
-    required this.snapshot,
-    required this.disabled,
-    required this.complete,
-    required this.delete,
-    required this.onOpenTask,
-  });
-  final DaySnapshot snapshot;
-  final bool disabled;
-  final Future<void> Function(TaskItem, bool) complete;
-  final Future<void> Function(DayItem) delete;
-  final ValueChanged<TaskItem> onOpenTask;
-
-  @override
-  Widget build(BuildContext context) {
-    final tasks = snapshot.items.whereType<TaskItem>().toList();
-    final notes = snapshot.items.whereType<NoteItem>().toList();
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    final dailyNote = DayAppearance.of(context)?.dailyNote;
-    final taskCard = FloeSquircle(
-      padding: EdgeInsets.all(mobile ? 23 : 27),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Today’s tasks',
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (tasks.isEmpty)
-            const Text('오늘 처리할 할 일이 없어요.', style: FloeType.body),
-          for (final task in tasks)
-            ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 64),
-              child: Row(
-                children: [
-                  _ToneDot(color: DayAppearance.tone(context, task.id).accent),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: InkWell(
-                      onTap: () => onOpenTask(task),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              task.title,
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.2,
-                                fontWeight: FontWeight.w600,
-                                color: task.isCompleted
-                                    ? FloePalette.neutral500
-                                    : FloePalette.neutral950,
-                                decoration: task.isCompleted
-                                    ? TextDecoration.lineThrough
-                                    : null,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              task.deadline == null
-                                  ? 'No due date'
-                                  : 'Due today',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                height: 1.2,
-                                color: FloePalette.neutral500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Checkbox(
-                      value: task.isCompleted,
-                      onChanged: disabled
-                          ? null
-                          : (value) => complete(task, value ?? false),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 8),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.only(top: 14),
-            child: InkWell(
-              onTap: tasks.isEmpty ? null : () => onOpenTask(tasks.first),
-              child: const SizedBox(
-                height: 32,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'View task detail',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: FloePalette.neutral600,
-                        ),
-                      ),
-                    ),
-                    Icon(LucideIcons.chevronRight, size: 17),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    final noteCard = FloeSquircle(
-      padding: EdgeInsets.all(mobile ? 23 : 27),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 184),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Note for today',
-                    style: TextStyle(
-                      fontSize: 17,
-                      height: 1.2,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Icon(
-                  LucideIcons.notebookPen,
-                  size: 20,
-                  color: FloePalette.neutral600,
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            Text(
-              dailyNote ??
-                  (notes.isEmpty ? '오늘의 생각을 남겨보세요.' : notes.first.title),
-              style: FloeType.body.copyWith(height: 1.7),
-            ),
-            const SizedBox(height: 44),
-            const Text(
-              'Updated this morning',
-              style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!mobile && MediaQuery.sizeOf(context).width <= 1080) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: taskCard),
-          const SizedBox(width: 20),
-          Expanded(child: noteCard),
-        ],
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        taskCard,
-        SizedBox(height: mobile ? 16 : 20),
-        noteCard,
-      ],
-    );
-  }
-}
-
-class _Timeline extends StatelessWidget {
-  const _Timeline({
-    required this.items,
-    required this.snapshot,
-    required this.onOpenTask,
-  });
-  int get firstHour => items
-      .whereType<EventItem>()
-      .where((event) => !event.isAllDay)
-      .fold(
-        8,
-        (hour, event) => _dayMinutes(event.startsAt) ~/ 60 < hour
-            ? (_dayMinutes(event.startsAt) ~/ 60).clamp(0, 23)
-            : hour,
-      );
-  int get lastHour => items
-      .whereType<EventItem>()
-      .where((event) => !event.isAllDay)
-      .fold(
-        19,
-        (hour, event) => _dayMinutes(event.startsAt) ~/ 60 + 1 > hour
-            ? (_dayMinutes(event.startsAt) ~/ 60 + 1).clamp(1, 24)
-            : hour,
-      );
-  static const hourExtent = 64.0;
-  final List<DayItem> items;
-  final DaySnapshot snapshot;
-  final ValueChanged<TaskItem> onOpenTask;
-
-  @override
-  Widget build(BuildContext context) {
-    final events =
-        items.whereType<EventItem>().where((event) => !event.isAllDay).toList()
-          ..sort((left, right) => left.startsAt.compareTo(right.startsAt));
-    final visible = events;
-    final timelineHeight = (lastHour - firstHour) * hourExtent;
-    final current = events
-        .where(
-          (event) =>
-              !event.startsAt.isAfter(snapshot.generatedAt) &&
-              event.endsAt.isAfter(snapshot.generatedAt),
-        )
-        .firstOrNull;
-    final suggestion = current ?? visible.firstOrNull;
-    final hasBreakWindow =
-        suggestion != null &&
-        !events.any(
-          (event) =>
-              event.startsAt.isBefore(
-                suggestion.endsAt.add(const Duration(minutes: 20)),
-              ) &&
-              event.endsAt.isAfter(suggestion.endsAt),
-        );
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    final compact = MediaQuery.sizeOf(context).width <= 430;
-    final markerSize = compact ? 48.0 : 52.0;
-    return FloeSquircle(
-      key: const Key('timeline-card'),
-      padding: const EdgeInsets.all(1),
-      child: Column(
-        children: [
-          _AllDayStrip(
-            events: items
-                .whereType<EventItem>()
-                .where((event) => event.isAllDay)
-                .toList(),
-          ),
-          SizedBox(
-            height: timelineHeight,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                for (var hour = firstHour; hour <= lastHour; hour++)
-                  _HourGuide(hour: hour, top: (hour - firstHour) * hourExtent),
-                if (visible.isEmpty)
-                  Positioned(
-                    top: 108,
-                    left: 76,
-                    right: 24,
-                    child: Text(
-                      items.isEmpty ? '오늘은 아직 비어 있어요' : '시간이 지정된 일정이 없어요.',
-                      style: FloeType.body,
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                for (final event in visible)
-                  _TimelineBlock(
-                    item: event,
-                    timezoneOffsetSeconds: snapshot.timezoneOffsetSeconds,
-                    top: (_minutes(event.startsAt) / 60 * hourExtent + 4).clamp(
-                      4,
-                      timelineHeight - 54,
-                    ),
-                    onOpenTask: onOpenTask,
-                  ),
-                if (_showsCurrentTime)
-                  _TimelineNowMarker(
-                    now: _wallTime(snapshot.generatedAt),
-                    top: _minutes(snapshot.generatedAt) / 60 * hourExtent,
-                  ),
-                if (suggestion != null && hasBreakWindow)
-                  Positioned(
-                    right: mobile ? 12 : 84,
-                    top:
-                        ((_minutes(suggestion.startsAt) +
-                                        suggestion.endsAt
-                                                .difference(suggestion.startsAt)
-                                                .inMinutes /
-                                            2) /
-                                    60 *
-                                    hourExtent -
-                                26)
-                            .clamp(0, timelineHeight - 52),
-                    width: markerSize,
-                    height: markerSize,
-                    child: _TimelineSuggestionButton(item: suggestion),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  bool get _showsCurrentTime {
-    final now = _wallTime(snapshot.generatedAt);
-    return now.year == snapshot.date.year &&
-        now.month == snapshot.date.month &&
-        now.day == snapshot.date.day &&
-        now.hour >= firstHour &&
-        now.hour < lastHour;
-  }
-
-  DateTime _wallTime(DateTime value) =>
-      value.toUtc().add(Duration(seconds: snapshot.timezoneOffsetSeconds));
-
-  int _dayMinutes(DateTime value) => _wallTime(value)
-      .difference(
-        DateTime.utc(
-          snapshot.date.year,
-          snapshot.date.month,
-          snapshot.date.day,
-        ),
-      )
-      .inMinutes;
-
-  int _minutes(DateTime value) => _dayMinutes(value) - firstHour * 60;
-}
-
-extension<T> on Iterable<T> {
-  T? get firstOrNull {
-    final iterator = this.iterator;
-    return iterator.moveNext() ? iterator.current : null;
-  }
-}
-
-class _AllDayStrip extends StatelessWidget {
-  const _AllDayStrip({required this.events});
-  final List<EventItem> events;
-
-  @override
-  Widget build(BuildContext context) {
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 50),
-      padding: EdgeInsets.only(left: mobile ? 14 : 22, right: mobile ? 14 : 16),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: FloePalette.neutral200)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: mobile ? 62 : 112,
-            child: Text('All-day', style: FloeType.body.copyWith(fontSize: 13)),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final event in events)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Tooltip(
-                      message: event.externalId ?? event.title,
-                      child: FloeSquircle(
-                        size: FloeSquircleSize.md,
-                        fill: FloePalette.mint50,
-                        borderColor: FloePalette.mint100,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        child: Text(
-                          '${event.title}${event.calendarName == null ? '' : ' · ${event.sourceLabel}'}',
-                          style: TextStyle(
-                            height: 1.2,
-                            fontSize: mobile ? 12 : 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HourGuide extends StatelessWidget {
-  const _HourGuide({required this.hour, required this.top});
-  final int hour;
-  final double top;
-
-  @override
-  Widget build(BuildContext context) {
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    return Positioned(
-      top: top,
-      right: mobile ? 12 : 16,
-      left: mobile ? 14 : 22,
-      child: Row(
-        children: [
-          SizedBox(
-            width: mobile ? 48 : 82,
-            child: Text(
-              _hourLabel(hour),
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.2,
-                color: FloePalette.neutral600,
-              ),
-            ),
-          ),
-          const Expanded(
-            child: CustomPaint(
-              size: Size(double.infinity, 1),
-              painter: _HourRule(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HourRule extends CustomPainter {
-  const _HourRule();
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = FloePalette.neutral200
-      ..strokeWidth = 1;
-    for (double offset = 0; offset < size.width; offset += 7) {
-      canvas.drawLine(
-        Offset(offset, .5),
-        Offset((offset + 3).clamp(0, size.width), .5),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_HourRule oldDelegate) => false;
-}
-
-class _TimelineBlock extends StatelessWidget {
-  const _TimelineBlock({
-    required this.item,
-    required this.top,
-    required this.onOpenTask,
-    required this.timezoneOffsetSeconds,
-  });
-  final EventItem item;
-  final int timezoneOffsetSeconds;
-  final double top;
-  final ValueChanged<TaskItem> onOpenTask;
-
-  @override
-  Widget build(BuildContext context) {
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    final compact = MediaQuery.sizeOf(context).width <= 430;
-    final tone = DayAppearance.tone(context, item.id, ItemTone.blue);
-    return Positioned(
-      top: top,
-      right: mobile ? 18 : 110,
-      left: compact
-          ? 68
-          : mobile
-          ? 74
-          : 112,
-      child: FloeSquircle(
-        size: FloeSquircleSize.md,
-        fill: tone.fill,
-        borderColor: tone.border,
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 10 : 16,
-          vertical: compact ? 9 : 11,
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 3),
-              child: _ToneDot(color: tone.accent),
-            ),
-            SizedBox(width: compact ? 8 : 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: compact ? 12 : 13,
-                      height: 1.2,
-                      fontWeight: FontWeight.w600,
-                      color: FloePalette.neutral950,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_timeRange(item.startsAt.toUtc().add(Duration(seconds: timezoneOffsetSeconds)), item.endsAt.toUtc().add(Duration(seconds: timezoneOffsetSeconds)))}${item.calendarName == null ? '' : ' · ${item.sourceLabel}'}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: compact ? 10 : 12,
-                      height: 1.2,
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _ToneDot extends StatelessWidget {
   const _ToneDot({required this.color});
   final Color color;
@@ -2005,307 +1404,6 @@ class _ToneDot extends StatelessWidget {
     decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     child: const SizedBox.square(dimension: 10),
   );
-}
-
-class _TimelineSuggestionButton extends StatefulWidget {
-  const _TimelineSuggestionButton({required this.item});
-  final DayItem item;
-  @override
-  State<_TimelineSuggestionButton> createState() =>
-      _TimelineSuggestionButtonState();
-}
-
-class _TimelineSuggestionButtonState extends State<_TimelineSuggestionButton> {
-  bool open = false;
-  bool hovered = false;
-  bool focused = false;
-  @override
-  Widget build(BuildContext context) => Tooltip(
-    message: 'Floe 제안 열기',
-    child: PressableScale(
-      scale: 0.98,
-      builder: (states) => FloeSquircle(
-        size: FloeSquircleSize.floating,
-        elevation: 4,
-        fill: open || hovered || focused
-            ? FloePalette.primary50
-            : FloePalette.neutral0,
-        borderWidth: open || hovered || focused ? 2 : 1,
-        borderColor: open || hovered || focused
-            ? FloePalette.primary600
-            : FloePalette.primary200,
-        child: InkWell(
-          statesController: states,
-          mouseCursor: WidgetStateMouseCursor.clickable,
-          onHover: (value) => setState(() => hovered = value),
-          onFocusChange: (value) => setState(() => focused = value),
-          onTap: () async {
-            if (open) return;
-            setState(() => open = true);
-            await _showTimelineSuggestion(context, widget.item);
-            if (mounted) setState(() => open = false);
-          },
-          customBorder: floeSquircleBorder(FloeSquircleSize.floating),
-          child: Center(
-            child: FloeMascot(
-              size: MediaQuery.sizeOf(context).width <= 430 ? 31 : 34,
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-class _TimelineNowMarker extends StatelessWidget {
-  const _TimelineNowMarker({required this.now, required this.top});
-  final DateTime now;
-  final double top;
-  @override
-  Widget build(BuildContext context) {
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    return Positioned(
-      top: top,
-      right: mobile ? 10 : 12,
-      left: mobile ? 6 : 8,
-      child: IgnorePointer(
-        child: Row(
-          children: [
-            SizedBox(
-              width: mobile ? 58 : 78,
-              child: Text(
-                _clock(now),
-                style: const TextStyle(
-                  fontSize: 12,
-                  height: 1.2,
-                  color: FloePalette.primary600,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            SizedBox(width: mobile ? 6 : 8),
-            Container(
-              width: mobile ? 7 : 8,
-              height: mobile ? 7 : 8,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: FloePalette.primary600,
-              ),
-            ),
-            SizedBox(width: mobile ? 6 : 8),
-            const Expanded(
-              child: SizedBox(
-                height: 1.5,
-                child: ColoredBox(color: FloePalette.primary600),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-Future<void> _showTimelineSuggestion(BuildContext context, DayItem item) async {
-  if (item is! EventItem) return;
-  final owner = context.findAncestorStateOfType<_PersonalDayScreenState>();
-  final anchor = context.findRenderObject()! as RenderBox;
-  final origin = anchor.localToGlobal(Offset.zero);
-  final size = MediaQuery.sizeOf(context);
-  final width = (size.width - 40).clamp(0.0, 380.0);
-  final left = (origin.dx + anchor.size.width + 14).clamp(
-    20.0,
-    size.width - width - 20,
-  );
-  final top = (origin.dy - 130).clamp(
-    20.0,
-    (size.height - 380).clamp(20.0, double.infinity),
-  );
-  final nextEvents =
-      owner?.controller.snapshot?.items
-          .whereType<EventItem>()
-          .where(
-            (event) => !event.isAllDay && !event.startsAt.isBefore(item.endsAt),
-          )
-          .toList() ??
-      [];
-  nextEvents.sort((left, right) => left.startsAt.compareTo(right.startsAt));
-  final add = await showGeneralDialog<bool>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: 'Dismiss suggestion',
-    barrierColor: Colors.transparent,
-    transitionDuration: const Duration(milliseconds: 160),
-    pageBuilder: (context, animation, secondaryAnimation) => Stack(
-      children: [
-        Positioned(
-          left: left,
-          top: top,
-          width: width,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: size.height - top - 20),
-            child: SingleChildScrollView(
-              child: _TimelineSuggestionPanel(
-                item: item,
-                next: nextEvents.firstOrNull,
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-  if (add == true && owner != null && owner.mounted) {
-    await owner._reserveBreak(item);
-  }
-}
-
-class _TimelineSuggestionPanel extends StatefulWidget {
-  const _TimelineSuggestionPanel({required this.item, this.next});
-  final EventItem item;
-  final EventItem? next;
-  @override
-  State<_TimelineSuggestionPanel> createState() =>
-      _TimelineSuggestionPanelState();
-}
-
-class _TimelineSuggestionPanelState extends State<_TimelineSuggestionPanel> {
-  bool reasonOpen = false;
-  @override
-  Widget build(BuildContext context) {
-    final mobile = MediaQuery.sizeOf(context).width <= 780;
-    final gap = mobile ? 14.0 : 16.0;
-    final end = widget.item.endsAt.add(const Duration(minutes: 20));
-    final add = FloeButton.filled(
-      onPressed: () => Navigator.pop(context, true),
-      child: const Text('Add break'),
-    );
-    final keep = FloeButton.outlined(
-      onPressed: () => Navigator.pop(context),
-      child: const Text('Keep current'),
-    );
-    return FloeSquircle(
-      size: FloeSquircleSize.xl,
-      elevation: 8,
-      padding: EdgeInsets.all(mobile ? 21 : 25),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              const FloeMascot(size: 32),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  'Floe suggestion',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: FloePalette.primary600,
-                  ),
-                ),
-              ),
-              FloeSquircle(
-                size: FloeSquircleSize.md,
-                child: FloeButton.icon(
-                  tooltip: 'Close suggestion',
-                  style: IconButton.styleFrom(
-                    fixedSize: const Size.square(36),
-                    minimumSize: const Size.square(36),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(LucideIcons.x, size: 18),
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: gap),
-          const Text(
-            'Reserve a 20-minute break?',
-            style: TextStyle(
-              fontSize: 22,
-              height: 1.2,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -.55,
-            ),
-          ),
-          SizedBox(height: gap),
-          Text(
-            'Your afternoon is busy. Add a break after ${widget.item.title}${widget.next == null ? '?' : ', before ${widget.next!.title}?'}',
-            style: FloeType.body.copyWith(height: 1.55),
-          ),
-          SizedBox(height: gap),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FloeSquircle(
-              size: FloeSquircleSize.md,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(LucideIcons.clock3, size: 17),
-                  const SizedBox(width: 8),
-                  Text(
-                    _timeRange(widget.item.endsAt, end),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: gap),
-          if (mobile) ...[
-            add,
-            const SizedBox(height: 10),
-            keep,
-          ] else
-            Row(
-              children: [
-                Expanded(child: add),
-                const SizedBox(width: 10),
-                Expanded(child: keep),
-              ],
-            ),
-          SizedBox(height: gap),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FloeButton.text(
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                foregroundColor: FloePalette.primary600,
-              ),
-              onPressed: () => setState(() => reasonOpen = !reasonOpen),
-              child: const Text(
-                'Why this suggestion?',
-                style: TextStyle(fontSize: 12),
-              ),
-            ),
-          ),
-          if (reasonOpen) ...[
-            const SizedBox(height: 12),
-            const Divider(height: 1),
-            Text(
-              '${widget.item.title} ends at ${_clock(widget.item.endsAt)}. A short break keeps a transition between activities.',
-              style: FloeType.body.copyWith(fontSize: 12),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-String _hourLabel(int hour) {
-  final suffix = hour < 12 ? 'AM' : 'PM';
-  final normalized = hour % 12 == 0 ? 12 : hour % 12;
-  return '$normalized $suffix';
 }
 
 class _DayRow extends StatelessWidget {
@@ -2397,9 +1495,9 @@ class _DayRow extends StatelessWidget {
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
+    final confirmed = await showFloeDialog<bool>(
+      context,
+      (context) => AlertDialog(
         title: const Text('항목을 삭제할까요?'),
         content: Text('“${item.title}” 항목이 오늘의 흐름에서 제거됩니다.'),
         actions: [
@@ -2486,7 +1584,7 @@ class _CaptureBar extends StatelessWidget {
                     if (!pending && value.trim().isNotEmpty) submit();
                   },
                   decoration: const InputDecoration(
-                    hintText: 'Capture an event, task, or thought',
+                    hintText: 'A thought for your day...',
                     hintStyle: TextStyle(color: FloePalette.neutral500),
                     filled: false,
                     border: InputBorder.none,
@@ -2505,8 +1603,8 @@ class _CaptureBar extends StatelessWidget {
                     message: '캡처 저장',
                     child: SizedBox.square(
                       dimension: 44,
-                      child: FloeButton.filled(
-                        style: FilledButton.styleFrom(
+                      child: FloeButton.outlined(
+                        style: OutlinedButton.styleFrom(
                           padding: EdgeInsets.zero,
                           shape: floeSquircleBorder(FloeSquircleSize.md),
                         ),
@@ -2518,7 +1616,7 @@ class _CaptureBar extends StatelessWidget {
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(LucideIcons.arrowUp, size: 19),
+                            : const Icon(LucideIcons.arrowRight, size: 19),
                       ),
                     ),
                   );
@@ -2526,17 +1624,6 @@ class _CaptureBar extends StatelessWidget {
               ),
             ],
           ),
-  );
-}
-
-class _LoadingDay extends StatelessWidget {
-  const _LoadingDay();
-  @override
-  Widget build(BuildContext context) => const FloeSquircle(
-    size: FloeSquircleSize.xl,
-    fill: FloePalette.neutral50,
-    padding: EdgeInsets.all(FloeSpace.xxxl),
-    child: Center(child: CircularProgressIndicator()),
   );
 }
 
@@ -2855,14 +1942,6 @@ String _time(DateTime value) =>
 
 String _date(DateTime value) =>
     '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][value.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][value.month - 1]} ${value.day}';
-
-String _clock(DateTime value) =>
-    '${value.hour % 12 == 0 ? 12 : value.hour % 12}:${value.minute.toString().padLeft(2, '0')} ${value.hour < 12 ? 'AM' : 'PM'}';
-
-String _timeRange(DateTime start, DateTime end) {
-  final first = _clock(start);
-  return '${start.hour < 12 == (end.hour < 12) ? first.substring(0, first.length - 3) : first} – ${_clock(end)}';
-}
 
 TaskItem? _taskById(DaySnapshot snapshot, String? id) {
   if (id == null) return null;
