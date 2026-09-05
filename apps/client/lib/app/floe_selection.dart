@@ -128,10 +128,19 @@ class _FloeSelectionAnchor<T> extends StatefulWidget {
       _FloeSelectionAnchorState<T>();
 }
 
-class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>> {
-  final controller = MenuController();
+class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
+    with SingleTickerProviderStateMixin {
+  final triggerKey = GlobalKey();
   final focusNode = FocusNode();
+  final popupFocusNode = FocusNode();
+  final optionKeys = <GlobalKey>[];
+  late final AnimationController popupAnimation;
+  OverlayEntry? popupEntry;
   bool open = false;
+  bool opensAbove = false;
+  int active = -1;
+  String searchText = '';
+  DateTime? searchedAt;
 
   FloeSelectOption<T>? get selected {
     for (final option in widget.options) {
@@ -140,32 +149,299 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>> {
     return null;
   }
 
+  int get firstEnabled => _nextEnabled(-1, 1);
+
+  @override
+  void initState() {
+    super.initState();
+    popupAnimation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 160),
+    );
+  }
+
   @override
   void didUpdateWidget(_FloeSelectionAnchor<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.enabled && controller.isOpen) controller.close();
+    if (!widget.enabled && open) close(restoreFocus: false);
   }
 
   @override
   void dispose() {
+    popupEntry?.remove();
+    popupAnimation.dispose();
     focusNode.dispose();
+    popupFocusNode.dispose();
     super.dispose();
   }
 
   void toggle() {
     if (!widget.enabled) return;
-    controller.isOpen ? controller.close() : controller.open();
+    open ? close() : show();
   }
+
+  void show({bool last = false}) {
+    if (open || !widget.enabled) return;
+    final overlay = Overlay.of(context);
+    final overlayBox = overlay.context.findRenderObject()! as RenderBox;
+    final triggerBox =
+        triggerKey.currentContext!.findRenderObject()! as RenderBox;
+    final anchorOffset = triggerBox.localToGlobal(
+      Offset.zero,
+      ancestor: overlayBox,
+    );
+    final anchor = anchorOffset & triggerBox.size;
+    final availableWidth = overlayBox.size.width - 24;
+    final menuWidth = math.min(math.max(anchor.width, 240.0), availableWidth);
+    final naturalHeight = widget.options.isEmpty
+        ? 54.0
+        : widget.options.fold<double>(
+            10,
+            (height, option) => height + (option.description == null ? 44 : 59),
+          );
+    final below = overlayBox.size.height - anchor.bottom - 16;
+    final above = anchor.top - 16;
+    opensAbove = below < math.min(320, naturalHeight) && above > below;
+    final maxHeight = math.max(
+      44.0,
+      math.min(320.0, opensAbove ? above : below),
+    );
+    final popupHeight = math.min(naturalHeight, maxHeight);
+    final left = math.max(
+      12.0,
+      math.min(anchor.left, overlayBox.size.width - menuWidth - 12),
+    );
+    final top = opensAbove
+        ? math.max(12.0, anchor.top - popupHeight - 6)
+        : anchor.bottom + 6;
+    final selectedIndex = widget.options.indexWhere(
+      (option) => option.enabled && option.value == widget.value,
+    );
+    active = !widget.menu && selectedIndex >= 0
+        ? selectedIndex
+        : last
+        ? _nextEnabled(0, -1)
+        : firstEnabled;
+    optionKeys
+      ..clear()
+      ..addAll(List.generate(widget.options.length, (_) => GlobalKey()));
+    searchText = '';
+    searchedAt = null;
+    setState(() => open = true);
+    popupEntry = OverlayEntry(
+      builder: (context) => _buildOverlay(
+        left: left,
+        top: top,
+        width: menuWidth,
+        maxHeight: maxHeight,
+      ),
+    );
+    overlay.insert(popupEntry!);
+    popupAnimation.duration = FloeMotion.reduceMotion(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 160);
+    popupAnimation.forward(from: 0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && open) popupFocusNode.requestFocus();
+    });
+  }
+
+  void close({bool restoreFocus = true}) {
+    if (!open) return;
+    popupEntry?.remove();
+    popupEntry = null;
+    popupAnimation.reset();
+    searchText = '';
+    searchedAt = null;
+    if (mounted) setState(() => open = false);
+    if (restoreFocus) focusNode.requestFocus();
+  }
+
+  void choose(int index) {
+    if (index < 0 ||
+        index >= widget.options.length ||
+        !widget.options[index].enabled) {
+      return;
+    }
+    final value = widget.options[index].value;
+    close();
+    widget.onSelected(value);
+  }
+
+  int _nextEnabled(int current, int direction) {
+    for (var offset = 1; offset <= widget.options.length; offset++) {
+      final index =
+          (current + direction * offset + widget.options.length) %
+          widget.options.length;
+      if (widget.options[index].enabled) return index;
+    }
+    return -1;
+  }
+
+  void setActive(int index) {
+    if (index == active || index < 0 || !widget.options[index].enabled) return;
+    active = index;
+    popupEntry?.markNeedsBuild();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final optionContext = optionKeys[index].currentContext;
+      if (optionContext != null) {
+        Scrollable.ensureVisible(
+          optionContext,
+          alignment: .5,
+          duration: FloeMotion.reduceMotion(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 80),
+        );
+      }
+    });
+  }
+
+  KeyEventResult navigate(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowDown) {
+      setActive(_nextEnabled(active, 1));
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      setActive(_nextEnabled(active < 0 ? 0 : active, -1));
+    } else if (key == LogicalKeyboardKey.home) {
+      setActive(firstEnabled);
+    } else if (key == LogicalKeyboardKey.end) {
+      setActive(_nextEnabled(0, -1));
+    } else if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.space) {
+      choose(active);
+    } else if (key == LogicalKeyboardKey.escape) {
+      close();
+    } else if (key == LogicalKeyboardKey.tab) {
+      close(restoreFocus: false);
+      return KeyEventResult.ignored;
+    } else if (event.character?.length == 1 &&
+        !HardwareKeyboard.instance.isMetaPressed &&
+        !HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isAltPressed) {
+      final now = DateTime.now();
+      final character = event.character!.toLowerCase();
+      searchText =
+          searchedAt != null &&
+              now.difference(searchedAt!) < const Duration(milliseconds: 700)
+          ? '$searchText$character'
+          : character;
+      searchedAt = now;
+      final repeated = searchText
+          .split('')
+          .every((candidate) => candidate == character);
+      final query = repeated ? character : searchText;
+      for (var offset = 1; offset <= widget.options.length; offset++) {
+        final index =
+            (active + offset + widget.options.length) % widget.options.length;
+        final option = widget.options[index];
+        if (option.enabled && option.label.toLowerCase().startsWith(query)) {
+          setActive(index);
+          break;
+        }
+      }
+    } else {
+      return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  Widget _buildOverlay({
+    required double left,
+    required double top,
+    required double width,
+    required double maxHeight,
+  }) => Positioned.fill(
+    child: Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: (_) => close(restoreFocus: false),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: width,
+          child: FadeTransition(
+            key: const ValueKey('floe-selection-fade'),
+            opacity: CurvedAnimation(
+              parent: popupAnimation,
+              curve: FloeMotion.easeOut,
+            ),
+            child: ScaleTransition(
+              key: const ValueKey('floe-selection-scale'),
+              scale: Tween(begin: .97, end: 1.0).animate(
+                CurvedAnimation(
+                  parent: popupAnimation,
+                  curve: FloeMotion.easeOut,
+                ),
+              ),
+              alignment: opensAbove ? Alignment.bottomLeft : Alignment.topLeft,
+              child: Material(
+                key: const ValueKey('floe-selection-popup'),
+                color: FloePalette.neutral0,
+                elevation: 8,
+                shadowColor: FloePalette.neutral950.withValues(alpha: .08),
+                shape: floeSquircleBorder(
+                  FloeSquircleSize.md,
+                  borderColor: FloePalette.neutral200,
+                  borderWidth: 1,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxHeight),
+                  child: Focus(
+                    focusNode: popupFocusNode,
+                    onKeyEvent: navigate,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(5),
+                      child: widget.options.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.all(7),
+                              child: Text(
+                                'No options available',
+                                style: TextStyle(color: FloePalette.neutral600),
+                              ),
+                            )
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (
+                                  var index = 0;
+                                  index < widget.options.length;
+                                  index++
+                                )
+                                  _FloeSelectionOptionRow(
+                                    key: optionKeys[index],
+                                    option: widget.options[index],
+                                    active: active == index,
+                                    selected:
+                                        !widget.menu &&
+                                        widget.value ==
+                                            widget.options[index].value,
+                                    onHover: () => setActive(index),
+                                    onPressed: () => choose(index),
+                                  ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final availableWidth = MediaQuery.sizeOf(context).width - 24;
-      final anchorWidth = constraints.hasBoundedWidth
-          ? constraints.maxWidth
-          : 240.0;
-      final menuWidth = math.min(math.max(anchorWidth, 240.0), availableWidth);
+    builder: (context, _) {
       final trigger = _FloeSelectionTrigger(
+        key: triggerKey,
         label: widget.label,
         value: widget.menu
             ? widget.label
@@ -175,148 +451,144 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>> {
         focusNode: focusNode,
         icon: widget.icon,
         onPressed: toggle,
+        onDirectionalOpen: (last) => show(last: last),
       );
-      return MenuAnchor(
-        controller: controller,
-        childFocusNode: focusNode,
-        animated: false,
-        crossAxisUnconstrained: false,
-        alignmentOffset: const Offset(0, 6),
-        style: MenuStyle(
-          backgroundColor: const WidgetStatePropertyAll(FloePalette.neutral0),
-          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-          shadowColor: WidgetStatePropertyAll(
-            FloePalette.neutral950.withValues(alpha: .08),
-          ),
-          elevation: const WidgetStatePropertyAll(8),
-          padding: const WidgetStatePropertyAll(EdgeInsets.all(5)),
-          fixedSize: WidgetStatePropertyAll(Size.fromWidth(menuWidth)),
-          side: const WidgetStatePropertyAll(
-            BorderSide(color: FloePalette.neutral200),
-          ),
-          shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
-          ),
-          alignment: AlignmentDirectional.topStart,
-        ),
-        onOpen: () => setState(() => open = true),
-        onClose: () => setState(() => open = false),
-        menuChildren: [
-          if (widget.options.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                'No options available',
-                style: TextStyle(color: FloePalette.neutral600),
-              ),
-            ),
-          for (final option in widget.options)
-            MenuItemButton(
-              semanticsLabel: option.label,
-              style: _optionStyle(option.enabled),
-              trailingIcon: !widget.menu && option.value == widget.value
-                  ? const Icon(
-                      LucideIcons.check,
-                      size: 16,
-                      color: FloePalette.primary600,
-                    )
-                  : null,
-              onPressed: option.enabled
-                  ? () => widget.onSelected(option.value)
-                  : null,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    option.label,
-                    style: const TextStyle(fontSize: 14, height: 1.35),
+      return widget.menu
+          ? widget.icon == null
+                ? trigger
+                : Tooltip(message: widget.label, child: trigger)
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  widget.label,
+                  style: const TextStyle(
+                    color: FloePalette.neutral950,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
-                  if (option.description != null) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      option.description!,
-                      style: const TextStyle(
-                        color: FloePalette.neutral600,
-                        fontSize: 12,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-        ],
-        builder: (context, controller, child) => widget.menu
-            ? widget.icon == null
-                  ? trigger
-                  : Tooltip(message: widget.label, child: trigger)
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    widget.label,
-                    style: const TextStyle(
-                      color: FloePalette.neutral950,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                ),
+                const SizedBox(height: 8),
+                trigger,
+                if (widget.description != null) ...[
                   const SizedBox(height: 8),
-                  trigger,
-                  if (widget.description != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.description!,
-                      style: const TextStyle(
-                        color: FloePalette.neutral600,
-                        fontSize: 12,
-                        height: 1.5,
-                      ),
+                  Text(
+                    widget.description!,
+                    style: const TextStyle(
+                      color: FloePalette.neutral600,
+                      fontSize: 12,
+                      height: 1.5,
                     ),
-                  ],
-                  if (widget.errorText != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.errorText!,
-                      style: const TextStyle(
-                        color: FloePalette.error600,
-                        fontSize: 12,
-                        height: 1.5,
-                      ),
-                    ),
-                  ],
+                  ),
                 ],
-              ),
-      );
+                if (widget.errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.errorText!,
+                    style: const TextStyle(
+                      color: FloePalette.error600,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ],
+            );
     },
   );
+}
 
-  ButtonStyle _optionStyle(bool enabled) => ButtonStyle(
-    animationDuration: FloeMotion.hoverDuration,
-    foregroundColor: WidgetStateProperty.resolveWith(
-      (states) => enabled ? FloePalette.neutral950 : FloePalette.neutral400,
-    ),
-    backgroundColor: WidgetStateProperty.resolveWith(
-      (states) =>
-          states.contains(WidgetState.hovered) ||
-              states.contains(WidgetState.focused)
-          ? FloePalette.primary50
-          : Colors.transparent,
-    ),
-    overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-    side: WidgetStateProperty.resolveWith(
-      (states) =>
-          states.contains(WidgetState.focused) ||
-              states.contains(WidgetState.hovered)
-          ? const BorderSide(color: FloePalette.primary600, width: 2)
-          : const BorderSide(color: Colors.transparent, width: 2),
-    ),
-    shape: WidgetStatePropertyAll(floeSquircleBorder(FloeSquircleSize.sm)),
-    padding: const WidgetStatePropertyAll(EdgeInsets.all(10)),
-    minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
-    mouseCursor: WidgetStatePropertyAll(
-      enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+class _FloeSelectionOptionRow<T> extends StatelessWidget {
+  const _FloeSelectionOptionRow({
+    required this.option,
+    required this.active,
+    required this.selected,
+    required this.onHover,
+    required this.onPressed,
+    super.key,
+  });
+
+  final FloeSelectOption<T> option;
+  final bool active;
+  final bool selected;
+  final VoidCallback onHover;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    selected: selected,
+    enabled: option.enabled,
+    label: option.label,
+    onTap: option.enabled ? onPressed : null,
+    child: MouseRegion(
+      cursor: option.enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.forbidden,
+      onHover: (event) {
+        if (event.kind == PointerDeviceKind.mouse && option.enabled) onHover();
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: option.enabled ? onPressed : null,
+        child: AnimatedContainer(
+          key: const ValueKey('floe-selection-option'),
+          duration: FloeMotion.reduceMotion(context)
+              ? Duration.zero
+              : FloeMotion.hoverDuration,
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.all(10),
+          decoration: ShapeDecoration(
+            color: active ? FloePalette.primary50 : Colors.transparent,
+            shape: floeSquircleBorder(
+              FloeSquircleSize.sm,
+              borderColor: active ? FloePalette.primary600 : Colors.transparent,
+              borderWidth: 2,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      option.label,
+                      style: TextStyle(
+                        color: option.enabled
+                            ? FloePalette.neutral950
+                            : FloePalette.neutral400,
+                        fontSize: 14,
+                        height: 1.35,
+                      ),
+                    ),
+                    if (option.description != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        option.description!,
+                        style: const TextStyle(
+                          color: FloePalette.neutral600,
+                          fontSize: 12,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (selected) ...[
+                const SizedBox(width: 16),
+                const Icon(
+                  LucideIcons.check,
+                  size: 16,
+                  color: FloePalette.primary600,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -328,8 +600,10 @@ class _FloeSelectionTrigger extends StatefulWidget {
     required this.open,
     required this.focusNode,
     required this.onPressed,
+    required this.onDirectionalOpen,
     this.label,
     this.icon,
+    super.key,
   });
 
   final String? label;
@@ -338,6 +612,7 @@ class _FloeSelectionTrigger extends StatefulWidget {
   final bool open;
   final FocusNode focusNode;
   final VoidCallback onPressed;
+  final ValueChanged<bool> onDirectionalOpen;
   final Widget? icon;
 
   @override
@@ -372,10 +647,16 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
           onKeyEvent: (node, event) {
             if (event is KeyDownEvent &&
                 (event.logicalKey == LogicalKeyboardKey.enter ||
-                    event.logicalKey == LogicalKeyboardKey.space ||
-                    event.logicalKey == LogicalKeyboardKey.arrowDown ||
-                    event.logicalKey == LogicalKeyboardKey.arrowUp)) {
+                    event.logicalKey == LogicalKeyboardKey.space)) {
               widget.onPressed();
+              return KeyEventResult.handled;
+            }
+            if (event is KeyDownEvent &&
+                (event.logicalKey == LogicalKeyboardKey.arrowDown ||
+                    event.logicalKey == LogicalKeyboardKey.arrowUp)) {
+              widget.onDirectionalOpen(
+                event.logicalKey == LogicalKeyboardKey.arrowUp,
+              );
               return KeyEventResult.handled;
             }
             return KeyEventResult.ignored;
@@ -584,6 +865,9 @@ class _FloeChoice extends StatefulWidget {
 }
 
 class _FloeChoiceState extends State<_FloeChoice> {
+  static _FloeChoiceState? hoverOwner;
+  static _FloeChoiceState? focusOwner;
+
   FocusNode? internalFocusNode;
   FocusNode get focusNode =>
       widget.focusNode ?? (internalFocusNode ??= FocusNode());
@@ -591,16 +875,41 @@ class _FloeChoiceState extends State<_FloeChoice> {
   bool hovered = false;
   bool focused = false;
 
-  void clearPointerFocus() {
-    if (focusNode.hasFocus) {
-      focusNode.unfocus();
-    } else {
-      FocusManager.instance.primaryFocus?.unfocus();
+  void setHovered(bool value) {
+    if (mounted && hovered != value) setState(() => hovered = value);
+  }
+
+  void claimHover() {
+    if (hoverOwner == this) return;
+    hoverOwner?.setHovered(false);
+    hoverOwner = this;
+    setHovered(true);
+  }
+
+  void setFocused(bool value) {
+    if (value) {
+      if (focusOwner != this) focusOwner?.setFocusStyle(false);
+      focusOwner = this;
+    } else if (focusOwner == this) {
+      focusOwner = null;
     }
+    setFocusStyle(value);
+  }
+
+  void setFocusStyle(bool value) {
+    if (mounted && focused != value) setState(() => focused = value);
+  }
+
+  void clearPointerFocus() {
+    focusOwner?.setFocusStyle(false);
+    focusOwner = null;
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
   void dispose() {
+    if (hoverOwner == this) hoverOwner = null;
+    if (focusOwner == this) focusOwner = null;
     internalFocusNode?.dispose();
     super.dispose();
   }
@@ -652,12 +961,11 @@ class _FloeChoiceState extends State<_FloeChoice> {
             ? SystemMouseCursors.click
             : SystemMouseCursors.forbidden,
         onEnter: (event) {
-          if (event.kind == PointerDeviceKind.mouse) {
-            setState(() => hovered = true);
-          }
+          if (event.kind == PointerDeviceKind.mouse) claimHover();
         },
         onExit: (_) {
-          if (hovered) setState(() => hovered = false);
+          if (hoverOwner == this) hoverOwner = null;
+          setHovered(false);
         },
         child: FocusableActionDetector(
           enabled: widget.enabled,
@@ -674,7 +982,7 @@ class _FloeChoiceState extends State<_FloeChoice> {
               },
             ),
           },
-          onShowFocusHighlight: (value) => setState(() => focused = value),
+          onShowFocusHighlight: setFocused,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: widget.enabled ? (_) => clearPointerFocus() : null,

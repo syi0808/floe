@@ -192,14 +192,20 @@ void main() {
     expect(find.byType(DropdownButton<String>), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 80));
+    final scale = tester.widget<ScaleTransition>(
+      find.byKey(const ValueKey('floe-selection-scale')),
+    );
+    expect(scale.scale.value, greaterThan(.97));
+    expect(scale.scale.value, lessThan(1));
     await tester.pumpAndSettle();
-    expect(find.byType(MenuItemButton), findsNWidgets(3));
     expect(
-      tester.widget<MenuAnchor>(find.byType(MenuAnchor)).animated,
-      isFalse,
+      find.byKey(const ValueKey('floe-selection-option')),
+      findsNWidgets(3),
     );
     expect(
-      tester.getSize(find.byType(MenuItemButton).first).width,
+      tester.getSize(find.byKey(const ValueKey('floe-selection-popup'))).width,
       greaterThan(280),
     );
     await tester.tap(find.text('Team'));
@@ -208,7 +214,7 @@ void main() {
     await tester.tap(find.text('Work'));
     await tester.pumpAndSettle();
     expect(selected, 'work');
-    expect(find.byType(MenuItemButton), findsNothing);
+    expect(find.byKey(const ValueKey('floe-selection-popup')), findsNothing);
   });
 
   testWidgets('custom dropdown invokes its selected action', (tester) async {
