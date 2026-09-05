@@ -1133,6 +1133,7 @@ class _FloeCheckPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.translate(-.75, -.5);
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
