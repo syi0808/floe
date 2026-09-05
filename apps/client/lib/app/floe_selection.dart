@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -178,7 +179,8 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>> {
       return MenuAnchor(
         controller: controller,
         childFocusNode: focusNode,
-        animated: !FloeMotion.reduceMotion(context),
+        animated: false,
+        crossAxisUnconstrained: false,
         alignmentOffset: const Offset(0, 6),
         style: MenuStyle(
           backgroundColor: const WidgetStatePropertyAll(FloePalette.neutral0),
@@ -189,7 +191,6 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>> {
           elevation: const WidgetStatePropertyAll(8),
           padding: const WidgetStatePropertyAll(EdgeInsets.all(5)),
           fixedSize: WidgetStatePropertyAll(Size.fromWidth(menuWidth)),
-          maximumSize: const WidgetStatePropertyAll(Size.fromHeight(320)),
           side: const WidgetStatePropertyAll(
             BorderSide(color: FloePalette.neutral200),
           ),
@@ -590,6 +591,14 @@ class _FloeChoiceState extends State<_FloeChoice> {
   bool hovered = false;
   bool focused = false;
 
+  void clearPointerFocus() {
+    if (focusNode.hasFocus) {
+      focusNode.unfocus();
+    } else {
+      FocusManager.instance.primaryFocus?.unfocus();
+    }
+  }
+
   @override
   void dispose() {
     internalFocusNode?.dispose();
@@ -638,40 +647,51 @@ class _FloeChoiceState extends State<_FloeChoice> {
       inMutuallyExclusiveGroup: widget.radio,
       label: widget.semanticLabel,
       onTap: widget.onActivate,
-      child: FocusableActionDetector(
-        enabled: widget.enabled,
-        focusNode: focusNode,
-        mouseCursor: widget.enabled
+      child: MouseRegion(
+        cursor: widget.enabled
             ? SystemMouseCursors.click
             : SystemMouseCursors.forbidden,
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
-          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        onEnter: (event) {
+          if (event.kind == PointerDeviceKind.mouse) {
+            setState(() => hovered = true);
+          }
         },
-        actions: {
-          ActivateIntent: CallbackAction<ActivateIntent>(
-            onInvoke: (_) {
-              widget.onActivate?.call();
-              return null;
-            },
-          ),
+        onExit: (_) {
+          if (hovered) setState(() => hovered = false);
         },
-        onShowHoverHighlight: (value) => setState(() => hovered = value),
-        onShowFocusHighlight: (value) => setState(() => focused = value),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onActivate,
-          child: AnimatedContainer(
-            duration: FloeMotion.reduceMotion(context)
-                ? Duration.zero
-                : FloeMotion.hoverDuration,
-            decoration: BoxDecoration(
-              color: hovered && widget.enabled
-                  ? FloePalette.primary50
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(14),
+        child: FocusableActionDetector(
+          enabled: widget.enabled,
+          focusNode: focusNode,
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          },
+          actions: {
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                widget.onActivate?.call();
+                return null;
+              },
             ),
-            child: content,
+          },
+          onShowFocusHighlight: (value) => setState(() => focused = value),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: widget.enabled ? (_) => clearPointerFocus() : null,
+            onTap: widget.onActivate,
+            child: AnimatedContainer(
+              key: const ValueKey('floe-choice-hover-surface'),
+              duration: FloeMotion.reduceMotion(context)
+                  ? Duration.zero
+                  : FloeMotion.hoverDuration,
+              decoration: BoxDecoration(
+                color: hovered && widget.enabled
+                    ? FloePalette.primary50
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: content,
+            ),
           ),
         ),
       ),
@@ -719,6 +739,7 @@ class _FloeChoiceVisual extends StatelessWidget {
             width: 30,
             height: 30,
             child: AnimatedOpacity(
+              key: const ValueKey('floe-choice-focus-ring'),
               opacity: focused && enabled ? 1 : 0,
               duration: duration,
               child: DecoratedBox(
@@ -811,9 +832,9 @@ class _FloeCheckPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final path = Path()
-      ..moveTo(5, 10)
-      ..lineTo(8.2, 13.2)
-      ..lineTo(15, 6.5);
+      ..moveTo(5.5, 10.4)
+      ..lineTo(8.6, 13.3)
+      ..lineTo(15.2, 6.9);
     canvas.drawPath(path, paint);
   }
 

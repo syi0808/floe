@@ -95,8 +95,11 @@ disabled activation prevention, no-scale press behavior, and calendar selection.
 
 `FloeSelect` and `FloeDropdown` use the prototype's shared squircle trigger and menu
 surface, 44px option targets, violet active treatment, selected check, disabled rows,
-origin-aware placement, and reduced-motion handling. Calendar destination and task
-actions use these controls instead of Material's default dropdown and popup menu.
+and origin-aware placement. They opt out of Flutter's 500ms staged height/item fade,
+which does not match Floe motion, and open the already-sized menu directly. Calendar
+destination and task actions use these controls instead of Material's default dropdown
+and popup menu.
 
-Flutter validation: 73 tests and analysis pass. The earlier macOS release build and
-strict deep codesign verification remain recorded; live native visual review is not.
+Flutter validation: 74 tests and analysis pass. The earlier macOS release build and
+strict deep codesign verification remain recorded. Checkbox, Radio and Select pointer
+transitions were also reviewed in a dedicated native macOS debug harness.

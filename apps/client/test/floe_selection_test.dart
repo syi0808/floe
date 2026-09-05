@@ -1,6 +1,8 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -102,6 +104,62 @@ void main() {
     expect(tester.getSize(visual), originalSize);
   });
 
+  testWidgets('pointer focus and hover move off the previous choice', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(
+          body: Column(
+            children: [
+              FloeCheckboxTile(
+                value: false,
+                title: const Text('First'),
+                onChanged: (_) {},
+              ),
+              FloeCheckboxTile(
+                value: false,
+                title: const Text('Second'),
+                onChanged: (_) {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    List<double> focusOpacities() => tester
+        .widgetList<AnimatedOpacity>(
+          find.byKey(const ValueKey('floe-choice-focus-ring')),
+        )
+        .map((widget) => widget.opacity)
+        .toList();
+    List<Color?> hoverColors() => tester
+        .widgetList<AnimatedContainer>(
+          find.byKey(const ValueKey('floe-choice-hover-surface')),
+        )
+        .map((widget) => (widget.decoration! as BoxDecoration).color)
+        .toList();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+    expect(focusOpacities(), [1, 0]);
+    await tester.tap(find.text('Second'));
+    await tester.pumpAndSettle();
+    expect(focusOpacities(), [0, 0]);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.text('First')));
+    await tester.pumpAndSettle();
+    expect(hoverColors(), [FloePalette.primary50, Colors.transparent]);
+    await mouse.moveTo(tester.getCenter(find.text('Second')));
+    await tester.pumpAndSettle();
+    expect(hoverColors(), [Colors.transparent, FloePalette.primary50]);
+  });
+
   testWidgets('custom select commits only enabled options', (tester) async {
     String? selected = 'home';
     await tester.pumpWidget(
@@ -136,6 +194,14 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(find.byType(MenuItemButton), findsNWidgets(3));
+    expect(
+      tester.widget<MenuAnchor>(find.byType(MenuAnchor)).animated,
+      isFalse,
+    );
+    expect(
+      tester.getSize(find.byType(MenuItemButton).first).width,
+      greaterThan(280),
+    );
     await tester.tap(find.text('Team'));
     await tester.pumpAndSettle();
     expect(selected, 'home');
