@@ -1111,7 +1111,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionLookingUp.
   ///
   /// In en, this message translates to:
-  /// **'Looking up the original execution marker. No new event is being created…'**
+  /// **'Checking Calendar for this exact event. No new event is being created…'**
   String get actionLookingUp;
 
   /// No description provided for @actionCollecting.
@@ -1201,7 +1201,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionSucceeded.
   ///
   /// In en, this message translates to:
-  /// **'Calendar creation is recorded as successful. This does not confirm collection into Today.'**
+  /// **'Created in Calendar.'**
   String get actionSucceeded;
 
   /// No description provided for @actionReloadRequired.
@@ -1303,8 +1303,74 @@ abstract class AppLocalizations {
   /// No description provided for @actionNoExtras.
   ///
   /// In en, this message translates to:
-  /// **'No guests or alerts. Times above are UTC; the proposal timezone is shown separately.'**
+  /// **'Only this event. No guests, alerts or repeat schedule. Existing events stay unchanged.'**
   String get actionNoExtras;
+
+  /// No description provided for @actionTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details'**
+  String get actionTechnicalDetails;
+
+  /// No description provided for @actionWhen.
+  ///
+  /// In en, this message translates to:
+  /// **'When'**
+  String get actionWhen;
+
+  /// No description provided for @actionLocalTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Your device time'**
+  String get actionLocalTime;
+
+  /// No description provided for @actionProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Provider'**
+  String get actionProvider;
+
+  /// No description provided for @actionCalendarId.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar ID'**
+  String get actionCalendarId;
+
+  /// No description provided for @actionConflictReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Another event overlaps this time. Nothing was created.'**
+  String get actionConflictReason;
+
+  /// No description provided for @actionExpiredReason.
+  ///
+  /// In en, this message translates to:
+  /// **'This proposal has expired. Nothing was created.'**
+  String get actionExpiredReason;
+
+  /// No description provided for @actionPermissionReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar write access is unavailable. Nothing was created.'**
+  String get actionPermissionReason;
+
+  /// No description provided for @actionChangedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'The calendar connection has changed. Nothing was created.'**
+  String get actionChangedReason;
+
+  /// No description provided for @actionTimezoneReason.
+  ///
+  /// In en, this message translates to:
+  /// **'This event’s time zone could not be verified. Nothing was created.'**
+  String get actionTimezoneReason;
+
+  /// No description provided for @actionUnavailableReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe could not safely create this event. Nothing was created.'**
+  String get actionUnavailableReason;
 
   /// No description provided for @actionWriteDisabled.
   ///
@@ -1315,7 +1381,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionApprovalUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Approval requires Today, an unexpired proposal and a successfully loaded, unchanged calendar connection. Reload or reconnect if needed.'**
+  /// **'This proposal can’t be approved right now. Refresh its status or reconnect Calendar.'**
   String get actionApprovalUnavailable;
 
   /// No description provided for @actionDecline.

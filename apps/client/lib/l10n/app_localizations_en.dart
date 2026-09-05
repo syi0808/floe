@@ -603,7 +603,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionLookingUp =>
-      'Looking up the original execution marker. No new event is being created…';
+      'Checking Calendar for this exact event. No new event is being created…';
 
   @override
   String get actionCollecting => 'Collecting the created event into Today…';
@@ -654,8 +654,7 @@ class AppLocalizationsEn extends AppLocalizations {
       'The result is unconfirmed. Inspect the original calendar; do not create a replacement.';
 
   @override
-  String get actionSucceeded =>
-      'Calendar creation is recorded as successful. This does not confirm collection into Today.';
+  String get actionSucceeded => 'Created in Calendar.';
 
   @override
   String get actionReloadRequired =>
@@ -708,7 +707,46 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionNoExtras =>
-      'No guests or alerts. Times above are UTC; the proposal timezone is shown separately.';
+      'Only this event. No guests, alerts or repeat schedule. Existing events stay unchanged.';
+
+  @override
+  String get actionTechnicalDetails => 'Technical details';
+
+  @override
+  String get actionWhen => 'When';
+
+  @override
+  String get actionLocalTime => 'Your device time';
+
+  @override
+  String get actionProvider => 'Provider';
+
+  @override
+  String get actionCalendarId => 'Calendar ID';
+
+  @override
+  String get actionConflictReason =>
+      'Another event overlaps this time. Nothing was created.';
+
+  @override
+  String get actionExpiredReason =>
+      'This proposal has expired. Nothing was created.';
+
+  @override
+  String get actionPermissionReason =>
+      'Calendar write access is unavailable. Nothing was created.';
+
+  @override
+  String get actionChangedReason =>
+      'The calendar connection has changed. Nothing was created.';
+
+  @override
+  String get actionTimezoneReason =>
+      'This event’s time zone could not be verified. Nothing was created.';
+
+  @override
+  String get actionUnavailableReason =>
+      'Floe could not safely create this event. Nothing was created.';
 
   @override
   String get actionWriteDisabled =>
@@ -716,7 +754,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionApprovalUnavailable =>
-      'Approval requires Today, an unexpired proposal and a successfully loaded, unchanged calendar connection. Reload or reconnect if needed.';
+      'This proposal can’t be approved right now. Refresh its status or reconnect Calendar.';
 
   @override
   String get actionDecline => 'Decline';

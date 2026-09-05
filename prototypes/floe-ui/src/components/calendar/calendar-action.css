@@ -5,6 +5,9 @@
 .s3-action-description { color: var(--ink-secondary); font-size: 14px; line-height: 1.8; margin: 14px 0 22px; }
 .s3-action-summary { display: grid; gap: 10px; background: var(--primary-50); padding: 22px; font-size: 13px; color: var(--ink-secondary); }
 .s3-action-summary strong { color: var(--ink); font-size: 17px; font-weight: 550; }
+.s3-action-eyebrow { color: var(--ink-tertiary); font-size: 11px; }
+.s3-action-impact { color: var(--ink-secondary); font-size: 12px; line-height: 1.8; margin: 0 0 20px; }
+.s3-action-destination { margin: 20px 0 16px; }
 .s3-action-buttons { display: flex; justify-content: flex-end; margin: 22px 0; }
 .s3-action-trace { color: var(--ink-tertiary); font-size: 12px; margin: 22px 0; }
 .s3-action-trace summary { cursor: pointer; }

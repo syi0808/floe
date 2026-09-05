@@ -34,6 +34,17 @@ Open an assistant panel when the user invokes Floe or accepts a suggestion. Use 
 
 Before an external or consequential mutation, state the proposed action, target, time, and relevant side effects. The primary button names the action. `Cancel` or `Keep current` must remain available.
 
+The default view answers the user's decision, not the executor's schema: what will
+change, when, and where. Present the user's title and readable local time first;
+retain account/calendar distinctions and any meaningful timezone difference.
+Show a short explanation only when it adds decision-relevant context. UUIDs,
+raw provider codes and audit timestamps belong in collapsed technical details,
+not between the proposal and its approval controls. Do not invent rationale from
+an ID or implementation state, and do not conceal guests, alerts or other effects.
+
+See [decision-first action review](s3-calendar-action-ui.md). Metadata remains
+inspectable without becoming mandatory reading for ordinary approval.
+
 ## Placement
 
 - Wide Day Canvas, general suggestion: bottom region of the contextual rail, after tasks and notes.
@@ -53,7 +64,7 @@ Before an external or consequential mutation, state the proposed action, target,
 
 ## States
 
-Every suggestion supports loading, ready, stale, acting, success, recoverable failure, and dismissed states. Stale suggestions explain why they can no longer apply. Failures remain local and preserve the user's intended action for retry.
+Every suggestion supports loading, ready, stale, acting, success, recoverable failure, and dismissed states. Stale suggestions explain why they can no longer apply. Failures remain local and preserve the user's intended action for safe recovery. A lost create response requires lookup, not another create; a collection failure requires a read retry. State copy distinguishes an external success from its appearance in the local day.
 
 ## Copy pattern
 

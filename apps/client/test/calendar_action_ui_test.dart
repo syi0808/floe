@@ -10,8 +10,16 @@ import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_action_panel.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:intl/intl.dart';
 
-CalendarAction action({String status = 'pending', String person = 'person'}) {
+CalendarAction action({
+  String status = 'pending',
+  String person = 'person',
+  DateTime? startsAt,
+  DateTime? endsAt,
+  DateTime? expiresAt,
+  String? reason,
+}) {
   final now = DateTime.now().toUtc();
   return CalendarAction.fromJson({
     'id': 'proposal',
@@ -22,17 +30,20 @@ CalendarAction action({String status = 'pending', String person = 'person'}) {
     'title': 'Quiet focus',
     'connection_revision': 3,
     'created_at': now.subtract(const Duration(minutes: 1)).toIso8601String(),
-    'expires_at': now.add(const Duration(minutes: 14)).toIso8601String(),
+    'expires_at': (expiresAt ?? now.add(const Duration(minutes: 14)))
+        .toIso8601String(),
     'approved_at': status == 'approved' ? now.toIso8601String() : null,
     'execution_id': 'execution',
     'schedule': {
-      'starts_at': now.add(const Duration(hours: 1)).toIso8601String(),
-      'ends_at': now.add(const Duration(hours: 2)).toIso8601String(),
+      'starts_at': (startsAt ?? now.add(const Duration(hours: 1)))
+          .toIso8601String(),
+      'ends_at': (endsAt ?? now.add(const Duration(hours: 2)))
+          .toIso8601String(),
       'timezone': 'Asia/Seoul',
     },
     'state': {
       'status': status,
-      if (status == 'unknown') 'reason': 'timeout',
+      'reason': reason ?? (status == 'unknown' ? 'timeout' : null),
       if (status == 'succeeded') 'external_id': 'external-event',
     },
   });
@@ -228,8 +239,32 @@ void main() {
       await tester.tap(find.text('Review proposal'));
       await tester.pumpAndSettle();
       expect(find.text('Destination calendar'), findsOneWidget);
-      expect(find.text('Asia/Seoul'), findsOneWidget);
+      expect(find.text('Source time zone: Asia/Seoul'), findsOneWidget);
+      expect(find.text('When'), findsOneWidget);
+      expect(find.text('Starts (UTC)'), findsNothing);
+      expect(find.text('Execution ID'), findsNothing);
+      expect(find.text('proposal'), findsNothing);
+      expect(find.textContaining('Your device time · UTC'), findsOneWidget);
+      final proposal = controller.actions.single;
+      final start = proposal.startsAt.toLocal();
+      final end = proposal.endsAt.toLocal();
+      if (start.year == end.year &&
+          start.month == end.month &&
+          start.day == end.day) {
+        expect(
+          find.text(
+            '${DateFormat.yMMMd('en').add_jm().format(start)} – ${DateFormat.jm('en').format(end)}',
+          ),
+          findsOneWidget,
+        );
+      }
+      await tester.ensureVisible(find.text('Technical details'));
+      await tester.tap(find.text('Technical details'));
+      await tester.pumpAndSettle();
       expect(find.text('Starts (UTC)'), findsOneWidget);
+      expect(find.text('Execution ID'), findsOneWidget);
+      expect(find.text('proposal'), findsOneWidget);
+      await tester.ensureVisible(find.byTooltip('Close'));
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(gateway.decisions, 0);
@@ -250,6 +285,71 @@ void main() {
       controller.dispose();
     });
   }
+
+  testWidgets(
+    'overnight review shows both local dates and a plain-language block reason',
+    (tester) async {
+      final startsAt = DateTime(2026, 9, 6, 23, 45);
+      final endsAt = DateTime(2026, 9, 7, 0, 30);
+      final gateway = Gateway()
+        ..saved = [
+          action(
+            status: 'blocked',
+            startsAt: startsAt,
+            endsAt: endsAt,
+            reason: 'schedule_conflict',
+          ),
+        ];
+      final controller = CalendarActionController(
+        gateway: gateway,
+        personId: 'person',
+      );
+      await controller.load();
+      await mount(tester, controller, 390);
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      final format = DateFormat.yMMMd('en').add_jm();
+      expect(
+        find.text('${format.format(startsAt)} – ${format.format(endsAt)}'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Another event overlaps this time. Nothing was created.'),
+        findsOneWidget,
+      );
+      expect(find.text('schedule_conflict'), findsNothing);
+      expect(find.text('Save approval only'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    },
+  );
+
+  testWidgets('expired review explains why approval is unavailable', (
+    tester,
+  ) async {
+    final gateway = Gateway()
+      ..saved = [
+        action(expiresAt: DateTime.now().subtract(const Duration(seconds: 1))),
+      ];
+    final controller = CalendarActionController(
+      gateway: gateway,
+      personId: 'person',
+    );
+    await controller.load();
+    await mount(tester, controller, 390);
+    await tester.tap(find.text('Review proposal'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('This proposal has expired. Nothing was created.'),
+      findsOneWidget,
+    );
+    expect(find.text('Technical details'), findsOneWidget);
+    expect(find.text('execution'), findsNothing);
+    expect(gateway.decisions, 0);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
 
   testWidgets(
     'closing during a decision preserves its single in-flight request',
@@ -348,7 +448,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Save approval only'), findsNothing);
         expect(find.text('Decline'), findsNothing);
-        expect(find.text('Execution ID'), findsOneWidget);
+        expect(find.text('Execution ID'), findsNothing);
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
       }

@@ -239,6 +239,27 @@ Gradients are limited to the Floe mascot and one optional, low-contrast ambient 
 - Prefer direct, calm copy. Never manufacture urgency or praise routine completion.
 - Review Korean line breaks manually and preserve user-authored text exactly where meaning matters.
 
+### Decision-first disclosure
+
+An action review is a decision surface, not a ledger dump. Lead with the user's
+content, human-readable date/time, unambiguous destination and the concrete effect
+of approval. Keep only information that changes the user's decision or next step
+in the primary reading path.
+
+Move UUIDs, raw provider names, storage timestamps and execution metadata into
+explicitly collapsed technical details. Preserve the underlying audit data and
+access to it; abstraction is not deletion. Prefer local, readable times and make
+timezone differences clear without requiring users to decode UTC strings.
+
+Progressive disclosure never hides material effects or relevant safety state:
+guests, alerts, sharing, permission limits, expiry, conflicts and uncertain outcomes
+must remain understandable when applicable. Creation and collection are distinct
+outcomes. Describe recovery in terms of what the user can safely do next, not the
+internal state machine. Do not repeat the same disclaimer at every hierarchy level.
+
+See [the accepted product principle](docs/planning/00-overview/product-principles.md#판단에-필요한-정보만-먼저)
+and [action review specification](docs/design/s3-calendar-action-ui.md).
+
 ## Layout hierarchy
 
 Desktop uses a stable application shell: brand and global destinations in the header, a screen-specific toolbar below it, primary content on the left, and an optional contextual rail on the right. The rail supports the current object; it never becomes an equal-weight dashboard column.

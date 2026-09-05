@@ -21,6 +21,20 @@ verified criteria, not estimated implementation percentages.
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
+### Decision-first UI checkpoint — 2026-09-06
+
+- Parallel Select/Dropdown prototype and action-review simplification are integrated.
+  Shared controls support keyboard/typeahead, focus recovery and restrained motion;
+  the review prioritizes the user's decision and collapses technical metadata.
+- Recorded the product-wide abstraction principle; applied it in prototype and
+  Flutter review without changing execution authority or the write-disabled gate.
+- 48 component contracts, 26 action assertions, 13 selection navigation assertions,
+  11 source guards, production prototype build and 72 Flutter tests pass; analyze clean.
+- Browser checks cover desktop/390/320 layouts, Select/Dropdown keyboard flow,
+  diagnostic disclosure, rejection and lookup/read-only recovery simulations.
+- [Evidence and remaining accessibility checks](docs/validation/decision-first-ui.md).
+  S3 remains 2/5 verified; this presentation pass is not new live acceptance evidence.
+
 ### S3 native execution checkpoint — 2026-09-06
 
 - After user-granted Calendar permission, the signed Flutter app completed explicit

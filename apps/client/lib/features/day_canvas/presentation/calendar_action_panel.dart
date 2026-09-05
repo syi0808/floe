@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:intl/intl.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
@@ -139,6 +140,19 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
       final strings = AppLocalizations.of(context);
       final controller = widget.controller;
       final action = controller.find(widget.actionId);
+      final locale = Localizations.localeOf(context).toLanguageTag();
+      String localDateTime(DateTime value) =>
+          DateFormat.yMMMd(locale).add_jm().format(value.toLocal());
+      String localInterval(CalendarAction value) {
+        final start = value.startsAt.toLocal();
+        final end = value.endsAt.toLocal();
+        final sameDay =
+            start.year == end.year &&
+            start.month == end.month &&
+            start.day == end.day;
+        return '${localDateTime(start)} – ${sameDay ? DateFormat.jm(locale).format(end) : localDateTime(end)}';
+      }
+
       final canApprove =
           action != null &&
           controller.canApprove(action, widget.connection(), DateTime.now());
@@ -153,49 +167,41 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
-            for (final entry in <String, String>{
-              strings.actionDestination:
-                  '${action.calendarName} · ${action.provider}\n${action.calendarId}',
-              strings.actionStart: action.startsAt.toUtc().toIso8601String(),
-              strings.actionEnd: action.endsAt.toUtc().toIso8601String(),
-              strings.sourceTimeZone: action.timezone,
-              strings.actionPerson: action.personId,
-              strings.actionExpires: action.expiresAt.toUtc().toIso8601String(),
-              strings.actionProposalId: action.id,
-              strings.actionExecutionId: action.executionId,
-              if (action.approvedAt != null)
-                strings.actionApprovedAt: action.approvedAt!
-                    .toUtc()
-                    .toIso8601String(),
-              if (action.externalId != null)
-                strings.actionExternalId: action.externalId!,
-              if (action.reason != null) strings.actionReason: action.reason!,
-            }.entries)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      entry.key,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    SelectableText(entry.value),
-                  ],
-                ),
-              ),
-            Text(strings.actionNoExtras),
-            const SizedBox(height: 16),
-            Semantics(
-              liveRegion: true,
-              child: Text(_status(strings, action.status)),
+            Text(
+              strings.actionDestination,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
+            Text(action.calendarName),
             const SizedBox(height: 12),
             Text(
-              controller.writesEnabled
-                  ? strings.actionWriteEnabled
-                  : strings.actionWriteDisabled,
+              strings.actionWhen,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
+            Text(localInterval(action)),
+            Text(
+              '${strings.actionLocalTime} · ${_offset(action.startsAt)}'
+              '${_offset(action.startsAt) == _offset(action.endsAt) ? '' : ' → ${_offset(action.endsAt)}'}',
+            ),
+            Text('${strings.sourceTimeZone}: ${action.timezone}'),
+            const SizedBox(height: 12),
+            Text(strings.actionNoExtras),
+            const SizedBox(height: 16),
+            if (!action.status.canDecide)
+              Semantics(
+                liveRegion: true,
+                child: Text(_status(strings, action.status)),
+              ),
+            if (action.status == CalendarActionStatus.blocked)
+              Text(switch (action.reason) {
+                'schedule_conflict' => strings.actionConflictReason,
+                'expired' => strings.actionExpiredReason,
+                'permission_denied' => strings.actionPermissionReason,
+                'calendar_changed' => strings.actionChangedReason,
+                'invalid_timezone' => strings.actionTimezoneReason,
+                _ => strings.actionUnavailableReason,
+              }),
+            const SizedBox(height: 12),
+            if (!controller.writesEnabled) Text(strings.actionWriteDisabled),
             if (controller.phase case final phase?)
               Text(switch (phase) {
                 'executing' => strings.actionCheckingCreating,
@@ -245,7 +251,11 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
               ),
             if (action.status.canDecide && !canApprove) ...[
               const SizedBox(height: 12),
-              Text(strings.actionApprovalUnavailable),
+              Text(
+                !DateTime.now().isBefore(action.expiresAt)
+                    ? strings.actionExpiredReason
+                    : strings.actionApprovalUnavailable,
+              ),
             ],
             if (action.status.canDecide) ...[
               const SizedBox(height: 16),
@@ -282,6 +292,48 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
                 ],
               ),
             ],
+            ExpansionTile(
+              title: Text(strings.actionTechnicalDetails),
+              tilePadding: EdgeInsets.zero,
+              children: [
+                for (final entry in <String, String>{
+                  strings.actionProvider: action.provider,
+                  strings.actionCalendarId: action.calendarId,
+                  strings.actionStart: action.startsAt
+                      .toUtc()
+                      .toIso8601String(),
+                  strings.actionEnd: action.endsAt.toUtc().toIso8601String(),
+                  strings.sourceTimeZone: action.timezone,
+                  strings.actionPerson: action.personId,
+                  strings.actionExpires: action.expiresAt
+                      .toUtc()
+                      .toIso8601String(),
+                  strings.actionProposalId: action.id,
+                  strings.actionExecutionId: action.executionId,
+                  if (action.approvedAt != null)
+                    strings.actionApprovedAt: action.approvedAt!
+                        .toUtc()
+                        .toIso8601String(),
+                  if (action.externalId != null)
+                    strings.actionExternalId: action.externalId!,
+                  if (action.reason != null)
+                    strings.actionReason: action.reason!,
+                }.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          entry.key,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        SelectableText(entry.value),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           ],
           if (controller.busy) Text(strings.actionLoading),
           if (controller.failed) ...[
@@ -296,4 +348,11 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
       );
     },
   );
+}
+
+String _offset(DateTime value) {
+  final minutes = value.toLocal().timeZoneOffset.inMinutes;
+  final hours = (minutes.abs() ~/ 60).toString().padLeft(2, '0');
+  final remainder = (minutes.abs() % 60).toString().padLeft(2, '0');
+  return 'UTC${minutes < 0 ? '-' : '+'}$hours:$remainder';
 }

@@ -2,6 +2,7 @@ import { ShieldCheck } from 'lucide-react';
 import { SquircleButton, SquircleBlock } from '../../primitives.jsx';
 import { Modal } from '../ui/Modal.jsx';
 import { DotSpinner } from '../ui/DotSpinner.jsx';
+import { Select } from '../ui/Select.jsx';
 import './calendar-action.css';
 
 const messages = {
@@ -15,7 +16,7 @@ const messages = {
   denied: ['Calendar access needs attention.', 'Write access is unavailable. Nothing was created. Restore access, then review a fresh suggestion.'],
   expired: ['This suggestion has expired.', 'Nothing was created. Get a fresh suggestion and approve its details again.'],
   unknown: ['Let’s check before trying again.', 'Calendar may have saved the event, but its response was lost. We won’t create another one.'],
-  'looking-up': ['Looking for the original event.', 'Matching the execution marker, calendar, title and exact time. No new event is being created.'],
+  'looking-up': ['Looking for the original event.', 'Checking Calendar for this exact event. No new event is being created.'],
   'read-error': ['Created, but not collected yet.', 'Your event is saved in Calendar. Retry the read to show it here—never create it again.'],
 };
 
@@ -28,20 +29,18 @@ export function CalendarActionDialog({ action, calendars, connected, onAction, o
     <Modal title={title} onClose={onClose}>
       <p className="s3-action-description" role="status" aria-live="polite">{description}</p>
       <SquircleBlock radius={22} className="s3-action-summary">
+        <span className="s3-action-eyebrow">{created ? 'Calendar event' : 'Add one Calendar event'}</span>
         <strong>A little room to focus</strong>
         <span>Fri, Sep 4, 2026 · 2:45–3:30 PM</span>
-        <span>Asia/Seoul · UTC+09:00 · 45 minutes</span>
+        <span className="s3-action-caption">45 minutes · Seoul time (UTC+09:00)</span>
       </SquircleBlock>
-      <dl className="s1-facts">
-        <div><dt>Person</dt><dd>You · this device</dd></div>
-        <div><dt>Destination</dt><dd>{action.status === 'pending' ? (
-          <select aria-label="Target calendar" value={action.calendarId} onChange={(event) => onAction({ type: 'target', calendarId: event.target.value })}>
-            {calendars.filter((entry) => entry.id !== 'team').map((entry) => <option key={entry.id} value={entry.id}>{entry.account} · {entry.name}</option>)}
-          </select>
-        ) : `${calendar.account} · ${calendar.name}`}</dd></div>
-        <div><dt>Guests / alerts</dt><dd>None</dd></div>
-        {action.status === 'pending' && <div><dt>Approval window</dt><dd>15 minutes · details are fixed after approval</dd></div>}
-      </dl>
+      {action.status === 'pending' ? <div className="s3-action-destination"><Select
+        label="Target calendar"
+        value={action.calendarId}
+        options={calendars.filter((entry) => entry.id !== 'team').map((entry) => ({ value: entry.id, label: `${entry.account} · ${entry.name}` }))}
+        onChange={(value) => onAction({ type: 'target', calendarId: value })}
+      /></div> : <dl className="s1-facts"><div><dt>Destination</dt><dd>{calendar.account} · {calendar.name}</dd></div></dl>}
+      <p className="s3-action-impact">Only this event. No guests, alerts or repeat schedule. Existing events stay unchanged.</p>
       {busy && <DotSpinner label="Checking action status…" />}
       {action.status === 'unknown' && action.checked && <p className="s3-action-warning">No exact match could be confirmed. Inspect the original calendar; this action stays unresolved. Do not create a replacement yet.</p>}
       <div className="s1-actions s3-action-buttons">
@@ -54,7 +53,9 @@ export function CalendarActionDialog({ action, calendars, connected, onAction, o
         {action.status === 'read-error' && <SquircleButton className="primary-button" onClick={() => onAction({ type: 'retry-read' })}>Retry Calendar read</SquircleButton>}
         {action.status === 'succeeded' && <SquircleButton className="primary-button" onClick={onClose}>Back to my day</SquircleButton>}
       </div>
-      <details className="s3-action-trace"><summary>Action trail</summary><dl className="s1-facts">
+      <details className="s3-action-trace"><summary>Technical details</summary><dl className="s1-facts">
+        <div><dt>Person</dt><dd>You · this device</dd></div>
+        <div><dt>Approval window</dt><dd>15 minutes · details are fixed after approval</dd></div>
         <div><dt>Proposal</dt><dd>fixture-proposal-{action.revision}</dd></div>
         <div><dt>Execution</dt><dd>fixture-execution-{action.revision}</dd></div>
         <div><dt>State</dt><dd>{action.status}</dd></div>

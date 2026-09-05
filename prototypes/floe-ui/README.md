@@ -48,6 +48,22 @@ Try `/?action=ready`, `conflict`, `denied`, `expired`, `timeout`, `missing` and
 [S3 prototype specification](../../docs/design/s3-calendar-action-ui.md).
 Validate the state machine with `pnpm check:actions`.
 
+## Select, Dropdown and focused review
+
+- **Settings → Interaction preview:** try the shared Select and action Dropdown.
+  This labeled demo changes neither server settings nor Calendar and does not
+  access the clipboard. Arrow/Home/End/typeahead navigate; Enter commits, Escape
+  cancels, and Tab continues to the next control. Disabled rows are skipped.
+- **Today → Review suggestion:** the destination uses the same Select. The review
+  leads with the event, readable time and actual effect of approval; IDs and audit
+  metadata are available only when **Technical details** is expanded.
+- Motion uses restrained, trigger-origin entry, immediate dismissal and no moving
+  keyboard highlight. Reduced-motion and forced-color styles are included.
+
+See [selection controls](../../docs/design/selection-controls.md) and
+[decision-first validation](../../docs/validation/decision-first-ui.md).
+Run `node scripts/check-selection-controls.mjs` alongside the existing checks.
+
 ## Run locally
 
 Node.js 20.19 or newer is required; the checked-in `.nvmrc` selects Node.js 24.

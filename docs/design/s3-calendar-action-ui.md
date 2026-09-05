@@ -3,13 +3,36 @@
 2026-09-05. User direction: implement/review UI in the HTML prototype before
 porting to Flutter. This is an interactive design reference, not live execution.
 
-2026-09-06: [Flutter ledger review](../validation/s3-action-review-ui.md) now ports
-the inspection/decision boundary. It intentionally uses **Save approval only**,
-not simulated create progress; live writes and proposal production remain disabled.
+2026-09-06: [Native execution](../validation/s3-native-executor.md) now binds the
+Flutter review to the durable ledger. Default builds retain **Save approval only**;
+explicit write-enabled validation builds offer **Approve & create**.
+
+## Decision-first review
+
+Review is a decision surface, not a ledger inspector. Its first screen answers:
+**what will change, where, when, and what will not change**. Show the event title,
+human-readable destination, date/time, and the one-event scope. Keep guests,
+alerts, recurrence and effects on existing events explicit. Reducing noise must
+not reduce the user's understanding of what they authorize.
+
+The prototype uses a labeled Seoul-time fixture. Flutter displays both endpoints
+in the device's local time with their UTC offsets (including offset changes),
+and labels the original proposal time zone separately. Full dates avoid ambiguity
+for overnight events. This is presentation only: approval retains the original
+immutable instants and time zone, never a reparsed display string.
+
+Provider codes, Person/calendar/proposal/execution IDs, raw UTC timestamps,
+approval timestamps and external IDs belong in collapsed **Technical details**.
+They remain selectable for support, but are not prerequisites for a decision.
+Block reasons are translated into ordinary language outside that disclosure.
+Unknown outcomes, permission/conflict failures and created-but-not-collected
+states remain visible, alongside the correct lookup-only or read-only recovery.
+Closing review remains neither consent nor rejection. Simplification does not
+change expiry, fresh validation, write gating or duplicate suppression.
 
 Today includes a quiet focus suggestion beside the timeline. Review opens the
 existing accessible dialog shell with explicit destination (writable fixture
-calendars only), title, date, start/end, timezone, Person and no guests/alerts.
+calendars only), title, date, start/end, timezone and no guests/alerts.
 Destination changes produce a new proposal revision before approval. Decline does
 not create an event; closing the dialog is not approval or rejection.
 
@@ -42,10 +65,10 @@ No model, OS settings operation, EventKit call or real persistent ledger is invo
 Reload resets the simulation. Native durable restart behavior is tested separately
 in Rust; it is not established by this prototype.
 
-## Next native gate
+## Validation boundary
 
-Review desktop/narrow layout and keyboard flows here first. Only after that review
-and EventKit create/recovery PoC should these components be translated to Flutter,
-binding decisions/state to the Rust ledger rather than reproducing this reducer as
-production authority. Native read-only disclosure must be updated when live writes
-are actually introduced; the S1 connection fixtures remain read-only references.
+The simplified review is implemented in the prototype and Flutter. Production
+decisions/state remain bound to the Rust ledger, not this simulated reducer.
+Default native builds remain write-disabled. This presentation change does not
+advance the remaining live acceptance or dogfood gates recorded in
+[S3 native validation](../validation/s3-native-executor.md).
