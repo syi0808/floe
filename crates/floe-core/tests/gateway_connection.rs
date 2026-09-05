@@ -13,7 +13,7 @@ fn explicit_gateway_addresses_remain_literal_loopback_only() {
         "http://127.0.0.1:0",
     ] {
         assert!(
-            GatewayScheduleModel::new("focus".into(), false)
+            GatewayScheduleModel::new("high_effort".into(), false)
                 .unwrap()
                 .with_connection(GatewayConnection {
                     base_url: address.into(),
@@ -24,7 +24,7 @@ fn explicit_gateway_addresses_remain_literal_loopback_only() {
         );
     }
     assert!(
-        GatewayScheduleModel::new("focus".into(), false)
+        GatewayScheduleModel::new("high_effort".into(), false)
             .unwrap()
             .with_connection(GatewayConnection {
                 base_url: "http://127.0.0.1:9543".into(),
@@ -42,7 +42,7 @@ fn explicit_gateway_rejects_invalid_credentials() {
         format!("{}\n", "a".repeat(52)),
     ] {
         assert!(
-            GatewayScheduleModel::new("focus".into(), false)
+            GatewayScheduleModel::new("high_effort".into(), false)
                 .unwrap()
                 .with_connection(GatewayConnection {
                     base_url: "http://127.0.0.1:8431".into(),

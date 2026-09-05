@@ -67,7 +67,7 @@ class FocusProposal {
     required this.timezoneOffsetSeconds,
     required this.reason,
     required this.evidence,
-    required this.model,
+    required this.inferenceClass,
     required this.calendarWarning,
   });
 
@@ -78,7 +78,7 @@ class FocusProposal {
   final int timezoneOffsetSeconds;
   final String reason;
   final List<FocusEvidence> evidence;
-  final String model;
+  final String inferenceClass;
   final bool calendarWarning;
 
   factory FocusProposal.fromJson(Map<String, dynamic> json) {
@@ -98,7 +98,7 @@ class FocusProposal {
             ),
           )
           .toList(growable: false),
-      model: json['model'] as String,
+      inferenceClass: json['inference_class'] as String,
       calendarWarning: json['calendar_warning'] as bool,
     );
   }

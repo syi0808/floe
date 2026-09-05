@@ -73,7 +73,7 @@ func (console *Console) lookup(name string) string {
 }
 
 func (console *Console) rebuild() {
-	config := inference.Config{Targets: map[string]inference.Target{}}
+	config := inference.Config{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}}
 	secrets := map[string]string{}
 	for _, target := range console.state.Targets {
 		if target.APIKeyEnv != "" {
@@ -87,6 +87,12 @@ func (console *Console) rebuild() {
 			console.unavailable[identifier] = true
 		} else {
 			config.Targets[identifier] = target
+		}
+	}
+	for class, route := range console.state.Routes {
+		candidate := inference.Config{Targets: config.Targets, Routes: map[string]inference.Route{class: route}}
+		if _, err := inference.New(candidate, console.internalToken, lookup, console.runtime); err == nil {
+			config.Routes[class] = route
 		}
 	}
 	console.gateway, _ = inference.New(config, console.internalToken, lookup, console.runtime)
@@ -307,6 +313,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.testTarget(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/route" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateRoute(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.URL.Path == "/manage/api/state" && request.Method == "GET" {
@@ -326,7 +338,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
 			pending = console.pair
 		}
-		reply(writer, 200, map[string]any{"csrf": current.csrf, "targets": targets, "clients": clients, "pairing": pending, "address": "http://" + console.address})
+		reply(writer, 200, map[string]any{"csrf": current.csrf, "targets": targets, "routes": console.state.Routes, "clients": clients, "pairing": pending, "address": "http://" + console.address})
 		return
 	}
 	if request.Method != "POST" {
@@ -382,6 +394,11 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 	case "/manage/api/target/delete":
 		old := next.Targets[input.ID]
 		delete(next.Targets, input.ID)
+		for class, route := range next.Routes {
+			if route.Target == input.ID {
+				delete(next.Routes, class)
+			}
+		}
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
 			return
@@ -396,6 +413,35 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		failure(writer, 404, "not_found")
 		return
 	}
+	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+func (console *Console) updateRoute(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Class           string `json:"inference_class"`
+		Target          string `json:"target"`
+		ReasoningEffort string `json:"reasoning_effort"`
+	}
+	if !decode(writer, request, &input) || !inference.ValidClass(input.Class) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if input.Target == "" {
+		delete(next.Routes, input.Class)
+	} else {
+		next.Routes[input.Class] = inference.Route{Target: input.Target, ReasoningEffort: input.ReasoningEffort}
+		if _, err := inference.New(inference.Config{Targets: next.Targets, Routes: next.Routes}, console.internalToken, console.lookup, console.runtime); err != nil {
+			failure(writer, 400, "invalid_route")
+			return
+		}
+	}
+	if console.save(next) != nil {
+		failure(writer, 500, "save_failed")
+		return
+	}
+	console.state = next
+	console.rebuild()
 	reply(writer, 200, map[string]bool{"ok": true})
 }
 

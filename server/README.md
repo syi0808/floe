@@ -32,8 +32,10 @@ only its path. The containing directory must have mode 0700; generated files are
 5. Add an API or already-installed Ollama model target in the dashboard. No provider
    request occurs merely by saving a target. Use **Test connection** for an explicit
    synthetic request; external providers require confirmation and may charge for it.
-6. Click **Check connection** in Floe and select a default focus target. The focus
-   dialog uses this target while keeping per-request external consent unchecked.
+6. Map **High effort** to that target under **Performance classes**. Floe chooses
+   this class for focus suggestions without exposing models or routes in the app.
+7. Click **Check connection** in Floe. The app reports whether the server has the
+   required class configured; model selection remains in this dashboard.
 
 App pairing tokens never grant management access. **Forget connection** removes
 only the app's local copy; **Revoke** in the dashboard invalidates the token on the
@@ -67,7 +69,7 @@ The environment-configured mode below remains for existing development fixtures.
 Set `FLOE_INFERENCE_CONFIG` and leave `FLOE_SERVER_DATA` unset to select it. It has
 no browser dashboard and requires the shared gateway token as before.
 
-## Run with a local model
+## Run with server-side Ollama (legacy)
 
 Go 1.25 or newer. Copy `config.example.json` to `config.local.json` and replace
 the placeholder with an already-installed Ollama model. Floe does not install or
@@ -81,17 +83,16 @@ cp server/config.example.json server/config.local.json
 export FLOE_INFERENCE_CONFIG="$PWD/server/config.local.json"
 export FLOE_INFERENCE_TOKEN="$(openssl rand -hex 32)"
 (cd server && go run ./cmd/floe-server) &
-cd apps/client
-flutter run -d macos --dart-define=FLOE_INFERENCE_TARGET=local-focus
 ```
 
-Edit the copied config **before** starting the service. The app's focus panel
-accepts `local-focus`, the target ID, not the raw model name. The target's model
-and provider are operator-configured and available through authenticated
-`GET /v1/targets`. Restart the gateway after changing configuration or credentials.
-An app opened from Finder does not inherit this legacy shell token; use console
-pairing instead. A saved app connection takes precedence over the legacy token.
-Core/local preference CRUD needs no gateway.
+Edit the copied config **before** starting the service. The app's focus feature
+requests `high_effort`; the gateway resolves that class to `local-focus`. Target,
+model, provider and reasoning effort are operator-only configuration. Apps can see
+only class availability and data-boundary metadata through authenticated
+`GET /v1/inference-classes`. Restart the gateway after changing configuration or credentials.
+This headless path exists for fixtures and direct development clients; native Floe
+uses console pairing instead. Device-local models execute inside the client runtime
+and do not use this gateway. Core/local preference CRUD needs no gateway.
 
 ## API-key target
 
@@ -106,6 +107,12 @@ An OpenAI-compatible target can be configured as:
       "model": "replace-with-supported-model",
       "api_key_env": "FLOE_PROVIDER_API_KEY"
     }
+  },
+  "routes": {
+    "high_effort": {
+      "target": "api-focus",
+      "reasoning_effort": "high"
+    }
   }
 }
 ```
@@ -116,8 +123,8 @@ the environment-variable **name** belongs in config. The app receives no provide
 key. The model must support non-streaming Chat Completions JSON-schema output;
 compatibility is tested per model, not assumed for all APIs or subscription plans.
 
-Select `api-focus` and explicitly allow external transfer for the request. This
-permission is required for every OpenAI-compatible target, even a loopback proxy:
+Map `high_effort` to `api-focus` and explicitly allow external transfer for the
+request. This permission is required for every OpenAI-compatible target, even a loopback proxy:
 being on localhost does not mean its upstream runs locally. No automatic fallback,
 retry or account rotation occurs. Provider errors do not expose raw response text.
 
@@ -138,7 +145,7 @@ it is not multi-user/Person authorization.
 ```json
 {
   "schema_version": 1,
-  "target": "local-focus",
+  "inference_class": "high_effort",
   "allow_external": false,
   "instructions": "Domain-owned instructions",
   "input": {"domain_owned": "minimal context"},
@@ -146,9 +153,9 @@ it is not multi-user/Person authorization.
 }
 ```
 
-Success: `{"schema_version":1,"target":"local-focus","model":"configured-model","output":"{...}"}`.
+Success: `{"schema_version":1,"inference_class":"high_effort","output":"{...}"}`.
 Failure: `{"schema_version":1,"error":{"code":"model_timeout"}}`.
-Other codes include `unauthorized`, `validation`, `unknown_target`,
+Other codes include `unauthorized`, `validation`, `inference_class_unavailable`,
 `external_transfer_denied`, `model_busy`, `model_unavailable`, `invalid_proposal`.
 
 The gateway normalizes provider envelopes and checks output bounds/JSON, but

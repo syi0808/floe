@@ -19,7 +19,7 @@ pub fn schedule_output_schema(view: &ScheduleView) -> Value {
 }
 
 pub struct GatewayScheduleModel {
-    target: String,
+    inference_class: String,
     allow_external: bool,
     connection: Option<GatewayConnection>,
 }
@@ -64,20 +64,18 @@ impl GatewayScheduleModel {
         Ok(self)
     }
 
-    pub fn new(target: String, allow_external: bool) -> Result<Self, CoreError> {
-        if target.is_empty()
-            || target.len() > 64
-            || !target
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
-        {
+    pub fn new(inference_class: String, allow_external: bool) -> Result<Self, CoreError> {
+        if !matches!(
+            inference_class.as_str(),
+            "fast" | "balanced" | "high_effort"
+        ) {
             return Err(CoreError::new(
                 ErrorCode::Validation,
-                "invalid inference target ID",
+                "invalid inference class",
             ));
         }
         Ok(Self {
-            target,
+            inference_class,
             allow_external,
             connection: None,
         })
@@ -86,7 +84,7 @@ impl GatewayScheduleModel {
 
 impl ScheduleModel for GatewayScheduleModel {
     fn name(&self) -> &str {
-        &self.target
+        &self.inference_class
     }
 
     async fn generate(&self, view: &ScheduleView) -> Result<String, CoreError> {
@@ -125,7 +123,7 @@ impl ScheduleModel for GatewayScheduleModel {
             .bearer_auth(&connection.token)
             .json(&json!({
                 "schema_version": 1,
-                "target": self.target,
+                "inference_class": self.inference_class,
                 "allow_external": self.allow_external,
                 "instructions": SCHEDULE_INSTRUCTIONS,
                 "input": view,
@@ -160,7 +158,7 @@ impl ScheduleModel for GatewayScheduleModel {
             ));
         }
         if body.get("schema_version") != Some(&json!(1))
-            || body.get("target") != Some(&json!(self.target))
+            || body.get("inference_class") != Some(&json!(self.inference_class))
         {
             return Err(CoreError::new(
                 ErrorCode::InvalidProposal,

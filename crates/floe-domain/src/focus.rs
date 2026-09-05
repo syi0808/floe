@@ -67,6 +67,6 @@ pub struct FocusProposal {
     pub slot: FocusSlot,
     pub reason: String,
     pub evidence: Vec<FocusEvidence>,
-    pub model: String,
+    pub inference_class: String,
     pub calendar_warning: bool,
 }

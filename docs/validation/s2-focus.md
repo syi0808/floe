@@ -69,7 +69,7 @@ before enabling external transfer; local proxies can forward to external provide
 
 ## Real-model evaluation — pending
 
-At least three attempts per case; record build SHA, OS, gateway target/provider,
+At least three attempts per case; record build SHA, OS, requested performance class and the server-side route/provider,
 model version/quantization, offset, latency, typed outcome, interval validity,
 evidence completeness and human reason-quality assessment. Exact text matching
 and one successful answer do not establish quality.

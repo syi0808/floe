@@ -201,7 +201,7 @@ async fn schedule_expert_receives_only_minimal_view_and_proposal_does_not_mutate
             .any(|source| source.label.contains("PRIVATE TITLE"))
     );
     assert_eq!(proposal.person_id, person);
-    assert_eq!(proposal.model, "fixture-not-live");
+    assert_eq!(proposal.inference_class, "fixture-not-live");
     assert_eq!(
         core.day_snapshot(person, now().date_naive(), 32400, now())
             .await

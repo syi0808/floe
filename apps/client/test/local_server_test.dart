@@ -38,11 +38,9 @@ void main() {
         address: 'http://127.0.0.1:9431',
         token: 'a' * 52,
         clientId: 'fixture-client',
-        target: 'local-focus',
       );
       await client.save(saved);
       final restored = await LocalServerClient(store: store).connection();
-      expect(restored?.target, 'local-focus');
       expect(restored?.toInferenceJson().keys, ['base_url', 'token']);
       await store.delete();
       expect(await client.connection(), isNull);

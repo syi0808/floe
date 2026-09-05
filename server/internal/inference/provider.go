@@ -77,9 +77,9 @@ func newProvider(target Target, lookup func(string) string, codex CodexClient) (
 	}}, nil
 }
 
-func (adapter *provider) generate(ctx context.Context, request Request) (string, error) {
+func (adapter *provider) generate(ctx context.Context, request Request, reasoningEffort string) (string, error) {
 	if adapter.target.Provider == "codex_oauth" {
-		output, err := adapter.codex.Generate(ctx, adapter.target.Model, request.Instructions, request.Input, request.OutputSchema)
+		output, err := adapter.codex.Generate(ctx, adapter.target.Model, reasoningEffort, request.Instructions, request.Input, request.OutputSchema)
 		if err != nil {
 			return "", errProvider
 		}
@@ -91,7 +91,7 @@ func (adapter *provider) generate(ctx context.Context, request Request) (string,
 	if adapter.target.Provider == "ollama" {
 		return adapter.ollama(ctx, request)
 	}
-	return adapter.openAI(ctx, request)
+	return adapter.openAI(ctx, request, reasoningEffort)
 }
 
 func (adapter *provider) post(ctx context.Context, path string, payload any, output any) error {
@@ -166,7 +166,7 @@ func (adapter *provider) ollama(ctx context.Context, request Request) (string, e
 	return response.Message.Content, nil
 }
 
-func (adapter *provider) openAI(ctx context.Context, request Request) (string, error) {
+func (adapter *provider) openAI(ctx context.Context, request Request, reasoningEffort string) (string, error) {
 	var response struct {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
@@ -178,12 +178,16 @@ func (adapter *provider) openAI(ctx context.Context, request Request) (string, e
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	err := adapter.post(ctx, "/chat/completions", map[string]any{
+	payload := map[string]any{
 		"model": adapter.target.Model, "messages": messages(request), "stream": false,
 		"response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{
 			"name": "floe_result", "strict": true, "schema": request.OutputSchema,
 		}},
-	}, &response)
+	}
+	if reasoningEffort != "" {
+		payload["reasoning_effort"] = reasoningEffort
+	}
+	err := adapter.post(ctx, "/chat/completions", payload, &response)
 	if err != nil {
 		return "", err
 	}

@@ -110,6 +110,11 @@ void main() {
       'base_url': 'http://127.0.0.1:${upstream.port}/v1',
       'api_key': '',
     });
+    await manage('route', {
+      'inference_class': 'high_effort',
+      'target': 'fixture-focus',
+      'reasoning_effort': 'high',
+    });
     final store = MemoryServerCredentials();
     final client = LocalServerClient(store: store);
     final pair = await client.request(address, '/pair/start', body: {});
@@ -130,10 +135,9 @@ void main() {
       address: address,
       token: approved['token'] as String,
       clientId: approved['client_id'] as String,
-      target: 'fixture-focus',
     );
     await client.save(connection);
-    expect((await client.targets(connection)).keys, ['fixture-focus']);
+    expect((await client.inferenceClasses(connection)).keys, ['high_effort']);
     final now = DateTime.utc(2026, 9, 5);
     final query = DayQuery(
       personId: localPersonId,
@@ -148,7 +152,7 @@ void main() {
       serverClient: client,
     );
     await expectLater(
-      gateway.suggestFocus(query, 'fixture-focus'),
+      gateway.suggestFocus(query),
       throwsA(
         isA<FocusGatewayException>().having(
           (error) => error.code,
@@ -158,19 +162,15 @@ void main() {
       ),
     );
     expect(contexts, isEmpty);
-    final proposal = await gateway.suggestFocus(
-      query,
-      'fixture-focus',
-      allowExternal: true,
-    );
-    expect(proposal.model, 'fixture-focus');
+    final proposal = await gateway.suggestFocus(query, allowExternal: true);
+    expect(proposal.inferenceClass, 'high_effort');
     expect(contexts.length, 1);
     expect(jsonEncode(contexts), isNot(contains(connection.token)));
     expect(jsonEncode(contexts), isNot(contains(localPersonId)));
     expect((await gateway.loadDay(query)).items, isEmpty);
     await manage('client/delete', {'id': connection.clientId});
     await expectLater(
-      client.targets(connection),
+      client.inferenceClasses(connection),
       throwsA(
         isA<ServerConnectionException>().having(
           (error) => error.code,

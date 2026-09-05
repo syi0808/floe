@@ -593,22 +593,19 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get focusDisclosure =>
-      'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to the local Go inference gateway. The selected target determines the model and provider. Titles, notes, account IDs and provider credentials are not included in model context. Remote API targets require your permission below. Nothing is added to your calendar.';
-
-  @override
-  String get focusModel => 'Configured gateway target ID';
+      'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to your configured server. Titles, notes and account IDs are excluded. Nothing is added to your calendar.';
 
   @override
   String get focusAllowExternal =>
-      'Allow this request to send the described context to the selected target’s external provider (including a local proxy’s upstream).';
+      'Allow the Floe server to process this schedule context for this request.';
 
   @override
   String get focusExternalDenied =>
-      'This target uses an external provider. Review the configured target and allow external transfer, or select a local target.';
+      'This request needs permission to send the described schedule context to your Floe server.';
 
   @override
   String get focusInvalidInput =>
-      'Check the focus preference and target ID. IDs contain only letters, numbers, hyphens and underscores.';
+      'Check the saved focus preference and try again.';
 
   @override
   String get focusSuggest => 'Suggest focus time';
@@ -629,15 +626,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get focusModelUnavailable =>
-      'Could not use the inference target. Check the Go gateway, its authentication token, configured target and provider credentials, then retry.';
+      'Floe could not generate a suggestion. Check the server connection or ask the server administrator to review the service configuration.';
 
   @override
   String get focusModelTimeout =>
-      'The inference target took too long. Try again or select another configured target.';
+      'The suggestion took too long. Try again later.';
 
   @override
   String get focusInvalidProposal =>
-      'The model returned an invalid suggestion. Nothing was changed. Try again.';
+      'Floe received an invalid suggestion. Nothing was changed. Try again.';
 
   @override
   String get focusNoSlot =>

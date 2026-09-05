@@ -298,7 +298,7 @@ fn validate_candidate(
         slot: slot.clone(),
         reason: reason.into(),
         evidence: view.evidence.clone(),
-        model: model.into(),
+        inference_class: model.into(),
         calendar_warning: view.calendar_warning,
     })
 }

@@ -19,15 +19,15 @@ Verified until S1 and real-model evaluation pass.
 
 ```text
 Schedule / Memory / Manager
-  ├─ select target, minimize context, specify allowed egress and capabilities
+  ├─ select performance class, minimize context, specify allowed egress
   ├─ Go inference gateway → network model providers
   └─ Native executor → device-only models (future adapter)
 
 Rust host → validate returned proposal → Flutter presentation
 ```
 
-- Domain services own model choice, sensitivity and business semantics. The
-  gateway does not guess privacy, rewrite domain prompts, optimize model choice,
+- Domain services own performance requirements, sensitivity and business semantics. The
+  gateway does not guess privacy, rewrite domain prompts, infer task meaning,
   or silently select a fallback.
 - Go owns network provider authentication, transport, deadline/cancellation,
   protocol normalization and bounded execution. Future streaming/usage accounting
@@ -47,6 +47,8 @@ Rust host → validate returned proposal → Flutter presentation
 The headless baseline below is extended by [ADR 0010](0010-local-connection-console.md):
 the default local console adds managed target registration, Keychain-backed credentials,
 app pairing/configurable local address and a server-owned Codex OAuth adapter.
+Its client routing contract is superseded by performance classes in
+[ADR 0011](0011-inference-performance-classes.md).
 
 The Go module lives under `server/`, has no third-party Go dependencies, and
 runs explicitly as a loopback-only developer service on `127.0.0.1:8431`.

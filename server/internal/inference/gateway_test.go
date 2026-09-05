@@ -21,21 +21,21 @@ type fixtureCodex struct{ calls atomic.Int32 }
 
 func (client *fixtureCodex) Ready() bool { return true }
 
-func (client *fixtureCodex) Generate(_ context.Context, model, instructions string, input, schema json.RawMessage) (string, error) {
+func (client *fixtureCodex) Generate(_ context.Context, model, effort, instructions string, input, schema json.RawMessage) (string, error) {
 	client.calls.Add(1)
-	if model != "fixture-model" || instructions == "" || !json.Valid(input) || !json.Valid(schema) {
+	if model != "fixture-model" || effort != "high" || instructions == "" || !json.Valid(input) || !json.Valid(schema) {
 		return "", errors.New("bad request")
 	}
 	return candidate, nil
 }
 
 func fixtureRequest() Request {
-	return Request{SchemaVersion: 1, Target: "focus", Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
+	return Request{SchemaVersion: 1, InferenceClass: "high_effort", Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
 }
 
 func fixtureGateway(test *testing.T, providerName, endpoint string) *Gateway {
 	test.Helper()
-	gateway, err := New(Config{Targets: map[string]Target{"focus": {Provider: providerName, BaseURL: endpoint, Model: "fixture-model", APIKeyEnv: "FIXTURE_KEY"}}}, testToken, func(string) string { return "private-provider-key" })
+	gateway, err := New(Config{Targets: map[string]Target{"focus": {Provider: providerName, BaseURL: endpoint, Model: "fixture-model", APIKeyEnv: "FIXTURE_KEY"}}, Routes: map[string]Route{"high_effort": {Target: "focus", ReasoningEffort: "high"}}}, testToken, func(string) string { return "private-provider-key" })
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestOpenAIWireContract(test *testing.T) {
 		if json.NewDecoder(request.Body).Decode(&body) != nil {
 			test.Error("bad request JSON")
 		}
-		if body["model"] != "fixture-model" || body["stream"] != false || body["tools"] != nil {
+		if body["model"] != "fixture-model" || body["reasoning_effort"] != "high" || body["stream"] != false || body["tools"] != nil {
 			test.Error("unexpected model capabilities")
 		}
 		format := body["response_format"].(map[string]any)
@@ -78,7 +78,7 @@ func TestOpenAIWireContract(test *testing.T) {
 	input := fixtureRequest()
 	input.AllowExternal = true
 	response := invoke(gateway, input)
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `"target":"focus"`) {
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"inference_class":"high_effort"`) || strings.Contains(response.Body.String(), "fixture-model") {
 		test.Fatal(response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
@@ -100,12 +100,11 @@ func TestCodexOAuthUsesServerRuntimeBehindConsent(test *testing.T) {
 	client := &fixtureCodex{}
 	gateway, err := New(Config{Targets: map[string]Target{"codex": {
 		Provider: "codex_oauth", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "fixture-model",
-	}}}, testToken, func(string) string { return "" }, client)
+	}}, Routes: map[string]Route{"high_effort": {Target: "codex", ReasoningEffort: "high"}}}, testToken, func(string) string { return "" }, client)
 	if err != nil {
 		test.Fatal(err)
 	}
 	input := fixtureRequest()
-	input.Target = "codex"
 	if invoke(gateway, input).Code != http.StatusForbidden || client.calls.Load() != 0 {
 		test.Fatal("Codex request bypassed consent")
 	}
@@ -171,7 +170,7 @@ func TestAuthenticationOriginAndRequestBounds(test *testing.T) {
 			test.Error("unauthenticated request accepted")
 		}
 	}
-	request := httptest.NewRequest(http.MethodGet, "/v1/targets", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/inference-classes", nil)
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	request.Header.Set("Origin", "https://untrusted.example")
 	writer := httptest.NewRecorder()
@@ -194,24 +193,37 @@ func TestAuthenticationOriginAndRequestBounds(test *testing.T) {
 		test.Error("unsupported version accepted")
 	}
 	input = fixtureRequest()
-	input.Target = "unknown"
+	input.InferenceClass = "unknown"
 	if invoke(gateway, input).Code != 400 {
 		test.Error("unknown target accepted")
 	}
 }
 
-func TestInventoryDoesNotExposeSecretsOrEndpoints(test *testing.T) {
+func TestClassInventoryDoesNotExposeModelRoutingOrSecrets(test *testing.T) {
 	gateway := fixtureGateway(test, "openai_compatible", "https://private.example/v1")
-	request := httptest.NewRequest(http.MethodGet, "/v1/targets", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/inference-classes", nil)
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	writer := httptest.NewRecorder()
 	gateway.ServeHTTP(writer, request)
 	if writer.Code != 200 {
 		test.Fatal(writer.Body.String())
 	}
-	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", testToken} {
+	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", "fixture-model", "focus", testToken} {
 		if strings.Contains(writer.Body.String(), secret) {
 			test.Error("inventory exposed secret or configuration")
+		}
+	}
+}
+
+func TestOnlySupportedInferenceClassesAndValidRoutesAreAccepted(test *testing.T) {
+	target := Target{Provider: "ollama", BaseURL: "http://127.0.0.1:11434", Model: "fixture"}
+	for class, route := range map[string]Route{
+		"focus_time":  {Target: "focus"},
+		"high-effort": {Target: "focus"},
+		"high_effort": {Target: "missing"},
+	} {
+		if _, err := New(Config{Targets: map[string]Target{"focus": target}, Routes: map[string]Route{class: route}}, testToken, func(string) string { return "" }); err == nil {
+			test.Errorf("accepted invalid route %q", class)
 		}
 	}
 }

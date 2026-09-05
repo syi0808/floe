@@ -115,6 +115,9 @@ func TestRefreshAndCodexInferenceUseServerOwnedCredential(test *testing.T) {
 		if json.NewDecoder(request.Body).Decode(&body) != nil || body["tool_choice"] != "none" || len(body["tools"].([]any)) != 0 || body["parallel_tool_calls"] != true {
 			test.Error("Codex request did not disable tools")
 		}
+		if body["reasoning"].(map[string]any)["effort"] != "high" {
+			test.Error("Codex request did not apply the server reasoning route")
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = writer.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"ok\\\":\"}\n\n"))
 		_, _ = writer.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"true}\"}\n\n"))
@@ -128,7 +131,7 @@ func TestRefreshAndCodexInferenceUseServerOwnedCredential(test *testing.T) {
 	if err := runtime.save(&tokenBundle{AccessToken: "old-access", RefreshToken: "old-refresh", IDToken: fixtureIDToken("account-1"), AccountID: "account-1", ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
 		test.Fatal(err)
 	}
-	output, err := runtime.Generate(context.Background(), "fixture-model", "Return JSON", json.RawMessage(`{"test":true}`), json.RawMessage(`{"type":"object"}`))
+	output, err := runtime.Generate(context.Background(), "fixture-model", "high", "Return JSON", json.RawMessage(`{"test":true}`), json.RawMessage(`{"type":"object"}`))
 	if err != nil || output != `{"ok":true}` || refreshes != 1 {
 		test.Fatalf("direct Codex inference failed: %q %v", output, err)
 	}

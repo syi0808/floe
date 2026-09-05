@@ -17,7 +17,7 @@ class LocalServerPanel extends StatefulWidget {
 class _LocalServerPanelState extends State<LocalServerPanel> {
   final address = TextEditingController(text: 'http://127.0.0.1:8431');
   ServerConnection? connection;
-  Map<String, dynamic> targets = {};
+  Map<String, dynamic> inferenceClasses = {};
   String? proof;
   String? code;
   String? pairingAddress;
@@ -41,7 +41,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         return;
       }
       address.text = saved.address;
-      targets = await widget.client.targets(saved);
+      inferenceClasses = await widget.client.inferenceClasses(saved);
       status = 'Connected to Floe server';
     });
   }
@@ -103,13 +103,13 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           token: response['token'] as String,
           clientId: response['client_id'] as String,
         );
-        final available = await widget.client.targets(saved);
+        final available = await widget.client.inferenceClasses(saved);
         if (!mounted || attempt != generation) return;
         await widget.client.save(saved);
         if (!mounted || attempt != generation) return;
         setState(() {
           connection = saved;
-          targets = available;
+          inferenceClasses = available;
           proof = null;
           code = null;
           address.text = base;
@@ -185,7 +185,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         ),
         const SizedBox(height: 12),
         const Text(
-          'Connect Floe to the Go server that routes network model requests. Provider credentials stay with the server; app access is saved in Keychain.',
+          'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
         ),
         const SizedBox(height: 20),
         TextField(
@@ -252,7 +252,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
                         await widget.client.store.delete();
                         if (!mounted) return;
                         connection = null;
-                        targets = {};
+                        inferenceClasses = {};
                         status = 'Forgot this connection. Revoke its access in the dashboard if no longer needed.';
                       }),
                 child: const Text('Forget connection'),
@@ -261,44 +261,13 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         ),
         if (connection != null) ...[
           const SizedBox(height: 24),
-          if (targets.isEmpty)
+          if (!inferenceClasses.containsKey('high_effort'))
             const FloeInfoNote(
-              text: 'Server connected. Add a model target in the dashboard to enable focus suggestions.',
+              text: 'Server connected. Ask the server administrator to finish setting up focus suggestions.',
             ),
-          if (targets.isNotEmpty)
-            DropdownButtonFormField<String>(
-              key: ValueKey('${connection!.target}:${targets.keys.join(',')}'),
-              initialValue: targets.containsKey(connection!.target)
-                  ? connection!.target
-                  : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Default focus target',
-              ),
-              items: [
-                for (final entry in targets.entries)
-                  DropdownMenuItem(
-                    value: entry.key,
-                    child: Text('${entry.key} · ${entry.value['model']}'),
-                  ),
-              ],
-              onChanged: busy
-                  ? null
-                  : (target) => _run(() async {
-                      if (target == null) return;
-                      final previous = connection!;
-                      final updated = ServerConnection(
-                        address: previous.address,
-                        token: previous.token,
-                        clientId: previous.clientId,
-                        target: target,
-                      );
-                      await widget.client.save(updated);
-                      if (mounted) {
-                        connection = updated;
-                        status = 'Default focus target saved';
-                      }
-                    }),
+          if (inferenceClasses.containsKey('high_effort'))
+            const FloeInfoNote(
+              text: 'The server is ready for focus suggestions.',
             ),
         ],
         if (busy) ...[

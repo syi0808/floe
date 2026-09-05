@@ -51,8 +51,7 @@ class FixtureGateway implements FocusGateway {
 
   @override
   Future<FocusProposal> suggestFocus(
-    DayQuery query,
-    String model, {
+    DayQuery query, {
     bool allowExternal = false,
   }) async {
     calls++;
@@ -69,7 +68,7 @@ class FixtureGateway implements FocusGateway {
     timezoneOffsetSeconds: 0,
     reason: 'An unoccupied interval.',
     evidence: const [FocusEvidence(id: 'schedule', label: 'Loaded schedule')],
-    model: 'fixture',
+    inferenceClass: 'fixture',
     calendarWarning: true,
   );
 }
@@ -85,9 +84,9 @@ void main() {
       expect(controller.preference, isNull);
       expect(await controller.save(preference), isTrue);
       expect(controller.preference?.revision, 1);
-      expect(await controller.suggest('fixture'), isTrue);
+      expect(await controller.suggest(), isTrue);
       expect(gateway.lastAllowExternal, isFalse);
-      expect(await controller.suggest('fixture', allowExternal: true), isTrue);
+      expect(await controller.suggest(allowExternal: true), isTrue);
       expect(gateway.lastAllowExternal, isTrue);
       expect(controller.proposal, isNotNull);
       expect(await controller.save(preference), isTrue);
@@ -110,14 +109,14 @@ void main() {
       final gateway = FixtureGateway();
       final controller = FocusController(gateway: gateway, query: query);
       await controller.load();
-      await controller.suggest('fixture');
+      await controller.suggest();
       gateway.failure = code;
-      expect(await controller.suggest('fixture'), isFalse);
+      expect(await controller.suggest(), isFalse);
       expect(controller.proposal, isNull);
       expect(controller.errorCode, code);
       expect(controller.pending, isFalse);
       gateway.failure = null;
-      expect(await controller.suggest('fixture'), isTrue);
+      expect(await controller.suggest(), isTrue);
       expect(controller.errorCode, isNull);
       controller.dispose();
     }
@@ -129,7 +128,7 @@ void main() {
     addTearDown(controller.dispose);
     expect(await controller.load(), isFalse);
     expect(await controller.save(preference), isFalse);
-    expect(await controller.suggest('fixture'), isFalse);
+    expect(await controller.suggest(), isFalse);
     gateway.failure = null;
     await controller.load();
     gateway.failure = 'conflict';
@@ -146,9 +145,9 @@ void main() {
       final gateway = FixtureGateway()..pending = Completer<FocusProposal>();
       final controller = FocusController(gateway: gateway, query: query);
       await controller.load();
-      final request = controller.suggest('fixture');
+      final request = controller.suggest();
       expect(controller.pending, isTrue);
-      expect(await controller.suggest('fixture'), isFalse);
+      expect(await controller.suggest(), isFalse);
       expect(await controller.save(preference), isFalse);
       expect(gateway.calls, 1);
       controller.dispose();
@@ -171,7 +170,7 @@ void main() {
       'evidence': [
         {'id': 'preference', 'label': 'User-entered preference'},
       ],
-      'model': 'fixture',
+      'inference_class': 'fixture',
       'calendar_warning': true,
     });
     expect(proposal.personId, 'person');

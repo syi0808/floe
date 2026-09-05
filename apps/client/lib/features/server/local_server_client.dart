@@ -33,19 +33,16 @@ class ServerConnection {
     required this.address,
     required this.token,
     required this.clientId,
-    this.target = '',
   });
 
   final String address;
   final String token;
   final String clientId;
-  final String target;
 
   Map<String, String> toJson() => {
     'base_url': address,
     'token': token,
     'client_id': clientId,
-    'target': target,
   };
   Map<String, String> toInferenceJson() => {
     'base_url': address,
@@ -96,7 +93,6 @@ class LocalServerClient {
         address: address,
         token: token,
         clientId: value['client_id'] as String,
-        target: value['target'] as String? ?? '',
       );
     } on Object {
       throw const ServerConnectionException('invalid_saved_connection');
@@ -154,17 +150,17 @@ class LocalServerClient {
     }
   }
 
-  Future<Map<String, dynamic>> targets(ServerConnection value) async {
+  Future<Map<String, dynamic>> inferenceClasses(ServerConnection value) async {
     final response = await request(
       value.address,
-      '/v1/targets',
+      '/v1/inference-classes',
       token: value.token,
     );
     if (response['schema_version'] != 1 ||
-        response['targets'] is! Map<String, dynamic>) {
+        response['inference_classes'] is! Map<String, dynamic>) {
       throw const ServerConnectionException('invalid_response');
     }
-    return response['targets'] as Map<String, dynamic>;
+    return response['inference_classes'] as Map<String, dynamic>;
   }
 
   Future<void> openDashboard(String address) => KeychainServerCredentialStore

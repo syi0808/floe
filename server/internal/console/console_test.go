@@ -28,7 +28,7 @@ func (runtime *fakeAuthRuntime) Action(context.Context, string) (any, error) {
 
 func (runtime *fakeAuthRuntime) Ready() bool { return runtime.ready }
 
-func (*fakeAuthRuntime) Generate(context.Context, string, string, json.RawMessage, json.RawMessage) (string, error) {
+func (*fakeAuthRuntime) Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error) {
 	return `{"ok":true}`, nil
 }
 
@@ -115,7 +115,7 @@ func (fixture *fixture) pair() (string, string) {
 func TestPairingRestartAndRevocation(test *testing.T) {
 	fixture := setup(test)
 	identifier, token := fixture.pair()
-	fixture.value(fixture.call("GET", "/v1/targets", nil, token))
+	fixture.value(fixture.call("GET", "/v1/inference-classes", nil, token))
 	disk, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
 	if strings.Contains(string(disk), token) {
 		test.Fatal("plaintext app token persisted")
@@ -126,13 +126,13 @@ func TestPairingRestartAndRevocation(test *testing.T) {
 	}
 	old := fixture.console
 	fixture.console = management
-	fixture.value(fixture.call("GET", "/v1/targets", nil, token))
+	fixture.value(fixture.call("GET", "/v1/inference-classes", nil, token))
 	if fixture.call("GET", "/manage/api/state", nil, "").Code != 401 {
 		test.Fatal("management session survived restart")
 	}
 	fixture.console = old
 	fixture.value(fixture.call("POST", "/manage/api/client/delete", map[string]string{"id": identifier}, ""))
-	if fixture.call("GET", "/v1/targets", nil, token).Code != 401 {
+	if fixture.call("GET", "/v1/inference-classes", nil, token).Code != 401 {
 		test.Fatal("revoked token accepted")
 	}
 }
@@ -149,8 +149,8 @@ func TestManagementAndInferenceAuthAreSeparate(test *testing.T) {
 		{"/manage/api/target/delete", "POST", "http://127.0.0.1:8431", "127.0.0.1:8431", "wrong", true, ""},
 		{"/manage/api/target/delete", "POST", "https://evil.example", "127.0.0.1:8431", fixture.csrf, true, ""},
 		{"/manage/api/state", "GET", "", "evil.example:8431", "", true, ""},
-		{"/v1/targets", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
-		{"/v1/targets", "GET", "", "127.0.0.1:8431", "", true, ""},
+		{"/v1/inference-classes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
+		{"/v1/inference-classes", "GET", "", "127.0.0.1:8431", "", true, ""},
 		{"/pair/start", "POST", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, ""},
 	} {
 		request := httptest.NewRequest(sample.method, "http://"+sample.host+sample.path, strings.NewReader(`{"id":"missing"}`))
@@ -190,10 +190,19 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	defer upstream.Close()
 	input := map[string]string{"id": "focus", "provider": "openai_compatible", "base_url": upstream.URL, "model": "fixture", "api_key": "private-provider-key"}
 	fixture.value(fixture.call("POST", "/manage/api/target", input, ""))
+	fixture.value(fixture.call("POST", "/manage/api/route", map[string]string{"inference_class": "high_effort", "target": "focus", "reasoning_effort": "high"}, ""))
 	if calls.Load() != 0 {
 		test.Fatal("adding target transmitted a request")
 	}
 	state := fixture.call("GET", "/manage/api/state", nil, "")
+	if !strings.Contains(state.Body.String(), `"high_effort"`) || !strings.Contains(state.Body.String(), `"reasoning_effort":"high"`) {
+		test.Fatal("saved route missing from management state")
+	}
+	_, appToken := fixture.pair()
+	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
+	if !strings.Contains(classes.Body.String(), `"high_effort"`) || strings.Contains(classes.Body.String(), "fixture") || strings.Contains(classes.Body.String(), "focus") {
+		test.Fatal("app inference inventory exposed server routing")
+	}
 	disk, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
 	if strings.Contains(state.Body.String()+string(disk), "private-provider-key") || len(fixture.vault.values) != 1 {
 		test.Fatal("credential storage boundary violated")

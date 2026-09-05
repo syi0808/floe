@@ -59,6 +59,9 @@ void main() {
             'model': 'synthetic-model',
           },
         },
+        'routes': {
+          'high_effort': {'target': 'fixture', 'reasoning_effort': 'high'},
+        },
       }),
     );
     final binary = '${temporary.path}/floe-server';
@@ -115,7 +118,7 @@ void main() {
       ),
     );
     await expectLater(
-      gateway.suggestFocus(query, 'fixture'),
+      gateway.suggestFocus(query),
       throwsA(
         isA<FocusGatewayException>().having(
           (error) => error.code,
@@ -125,11 +128,7 @@ void main() {
       ),
     );
     expect(contexts, isEmpty);
-    final proposal = await gateway.suggestFocus(
-      query,
-      'fixture',
-      allowExternal: true,
-    );
+    final proposal = await gateway.suggestFocus(query, allowExternal: true);
     expect(proposal.personId, localPersonId);
     expect(proposal.endsAt.difference(proposal.startsAt).inMinutes, 45);
     expect(
@@ -143,7 +142,6 @@ void main() {
     await gateway.saveFocusPreference(query, 1, null);
     final withoutPreference = await gateway.suggestFocus(
       query,
-      'fixture',
       allowExternal: true,
     );
     expect(contexts.last['preference'], isNull);
@@ -153,7 +151,7 @@ void main() {
     );
     invalid = true;
     await expectLater(
-      gateway.suggestFocus(query, 'fixture', allowExternal: true),
+      gateway.suggestFocus(query, allowExternal: true),
       throwsA(
         isA<FocusGatewayException>().having(
           (error) => error.code,

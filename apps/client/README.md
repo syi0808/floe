@@ -90,12 +90,12 @@ focus-window preference; Rust owns persistence and validation. A suggestion show
 time, reason, context sources and any Calendar-cache warning without creating an
 event or task. Unsaved changes must be saved before requesting a new proposal.
 
-Network inference uses the [Go gateway](../../server/README.md), not direct
-Flutter/Rust provider calls. Enter a configured target ID, optionally prefilled
-using `--dart-define=FLOE_INFERENCE_TARGET=local-focus`. The app and Go process
-must share `FLOE_INFERENCE_TOKEN` through the launch environment. Remote/API
-targets require explicit external-transfer consent. OAuth/Apple native adapters
-and product credential setup UI are not yet implemented.
+Network inference uses a product-owned performance class through the
+[Go gateway](../../server/README.md), not direct Flutter/Rust provider calls.
+The focus feature requests `high_effort`; the server dashboard maps that class
+to a model and reasoning effort. The app never exposes or stores provider, model,
+target, or reasoning settings. Device-local model adapters bypass this server
+boundary; their runtime implementation is still pending.
 
 See [S2 validation](../../docs/validation/s2-focus.md) for the separate full
 Flutter/Rust/Go smoke test and pending live-model/UI evaluation.

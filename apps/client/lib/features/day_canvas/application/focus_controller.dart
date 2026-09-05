@@ -36,12 +36,11 @@ class FocusController extends ChangeNotifier {
     });
   }
 
-  Future<bool> suggest(String model, {bool allowExternal = false}) {
-    if (!loaded || model.trim().isEmpty) return Future.value(false);
+  Future<bool> suggest({bool allowExternal = false}) {
+    if (!loaded) return Future.value(false);
     return _run(() async {
       final result = await gateway.suggestFocus(
         query,
-        model.trim(),
         allowExternal: allowExternal,
       );
       if (!_disposed) proposal = result;

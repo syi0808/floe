@@ -5,5 +5,11 @@
       "base_url": "http://127.0.0.1:11434",
       "model": "replace-with-installed-model"
     }
+  },
+  "routes": {
+    "high_effort": {
+      "target": "local-focus",
+      "reasoning_effort": "high"
+    }
   }
 }

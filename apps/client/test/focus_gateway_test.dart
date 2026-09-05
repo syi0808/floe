@@ -85,7 +85,7 @@ void main() {
       timezoneOffsetSeconds: 0,
     );
     await expectLater(
-      gateway.suggestFocus(yesterday, 'fixture-not-called'),
+      gateway.suggestFocus(yesterday),
       throwsA(
         isA<FocusGatewayException>().having(
           (error) => error.code,

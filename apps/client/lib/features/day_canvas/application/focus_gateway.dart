@@ -9,8 +9,7 @@ abstract interface class FocusGateway {
     FocusPreferenceValue? value,
   );
   Future<FocusProposal> suggestFocus(
-    DayQuery query,
-    String model, {
+    DayQuery query, {
     bool allowExternal = false,
   });
 }

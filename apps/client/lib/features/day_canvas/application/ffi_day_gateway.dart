@@ -217,14 +217,13 @@ final class FfiDayGateway implements DayGateway, CalendarGateway, FocusGateway {
 
   @override
   Future<FocusProposal> suggestFocus(
-    DayQuery query,
-    String model, {
+    DayQuery query, {
     bool allowExternal = false,
   }) async {
     final connection = await serverClient.connection();
     final result = await _focusRequest(query, {
       'type': 'suggest_focus',
-      'model': model,
+      'inference_class': 'high_effort',
       'allow_external': allowExternal,
       if (connection != null) 'connection': connection.toInferenceJson(),
     });

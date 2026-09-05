@@ -35,13 +35,11 @@ class _FocusDialogState extends State<FocusDialog> {
   final start = TextEditingController(text: '09:00');
   final end = TextEditingController(text: '18:00');
   final duration = TextEditingController(text: '60');
-  final model = TextEditingController(
-    text: const String.fromEnvironment('FLOE_INFERENCE_TARGET'),
-  );
   bool allowExternal = false;
   bool dirty = false;
   bool invalidPreference = false;
   bool serverUnavailable = false;
+  bool requiresExternalConsent = false;
 
   @override
   void initState() {
@@ -54,8 +52,17 @@ class _FocusDialogState extends State<FocusDialog> {
     if (widget.gateway case FfiDayGateway gateway) {
       try {
         final connection = await gateway.serverClient.connection();
-        if (mounted && model.text.isEmpty && connection != null) {
-          model.text = connection.target;
+        if (connection == null) {
+          serverUnavailable = true;
+        } else {
+          final classes = await gateway.serverClient.inferenceClasses(
+            connection,
+          );
+          final configured = classes['high_effort'];
+          serverUnavailable = configured is! Map<String, dynamic>;
+          requiresExternalConsent =
+              configured is Map<String, dynamic> &&
+              configured['requires_external_consent'] == true;
         }
       } on Object {
         serverUnavailable = true;
@@ -119,7 +126,6 @@ class _FocusDialogState extends State<FocusDialog> {
     start.dispose();
     end.dispose();
     duration.dispose();
-    model.dispose();
     super.dispose();
   }
 
@@ -209,37 +215,23 @@ class _FocusDialogState extends State<FocusDialog> {
             const FloeInfoNote(
               text: 'Check the remote server connection in Settings before requesting a suggestion.',
             ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: model,
-            enabled: !controller.pending,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: InputDecoration(labelText: strings.focusModel),
-            onChanged: (_) {
-              setState(() {});
-              controller.clearProposal();
-            },
-          ),
           const SizedBox(height: 12),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(strings.focusAllowExternal),
-            value: allowExternal,
-            onChanged: controller.pending
-                ? null
-                : (value) {
-                    setState(() => allowExternal = value ?? false);
-                    controller.clearProposal();
-                  },
-          ),
+          if (requiresExternalConsent)
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(strings.focusAllowExternal),
+              value: allowExternal,
+              onChanged: controller.pending
+                  ? null
+                  : (value) {
+                      setState(() => allowExternal = value ?? false);
+                      controller.clearProposal();
+                    },
+            ),
           if (dirty) _notice(strings.focusDirty),
           FloeButton.filled(
-            onPressed: enabled && !dirty && model.text.trim().isNotEmpty
-                ? () => controller.suggest(
-                    model.text,
-                    allowExternal: allowExternal,
-                  )
+            onPressed: enabled && !dirty && !serverUnavailable
+                ? () => controller.suggest(allowExternal: allowExternal)
                 : null,
             child: Text(strings.focusSuggest),
           ),
@@ -302,10 +294,6 @@ class _Proposal extends StatelessWidget {
           Text(proposal.reason),
           const SizedBox(height: 12),
           Text(strings.focusReadOnly),
-          Text(
-            proposal.model,
-            style: const TextStyle(color: FloePalette.neutral600),
-          ),
           if (proposal.calendarWarning) ...[
             const SizedBox(height: 12),
             FloeInfoNote(text: strings.focusCalendarWarning),

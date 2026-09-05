@@ -57,7 +57,7 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Pairing authorizes this app to call registered targets. External data transfer is still approved per request. Provider credentials remain on the server.',
+                      'Pairing authorizes this app to use assisted features on your server. Sensitive context is still approved per request, and service credentials remain on the server.',
                       style: TextStyle(
                         color: FloePalette.neutral600,
                         height: 1.5,

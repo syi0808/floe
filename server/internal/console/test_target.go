@@ -27,10 +27,21 @@ func (console *Console) testTarget(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	console.testActive = true
-	gateway := console.gateway
+	target, exists := console.state.Targets[input.ID]
+	lookup := console.lookup
+	runtime := console.runtime
 	console.mu.Unlock()
 	defer func() { console.mu.Lock(); console.testActive = false; console.mu.Unlock() }()
-	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, Target: input.ID, AllowExternal: input.AllowExternal, Instructions: `Return only {"ok":true}. This is a synthetic connectivity test without personal data.`, Input: json.RawMessage(`{"test":true}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)})
+	if !exists {
+		failure(writer, 404, "unknown_target")
+		return
+	}
+	gateway, err := inference.New(inference.Config{Targets: map[string]inference.Target{input.ID: target}, Routes: map[string]inference.Route{"fast": {Target: input.ID}}}, console.internalToken, lookup, runtime)
+	if err != nil {
+		failure(writer, 503, "model_unavailable")
+		return
+	}
+	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, InferenceClass: "fast", AllowExternal: input.AllowExternal, Instructions: `Return only {"ok":true}. This is a synthetic connectivity test without personal data.`, Input: json.RawMessage(`{"test":true}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)})
 	ctx, cancel := context.WithTimeout(request.Context(), 40*time.Second)
 	defer cancel()
 	forward, _ := http.NewRequestWithContext(ctx, "POST", "/v1/generate", bytes.NewReader(payload))

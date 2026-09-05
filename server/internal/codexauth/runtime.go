@@ -376,18 +376,22 @@ func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	return next, nil
 }
 
-func (runtime *Runtime) Generate(ctx context.Context, model, instructions string, input, schema json.RawMessage) (string, error) {
+func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, instructions string, input, schema json.RawMessage) (string, error) {
 	credential, err := runtime.access(ctx)
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(map[string]any{
+	requestBody := map[string]any{
 		"model": model, "instructions": instructions,
 		"input": []any{map[string]any{"type": "message", "role": "user", "content": []any{map[string]string{"type": "input_text", "text": string(input)}}}},
 		"tools": []any{}, "tool_choice": "none", "parallel_tool_calls": true, "stream": true, "store": false,
 		"include": []string{"reasoning.encrypted_content"},
 		"text":    map[string]any{"format": map[string]any{"type": "json_schema", "name": "floe_result", "strict": true, "schema": schema}},
-	})
+	}
+	if reasoningEffort != "" {
+		requestBody["reasoning"] = map[string]string{"effort": reasoningEffort, "summary": "auto"}
+	}
+	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", invalidOutput
 	}

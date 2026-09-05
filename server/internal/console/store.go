@@ -20,6 +20,7 @@ type Vault interface {
 
 type diskState struct {
 	Targets map[string]inference.Target `json:"targets"`
+	Routes  map[string]inference.Route  `json:"routes"`
 	Clients map[string]string           `json:"clients"`
 }
 
@@ -53,7 +54,7 @@ func writePrivate(path string, value []byte) error {
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Clients: map[string]string{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Clients: map[string]string{}}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return state, "", err
 	}
@@ -63,8 +64,11 @@ func readState(directory string) (diskState, string, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(directory, "state.json"))
 	if err == nil {
-		if json.Unmarshal(data, &state) != nil || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Clients) > 16 {
+		if json.Unmarshal(data, &state) != nil || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Clients) > 16 {
 			return state, "", errors.New("invalid server state")
+		}
+		if state.Routes == nil {
+			state.Routes = map[string]inference.Route{}
 		}
 	} else if !os.IsNotExist(err) {
 		return state, "", err
@@ -90,9 +94,12 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Clients: map[string]string{}}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Clients: map[string]string{}}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
+	}
+	for key, value := range state.Routes {
+		copy.Routes[key] = value
 	}
 	for key, value := range state.Clients {
 		copy.Clients[key] = value

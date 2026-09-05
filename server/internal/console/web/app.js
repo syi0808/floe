@@ -78,6 +78,32 @@ async function refresh() {
     }));
     card.append(actions); targets.append(card);
   }
+  const routeTarget = element('route-target');
+  routeTarget.replaceChildren();
+  for (const identifier of Object.keys(state.targets)) {
+    const option = text('option', identifier);
+    option.value = identifier;
+    routeTarget.append(option);
+  }
+  const routes = element('routes');
+  routes.replaceChildren();
+  if (!Object.keys(state.routes).length) routes.append(text('p', 'No performance classes are routed yet. Focus suggestions use High effort.'));
+  for (const [inferenceClass, route] of Object.entries(state.routes)) {
+    const row = document.createElement('div');
+    row.className = 'target';
+    row.append(text('strong', inferenceClass.replace('_', ' ')), text('p', `${route.target} · ${route.reasoning_effort || 'provider default'} reasoning`));
+    row.append(button('Edit', async () => {
+      const form = element('route-form');
+      form.elements.inference_class.value = inferenceClass;
+      form.elements.target.value = route.target;
+      form.elements.reasoning_effort.value = route.reasoning_effort || '';
+      form.elements.inference_class.focus();
+    }), button('Remove', async () => {
+      await api('route', {inference_class: inferenceClass, target: '', reasoning_effort: ''}); await refresh();
+    }));
+    routes.append(row);
+  }
+  element('route-form').querySelector('button').disabled = !Object.keys(state.targets).length;
   const clients = element('clients');
   clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
@@ -103,6 +129,13 @@ element('target-form').addEventListener('submit', (event) => {
     const input = Object.fromEntries(new FormData(event.target));
     event.target.elements.api_key.value = '';
     await api('target', input); await refresh(); notice('Target saved. Run a synthetic connection test when ready.');
+  });
+});
+element('route-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  action(event.submitter, async () => {
+    const input = Object.fromEntries(new FormData(event.target));
+    await api('route', input); await refresh(); notice('Performance class route saved.');
   });
 });
 function syncProviderForm() {

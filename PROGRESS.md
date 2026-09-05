@@ -14,7 +14,7 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Deferred | Fixture end-to-end; EventKit app builds | 0/4 | Live verification remains prerequisite; user-directed S2 start | Connect a dedicated macOS Calendar |
-| S2 — Contextual suggestion | Implementing | Flutter/Rust/Go end-to-end fixture; API/Ollama HTTP fixtures | 0/4 | S1 Verified; real-model evaluation and manual UI review | Configure one target and evaluate a focus proposal |
+| S2 — Contextual suggestion | Implementing | Flutter/Rust/Go end-to-end fixture; API/Ollama HTTP fixtures | 0/4 | S1 Verified; real-model evaluation and manual UI review | Route `high_effort` and evaluate a focus proposal |
 | S3 — Approved action | Planned | None | 0/5 | S2 Verified; create capability | Approve, create externally, re-import |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
@@ -23,6 +23,7 @@ S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
 The user approved the [Go inference boundary](docs/decisions/0009-contextual-focus-suggestion.md)
+and [performance-class routing](docs/decisions/0011-inference-performance-classes.md)
 and starting S2 implementation before S1's live gate. S1 is deferred, not accepted;
 its unfinished criteria still block S2 verification. S2 is the only active
 implementation slice. This does not advance S4 server/sync acceptance.
@@ -37,10 +38,10 @@ implementation slice. This does not advance S4 server/sync acceptance.
 - Flutter exposes preference management and focus proposals with source labels,
   cache warning, unsaved-change protection, external consent, retry and pending UI.
 - The Floe-owned Go gateway has API-key/OpenAI-compatible and local Ollama adapters,
-  authenticated loopback transport, explicit target selection, deadlines/cancellation,
+  authenticated loopback transport, server-side performance-class routing, deadlines/cancellation,
   body/concurrency limits, redacted errors and no retry/redirect/cloud fallback.
 - No CLIProxyAPI dependency. The Go connection console adds API-key Keychain
-  storage, target management, synthetic tests and paired app tokens. Flutter exposes
+  storage, target and class-route management, synthetic tests and paired app tokens. Flutter exposes
   the deployment-neutral server boundary under **Settings → Remote server**; S2 still
   accepts loopback addresses only pending a hosted transport/authentication design.
 - The Go server now owns Codex PKCE OAuth, keeps rotating tokens in macOS Keychain
@@ -231,7 +232,7 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 
 ## Next Priorities
 
-1. Configure an already-available model target and run `docs/validation/s2-focus.md` without confusing fixtures with live evaluation.
+1. Configure an already-available model target, map `high_effort`, and run `docs/validation/s2-focus.md` without confusing fixtures with live evaluation.
 2. Complete S1's live Calendar criteria before advancing S2 verification.
 3. Review the native focus UI and record real-model reason quality and failure behavior.
 4. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.

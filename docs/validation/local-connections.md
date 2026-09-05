@@ -57,7 +57,8 @@ temporary server state; it does not touch the live node or native app Keychain.
 2. Approve; verify `Connected to Floe server`. Restart Floe and the server;
    check again without a shell token. Revoke in the dashboard and verify denial.
 3. Add a model; test with synthetic data. Confirm an external test requires explicit
-   confirmation, then choose a default target in Floe. No automatic model download.
+   confirmation, then map the **High effort** class in the server dashboard. Floe
+   exposes no model selector. No automatic model download.
 4. Check blank-key retention, endpoint-change key isolation, replacement and deletion.
    Deny/lock Keychain access and verify a recoverable error, without secret display.
 5. Start Codex browser login, complete consent yourself, verify completion, cancel a

@@ -194,7 +194,7 @@ pub enum CommandDto {
         value: Option<floe_domain::FocusPreferenceInput>,
     },
     SuggestFocus {
-        model: String,
+        inference_class: String,
         #[serde(default)]
         allow_external: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]

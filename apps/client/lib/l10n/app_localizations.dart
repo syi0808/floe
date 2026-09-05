@@ -1099,31 +1099,25 @@ abstract class AppLocalizations {
   /// No description provided for @focusDisclosure.
   ///
   /// In en, this message translates to:
-  /// **'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to the local Go inference gateway. The selected target determines the model and provider. Titles, notes, account IDs and provider credentials are not included in model context. Remote API targets require your permission below. Nothing is added to your calendar.'**
+  /// **'Floe sends only busy times, candidate slots, date, time-zone offset and your saved focus window to your configured server. Titles, notes and account IDs are excluded. Nothing is added to your calendar.'**
   String get focusDisclosure;
-
-  /// No description provided for @focusModel.
-  ///
-  /// In en, this message translates to:
-  /// **'Configured gateway target ID'**
-  String get focusModel;
 
   /// No description provided for @focusAllowExternal.
   ///
   /// In en, this message translates to:
-  /// **'Allow this request to send the described context to the selected target’s external provider (including a local proxy’s upstream).'**
+  /// **'Allow the Floe server to process this schedule context for this request.'**
   String get focusAllowExternal;
 
   /// No description provided for @focusExternalDenied.
   ///
   /// In en, this message translates to:
-  /// **'This target uses an external provider. Review the configured target and allow external transfer, or select a local target.'**
+  /// **'This request needs permission to send the described schedule context to your Floe server.'**
   String get focusExternalDenied;
 
   /// No description provided for @focusInvalidInput.
   ///
   /// In en, this message translates to:
-  /// **'Check the focus preference and target ID. IDs contain only letters, numbers, hyphens and underscores.'**
+  /// **'Check the saved focus preference and try again.'**
   String get focusInvalidInput;
 
   /// No description provided for @focusSuggest.
@@ -1159,19 +1153,19 @@ abstract class AppLocalizations {
   /// No description provided for @focusModelUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Could not use the inference target. Check the Go gateway, its authentication token, configured target and provider credentials, then retry.'**
+  /// **'Floe could not generate a suggestion. Check the server connection or ask the server administrator to review the service configuration.'**
   String get focusModelUnavailable;
 
   /// No description provided for @focusModelTimeout.
   ///
   /// In en, this message translates to:
-  /// **'The inference target took too long. Try again or select another configured target.'**
+  /// **'The suggestion took too long. Try again later.'**
   String get focusModelTimeout;
 
   /// No description provided for @focusInvalidProposal.
   ///
   /// In en, this message translates to:
-  /// **'The model returned an invalid suggestion. Nothing was changed. Try again.'**
+  /// **'Floe received an invalid suggestion. Nothing was changed. Try again.'**
   String get focusInvalidProposal;
 
   /// No description provided for @focusNoSlot.

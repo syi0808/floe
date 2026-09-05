@@ -4,10 +4,11 @@
 
 ## S2 실행 경계 — 2026-09-05
 
-[ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)에 따라 네트워크 기반
-모델 호출은 Floe 소유의 Go inference gateway로 모은다. 도메인은 target과
-전송 허용 범위를 명시하며, gateway는 인증·transport·timeout·오류 정규화를 맡는다.
-이는 업무 의미나 privacy를 추측하는 중앙 smart router가 아니다.
+[ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)와
+[ADR 0011](../../decisions/0011-inference-performance-classes.md)에 따라 네트워크 기반
+모델 호출은 Floe 소유의 Go inference gateway로 모은다. 도메인은 `fast`,
+`balanced`, `high_effort` 성능 class와 전송 허용 범위를 명시한다. 서버 관리자가
+class를 target·model·reasoning effort에 매핑하며, 앱 사용자는 이를 설정하지 않는다.
 
 Apple Foundation Models 같은 기기 내 모델은 native executor 경계로 분리하며
 원격 서버를 필수 경유하지 않는다. CLIProxyAPI 전체 채택은 보류한다.
@@ -44,9 +45,10 @@ Self-hosted
 └─ custom endpoint
 ```
 
-## 중앙 `InferenceRequest` Router를 비즈니스 핵심으로 만들지 않는다
+## 성능 class router를 업무 의미 router로 만들지 않는다
 
-어떤 모델 크기/특성/휴리스틱을 사용할지는 도메인 로직과 강하게 결합된다.
+도메인은 필요한 품질/지연 class를 명시하지만 구체 model/provider를 소유하지 않는다.
+Gateway는 요청 내용을 읽어 업무 용도를 추측하지 않고 명시된 class만 해석한다.
 
 따라서:
 
@@ -95,7 +97,7 @@ VisionModel
 
 Provider는 인증/transport/availability/model discovery 같은 실행 책임을 맡는다.
 
-## Business Logic Owns Model Choice
+## Business Logic Owns Performance Requirements
 
 예:
 
@@ -111,7 +113,8 @@ Manager planning
 → 강한 subscription/API reasoning model
 ```
 
-중앙 Router가 sensitivity나 model size를 추론해서 자동 선택하는 구조는 우선 피한다.
+중앙 Router가 sensitivity나 업무 의미를 추론하는 구조는 피한다. 관리자가 각
+performance class의 model과 reasoning effort를 바꿀 수 있다.
 
 ## Fallback
 
