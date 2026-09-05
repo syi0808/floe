@@ -246,10 +246,11 @@ content, human-readable date/time, unambiguous destination and the concrete effe
 of approval. Keep only information that changes the user's decision or next step
 in the primary reading path.
 
-Move UUIDs, raw provider names, storage timestamps and execution metadata into
-explicitly collapsed technical details. Preserve the underlying audit data and
-access to it; abstraction is not deletion. Prefer local, readable times and make
-timezone differences clear without requiring users to decode UTC strings.
+Move UUIDs, raw provider names and execution metadata into explicitly collapsed
+technical details. Preserve the underlying audit data and access to it; abstraction
+is not deletion. Store instants in UTC, but accept and display every user-facing
+date and time in the device's current local time. Do not expose timezone names,
+offsets or UTC notation as ordinary or technical UI metadata.
 
 Progressive disclosure never hides material effects or relevant safety state:
 guests, alerts, sharing, permission limits, expiry, conflicts and uncertain outcomes

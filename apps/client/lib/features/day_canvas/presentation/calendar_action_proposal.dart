@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:intl/intl.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
@@ -25,7 +26,6 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
   final title = TextEditingController();
   final start = TextEditingController();
   final end = TextEditingController();
-  final timezone = TextEditingController(text: 'Etc/UTC');
   String? calendarId;
   bool saving = false;
   bool failed = false;
@@ -33,10 +33,10 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now().toUtc();
-    final next = DateTime.utc(now.year, now.month, now.day, now.hour + 1);
-    start.text = next.toIso8601String();
-    end.text = next.add(const Duration(minutes: 45)).toIso8601String();
+    final now = DateTime.now();
+    final next = DateTime(now.year, now.month, now.day, now.hour + 1);
+    start.text = _localInput(next);
+    end.text = _localInput(next.add(const Duration(minutes: 45)));
     calendarId = widget.connection()?.selectedCalendarIds.firstOrNull;
   }
 
@@ -45,13 +45,21 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
     title.dispose();
     start.dispose();
     end.dispose();
-    timezone.dispose();
     super.dispose();
   }
 
   DateTime? parse(String text) {
-    if (!text.endsWith('Z')) return null;
-    return DateTime.tryParse(text);
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$')
+        .firstMatch(text.trim());
+    if (match == null) return null;
+    final value = DateTime(
+      int.parse(match[1]!),
+      int.parse(match[2]!),
+      int.parse(match[3]!),
+      int.parse(match[4]!),
+      int.parse(match[5]!),
+    );
+    return _localInput(value) == text.trim() ? value : null;
   }
 
   Future<void> save() async {
@@ -66,12 +74,13 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
       saving = true;
       failed = false;
     });
+    final startsAt = parse(start.text)!;
     final action = await widget.controller.propose(
       calendarId: calendarId!,
       title: title.text.trim(),
-      startsAt: parse(start.text)!,
+      startsAt: startsAt,
       endsAt: parse(end.text)!,
-      timezone: timezone.text.trim(),
+      timezone: _storageTimezone(startsAt.timeZoneOffset),
     );
     if (!mounted) return;
     if (action == null) {
@@ -136,6 +145,7 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
                 validator: (value) =>
                     value == null ? strings.actionFormInvalid : null,
               ),
+              const SizedBox(height: 12),
               TextFormField(
                 controller: title,
                 enabled: !saving,
@@ -144,6 +154,7 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
                     ? strings.actionFormInvalid
                     : null,
               ),
+              const SizedBox(height: 12),
               TextFormField(
                 controller: start,
                 enabled: !saving,
@@ -153,6 +164,7 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
                     ? null
                     : strings.actionFormInvalid,
               ),
+              const SizedBox(height: 12),
               TextFormField(
                 controller: end,
                 enabled: !saving,
@@ -168,14 +180,6 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
                       : strings.actionFormInvalid;
                 },
               ),
-              TextFormField(
-                controller: timezone,
-                enabled: !saving,
-                decoration: InputDecoration(labelText: strings.sourceTimeZone),
-                validator: (value) => value == null || value.trim().isEmpty
-                    ? strings.actionFormInvalid
-                    : null,
-              ),
               const SizedBox(height: 16),
               if (failed) Text(strings.actionReloadRequired),
               FloeButton.filled(
@@ -188,4 +192,15 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
       ],
     );
   }
+}
+
+String _localInput(DateTime value) =>
+    DateFormat('yyyy-MM-dd HH:mm').format(value);
+
+String _storageTimezone(Duration offset) {
+  final sign = offset.isNegative ? '-' : '+';
+  final minutes = offset.inMinutes.abs();
+  final hours = (minutes ~/ 60).toString().padLeft(2, '0');
+  final remainder = (minutes % 60).toString().padLeft(2, '0');
+  return 'UTC$sign$hours:$remainder';
 }

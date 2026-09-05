@@ -8,7 +8,7 @@ detail. Task Detail, Notes and Progress remain available.
 
 ## Explore S1
 
-- **Today:** open an event for provenance, original/display time zones, recurrence,
+- **Today:** open an event for provenance, source calendar, recurrence,
   and all-day exclusive boundaries. Changing the date automatically loads its events
   with a loading indicator; manual refresh remains available. Cached dates are preserved.
 - **Full day:** scroll inside the calendar from 00:00 to 24:00. Zoom to 3× or 12× to
@@ -42,7 +42,7 @@ interaction matrix and implementation boundaries.
 
 ## Explore S3
 
-Today → **Review suggestion** opens explicit calendar/title/time/timezone approval.
+Today → **Review suggestion** opens explicit calendar/title/local-time approval.
 Try `/?action=ready`, `conflict`, `denied`, `expired`, `timeout`, `missing` and
 `read-error`. All paths are simulated; reload resets state. See the
 [S3 prototype specification](../../docs/design/s3-calendar-action-ui.md).

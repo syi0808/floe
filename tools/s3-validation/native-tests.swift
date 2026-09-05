@@ -13,6 +13,12 @@ let raw: [String: Any] = [
 let proposal = try Proposal(raw)
 check(proposal.end.timeIntervalSince(proposal.start) == 3600, "UTC interval changed across DST")
 check(proposal.marker.absoluteString.contains(proposal.execution), "missing execution marker")
+var fixedOffset = raw
+var fixedSchedule = raw["schedule"] as! [String: Any]
+fixedSchedule["timezone"] = "UTC+09:00"
+fixedOffset["schedule"] = fixedSchedule
+let fixedProposal = try Proposal(fixedOffset)
+check(TimeZone(identifier: fixedProposal.timezone) != nil, "local fixed-offset metadata rejected")
 let timed: [String: Any] = ["deleted_at": NSNull(), "schedule": ["Timed": ["starts_at": "2026-03-08T07:30:00Z", "ends_at": "2026-03-08T08:30:00Z"]]]
 let overlapping = try localConflict([timed], proposal)
 check(overlapping, "local overlap missed")
@@ -33,4 +39,4 @@ let response = "{\"operation\":\"capabilities\"}".withCString { floeEventKitActi
 let capabilities = try JSONSerialization.jsonObject(with: Data(String(cString: response).utf8)) as! [String: Any]
 floeEventKitFree(response)
 check((capabilities["data"] as? [String: Any])?["writes_enabled"] as? Bool == false, "writes enabled in default build")
-print("8 native validation assertions passed; no OS permission or event access invoked")
+print("9 native validation assertions passed; no OS permission or event access invoked")

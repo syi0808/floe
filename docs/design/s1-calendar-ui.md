@@ -7,8 +7,9 @@ Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-cal
 checked IDs; All includes new sources on refresh. Cancel keeps saved scope, and an
 empty selected subset cannot be saved. This picker was implemented in the prototype
 before Flutter. Partial-source cache status and disconnect are reflected natively.
-`?dst=spring` and `?dst=fall` show 23/25-hour elapsed timelines, with timezone labels
-distinguishing repeated wall-clock hours. Fixture date navigation is disabled.
+`?dst=spring` and `?dst=fall` show 23/25-hour elapsed timelines. Repeated local
+wall-clock hours remain distinct in layout without exposing timezone labels.
+Fixture date navigation is disabled.
 
 ## Design intent
 

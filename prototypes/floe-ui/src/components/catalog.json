@@ -459,8 +459,7 @@
         "onPermission",
         "onDeny",
         "onRefresh",
-        "onDisconnect",
-        "displayTimezone"
+        "onDisconnect"
       ],
       "stateOwner": "caller: modal",
       "states": [
@@ -582,8 +581,7 @@
         "dateLabel",
         "dateShort",
         "dayOffset",
-        "stale",
-        "displayTimezone"
+        "stale"
       ],
       "stateOwner": "caller: event; browser: details expansion",
       "states": [],

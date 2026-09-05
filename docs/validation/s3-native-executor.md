@@ -5,8 +5,9 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
 ## Delivered implementation
 
 - Today can prepare an immutable proposal from an explicit connected calendar,
-  title, future UTC interval (maximum 24 hours) and timezone. Preparation performs
-  no external write. The next screen reviews the full payload and decision.
+  title and future device-local interval (maximum 24 hours). The FFI serializes its
+  instants as UTC and derives scheduling metadata internally. Preparation performs
+  no external write. The next screen reviews the decision-relevant payload.
 - The action API adds `capabilities`, `execute` and `recover`. Requests contain an
   action ID, not a caller-selected provider implementation, policy, receipt or
   execution timestamp. Production execution is bound to the local device Person.
@@ -18,7 +19,7 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
   remote executor is introduced. This remains a trusted in-process boundary, not
   an OS isolation boundary against arbitrary native code loaded into the app.
 - EventKit freshly resolves the exact target and connected scope, checks Full
-  Access, writability, supported timezone, and current external/local overlaps.
+  Access, writability, valid internal time metadata, and current external/local overlaps.
   Create repeats the checks immediately before save. It creates a timed,
   non-recurring event with no attendees/alarms and a Person/execution URL marker.
 - External all-day and recurring conflicts use fresh EventKit instances. Cached
@@ -28,7 +29,8 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
   timeout. A native call already inside EventKit cannot be forcibly cancelled;
   the ledger remains ambiguous and cannot dispatch again. A process-wide gate
   prevents a timed-out call from accumulating concurrent native saves.
-- Lookup requires exactly one full-payload/marker match in a bounded ±1-day window.
+- Lookup requires exactly one marker, target, title and UTC-interval match in a
+  bounded ±1-day window. EventKit uses the device's current timezone for its event.
   Edited, duplicated, moved-out-of-range or missing markers remain unresolved.
   Lookup remains available in write-disabled builds and never creates anything.
 - Explicit new approval can execute immediately in a write-enabled build.
@@ -62,7 +64,7 @@ flutter test
 flutter build macos --debug
 ```
 
-46 Rust tests, 70 Flutter tests and eight native assertions pass. Clippy and Flutter
+46 Rust tests, 72 Flutter tests and nine native assertions pass. Clippy and Flutter
 analysis are clean. macOS write-enabled debug and default release builds pass
 signature checks. The release library's actual capability response was checked:
 `writes_enabled=false`, without reading Calendar or requesting permission.

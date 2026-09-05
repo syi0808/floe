@@ -70,11 +70,8 @@ class CalendarEventDetails extends StatelessWidget {
                   ),
                   SizedBox(height: 6),
                   Text(
-                    AppLocalizations.of(context).dateAndZone(
-                      DateFormat.yMMMd(AppLocalizations.of(context).localeName)
-                          .format(snapshot.date),
-                      event.timezone ?? AppLocalizations.of(context).localTime,
-                    ),
+                    DateFormat.yMMMd(AppLocalizations.of(context).localeName)
+                        .format(snapshot.date),
                     style: TextStyle(
                       fontSize: 12,
                       color: FloePalette.primary700,
@@ -88,8 +85,6 @@ class CalendarEventDetails extends StatelessWidget {
       ),
       SizedBox(height: 24),
       for (final entry in <String, String>{
-        AppLocalizations.of(context).sourceTimeZone:
-            event.timezone ?? AppLocalizations.of(context).localTime,
         if (snapshot.calendar?.lastSuccessAt != null)
           AppLocalizations.of(context).lastCollected: formatTimestamp(
             context,

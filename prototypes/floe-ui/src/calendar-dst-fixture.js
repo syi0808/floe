@@ -7,7 +7,7 @@ export function dstFixture(mode) {
   const makeEvent = (id, startMinutes, endMinutes) => ({
     id, calendarId: 'work', title: id === 'dst-first' ? 'Across the clock change' : 'The repeated hour',
     startMinutes, endMinutes, time: `${formatter.format(new Date(+start + startMinutes * 60000))} – ${formatter.format(new Date(+start + endMinutes * 60000))}`,
-    detail: `${endMinutes - startMinutes} real minutes · DST fixture`, timezone: 'America/Los_Angeles',
+    detail: `${endMinutes - startMinutes} real minutes · clock-change fixture`, timezone: 'America/Los_Angeles',
     original: 'Local wall time with offset shown above',
   });
   return { date: spring ? '2026-03-08' : '2026-11-01', minutes: hours * 60,

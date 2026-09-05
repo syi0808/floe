@@ -628,12 +628,6 @@ abstract class AppLocalizations {
   /// **'Your local tasks and notes are unchanged.'**
   String get localTasksAndNotesUnchanged;
 
-  /// No description provided for @sourceTimeZone.
-  ///
-  /// In en, this message translates to:
-  /// **'Source time zone'**
-  String get sourceTimeZone;
-
   /// No description provided for @localTime.
   ///
   /// In en, this message translates to:
@@ -907,7 +901,7 @@ abstract class AppLocalizations {
   /// No description provided for @wonderingWhereAnEventCameFromOpen.
   ///
   /// In en, this message translates to:
-  /// **'Wondering where an event came from?\nOpen it to see its source and time zone.'**
+  /// **'Wondering where an event came from?\nOpen it to see its source calendar.'**
   String get wonderingWhereAnEventCameFromOpen;
 
   /// No description provided for @backToConnections.
@@ -1054,12 +1048,6 @@ abstract class AppLocalizations {
   /// **'{date} · exclusive'**
   String exclusiveDate(String date);
 
-  /// No description provided for @dateAndZone.
-  ///
-  /// In en, this message translates to:
-  /// **'{date} · {zone}'**
-  String dateAndZone(String date, String zone);
-
   /// No description provided for @zoomTimes.
   ///
   /// In en, this message translates to:
@@ -1087,13 +1075,13 @@ abstract class AppLocalizations {
   /// No description provided for @actionProposalExplanation.
   ///
   /// In en, this message translates to:
-  /// **'Choose a connected calendar and future UTC times (ending in Z), up to 24 hours apart. This only prepares a proposal. You will review and explicitly approve it next. Calendar writability, timezone and conflicts are checked before execution.'**
+  /// **'Choose a connected calendar and future date and time, up to 24 hours apart. Times use your device’s current time. This only prepares a proposal; you will review and explicitly approve it next.'**
   String get actionProposalExplanation;
 
   /// No description provided for @actionFormInvalid.
   ///
   /// In en, this message translates to:
-  /// **'Check this value and the future UTC interval.'**
+  /// **'Check this value and the future date and time.'**
   String get actionFormInvalid;
 
   /// No description provided for @actionWriteEnabled.
@@ -1249,13 +1237,13 @@ abstract class AppLocalizations {
   /// No description provided for @actionStart.
   ///
   /// In en, this message translates to:
-  /// **'Starts (UTC)'**
+  /// **'Starts'**
   String get actionStart;
 
   /// No description provided for @actionEnd.
   ///
   /// In en, this message translates to:
-  /// **'Ends (UTC)'**
+  /// **'Ends'**
   String get actionEnd;
 
   /// No description provided for @actionPerson.
@@ -1267,7 +1255,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionExpires.
   ///
   /// In en, this message translates to:
-  /// **'Approval expires (UTC)'**
+  /// **'Approval expires'**
   String get actionExpires;
 
   /// No description provided for @actionProposalId.
@@ -1285,7 +1273,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionApprovedAt.
   ///
   /// In en, this message translates to:
-  /// **'Approved at (UTC)'**
+  /// **'Approved at'**
   String get actionApprovedAt;
 
   /// No description provided for @actionExternalId.
@@ -1317,12 +1305,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'When'**
   String get actionWhen;
-
-  /// No description provided for @actionLocalTime.
-  ///
-  /// In en, this message translates to:
-  /// **'Your device time'**
-  String get actionLocalTime;
 
   /// No description provided for @actionProvider.
   ///
@@ -1363,7 +1345,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionTimezoneReason.
   ///
   /// In en, this message translates to:
-  /// **'This event’s time zone could not be verified. Nothing was created.'**
+  /// **'This event’s time could not be verified. Nothing was created.'**
   String get actionTimezoneReason;
 
   /// No description provided for @actionUnavailableReason.

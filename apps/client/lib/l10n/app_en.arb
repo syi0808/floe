@@ -89,7 +89,6 @@
   "savedInFloe": "Saved in Floe",
   "calendarsRefreshed": "Calendars refreshed",
   "localTasksAndNotesUnchanged": "Your local tasks and notes are unchanged.",
-  "sourceTimeZone": "Source time zone",
   "localTime": "Local time",
   "lastCollected": "Last collected",
   "allDayBoundary": "All-day boundary",
@@ -138,7 +137,7 @@
   "seeYourTasks": "See your tasks",
   "aNoteToSelf": "A note to self",
   "leaveALittleRoomBetweenThingsNot": "Leave a little room between things. Not every empty space needs filling.",
-  "wonderingWhereAnEventCameFromOpen": "Wondering where an event came from?\nOpen it to see its source and time zone.",
+  "wonderingWhereAnEventCameFromOpen": "Wondering where an event came from?\nOpen it to see its source calendar.",
   "backToConnections": "Back to connections",
   "calendarIntegrationIsUnavailableInThisPreview": "Calendar integration is unavailable in this preview. Use the native macOS client to connect.",
   "aClearBoundary": "A clear boundary.",
@@ -244,17 +243,6 @@
       }
     }
   },
-  "dateAndZone": "{date} · {zone}",
-  "@dateAndZone": {
-    "placeholders": {
-      "date": {
-        "type": "String"
-      },
-      "zone": {
-        "type": "String"
-      }
-    }
-  },
   "zoomTimes": "{value, plural, one{1 time} other{{value} times}}",
   "@zoomTimes": {
     "placeholders": {
@@ -266,8 +254,8 @@
   "actionNewProposal": "Plan a Calendar event",
   "actionTitle": "Event title",
   "actionPrepareReview": "Prepare for review",
-  "actionProposalExplanation": "Choose a connected calendar and future UTC times (ending in Z), up to 24 hours apart. This only prepares a proposal. You will review and explicitly approve it next. Calendar writability, timezone and conflicts are checked before execution.",
-  "actionFormInvalid": "Check this value and the future UTC interval.",
+  "actionProposalExplanation": "Choose a connected calendar and future date and time, up to 24 hours apart. Times use your device’s current time. This only prepares a proposal; you will review and explicitly approve it next.",
+  "actionFormInvalid": "Check this value and the future date and time.",
   "actionWriteEnabled": "Explicit approval creates one event after fresh checks. No guests or alerts. Ambiguous results are recovered by lookup only.",
   "actionCheckingCreating": "Checking permission, target and conflicts, then creating once…",
   "actionLookingUp": "Checking Calendar for this exact event. No new event is being created…",
@@ -293,26 +281,25 @@
   "actionReload": "Reload proposals",
   "actionMissing": "This proposal is no longer available.",
   "actionDestination": "Destination calendar",
-  "actionStart": "Starts (UTC)",
-  "actionEnd": "Ends (UTC)",
+  "actionStart": "Starts",
+  "actionEnd": "Ends",
   "actionPerson": "Person",
-  "actionExpires": "Approval expires (UTC)",
+  "actionExpires": "Approval expires",
   "actionProposalId": "Proposal ID",
   "actionExecutionId": "Execution ID",
-  "actionApprovedAt": "Approved at (UTC)",
+  "actionApprovedAt": "Approved at",
   "actionExternalId": "External event ID",
   "actionReason": "Recorded reason",
   "actionNoExtras": "Only this event. No guests, alerts or repeat schedule. Existing events stay unchanged.",
   "actionTechnicalDetails": "Technical details",
   "actionWhen": "When",
-  "actionLocalTime": "Your device time",
   "actionProvider": "Provider",
   "actionCalendarId": "Calendar ID",
   "actionConflictReason": "Another event overlaps this time. Nothing was created.",
   "actionExpiredReason": "This proposal has expired. Nothing was created.",
   "actionPermissionReason": "Calendar write access is unavailable. Nothing was created.",
   "actionChangedReason": "The calendar connection has changed. Nothing was created.",
-  "actionTimezoneReason": "This event’s time zone could not be verified. Nothing was created.",
+  "actionTimezoneReason": "This event’s time could not be verified. Nothing was created.",
   "actionUnavailableReason": "Floe could not safely create this event. Nothing was created.",
   "actionWriteDisabled": "Calendar writing is not enabled. Approval only saves your decision; it does not schedule or queue an event.",
   "actionApprovalUnavailable": "This proposal can’t be approved right now. Refresh its status or reconnect Calendar.",

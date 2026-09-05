@@ -36,9 +36,10 @@ Before an external or consequential mutation, state the proposed action, target,
 
 The default view answers the user's decision, not the executor's schema: what will
 change, when, and where. Present the user's title and readable local time first;
-retain account/calendar distinctions and any meaningful timezone difference.
-Show a short explanation only when it adds decision-relevant context. UUIDs,
-raw provider codes and audit timestamps belong in collapsed technical details,
+retain account/calendar distinctions. Timezone names, offsets and UTC notation are
+not review content; UTC remains the internal storage/execution representation.
+Show a short explanation only when it adds decision-relevant context. UUIDs and
+raw provider codes belong in collapsed technical details,
 not between the proposal and its approval controls. Do not invent rationale from
 an ID or implementation state, and do not conceal guests, alerts or other effects.
 

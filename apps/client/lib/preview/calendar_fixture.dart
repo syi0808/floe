@@ -34,7 +34,7 @@ FakeDayGateway calendarPreviewGateway() => FakeDayGateway(
       ('planning', 'Plan the next step', 675, 735, 'Product team'),
       ('personal-call', 'A quick personal call', 690, 705, 'Personal'),
       ('reset', 'Take a breath', 750, 755, 'Personal'),
-      ('zones', 'Across time zones', 960, 1005, 'Product team'),
+      ('zones', 'Afternoon catch-up', 960, 1005, 'Product team'),
     ])
       EventItem(
         id: entry.$1,

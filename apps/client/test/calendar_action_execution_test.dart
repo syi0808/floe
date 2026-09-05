@@ -14,6 +14,8 @@ class Executor extends Gateway implements CalendarActionExecutionGateway {
   int creates = 0;
   int lookups = 0;
   int proposals = 0;
+  DateTime? proposedStart;
+  String? proposedTimezone;
   String outcome = 'succeeded';
 
   @override
@@ -48,6 +50,8 @@ class Executor extends Gateway implements CalendarActionExecutionGateway {
     required String timezone,
   }) async {
     proposals++;
+    proposedStart = startsAt;
+    proposedTimezone = timezone;
     saved = [action()];
     return saved.single;
   }
@@ -168,6 +172,27 @@ void main() {
       );
       await tester.tap(find.text('Plan a Calendar event'));
       await tester.pumpAndSettle();
+      expect(find.text('Starts'), findsOneWidget);
+      expect(find.text('Ends'), findsOneWidget);
+      expect(find.textContaining('time zone'), findsNothing);
+      expect(find.textContaining('UTC'), findsNothing);
+      final inputs = tester
+          .widgetList<TextFormField>(find.byType(TextFormField))
+          .toList();
+      expect(inputs, hasLength(3));
+      expect(inputs[1].controller!.text, matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'));
+      expect(inputs[2].controller!.text, matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'));
+      final titleField = find.widgetWithText(TextFormField, 'Event title');
+      final startField = find.widgetWithText(TextFormField, 'Starts');
+      final endField = find.widgetWithText(TextFormField, 'Ends');
+      expect(
+        tester.getTopLeft(startField).dy - tester.getBottomLeft(titleField).dy,
+        greaterThanOrEqualTo(12),
+      );
+      expect(
+        tester.getTopLeft(endField).dy - tester.getBottomLeft(startField).dy,
+        greaterThanOrEqualTo(12),
+      );
       await tester.ensureVisible(find.text('Prepare for review'));
       await tester.tap(find.text('Prepare for review'));
       await tester.pumpAndSettle();
@@ -180,6 +205,8 @@ void main() {
       await tester.tap(find.text('Prepare for review'));
       await tester.pumpAndSettle();
       expect(gateway.proposals, 1);
+      expect(gateway.proposedStart!.isUtc, isFalse);
+      expect(gateway.proposedTimezone, matches(r'^UTC[+-]\d{2}:\d{2}$'));
       expect(gateway.decisions, 0);
       expect(gateway.creates, 0);
       expect(find.byType(CalendarActionDialog), findsOneWidget);

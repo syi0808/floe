@@ -239,12 +239,11 @@ void main() {
       await tester.tap(find.text('Review proposal'));
       await tester.pumpAndSettle();
       expect(find.text('Destination calendar'), findsOneWidget);
-      expect(find.text('Source time zone: Asia/Seoul'), findsOneWidget);
+      expect(find.textContaining('time zone'), findsNothing);
+      expect(find.textContaining('UTC'), findsNothing);
       expect(find.text('When'), findsOneWidget);
-      expect(find.text('Starts (UTC)'), findsNothing);
       expect(find.text('Execution ID'), findsNothing);
       expect(find.text('proposal'), findsNothing);
-      expect(find.textContaining('Your device time · UTC'), findsOneWidget);
       final proposal = controller.actions.single;
       final start = proposal.startsAt.toLocal();
       final end = proposal.endsAt.toLocal();
@@ -261,7 +260,9 @@ void main() {
       await tester.ensureVisible(find.text('Technical details'));
       await tester.tap(find.text('Technical details'));
       await tester.pumpAndSettle();
-      expect(find.text('Starts (UTC)'), findsOneWidget);
+      expect(find.text('Starts'), findsOneWidget);
+      expect(find.textContaining('UTC'), findsNothing);
+      expect(find.textContaining('Asia/Seoul'), findsNothing);
       expect(find.text('Execution ID'), findsOneWidget);
       expect(find.text('proposal'), findsOneWidget);
       await tester.ensureVisible(find.byTooltip('Close'));

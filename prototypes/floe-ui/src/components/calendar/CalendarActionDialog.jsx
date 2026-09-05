@@ -32,7 +32,7 @@ export function CalendarActionDialog({ action, calendars, connected, onAction, o
         <span className="s3-action-eyebrow">{created ? 'Calendar event' : 'Add one Calendar event'}</span>
         <strong>A little room to focus</strong>
         <span>Fri, Sep 4, 2026 · 2:45–3:30 PM</span>
-        <span className="s3-action-caption">45 minutes · Seoul time (UTC+09:00)</span>
+        <span className="s3-action-caption">45 minutes</span>
       </SquircleBlock>
       {action.status === 'pending' ? <div className="s3-action-destination"><Select
         label="Target calendar"

@@ -47,6 +47,8 @@ void main() {
     expect(find.text('Back to my day'), findsNothing);
     expect(find.byType(FilledButton), findsNothing);
     expect(find.text('Source details'), findsOneWidget);
+    expect(find.textContaining('time zone'), findsNothing);
+    expect(find.textContaining('UTC'), findsNothing);
     await tester.tap(find.byTooltip('Close'));
     await tester.pumpAndSettle();
     expect(find.byType(CalendarEventDetails), findsNothing);

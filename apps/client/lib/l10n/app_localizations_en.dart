@@ -287,9 +287,6 @@ class AppLocalizationsEn extends AppLocalizations {
       'Your local tasks and notes are unchanged.';
 
   @override
-  String get sourceTimeZone => 'Source time zone';
-
-  @override
   String get localTime => 'Local time';
 
   @override
@@ -447,7 +444,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get wonderingWhereAnEventCameFromOpen =>
-      'Wondering where an event came from?\nOpen it to see its source and time zone.';
+      'Wondering where an event came from?\nOpen it to see its source calendar.';
 
   @override
   String get backToConnections => 'Back to connections';
@@ -561,11 +558,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String dateAndZone(String date, String zone) {
-    return '$date · $zone';
-  }
-
-  @override
   String zoomTimes(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,
@@ -587,11 +579,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionProposalExplanation =>
-      'Choose a connected calendar and future UTC times (ending in Z), up to 24 hours apart. This only prepares a proposal. You will review and explicitly approve it next. Calendar writability, timezone and conflicts are checked before execution.';
+      'Choose a connected calendar and future date and time, up to 24 hours apart. Times use your device’s current time. This only prepares a proposal; you will review and explicitly approve it next.';
 
   @override
   String get actionFormInvalid =>
-      'Check this value and the future UTC interval.';
+      'Check this value and the future date and time.';
 
   @override
   String get actionWriteEnabled =>
@@ -679,16 +671,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionDestination => 'Destination calendar';
 
   @override
-  String get actionStart => 'Starts (UTC)';
+  String get actionStart => 'Starts';
 
   @override
-  String get actionEnd => 'Ends (UTC)';
+  String get actionEnd => 'Ends';
 
   @override
   String get actionPerson => 'Person';
 
   @override
-  String get actionExpires => 'Approval expires (UTC)';
+  String get actionExpires => 'Approval expires';
 
   @override
   String get actionProposalId => 'Proposal ID';
@@ -697,7 +689,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionExecutionId => 'Execution ID';
 
   @override
-  String get actionApprovedAt => 'Approved at (UTC)';
+  String get actionApprovedAt => 'Approved at';
 
   @override
   String get actionExternalId => 'External event ID';
@@ -714,9 +706,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionWhen => 'When';
-
-  @override
-  String get actionLocalTime => 'Your device time';
 
   @override
   String get actionProvider => 'Provider';
@@ -742,7 +731,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionTimezoneReason =>
-      'This event’s time zone could not be verified. Nothing was created.';
+      'This event’s time could not be verified. Nothing was created.';
 
   @override
   String get actionUnavailableReason =>

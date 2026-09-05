@@ -13,7 +13,7 @@ export function CalendarDisclosure({ onClose, onPermission }) {
       </p>
       <ul className="s1-permission-list">
         <li>
-          <Check size={17} /> Read titles, times, and time zones
+          <Check size={17} /> Read event titles and times
         </li>
         <li>
           <Check size={17} /> Keep source details with each event

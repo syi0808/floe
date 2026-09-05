@@ -8,7 +8,6 @@ export function CalendarEventDetails({
   dateShort,
   dayOffset,
   stale,
-  displayTimezone = 'Asia/Seoul',
 }) {
   return (
     <>
@@ -26,22 +25,10 @@ export function CalendarEventDetails({
         <Clock3 size={20} />
         <div>
           <strong>{event.time}</strong>
-          <span>{dateLabel} · {displayTimezone}</span>
+          <span>{dateLabel}</span>
         </div>
       </SquircleBlock>
       <dl className="s1-facts">
-        <div>
-          <dt>Original time</dt>
-          <dd>
-            {event.id === 'remote' && dayOffset !== 0
-              ? `${dateShort}, 12:00 – 12:45 AM PDT`
-              : event.original.replace('Sep 4', dateShort)}
-          </dd>
-        </div>
-        <div>
-          <dt>Source time zone</dt>
-          <dd>{event.timezone}</dd>
-        </div>
         {event.recurring && (
           <div>
             <dt>Repeats</dt>

@@ -23,6 +23,9 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
 ### Decision-first UI checkpoint — 2026-09-06
 
+- Follow-up removes timezone/UTC/offset fields from user input, review and event
+  detail surfaces. Planning accepts device-local date/time with consistent field
+  spacing; UTC and fixed-offset scheduling metadata remain internal boundaries.
 - Parallel Select/Dropdown prototype and action-review simplification are integrated.
   Shared controls support keyboard/typeahead, focus recovery and restrained motion;
   the review prioritizes the user's decision and collapses technical metadata.
@@ -50,7 +53,7 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
   and absence verification passed. Existing calendar selections were preserved.
 - Fixed legacy mirror CAS compatibility (`8c068da`); diagnosed ad-hoc signing/TCC
   mismatch and began user-authorized Floe-only Calendar reauthorization.
-- 46 Rust tests, 70 Flutter tests and eight native assertions pass.
+- 46 Rust tests, 72 Flutter tests and nine native assertions pass.
 - [Implementation, evidence and remaining gates](docs/validation/s3-native-executor.md).
 
 ### S3 native review UI checkpoint — 2026-09-06

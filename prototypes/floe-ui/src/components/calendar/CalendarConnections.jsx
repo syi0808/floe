@@ -98,13 +98,12 @@ export function CalendarConnections({
                 {readDates.length
                   ? readDates
                       .map((offset) =>
-                        new Date(Date.UTC(2026, 8, 4 + offset)).toLocaleDateString('en-US', {
+                        new Date(2026, 8, 4 + offset).toLocaleDateString('en-US', {
                           month: 'short',
                           day: 'numeric',
-                          timeZone: 'UTC',
                         }),
                       )
-                      .join(', ') + ' · Asia/Seoul'
+                      .join(', ')
                   : 'Nothing collected yet'}
               </dd>
             </div>

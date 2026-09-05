@@ -89,7 +89,7 @@ export const externalEvents = [
   {
     id: 'remote',
     calendarId: 'team',
-    title: 'Across time zones',
+    title: 'Afternoon catch-up',
     time: '4:00 – 4:45 PM',
     startMinutes: 16 * 60,
     endMinutes: 16 * 60 + 45,
@@ -119,7 +119,7 @@ export function getAllDayEvents(dateShort) {
       time: 'Sep 3–5 · All day',
       timezone: 'Date-only · no conversion',
       original: 'Sep 3–5, all day',
-      detail: 'A multi-day event. Dates stay dates, even across time zones.',
+      detail: 'A multi-day event. All-day dates stay unchanged.',
       allDay: true,
       endDateExclusive: 'Sep 6, 2026 · exclusive',
       color: 'violet',

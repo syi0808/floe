@@ -73,9 +73,9 @@ struct Proposal {
   }
 
   func matches(_ event: EKEvent) -> Bool {
-    event.url == marker && event.calendar.calendarIdentifier == calendarID && event.title == title &&
+    return event.url == marker && event.calendar.calendarIdentifier == calendarID && event.title == title &&
       abs(event.startDate.timeIntervalSince(start)) < 0.001 && abs(event.endDate.timeIntervalSince(end)) < 0.001 &&
-      event.timeZone?.identifier == timezone && !event.isAllDay && !event.hasRecurrenceRules &&
+      !event.isAllDay && !event.hasRecurrenceRules &&
       !event.hasAttendees && !event.hasAlarms
   }
 
@@ -131,24 +131,23 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   guard calendars.count == identifiers.count,
         raw["calendar_name"] as? String == "\(target.source.title) · \(target.title)" else { throw NativeFailure("provider_unavailable") }
   let canCreate = target.allowsContentModifications && !target.isSubscribed
-  let supportedZone = proposal.timezone == "Etc/UTC" || TimeZone.knownTimeZoneIdentifiers.contains(proposal.timezone)
-  let zone = supportedZone ? TimeZone(identifier: proposal.timezone) : nil
+  let scheduleMetadataValid = TimeZone(identifier: proposal.timezone) != nil
   let events = store.events(matching: store.predicateForEvents(withStart: proposal.start, end: proposal.end, calendars: calendars))
   let hasLocalConflict = try localConflict(records, proposal)
   let conflict = events.contains { $0.startDate < proposal.end && $0.endDate > proposal.start } || hasLocalConflict
   try requirePermission()
   if operation == "preflight" {
     return ["person_id": proposal.person, "provider": "event_kit", "calendar_id": proposal.calendarID,
-      "permission_granted": true, "can_create": canCreate, "timezone_valid": zone != nil, "has_conflict": conflict]
+      "permission_granted": true, "can_create": canCreate, "timezone_valid": scheduleMetadataValid, "has_conflict": conflict]
   }
-  guard canCreate, let zone = zone, !conflict else { throw NativeFailure("uncertain_result") }
+  guard canCreate, scheduleMetadataValid, !conflict else { throw NativeFailure("uncertain_result") }
   guard store.events(matching: predicate).allSatisfy({ $0.url != proposal.marker }) else { throw NativeFailure("uncertain_result") }
   let event = EKEvent(eventStore: store)
   event.calendar = target
   event.title = proposal.title
   event.startDate = proposal.start
   event.endDate = proposal.end
-  event.timeZone = zone
+  event.timeZone = TimeZone.current
   event.url = proposal.marker
   event.alarms = nil
   try requirePermission()

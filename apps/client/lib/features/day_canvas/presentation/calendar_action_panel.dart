@@ -178,11 +178,6 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             Text(localInterval(action)),
-            Text(
-              '${strings.actionLocalTime} · ${_offset(action.startsAt)}'
-              '${_offset(action.startsAt) == _offset(action.endsAt) ? '' : ' → ${_offset(action.endsAt)}'}',
-            ),
-            Text('${strings.sourceTimeZone}: ${action.timezone}'),
             const SizedBox(height: 12),
             Text(strings.actionNoExtras),
             const SizedBox(height: 16),
@@ -299,21 +294,14 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
                 for (final entry in <String, String>{
                   strings.actionProvider: action.provider,
                   strings.actionCalendarId: action.calendarId,
-                  strings.actionStart: action.startsAt
-                      .toUtc()
-                      .toIso8601String(),
-                  strings.actionEnd: action.endsAt.toUtc().toIso8601String(),
-                  strings.sourceTimeZone: action.timezone,
+                  strings.actionStart: localDateTime(action.startsAt),
+                  strings.actionEnd: localDateTime(action.endsAt),
                   strings.actionPerson: action.personId,
-                  strings.actionExpires: action.expiresAt
-                      .toUtc()
-                      .toIso8601String(),
+                  strings.actionExpires: localDateTime(action.expiresAt),
                   strings.actionProposalId: action.id,
                   strings.actionExecutionId: action.executionId,
                   if (action.approvedAt != null)
-                    strings.actionApprovedAt: action.approvedAt!
-                        .toUtc()
-                        .toIso8601String(),
+                    strings.actionApprovedAt: localDateTime(action.approvedAt!),
                   if (action.externalId != null)
                     strings.actionExternalId: action.externalId!,
                   if (action.reason != null)
@@ -348,11 +336,4 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
       );
     },
   );
-}
-
-String _offset(DateTime value) {
-  final minutes = value.toLocal().timeZoneOffset.inMinutes;
-  final hours = (minutes.abs() ~/ 60).toString().padLeft(2, '0');
-  final remainder = (minutes.abs() % 60).toString().padLeft(2, '0');
-  return 'UTC${minutes < 0 ? '-' : '+'}$hours:$remainder';
 }

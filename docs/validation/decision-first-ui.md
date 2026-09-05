@@ -10,10 +10,11 @@ Date: 2026-09-06. Two parallel implementation tracks integrated and checked toge
   explicitly simulated interaction preview, with no real settings/clipboard effects.
 - Calendar review uses the shared Select. The prototype and Flutter review lead
   with title, human-readable destination, date/time and approval scope. Internal
-  IDs, raw UTC/provider and ledger metadata remain in collapsed technical details.
-- Flutter formats the immutable instants in device-local time, explicitly labels
-  UTC offset changes and original timezone, and includes both dates for overnight
-  intervals. Same-day intervals show the date once. Expiry and blocked reasons are
+  IDs, provider and useful ledger metadata remain in collapsed technical details;
+  raw UTC/timezone metadata stays internal.
+- Flutter formats immutable UTC instants in device-local time and includes both
+  dates for overnight intervals. The proposal accepts local date/time and derives
+  scheduling metadata internally. Same-day intervals show the date once. Expiry and blocked reasons are
   expressed plainly; successful creation is distinct from local collection.
 - Product principles, DESIGN.md and assistant/action specifications record why
   decision-relevant meaning takes precedence over exposing implementation fields.
@@ -32,6 +33,8 @@ This UI pass does not advance live S3 acceptance. No external event was created.
 - Default macOS Debug build and strict deep signature verification pass. The actual
   bundled native capability response remains `writes_enabled=false`; the app was
   not launched and no Calendar access or permission prompt was invoked.
+- Nine pure native assertions include acceptance of the internally derived local
+  fixed-offset scheduling metadata; they do not read Calendar.
 - Flutter review tests cover 390/1200 layouts, collapsed versus expanded IDs,
   readable local and overnight intervals, expiry/conflict explanations, decisions,
   in-flight behavior and lookup/read-only recovery regressions.

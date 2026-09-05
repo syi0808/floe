@@ -61,17 +61,15 @@ export function CalendarScreen({ page, onNavigate, notify }) {
   );
   const timer = useRef(null);
   const announceRead = useRef(false);
-  const date = dst ? new Date(`${dst.date}T00:00:00Z`) : new Date(Date.UTC(2026, 8, 4 + dayOffset));
+  const date = dst ? new Date(`${dst.date}T00:00:00`) : new Date(2026, 8, 4 + dayOffset);
   const dateLabel = date.toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
-    timeZone: 'UTC',
   });
   const dateShort = date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
-    timeZone: 'UTC',
   });
   const hasCache =
     ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'partial'].includes(phase) &&
@@ -259,7 +257,6 @@ export function CalendarScreen({ page, onNavigate, notify }) {
 
       {modal && (
         <CalendarDialogs
-          displayTimezone={dst ? 'America/Los_Angeles' : 'Asia/Seoul'}
           modal={modal}
           detailCalendar={detailCalendar}
           dateLabel={dateLabel}

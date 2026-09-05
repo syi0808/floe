@@ -30,7 +30,7 @@ export function CalendarContextRail({ taskDone, onTaskChange, hasCache, onNaviga
           <p>
             Wondering where an event came from?
             <br />
-            Open it to see its source and time zone.
+            Open it to see its source calendar.
           </p>
         </div>
       )}
