@@ -14,7 +14,7 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Deferred | Fixture end-to-end; EventKit app builds | 0/4 | Live verification remains prerequisite | Connect a dedicated macOS Calendar |
-| S3 — Approved action | Planned | None | 0/5 | S1 Verified; create capability | Approve, create externally, re-import |
+| S3 — Approved action | Implementing | Rust executor/ledger fixture; no native write | 0/5 | S1 Verified; create/recovery capability; approval UI | Connect approval UI and native adapter after provider PoC |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
@@ -37,6 +37,21 @@ Keychain persistence across a relaunch remains a manual checkpoint because nativ
 UI automation timed out. No real model or OAuth consent is claimed.
 
 ## Acceptance Evidence
+
+### S3 executor checkpoint — 2026-09-05
+
+- Immutable calendar-create proposals with explicit approve/reject and expiry.
+- Rust-owned durable execution IDs and atomic CAS transitions; duplicate execution
+  claims cannot dispatch twice. Ambiguous/interrupted execution uses lookup only.
+- Trusted policy/Person/target checks, connection-change detection, provider
+  preflight contract for capability/permission/timezone/conflicts, and receipt matching.
+- Fixture covers successful re-import, reopen, concurrent execution, cancellation
+  after write, typed failures and ambiguous recovery without blind retries.
+- `cargo test --workspace`: 35 passed, including 11 new action tests;
+  Clippy with warnings denied and formatting checks pass.
+- [Validation and adapter contract](docs/validation/s3-calendar-action.md).
+  No Flutter/FFI action surface, EventKit write adapter, live provider PoC or UI
+  acceptance is claimed. S3 remains 0/5; S1 remains Deferred, not Verified.
 
 S1 automated and native-build evidence is described in
 [the validation runbook](docs/validation/s1-calendar.md). Live results remain pending;
@@ -185,7 +200,8 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 ## Next Priorities
 
 1. Complete S1's live Calendar criteria.
-2. Define the next product use case before connecting it to a performance class.
+2. Validate EventKit create/recovery capability, then connect S3 approval/recovery UI
+   and the native executor adapter. Keep live writes disabled until this gate passes.
 3. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,

@@ -37,7 +37,14 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
-        for table in ["captures", "events", "tasks", "notes", "calendar_mirrors"] {
+        for table in [
+            "captures",
+            "events",
+            "tasks",
+            "notes",
+            "calendar_mirrors",
+            "calendar_actions",
+        ] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
                 (),
@@ -82,6 +89,58 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub(crate) async fn calendar_action(
+        &self,
+        person_id: PersonId,
+        id: uuid::Uuid,
+    ) -> Result<crate::CalendarAction, CoreError> {
+        let action: crate::CalendarAction = self
+            .get("calendar_actions", id.to_string())
+            .await?
+            .ok_or_else(|| CoreError::new(ErrorCode::NotFound, "calendar action not found"))?;
+        if action.person_id != person_id {
+            return Err(CoreError::new(
+                ErrorCode::NotFound,
+                "calendar action not found",
+            ));
+        }
+        Ok(action)
+    }
+
+    pub(crate) async fn save_calendar_action(
+        &self,
+        action: &crate::CalendarAction,
+        previous: Option<&crate::CalendarAction>,
+    ) -> Result<(), CoreError> {
+        let connection = self.connection().await?;
+        let payload = to_string(action).map_err(storage_error)?;
+        let changed = if let Some(previous) = previous {
+            connection.execute(
+                "UPDATE calendar_actions SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
+                (payload, action.id.to_string(), action.person_id.to_string(), to_string(previous).map_err(storage_error)?),
+            ).await.map_err(storage_error)?
+        } else {
+            connection.execute(
+                "INSERT OR IGNORE INTO calendar_actions(id, person_id, payload) VALUES (?, ?, ?)",
+                (action.id.to_string(), action.person_id.to_string(), payload),
+            ).await.map_err(storage_error)?
+        };
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "calendar action changed; reload its status",
+            ));
+        }
         Ok(())
     }
 
