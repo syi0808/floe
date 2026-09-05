@@ -9,10 +9,6 @@ pub enum ErrorCode {
     NotFound,
     Conflict,
     Storage,
-    ModelUnavailable,
-    ExternalTransferDenied,
-    ModelTimeout,
-    InvalidProposal,
     NoFocusSlot,
 }
 

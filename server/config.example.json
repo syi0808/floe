@@ -1,6 +1,6 @@
 {
   "targets": {
-    "local-focus": {
+    "local-model": {
       "provider": "ollama",
       "base_url": "http://127.0.0.1:11434",
       "model": "replace-with-installed-model"
@@ -8,7 +8,7 @@
   },
   "routes": {
     "high_effort": {
-      "target": "local-focus",
+      "target": "local-model",
       "reasoning_effort": "high"
     }
   }

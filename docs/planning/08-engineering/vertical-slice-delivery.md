@@ -18,24 +18,23 @@ Phase는 제품 범위 지도, slice는 구현·검증·인수 단위다. 모든
 
 ## 중심 시나리오
 
-> 오늘 일정을 읽고 내 선호를 고려해 집중 시간을 제안하며, 승인하면 외부
-> 캘린더에 반영하고 Day Canvas에서 결과를 확인한다.
+> 오늘 일정을 읽고 외부 캘린더 작업을 명시적으로 승인한 뒤 Day Canvas에서
+> 결과를 확인한다.
 
 ```text
 Calendar Connector → 정규화·출처·Person-scoped store
-→ Schedule Expert + 최소 Personal Memory → Manager
 → Action Proposal → App 근거 표시·명시적 승인
 → Policy → Validation → Permission Check → Deterministic Executor
 → Calendar Connector → 재수집 → Day Canvas 갱신
 ```
 
-첫 루프는 macOS, 한 Person, Calendar connector 하나의 전체 캘린더, built-in Expert 하나,
-집중 일정 생성 action 하나로 제한한다. Flutter는 화면과 승인 입력을 담당하고
+첫 루프는 macOS, 한 Person, Calendar connector 하나의 전체 캘린더와
+일정 생성 action 하나로 제한한다. Flutter는 화면과 승인 입력을 담당하고
 canonical 변경은 Rust typed command를 거친다. Expert는 제한된 view와
 capability를 사용하며 connector 자격증명이나 DB에 직접 접근하지 않는다.
 
-Manager/Schedule Expert와 OS lifecycle을 담당하는 Device Agent를 구분한다.
-S1–S3은 앱 실행 중 동작해도 되며, resident Device Agent 경계는 S5에서 검증한다.
+Manager/Expert와 OS lifecycle을 담당하는 Device Agent를 구분한다.
+S1과 S3은 앱 실행 중 동작해도 되며, resident Device Agent 경계는 S5에서 검증한다.
 
 ## S1 — Connected Calendar Read
 
@@ -74,41 +73,11 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 **제외:** LLM, 외부 쓰기, 다중 connector, 범용 ConnectorSpec 엔진.
 
-## S2 — Contextual Suggestion
-
-**사용자 결과:** “오늘 언제 집중하면 좋을까?”에 실제 일정과 선호를 근거로 답한다.
-
-**의존성:** S1 Verified 이상, 실제 모델 provider 선택.
-
-2026-09-05 사용자 승인으로 S2 구현만 먼저 착수한다. S1 미완료 작업은 Deferred로
-기록하고 검증 prerequisite은 유지한다. 네트워크 inference는 최소 Go gateway로
-분리하며 [ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)를 따른다.
-
-built-in Schedule Expert 하나가 제한된 일정 view를 판단하고 Manager가
-구조화된 제안을 전달한다. 최소 memory는 사용자가 직접 입력한 집중 시간
-선호 한 개로 시작한다. 자동 memory 추출이나 identity resolution은 포함하지 않는다.
-
-### Acceptance criteria
-
-- **S2-A1:** 앱에서 선호를 저장·조회·수정·삭제할 수 있고 출처와 Person 범위를
-  유지한다. 삭제한 선호는 이후 제안 context에서 제외된다.
-- **S2-A2:** 실제 모델을 사용해 일정·선호를 참조하는 구조화된 집중 시간 제안을
-  만들고 앱에 시간, 이유, 근거 출처를 표시한다.
-- **S2-A3:** 제안 출력의 schema와 시간 범위를 검증하며, 제안만으로 일정이나
-  task를 변경하지 않는다. Expert는 host-mediated view/capability만 사용한다.
-- **S2-A4:** 모델 timeout, malformed output, 빈 일정, 삭제된 선호의 평가 사례와
-  앱 오류 상태를 검증한다. 실제 모델 평가 결과와 알려진 품질 한계를 기록한다.
-
-외부 모델에는 필요한 최소 context만 전달하고 전송 범위를 사용자에게
-설명한다. 자격증명은 context·domain record·일반 로그에 포함하지 않는다.
-
-**제외:** 자동 행동, 다중 Expert 협업, SDK, 외부 package 실행, 장기 기억 추출.
-
 ## S3 — Approved Calendar Action
 
 **사용자 결과:** 제안의 상세 내용을 승인하면 집중 일정 하나가 외부에 생성된다.
 
-**의존성:** S2 Verified 이상, 선택 provider의 생성 capability 검증.
+**의존성:** S1 Verified 이상, 선택 provider의 생성 capability 검증.
 
 ### Acceptance criteria
 
@@ -221,11 +190,11 @@ Known limitations / blocker: 남은 제약과 해소 조건
 
 | Phase | 먼저 검증하는 slice 경계 | 여전히 별도 검증이 필요한 범위 |
 | --- | --- | --- |
-| 0 — PoCs | S1 connector, S2 model/expert, S3 executor, S4 sync/security | Health, 음성 및 나머지 PoC |
-| 1 — Personal Day | S1 Day Canvas, S2 Manager, S3 승인 UI | 편집·folding·음성·MVP dogfood |
-| 2 — Connected | S1 Calendar, S2 Schedule Expert, S3 생성 | Gmail, Contacts, Health, 추가 Expert |
-| 3 — Memory | S2 명시적 선호와 출처·수정·삭제 | People, Episode, 자동 추출, identity resolution |
-| 3.5 — Experts | S2 built-in contract와 capability 경계 | 외부 package, sandbox, SDK, marketplace |
+| 0 — PoCs | S1 connector, S3 executor, S4 sync/security | 모델/Expert, Health, 음성 및 나머지 PoC |
+| 1 — Personal Day | S1 Day Canvas, S3 승인 UI | 편집·folding·음성·MVP dogfood |
+| 2 — Connected | S1 Calendar, S3 생성 | Gmail, Contacts, Health, 추가 Expert |
+| 3 — Memory | 미포함 | People, Episode, memory, identity resolution |
+| 3.5 — Experts | 미포함 | built-in/외부 package, capability, sandbox, SDK, marketplace |
 | 4 — Cross-device | S4 두 기기 sync, S5 resident lifecycle | iOS/Android/Windows 전체 경험 |
 | 5 — Ambient | S5 변경 감지와 개입 | wake word, 전사, speaker recognition, 음성 handoff |
 | 6 — Hosted/Self-host | S4 최소 Go 서버와 배포 | admin, 다중 사용자 운영, broker, hosted 완성 |

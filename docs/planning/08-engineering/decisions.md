@@ -349,7 +349,7 @@ Floe renders structured settings, insight, intervention, and action-confirmation
 **Status:** Accepted — 2026-09-04
 
 Roadmap phases remain capability scopes, not sequential implementation gates.
-Deliver the connected Calendar read → contextual suggestion → approved action
+Deliver the connected Calendar read → approved action
 loop first, then extend it across devices/server and event-driven interventions.
 Track evidence-backed slice states rather than subjective phase percentages.
 Existing Personal Day acceptance and MVP boundaries remain separate.

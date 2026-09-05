@@ -11,9 +11,7 @@ import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
 import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
-import '../application/focus_gateway.dart';
 import '../application/ffi_day_gateway.dart';
-import 'focus_dialog.dart';
 import '../application/calendar_gateway.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
@@ -225,18 +223,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.gateway case final FocusGateway focusGateway) ...[
-          FloeButton.outlined(
-            onPressed:
-                controller.loadState != DayLoadState.ready ||
-                    controller.commandPending
-                ? null
-                : () =>
-                      openFocusDialog(context, focusGateway, controller.query),
-            child: Text(AppLocalizations.of(context).focusQuestion),
-          ),
-          const SizedBox(height: 16),
-        ],
         CalendarContextRail(
           snapshot: snapshot,
           disabled: controller.commandPending,

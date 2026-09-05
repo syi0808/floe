@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for S2.
+Accepted as reusable inference infrastructure.
 
 ## Context
 
@@ -23,8 +23,8 @@ The client-to-server contract uses one of three product-owned performance classe
 - `balanced`: the default trade-off for ordinary assistance.
 - `high_effort`: quality-sensitive work that benefits from stronger reasoning.
 
-Product code, not an end-user setting, selects the class. The S2 focus suggestion
-requests `high_effort`. The Go server maps each class to an administrator-managed
+Product code, not an end-user setting, selects the class. The Go server maps each
+class to an administrator-managed
 internal target and reasoning effort. Provider, endpoint, model, and reasoning
 settings are visible only in the server dashboard; target identifiers remain an
 internal persistence and execution detail.
@@ -46,5 +46,4 @@ perspective and therefore remains behind the gateway.
 - Features must deliberately select a stable performance class.
 - The server must reject missing or invalid class routes without falling back to an
   undisclosed model.
-- Device-local selection and fallback policy remain a separate client runtime task;
-  S2 currently exercises the server-backed `high_effort` path.
+- Device-local selection and fallback policy remain a separate client runtime task.

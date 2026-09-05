@@ -169,37 +169,9 @@ pub struct CalendarRecordDto {
     pub schedule: EventScheduleDto,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InferenceConnectionDto {
-    pub base_url: String,
-    pub token: String,
-}
-
-impl std::fmt::Debug for InferenceConnectionDto {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("InferenceConnectionDto")
-            .field("base_url", &self.base_url)
-            .field("token", &"[redacted]")
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
-    GetFocusPreference,
-    SetFocusPreference {
-        expected_revision: u64,
-        value: Option<floe_domain::FocusPreferenceInput>,
-    },
-    SuggestFocus {
-        inference_class: String,
-        #[serde(default)]
-        allow_external: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        connection: Option<InferenceConnectionDto>,
-    },
     SelectCalendars {
         provider: floe_domain::CalendarProvider,
         calendars: Vec<floe_domain::CalendarSelection>,
@@ -300,10 +272,6 @@ pub struct MutationResultDto {
     pub snapshot: DaySnapshotDto,
     pub changed_item: Option<TimelineItemDto>,
     pub capture: Option<CaptureDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub focus_preference: Option<floe_domain::FocusPreference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub focus_proposal: Option<floe_domain::FocusProposal>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -315,10 +283,6 @@ pub enum ErrorCodeDto {
     Storage,
     Internal,
     UnsupportedVersion,
-    ModelUnavailable,
-    ExternalTransferDenied,
-    ModelTimeout,
-    InvalidProposal,
     NoFocusSlot,
 }
 

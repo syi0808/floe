@@ -14,10 +14,10 @@ mix implementation breadth with evidence that components work together.
 
 - Keep roadmap phases as a product capability map, not sequential delivery gates.
 - Use user-visible, end-to-end slices as the implementation and acceptance unit.
-- Deliver S1 Calendar read, S2 contextual suggestion, and S3 approved execution
-  before expanding the same scenario to S4 cross-device/server and S5 interventions.
+- Deliver S1 Calendar read and S3 approved execution before expanding the same
+  scenario to S4 cross-device/server and S5 interventions.
 - Limit the first connected loop to macOS, one Person, one calendar connector,
-  one built-in Schedule Expert, and one calendar-create action.
+  and one calendar-create action.
 - Use fixtures to establish contracts, then validate real integrations before
   accepting a slice. A mock-only demonstration is not integration completion.
 - Track status, acceptance evidence, integration mode, blockers, and the next

@@ -37,14 +37,7 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
-        for table in [
-            "captures",
-            "events",
-            "tasks",
-            "notes",
-            "calendar_mirrors",
-            "focus_preferences",
-        ] {
+        for table in ["captures", "events", "tasks", "notes", "calendar_mirrors"] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
                 (),
@@ -78,41 +71,17 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
-        Ok(())
-    }
-
-    pub async fn focus_preference(
-        &self,
-        person_id: PersonId,
-    ) -> Result<Option<floe_domain::FocusPreference>, CoreError> {
-        self.get("focus_preferences", person_id.to_string()).await
-    }
-
-    pub async fn put_focus_preference(
-        &self,
-        value: &floe_domain::FocusPreference,
-        previous: Option<&floe_domain::FocusPreference>,
-    ) -> Result<(), CoreError> {
-        let connection = self.connection().await?;
-        let payload = to_string(value).map_err(storage_error)?;
-        let person = value.person_id.to_string();
-        let changed = if let Some(previous) = previous {
-            connection.execute(
-                "UPDATE focus_preferences SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
-                (payload, person.clone(), person, to_string(previous).map_err(storage_error)?),
-            ).await.map_err(storage_error)?
-        } else {
-            connection.execute(
-                "INSERT OR IGNORE INTO focus_preferences(id, person_id, payload) VALUES (?, ?, ?)",
-                (person.clone(), person, payload),
-            ).await.map_err(storage_error)?
-        };
-        if changed != 1 {
-            return Err(CoreError::new(
-                ErrorCode::Conflict,
-                "focus preference changed; reload and retry",
-            ));
-        }
+        connection
+            .execute("DROP TABLE IF EXISTS focus_preferences", ())
+            .await
+            .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
         Ok(())
     }
 
@@ -299,4 +268,44 @@ impl TursoStore {
 
 fn storage_error(error: impl std::fmt::Display) -> CoreError {
     CoreError::new(ErrorCode::Storage, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn migration_removes_legacy_focus_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.db");
+        let database = Builder::new_local(path.to_string_lossy().as_ref())
+            .build()
+            .await
+            .unwrap();
+        let connection = database.connect().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE focus_preferences (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        drop(connection);
+        drop(database);
+
+        let store = TursoStore::open(&path).await.unwrap();
+        let mut rows = store
+            .connection()
+            .await
+            .unwrap()
+            .query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'focus_preferences'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0);
+    }
 }

@@ -188,9 +188,9 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}]}`))
 	}))
 	defer upstream.Close()
-	input := map[string]string{"id": "focus", "provider": "openai_compatible", "base_url": upstream.URL, "model": "fixture", "api_key": "private-provider-key"}
+	input := map[string]string{"id": "fixture", "provider": "openai_compatible", "base_url": upstream.URL, "model": "fixture", "api_key": "private-provider-key"}
 	fixture.value(fixture.call("POST", "/manage/api/target", input, ""))
-	fixture.value(fixture.call("POST", "/manage/api/route", map[string]string{"inference_class": "high_effort", "target": "focus", "reasoning_effort": "high"}, ""))
+	fixture.value(fixture.call("POST", "/manage/api/route", map[string]string{"inference_class": "high_effort", "target": "fixture", "reasoning_effort": "high"}, ""))
 	if calls.Load() != 0 {
 		test.Fatal("adding target transmitted a request")
 	}
@@ -201,24 +201,24 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	}
 	_, appToken := fixture.pair()
 	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
-	if !strings.Contains(classes.Body.String(), `"high_effort"`) || strings.Contains(classes.Body.String(), "fixture") || strings.Contains(classes.Body.String(), "focus") {
+	if !strings.Contains(classes.Body.String(), `"high_effort"`) || strings.Contains(classes.Body.String(), "fixture") {
 		test.Fatal("app inference inventory exposed server routing")
 	}
 	disk, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
 	if strings.Contains(state.Body.String()+string(disk), "private-provider-key") || len(fixture.vault.values) != 1 {
 		test.Fatal("credential storage boundary violated")
 	}
-	if fixture.call("POST", "/manage/api/test", map[string]any{"id": "focus", "allow_external": false}, "").Code != 403 || calls.Load() != 0 {
+	if fixture.call("POST", "/manage/api/test", map[string]any{"id": "fixture", "allow_external": false}, "").Code != 403 || calls.Load() != 0 {
 		test.Fatal("consent did not gate provider call")
 	}
-	fixture.value(fixture.call("POST", "/manage/api/test", map[string]any{"id": "focus", "allow_external": true}, ""))
+	fixture.value(fixture.call("POST", "/manage/api/test", map[string]any{"id": "fixture", "allow_external": true}, ""))
 	if calls.Load() != 1 {
 		test.Fatal("unexpected request count")
 	}
 	input["api_key"] = ""
 	input["base_url"] = "https://new-provider.example/v1"
 	fixture.value(fixture.call("POST", "/manage/api/target", input, ""))
-	if fixture.console.state.Targets["focus"].APIKeyEnv != "" || len(fixture.vault.values) != 0 {
+	if fixture.console.state.Targets["fixture"].APIKeyEnv != "" || len(fixture.vault.values) != 0 {
 		test.Fatal("credential inherited by changed endpoint")
 	}
 }
@@ -284,7 +284,7 @@ func TestDashboardUsesProviderHierarchyWithoutTargetControls(test *testing.T) {
 func TestCredentialFailureIsAtomicAndRedacted(test *testing.T) {
 	fixture := setup(test)
 	fixture.vault.fail = true
-	response := fixture.call("POST", "/manage/api/target", map[string]string{"id": "focus", "provider": "openai_compatible", "base_url": "https://api.example/v1", "model": "fixture", "api_key": "secret"}, "")
+	response := fixture.call("POST", "/manage/api/target", map[string]string{"id": "fixture", "provider": "openai_compatible", "base_url": "https://api.example/v1", "model": "fixture", "api_key": "secret"}, "")
 	if response.Code != 503 || strings.Contains(response.Body.String(), "private failure") || len(fixture.console.state.Targets) != 0 {
 		test.Fatal("unsafe failed credential write")
 	}
@@ -314,10 +314,10 @@ func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 
 func TestUnavailableCredentialsDoNotDisableDashboard(test *testing.T) {
 	fixture := setup(test)
-	fixture.value(fixture.call("POST", "/manage/api/target", map[string]string{"id": "focus", "provider": "openai_compatible", "base_url": "https://api.example/v1", "model": "fixture", "api_key": "secret"}, ""))
+	fixture.value(fixture.call("POST", "/manage/api/target", map[string]string{"id": "fixture", "provider": "openai_compatible", "base_url": "https://api.example/v1", "model": "fixture", "api_key": "secret"}, ""))
 	fixture.vault.values = map[string]string{}
 	management, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
-	if err != nil || management.gateway == nil || !management.unavailable["focus"] {
+	if err != nil || management.gateway == nil || !management.unavailable["fixture"] {
 		test.Fatal("missing credential prevented management startup")
 	}
 }

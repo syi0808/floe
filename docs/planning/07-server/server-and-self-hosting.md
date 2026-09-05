@@ -61,7 +61,7 @@ Admin Dashboard
 
 ## Self-host Admin Dashboard
 
-S2에서는 [ADR 0010](../../decisions/0010-local-connection-console.md)에 따라
+초기 로컬 구현에서는 [ADR 0010](../../decisions/0010-local-connection-console.md)에 따라
 로컬 단일 운영자용 연결 콘솔만 먼저 구현한다. 모델 target/API key 관리,
 Codex OAuth 및 제한된 inference, 앱 페어링과 합성 데이터 연결 테스트가 범위다.
 아래 계정·Membership·초대 기능이나 원격 서버 배포를 완료한 것은 아니다.

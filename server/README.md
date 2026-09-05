@@ -1,7 +1,7 @@
 # Floe Inference Gateway
 
-Minimal Go network-inference module for S2. No third-party Go dependencies and no
-CLIProxyAPI dependency. Architecture: [ADR 0009](../docs/decisions/0009-contextual-focus-suggestion.md).
+Minimal Go network-inference module with no third-party Go dependencies and no
+CLIProxyAPI dependency. Architecture: [ADR 0011](../docs/decisions/0011-inference-performance-classes.md).
 
 This is a manually launched, single-operator loopback service, not the hosted
 server. The local console adds target registration, macOS Keychain credentials,
@@ -37,8 +37,8 @@ only its path. The containing directory must have mode 0700; generated files are
    OpenAI's `codex-rs/models-manager/models.json` on 2026-09-05; account-specific
    availability still requires a connection test.
    Saving makes this provider active for every non-empty class in the form.
-7. Click **Check connection** in Floe. The app reports whether the server has the
-   required class configured; model selection remains in this dashboard.
+7. Click **Check connection** in Floe to verify the paired credential and server
+   reachability. Model selection remains in this dashboard.
 
 App pairing tokens never grant management access. **Forget connection** removes
 only the app's local copy; **Revoke** in the dashboard invalidates the token on the
@@ -89,14 +89,14 @@ export FLOE_INFERENCE_TOKEN="$(openssl rand -hex 32)"
 (cd server && go run ./cmd/floe-server) &
 ```
 
-Edit the copied config **before** starting the service. The app's focus feature
-requests `high_effort`; the gateway resolves that class to `local-focus`. Target,
+Edit the copied config **before** starting the service. Product features request a
+performance class; the gateway resolves it to an operator-managed target. Target,
 model, provider and reasoning effort are operator-only configuration. Apps can see
 only class availability and data-boundary metadata through authenticated
 `GET /v1/inference-classes`. Restart the gateway after changing configuration or credentials.
 This headless path exists for fixtures and direct development clients; native Floe
 uses console pairing instead. Device-local models execute inside the client runtime
-and do not use this gateway. Core/local preference CRUD needs no gateway.
+and do not use this gateway.
 
 ## API-key target
 
@@ -105,7 +105,7 @@ An OpenAI-compatible target can be configured as:
 ```json
 {
   "targets": {
-    "api-focus": {
+    "api-model": {
       "provider": "openai_compatible",
       "base_url": "https://api.openai.com/v1",
       "model": "replace-with-supported-model",
@@ -114,7 +114,7 @@ An OpenAI-compatible target can be configured as:
   },
   "routes": {
     "high_effort": {
-      "target": "api-focus",
+      "target": "api-model",
       "reasoning_effort": "high"
     }
   }
@@ -127,7 +127,7 @@ the environment-variable **name** belongs in config. The app receives no provide
 key. The model must support non-streaming Chat Completions JSON-schema output;
 compatibility is tested per model, not assumed for all APIs or subscription plans.
 
-Map `high_effort` to `api-focus` and explicitly allow external transfer for the
+Map the required performance class to `api-model` and explicitly allow external transfer for the
 request. This permission is required for every OpenAI-compatible target, even a loopback proxy:
 being on localhost does not mean its upstream runs locally. No automatic fallback,
 retry or account rotation occurs. Provider errors do not expose raw response text.
@@ -163,8 +163,7 @@ Other codes include `unauthorized`, `validation`, `inference_class_unavailable`,
 `external_transfer_denied`, `model_busy`, `model_unavailable`, `invalid_proposal`.
 
 The gateway normalizes provider envelopes and checks output bounds/JSON, but
-does not implement domain validation. Rust validates slots, timestamps, evidence
-and source freshness after generation. No tool or mutation endpoint is exposed.
+does not implement feature-specific domain validation. No tool or mutation endpoint is exposed.
 
 Configuration is the endpoint allowlist; clients cannot submit URLs or credentials.
 HTTPS is required except literal loopback HTTP. Redirects and environment proxies
@@ -184,6 +183,4 @@ go vet ./...
 FLOE_TEST_KEYCHAIN=1 go test ./internal/credentials
 ```
 
-Cross-language fixture and live evaluation procedures:
-[S2 validation](../docs/validation/s2-focus.md).
 Console/pairing specifics: [local connection validation](../docs/validation/local-connections.md).

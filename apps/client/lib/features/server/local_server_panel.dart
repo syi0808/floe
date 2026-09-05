@@ -17,7 +17,6 @@ class LocalServerPanel extends StatefulWidget {
 class _LocalServerPanelState extends State<LocalServerPanel> {
   final address = TextEditingController(text: 'http://127.0.0.1:8431');
   ServerConnection? connection;
-  Map<String, dynamic> inferenceClasses = {};
   String? proof;
   String? code;
   String? pairingAddress;
@@ -41,7 +40,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         return;
       }
       address.text = saved.address;
-      inferenceClasses = await widget.client.inferenceClasses(saved);
+      await widget.client.checkConnection(saved);
       status = 'Connected to Floe server';
     });
   }
@@ -103,13 +102,12 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           token: response['token'] as String,
           clientId: response['client_id'] as String,
         );
-        final available = await widget.client.inferenceClasses(saved);
+        await widget.client.checkConnection(saved);
         if (!mounted || attempt != generation) return;
         await widget.client.save(saved);
         if (!mounted || attempt != generation) return;
         setState(() {
           connection = saved;
-          inferenceClasses = available;
           proof = null;
           code = null;
           address.text = base;
@@ -252,24 +250,12 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
                         await widget.client.store.delete();
                         if (!mounted) return;
                         connection = null;
-                        inferenceClasses = {};
                         status = 'Forgot this connection. Revoke its access in the dashboard if no longer needed.';
                       }),
                 child: const Text('Forget connection'),
               ),
           ],
         ),
-        if (connection != null) ...[
-          const SizedBox(height: 24),
-          if (!inferenceClasses.containsKey('high_effort'))
-            const FloeInfoNote(
-              text: 'Server connected. Ask the server administrator to finish setting up focus suggestions.',
-            ),
-          if (inferenceClasses.containsKey('high_effort'))
-            const FloeInfoNote(
-              text: 'The server is ready for focus suggestions.',
-            ),
-        ],
         if (busy) ...[
           const SizedBox(height: 16),
           const LinearProgressIndicator(),

@@ -44,10 +44,6 @@ class ServerConnection {
     'token': token,
     'client_id': clientId,
   };
-  Map<String, String> toInferenceJson() => {
-    'base_url': address,
-    'token': token,
-  };
 }
 
 class ServerConnectionException implements Exception {
@@ -150,7 +146,7 @@ class LocalServerClient {
     }
   }
 
-  Future<Map<String, dynamic>> inferenceClasses(ServerConnection value) async {
+  Future<void> checkConnection(ServerConnection value) async {
     final response = await request(
       value.address,
       '/v1/inference-classes',
@@ -160,7 +156,6 @@ class LocalServerClient {
         response['inference_classes'] is! Map<String, dynamic>) {
       throw const ServerConnectionException('invalid_response');
     }
-    return response['inference_classes'] as Map<String, dynamic>;
   }
 
   Future<void> openDashboard(String address) => KeychainServerCredentialStore

@@ -2,9 +2,8 @@
 
 > Status: Accepted architectural direction
 
-## S2 실행 경계 — 2026-09-05
+## Inference 실행 경계 — 2026-09-05
 
-[ADR 0009](../../decisions/0009-contextual-focus-suggestion.md)와
 [ADR 0011](../../decisions/0011-inference-performance-classes.md)에 따라 네트워크 기반
 모델 호출은 Floe 소유의 Go inference gateway로 모은다. 도메인은 `fast`,
 `balanced`, `high_effort` 성능 class와 전송 허용 범위를 명시한다. 서버 관리자가

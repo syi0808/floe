@@ -35,7 +35,7 @@ func fixtureRequest() Request {
 
 func fixtureGateway(test *testing.T, providerName, endpoint string) *Gateway {
 	test.Helper()
-	gateway, err := New(Config{Targets: map[string]Target{"focus": {Provider: providerName, BaseURL: endpoint, Model: "fixture-model", APIKeyEnv: "FIXTURE_KEY"}}, Routes: map[string]Route{"high_effort": {Target: "focus", ReasoningEffort: "high"}}}, testToken, func(string) string { return "private-provider-key" })
+	gateway, err := New(Config{Targets: map[string]Target{"fixture": {Provider: providerName, BaseURL: endpoint, Model: "fixture-model", APIKeyEnv: "FIXTURE_KEY"}}, Routes: map[string]Route{"high_effort": {Target: "fixture", ReasoningEffort: "high"}}}, testToken, func(string) string { return "private-provider-key" })
 	if err != nil {
 		test.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestClassInventoryDoesNotExposeModelRoutingOrSecrets(test *testing.T) {
 	if writer.Code != 200 {
 		test.Fatal(writer.Body.String())
 	}
-	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", "fixture-model", "focus", testToken} {
+	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", "fixture-model", "fixture", testToken} {
 		if strings.Contains(writer.Body.String(), secret) {
 			test.Error("inventory exposed secret or configuration")
 		}
@@ -230,11 +230,11 @@ func TestClassInventoryDoesNotExposeModelRoutingOrSecrets(test *testing.T) {
 func TestOnlySupportedInferenceClassesAndValidRoutesAreAccepted(test *testing.T) {
 	target := Target{Provider: "ollama", BaseURL: "http://127.0.0.1:11434", Model: "fixture"}
 	for class, route := range map[string]Route{
-		"focus_time":  {Target: "focus"},
-		"high-effort": {Target: "focus"},
+		"domain_task": {Target: "fixture"},
+		"high-effort": {Target: "fixture"},
 		"high_effort": {Target: "missing"},
 	} {
-		if _, err := New(Config{Targets: map[string]Target{"focus": target}, Routes: map[string]Route{class: route}}, testToken, func(string) string { return "" }); err == nil {
+		if _, err := New(Config{Targets: map[string]Target{"fixture": target}, Routes: map[string]Route{class: route}}, testToken, func(string) string { return "" }); err == nil {
 			test.Errorf("accepted invalid route %q", class)
 		}
 	}
@@ -341,7 +341,7 @@ func TestConfigurationRejectsUnsafeDestinationsAndMissingKeys(test *testing.T) {
 		{Provider: "openai_compatible", BaseURL: "https://example.com", Model: "model", APIKeyEnv: "MISSING_KEY"},
 		{Provider: "unknown", BaseURL: "https://example.com", Model: "model"},
 	} {
-		_, err := New(Config{Targets: map[string]Target{"focus": target}}, testToken, func(string) string { return "" })
+		_, err := New(Config{Targets: map[string]Target{"fixture": target}}, testToken, func(string) string { return "" })
 		if err == nil {
 			test.Fatal("unsafe configuration accepted")
 		}

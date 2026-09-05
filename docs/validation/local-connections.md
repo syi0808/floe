@@ -1,13 +1,11 @@
 # Local connection console validation
 
-Date: 2026-09-05, macOS arm64. Extends S2, not S4 acceptance.
+Date: 2026-09-05, macOS arm64. Infrastructure validation, not S4 acceptance.
 
 ## Automated evidence
 
-- Rust workspace: 34 tests; Clippy warnings denied. New tests reject remote,
-  credential-bearing, path/query/fragment and invalid-port gateway addresses and
-  malformed bearer credentials before networking.
-- Flutter: 56 tests, analyzer clean; Settings placement, local address normalization, credential
+- Rust workspace and Clippy warnings denied pass.
+- Flutter tests and analyzer pass; Settings placement, local address normalization, credential
   persistence, invalid-store recovery, redirect refusal and panel disposal covered.
 - Go: management/inference separation, exact Host/Origin/CSRF, cookie attributes,
   pairing approval/expiry/proof bounds, restart persistence and revocation, credential
@@ -16,11 +14,8 @@ Date: 2026-09-05, macOS arm64. Extends S2, not S4 acceptance.
   boundary, logout, no-tool structured Codex request and bounded SSE output.
 - Opt-in Security.framework test: disposable synthetic credential write/read/delete
   passes. No real provider API key is read or registered by this test.
-- Actual Flutter → Rust → Go console → synthetic provider integration passes on
-  a dynamically selected non-default port, using a paired credential rather than
-  an environment token. External consent blocks the provider first; a valid proposal
-  then passes domain validation; client revocation is observed. No Calendar mutation.
-- Original headless Flutter/Rust/Go fixture still passes separately.
+- Flutter → Go pairing passes on a dynamically selected non-default port, using a
+  paired credential rather than an environment token; client revocation is observed.
 - macOS debug app builds and strict signature verification passes.
 
 ```sh
@@ -33,12 +28,10 @@ cd ../apps/client
 flutter test
 flutter analyze
 flutter test integration/local_server_pairing_test.dart
-FLOE_INFERENCE_TOKEN="$(openssl rand -hex 24)" flutter test integration/focus_inference_test.dart
 ```
 
-The last command needs port 8431 free. Stop the interactive server first, or run
-that legacy fixture before starting it. The pairing suite uses its own port and
-temporary server state; it does not touch the live node or native app Keychain.
+The pairing suite uses its own port and temporary server state; it does not touch
+the live node or native app Keychain.
 
 ## Interactive checkpoint
 
@@ -64,8 +57,8 @@ temporary server state; it does not touch the live node or native app Keychain.
 5. Start Codex browser login, complete consent yourself, verify completion, cancel a
    new pending flow, disconnect and reconnect. Check five-minute expiry with the page
    closed. Verify this does not alter an existing non-Floe Codex login.
-6. Add a Codex OAuth target, run the synthetic test, then request a focus proposal.
+6. Add a Codex OAuth provider configuration and run its synthetic test.
    Verify no tool request, minimal context, structured output, cancellation, token
    refresh and subscription-limit behavior before treating the adapter as live-verified.
 
-Real model quality, S1 Calendar gates and S2 acceptance remain pending.
+Real model quality and S1 Calendar gates remain pending.

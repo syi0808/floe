@@ -2,14 +2,14 @@
 
 - Status: Accepted direction; local implementation, live provider evaluation pending
 - Date: 2026-09-05
-- Extends: ADR 0009
+- Related: ADR 0011
 
 ## Decision
 
 Bring forward a small connection-management console, not S4 accounts, hosted
 administration or synchronization. Go serves embedded HTML/CSS/JS with no frontend
 dependency/install step. Network inference remains in the existing gateway;
-Rust retains context minimization, consent, proposal validation and non-mutation.
+product features retain context minimization, consent and domain validation.
 
 The initial operating boundary is one trusted user on one Mac, bound only to
 `127.0.0.1`, with an editable port. The Flutter client accepts this local address,
@@ -19,7 +19,7 @@ normalizes `localhost` to `127.0.0.1`. Rust independently checks the connection.
 
 The client presents this under **Settings → Remote server** rather than as an
 inference provider or a primary connection. The deployment-neutral label reserves
-the client/server boundary for the future Go service, while the S2 implementation
+the client/server boundary for the future Go service. The current implementation
 continues to enforce loopback transport. Enabling a remote address requires a
 separate HTTPS, server-identity, account and multi-user authorization decision.
 

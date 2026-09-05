@@ -41,7 +41,7 @@ void main() {
       );
       await client.save(saved);
       final restored = await LocalServerClient(store: store).connection();
-      expect(restored?.toInferenceJson().keys, ['base_url', 'token']);
+      expect(restored?.toJson().keys, ['base_url', 'token', 'client_id']);
       await store.delete();
       expect(await client.connection(), isNull);
     },

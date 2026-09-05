@@ -8,12 +8,10 @@ The product is not an agent framework, automation builder, chat wrapper, or dash
 
 The first Personal Day vertical slice is in progress. The macOS Flutter client now reaches the Rust core through a versioned JSON/C ABI, while Rust owns typed operations, deterministic Day Canvas snapshots, and embedded Turso persistence.
 
-Delivery now prioritizes connected vertical slices over sequential roadmap phases:
-Calendar read → contextual suggestion → approved action, followed by cross-device
-and intervention slices. S1 has an EventKit read implementation and fixture end-to-end
-coverage; live permission/read validation is still pending. S2 now has explicit focus
-preferences and a Flutter → Rust → Go inference gateway fixture path. Live model
-evaluation remains pending; later slices remain planned;
+Delivery now prioritizes connected vertical slices over sequential roadmap phases.
+S1 has an EventKit read implementation and fixture end-to-end coverage; live
+permission/read validation is still pending. The Go model gateway and local connection
+console remain reusable infrastructure without a focus-time product feature;
 unfinished Personal Day work remains tracked separately in [progress](PROGRESS.md).
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
@@ -22,7 +20,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 
 - [Vertical slice delivery plan](docs/planning/08-engineering/vertical-slice-delivery.md)
 - [Go inference gateway setup](server/README.md)
-- [S2 inference architecture decision](docs/decisions/0009-contextual-focus-suggestion.md)
+- [Inference performance-class decision](docs/decisions/0011-inference-performance-classes.md)
 - [Delivery board and validation evidence](PROGRESS.md)
 - [Slice-driven delivery decision](docs/decisions/0006-slice-driven-delivery.md)
 - [Planning specification v0.8](docs/planning/README.md)
