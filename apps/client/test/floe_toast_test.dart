@@ -71,6 +71,13 @@ void main() {
     await tester.pumpAndSettle();
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(Offset(tester.getCenter(find.text('Second')).dx, 100));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('Second')).dy -
+          tester.getTopLeft(find.text('First')).dy,
+      lessThan(30),
+    );
     await mouse.moveTo(tester.getCenter(find.text('Second')));
     await tester.pumpAndSettle();
     await tester.pump(Duration(seconds: 6));

@@ -82,15 +82,21 @@ OS-mode and narrow-viewport visual verification remain unperformed in this check
 ## Flutter
 
 `FloeCheckbox`, `FloeCheckboxTile` and `FloeRadioTile` share native Material input
-semantics, Floe theme colors, 0.97/120ms press feedback, and an explicit focus border.
-Native mark transitions remain Flutter's standard control animation rather than a
-pixel-identical CSS animation. Reduced motion suppresses the added press scale.
+semantics, Floe theme colors, hover surfaces, and an explicit focus border. Pointer
+down does not scale either the row or control. Native mark transitions remain
+Flutter's standard control animation rather than a pixel-identical CSS animation.
 Disabled surfaces use neutral50, borders neutral200 and marks neutral300; labels
 use neutral500. Radio uses a violet surface with a white 4px-radius center.
 Calendar scope is now an explicit native RadioGroup (All/Selected); included calendars
 and task/subtask completion use the shared checkboxes. Existing selection/save/cancel
 behavior is unchanged. Tests cover disabled colors, keyboard checkbox/radio operation,
-disabled activation prevention, reduced-motion press, and calendar selection regression.
+disabled activation prevention, no-scale press behavior, and calendar selection
+regression.
 
-Flutter validation: 57 tests pass; analysis, macOS release build and strict deep
-codesign verification pass. Live native visual review is not recorded in this run.
+`FloeSelect` and `FloeDropdown` use the prototype's shared squircle trigger and menu
+surface, 44px option targets, violet active treatment, selected check, disabled rows,
+origin-aware placement, and reduced-motion handling. Calendar destination and task
+actions use these controls instead of Material's default dropdown and popup menu.
+
+Flutter validation: 74 tests and analysis pass. The earlier macOS release build and
+strict deep codesign verification remain recorded; live native visual review is not.

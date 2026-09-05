@@ -1335,25 +1335,19 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
           child: Row(
             children: [
               Spacer(),
-              FloeSquircle(
-                size: FloeSquircleSize.md,
-                child: PopupMenuButton<bool>(
-                  tooltip: AppLocalizations.of(context).taskOptions,
-                  onSelected: (completed) =>
-                      widget.onComplete(widget.task, completed),
-                  itemBuilder: (context) => [
-                    PopupMenuItem(
-                      value: !widget.task.isCompleted,
-                      child: Text(
-                        widget.task.isCompleted
-                            ? AppLocalizations.of(context).markIncomplete
-                            : AppLocalizations.of(context).completeTask,
-                      ),
-                    ),
-                  ],
-                  shape: floeSquircleBorder(FloeSquircleSize.md),
-                  icon: Icon(LucideIcons.ellipsis, size: 21),
-                ),
+              FloeDropdown<bool>(
+                label: AppLocalizations.of(context).taskOptions,
+                icon: Icon(LucideIcons.ellipsis, size: 21),
+                onSelected: (completed) =>
+                    widget.onComplete(widget.task, completed),
+                items: [
+                  FloeSelectOption(
+                    value: !widget.task.isCompleted,
+                    label: widget.task.isCompleted
+                        ? AppLocalizations.of(context).markIncomplete
+                        : AppLocalizations.of(context).completeTask,
+                  ),
+                ],
               ),
             ],
           ),

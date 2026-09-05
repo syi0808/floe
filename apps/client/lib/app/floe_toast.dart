@@ -141,7 +141,6 @@ class FloeToastHostState extends State<FloeToastHost>
         Positioned.fill(child: widget.child),
         if (_entries.isNotEmpty)
           Positioned(
-            top: media.padding.top + 16,
             right: math.max(narrow ? 16 : 24, media.padding.right),
             bottom: media.viewInsets.bottom > 0
                 ? media.viewInsets.bottom + 16
@@ -266,15 +265,15 @@ class _RenderToastStack extends RenderBox
 
   @override
   void performLayout() {
-    size = constraints.biggest;
     final children = getChildrenAsList();
+    final width = constraints.maxWidth;
     final naturalHeights = <double>[];
     final naturalConstraints = BoxConstraints(
-      minWidth: size.width,
-      maxWidth: size.width,
+      minWidth: width,
+      maxWidth: width,
       maxHeight: math.max(
         0,
-        (size.height - (children.length - 1) * 10) / children.length,
+        (constraints.maxHeight - (children.length - 1) * 10) / children.length,
       ),
     );
     for (final child in children) {
@@ -282,6 +281,16 @@ class _RenderToastStack extends RenderBox
       naturalHeights.add(child.size.height);
     }
     final frontHeight = naturalHeights.last;
+    final collapsedHeight = frontHeight + (children.length - 1) * 9;
+    final expandedHeight =
+        naturalHeights.fold<double>(0, (sum, height) => sum + height) +
+        (children.length - 1) * 10;
+    size = constraints.constrain(
+      Size(
+        width,
+        collapsedHeight + (expandedHeight - collapsedHeight) * _expansion,
+      ),
+    );
     var offset = 0.0;
     var top = size.height;
     for (var index = children.length - 1; index >= 0; index--) {

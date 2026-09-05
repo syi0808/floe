@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 void main() {
   test('disabled selection uses the subdued prototype palette', () {
@@ -94,9 +95,7 @@ void main() {
     expect(all, isTrue);
   });
 
-  testWidgets('press feedback is suppressed with reduced motion', (
-    tester,
-  ) async {
+  testWidgets('selection controls never scale on pointer down', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
@@ -110,8 +109,75 @@ void main() {
       tester.getCenter(find.byType(Checkbox)),
     );
     await tester.pump();
-    expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
+    expect(find.byType(AnimatedScale), findsNothing);
     await gesture.up();
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('custom select commits only enabled options', (tester) async {
+    String? selected = 'home';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(
+          body: SizedBox(
+            width: 320,
+            child: StatefulBuilder(
+              builder: (context, setState) => FloeSelect<String>(
+                label: 'Target calendar',
+                value: selected,
+                options: const [
+                  FloeSelectOption(value: 'home', label: 'Home'),
+                  FloeSelectOption(value: 'work', label: 'Work'),
+                  FloeSelectOption(
+                    value: 'team',
+                    label: 'Team',
+                    enabled: false,
+                  ),
+                ],
+                onChanged: (value) => setState(() => selected = value),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(DropdownButton<String>), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(find.byType(MenuItemButton), findsNWidgets(3));
+    await tester.tap(find.text('Team'));
+    await tester.pumpAndSettle();
+    expect(selected, 'home');
+    await tester.tap(find.text('Work'));
+    await tester.pumpAndSettle();
+    expect(selected, 'work');
+    expect(find.byType(MenuItemButton), findsNothing);
+  });
+
+  testWidgets('custom dropdown invokes its selected action', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(
+          body: FloeDropdown<bool>(
+            label: 'Task options',
+            icon: const Icon(LucideIcons.ellipsis),
+            items: const [FloeSelectOption(value: true, label: 'Complete')],
+            onSelected: (_) => calls++,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(PopupMenuButton<bool>), findsNothing);
+    await tester.tap(find.byIcon(LucideIcons.ellipsis));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Complete'));
+    await tester.pumpAndSettle();
+    expect(calls, 1);
   });
 }

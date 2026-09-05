@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_selection.dart';
 import '../application/calendar_action_controller.dart';
 import '../domain/day_models.dart';
 import 'calendar_action_panel.dart';
@@ -119,29 +120,21 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              DropdownButtonFormField<String>(
-                initialValue:
-                    calendars.any((calendar) => calendar.id == calendarId)
+              FloeSelect<String>(
+                label: strings.actionDestination,
+                value: calendars.any((calendar) => calendar.id == calendarId)
                     ? calendarId
                     : null,
-                isExpanded: true,
-                decoration: InputDecoration(
-                  labelText: strings.actionDestination,
-                ),
-                items: calendars
+                options: calendars
                     .map(
-                      (calendar) => DropdownMenuItem(
+                      (calendar) => FloeSelectOption(
                         value: calendar.id,
-                        child: Text(
-                          calendar.name,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        label: calendar.name,
                       ),
                     )
                     .toList(),
-                onChanged: saving
-                    ? null
-                    : (value) => setState(() => calendarId = value),
+                enabled: !saving,
+                onChanged: (value) => setState(() => calendarId = value),
                 validator: (value) =>
                     value == null ? strings.actionFormInvalid : null,
               ),
