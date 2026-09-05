@@ -25,8 +25,9 @@ The client-to-server contract uses one of three product-owned performance classe
 
 Product code, not an end-user setting, selects the class. The S2 focus suggestion
 requests `high_effort`. The Go server maps each class to an administrator-managed
-target and reasoning effort. Provider, endpoint, model, and target identifiers are
-visible only in the server dashboard and management state.
+internal target and reasoning effort. Provider, endpoint, model, and reasoning
+settings are visible only in the server dashboard; target identifiers remain an
+internal persistence and execution detail.
 
 Authenticated apps may query class availability and whether the selected route
 requires external-transfer consent. They cannot discover the underlying target,

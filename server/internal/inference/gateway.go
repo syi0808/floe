@@ -89,7 +89,7 @@ func New(config Config, token string, lookup func(string) string, codex ...Codex
 }
 
 func validEffort(value string) bool {
-	return value == "" || value == "low" || value == "medium" || value == "high"
+	return value == "" || value == "low" || value == "medium" || value == "high" || value == "xhigh"
 }
 
 func ValidClass(value string) bool {

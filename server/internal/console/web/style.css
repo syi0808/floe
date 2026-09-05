@@ -53,6 +53,20 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px 
 #notice { border-radius: var(--sq-md); padding: 16px; background: var(--primary-subtle); color: var(--secondary); }
 a { color: var(--primary); font-size: 14px; }
 [hidden] { display: none !important; }
+.provider-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 32px; margin-top: 28px; }
+.provider-nav { display: flex; flex-direction: column; gap: 8px; }
+.provider-option { text-align: left; background: white; color: #15182b; border-color: var(--border); }
+.provider-option:hover, .provider-option.active { background: var(--primary-subtle); color: var(--primary); border-color: #cfc6ff; }
+.provider-option span { display: block; margin-top: 4px; color: var(--secondary); font-size: 11px; font-weight: 400; }
+.provider-detail { min-width: 0; border-left: 1px solid var(--border); padding-left: 32px; }
+fieldset { border: 0; padding: 0; margin: 32px 0; }
+legend { font-size: 16px; font-weight: 650; padding: 0; margin-bottom: 8px; }
+.class-grid { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(180px, 2fr) minmax(140px, 1fr) auto; gap: 12px; align-items: end; border-top: 1px solid var(--border); padding: 18px 0 2px; }
+.class-grid.active-route { box-shadow: inset 3px 0 var(--primary); padding-left: 14px; }
+.class-grid strong, .class-grid span { display: block; }
+.class-grid span { color: var(--secondary); font-size: 11px; margin-top: 5px; }
+.class-grid label { margin: 0; }
+.class-grid button { margin-bottom: 0; }
 @supports (corner-shape: squircle) {
   button, input, select, .card, .warning, #notice { corner-shape: squircle; }
 }
@@ -62,4 +76,8 @@ a { color: var(--primary); font-size: 14px; }
   main { padding: 32px 20px; }
   .toolbar { flex-wrap: wrap; }
   .toolbar span { width: 100%; }
+  .provider-layout { grid-template-columns: 1fr; }
+  .provider-nav { display: grid; grid-template-columns: 1fr; }
+  .provider-detail { border-left: 0; border-top: 1px solid var(--border); padding: 24px 0 0; }
+  .class-grid { grid-template-columns: 1fr; align-items: stretch; }
 }

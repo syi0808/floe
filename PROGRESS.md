@@ -41,7 +41,7 @@ implementation slice. This does not advance S4 server/sync acceptance.
   authenticated loopback transport, server-side performance-class routing, deadlines/cancellation,
   body/concurrency limits, redacted errors and no retry/redirect/cloud fallback.
 - No CLIProxyAPI dependency. The Go connection console adds API-key Keychain
-  storage, target and class-route management, synthetic tests and paired app tokens. Flutter exposes
+  storage, provider-centric model/class management, synthetic tests and paired app tokens. Flutter exposes
   the deployment-neutral server boundary under **Settings → Remote server**; S2 still
   accepts loopback addresses only pending a hosted transport/authentication design.
 - The Go server now owns Codex PKCE OAuth, keeps rotating tokens in macOS Keychain

@@ -63,7 +63,8 @@ adapters; no generic OAuth broker or token read-back API is introduced.
 
 ## Operations and limits
 
-The console edits explicit API/Ollama/Codex targets and runs only user-triggered synthetic
+The persisted execution layer retains explicit targets, while the console groups
+configuration by provider and edits class-specific model/reasoning presets. It runs only user-triggered synthetic
 tests. It shows configured/unavailable state, not fabricated provider health or usage.
 Registration alone performs no inference. Missing credentials do not prevent
 management startup. No automatic fallback or provider selection is added.

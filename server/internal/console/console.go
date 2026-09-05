@@ -80,6 +80,11 @@ func (console *Console) rebuild() {
 			secrets[target.APIKeyEnv] = console.lookup(target.APIKeyEnv)
 		}
 	}
+	for _, profile := range console.state.Providers {
+		if profile.APIKeyEnv != "" {
+			secrets[profile.APIKeyEnv] = console.lookup(profile.APIKeyEnv)
+		}
+	}
 	lookup := func(name string) string { return secrets[name] }
 	console.unavailable = map[string]bool{}
 	for identifier, target := range console.state.Targets {
@@ -87,6 +92,17 @@ func (console *Console) rebuild() {
 			console.unavailable[identifier] = true
 		} else {
 			config.Targets[identifier] = target
+		}
+	}
+	for provider, profile := range console.state.Providers {
+		for class := range profile.Classes {
+			identifier := profileTargetID(provider, class)
+			target := console.profileTarget(provider, class, profile)
+			if _, err := inference.New(inference.Config{Targets: map[string]inference.Target{identifier: target}}, console.internalToken, lookup, console.runtime); err != nil {
+				console.unavailable[identifier] = true
+			} else {
+				config.Targets[identifier] = target
+			}
 		}
 	}
 	for class, route := range console.state.Routes {
@@ -319,17 +335,15 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateRoute(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/provider" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateProvider(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.URL.Path == "/manage/api/state" && request.Method == "GET" {
-		targets := map[string]any{}
-		for identifier, target := range console.state.Targets {
-			available := !console.unavailable[identifier]
-			if target.Provider == "codex_oauth" {
-				available = available && console.runtime != nil && console.runtime.Ready()
-			}
-			targets[identifier] = map[string]any{"provider": target.Provider, "model": target.Model, "base_url": target.BaseURL, "has_credential": target.APIKeyEnv != "", "available": available, "requires_external_consent": target.Provider != "ollama"}
-		}
 		clients := []string{}
 		for identifier := range console.state.Clients {
 			clients = append(clients, identifier)
@@ -338,7 +352,20 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
 			pending = console.pair
 		}
-		reply(writer, 200, map[string]any{"csrf": current.csrf, "targets": targets, "routes": console.state.Routes, "clients": clients, "pairing": pending, "address": "http://" + console.address})
+		providers := map[string]any{}
+		for provider, profile := range console.state.Providers {
+			classes := map[string]any{}
+			for class, configured := range profile.Classes {
+				identifier := profileTargetID(provider, class)
+				available := !console.unavailable[identifier]
+				if provider == "codex_oauth" {
+					available = available && console.runtime != nil && console.runtime.Ready()
+				}
+				classes[class] = map[string]any{"model": configured.Model, "reasoning_effort": configured.ReasoningEffort, "active": console.state.Routes[class].Target == identifier, "available": available}
+			}
+			providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
+		}
+		reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "clients": clients, "pairing": pending, "address": "http://" + console.address})
 		return
 	}
 	if request.Method != "POST" {

@@ -29,11 +29,11 @@ only its path. The containing directory must have mode 0700; generated files are
    and approve only the request you initiated. Requests expire after five minutes.
 4. The app confirms connectivity and saves its credential/address to Keychain.
    Finder launches now work without shared shell environment variables.
-5. Add an API or already-installed Ollama model target in the dashboard. No provider
-   request occurs merely by saving a target. Use **Test connection** for an explicit
-   synthetic request; external providers require confirmation and may charge for it.
-6. Map **High effort** to that target under **Performance classes**. Floe chooses
-   this class for focus suggestions without exposing models or routes in the app.
+5. Select a provider. Codex uses OAuth; OpenAI-compatible APIs use an endpoint and
+   optional Keychain-backed API key. Claude OAuth is visible but not implemented.
+6. Under that provider, set a model and reasoning effort for **High effort**. The
+   Codex model field offers suggestions and also accepts a custom model identifier.
+   Saving makes this provider active for every non-empty class in the form.
 7. Click **Check connection** in Floe. The app reports whether the server has the
    required class configured; model selection remains in this dashboard.
 
@@ -54,8 +54,9 @@ five-minute callback listener on `localhost:1455`. Access, refresh and identity
 tokens are stored as one macOS Keychain credential and are never returned through
 the management or app APIs. **Disconnect Codex** deletes that credential.
 
-After connecting, add a `Codex / ChatGPT OAuth` target and enter a model available
-to the account. The endpoint and credential are fixed server-side. Requests go to
+After connecting, select Codex and enter or choose a model for each desired
+performance class. Suggested model IDs are conveniences, not an account capability
+check; custom IDs remain available. The endpoint and credential are fixed server-side. Requests go to
 the ChatGPT Codex Responses backend with an empty tool list, `tool_choice: none`,
 bounded context, structured output and the same per-request external-transfer
 consent as other network providers. The server refreshes expiring access tokens and

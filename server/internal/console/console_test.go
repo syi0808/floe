@@ -195,8 +195,9 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 		test.Fatal("adding target transmitted a request")
 	}
 	state := fixture.call("GET", "/manage/api/state", nil, "")
-	if !strings.Contains(state.Body.String(), `"high_effort"`) || !strings.Contains(state.Body.String(), `"reasoning_effort":"high"`) {
-		test.Fatal("saved route missing from management state")
+	managementState := fixture.value(state)
+	if managementState["targets"] != nil || managementState["routes"] != nil {
+		test.Fatal("internal target or route inventory leaked through management state")
 	}
 	_, appToken := fixture.pair()
 	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
@@ -219,6 +220,59 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	fixture.value(fixture.call("POST", "/manage/api/target", input, ""))
 	if fixture.console.state.Targets["focus"].APIKeyEnv != "" || len(fixture.vault.values) != 0 {
 		test.Fatal("credential inherited by changed endpoint")
+	}
+}
+
+func TestProviderProfilesOwnClassModelsAndReplaceActiveRoutes(test *testing.T) {
+	fixture := setup(test)
+	apiProfile := map[string]any{
+		"provider": "openai_compatible", "base_url": "https://api.example/v1", "api_key": "private-provider-key",
+		"classes": map[string]any{
+			"fast":        map[string]string{"model": "fast-model", "reasoning_effort": "low"},
+			"high_effort": map[string]string{"model": "strong-model", "reasoning_effort": "high"},
+		},
+	}
+	fixture.value(fixture.call("POST", "/manage/api/provider", apiProfile, ""))
+	if len(fixture.vault.values) != 1 || len(fixture.console.state.Providers["openai_compatible"].Classes) != 2 {
+		test.Fatal("provider credential or class profiles were not stored together")
+	}
+	state := fixture.call("GET", "/manage/api/state", nil, "")
+	if strings.Contains(state.Body.String(), "private-provider-key") || !strings.Contains(state.Body.String(), `"strong-model"`) {
+		test.Fatal("management provider view exposed a secret or omitted its model")
+	}
+	_, appToken := fixture.pair()
+	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
+	if strings.Contains(classes.Body.String(), "strong-model") || strings.Contains(classes.Body.String(), "openai_compatible") {
+		test.Fatal("app class inventory exposed provider configuration")
+	}
+
+	fixture.console.runtime = &fakeAuthRuntime{ready: true}
+	fixture.value(fixture.call("POST", "/manage/api/provider", map[string]any{
+		"provider": "codex_oauth", "base_url": "https://ignored.example", "api_key": "ignored",
+		"classes": map[string]any{"high_effort": map[string]string{"model": "codex-model", "reasoning_effort": "xhigh"}},
+	}, ""))
+	if fixture.console.state.Routes["high_effort"].Target != profileTargetID("codex_oauth", "high_effort") || fixture.console.state.Providers["codex_oauth"].BaseURL != codexEndpoint {
+		test.Fatal("saving a provider did not replace the active class route")
+	}
+	if fixture.call("POST", "/manage/api/provider", map[string]any{"provider": "claude_oauth", "base_url": "", "api_key": "", "classes": map[string]any{}}, "").Code != 400 {
+		test.Fatal("unimplemented Claude provider was accepted")
+	}
+	fixture.value(fixture.call("POST", "/manage/api/provider", map[string]any{"provider": "codex_oauth", "base_url": "", "api_key": "", "classes": map[string]any{}}, ""))
+	if _, exists := fixture.console.state.Routes["high_effort"]; exists {
+		test.Fatal("removing provider retained its active route")
+	}
+}
+
+func TestDashboardUsesProviderHierarchyWithoutTargetControls(test *testing.T) {
+	fixture := setup(test)
+	response := fixture.call("GET", "/manage/", nil, "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "Codex OAuth") || !strings.Contains(response.Body.String(), "Claude OAuth") || !strings.Contains(response.Body.String(), "OpenAI-compatible API") {
+		test.Fatal("provider hierarchy is missing")
+	}
+	for _, removed := range []string{"Target ID", "Add or update a target", "Model target"} {
+		if strings.Contains(response.Body.String(), removed) {
+			test.Fatalf("dashboard still exposes %q", removed)
+		}
 	}
 }
 
@@ -263,24 +317,27 @@ func TestUnavailableCredentialsDoNotDisableDashboard(test *testing.T) {
 	}
 }
 
-func TestCodexTargetUsesOAuthRuntimeWithoutAPIKey(test *testing.T) {
+func TestCodexProfileUsesOAuthRuntimeWithoutAPIKey(test *testing.T) {
 	fixture := setup(test)
 	runtime := &fakeAuthRuntime{}
 	fixture.console.runtime = runtime
-	fixture.value(fixture.call("POST", "/manage/api/target", map[string]string{
-		"id": "codex-focus", "provider": "codex_oauth", "base_url": "https://evil.example", "model": "fixture", "api_key": "must-not-be-stored",
+	fixture.value(fixture.call("POST", "/manage/api/provider", map[string]any{
+		"provider": "codex_oauth", "base_url": "https://evil.example", "api_key": "must-not-be-stored",
+		"classes": map[string]any{"fast": map[string]string{"model": "fixture", "reasoning_effort": "low"}},
 	}, ""))
-	target := fixture.console.state.Targets["codex-focus"]
-	if target.BaseURL != "https://chatgpt.com/backend-api/codex" || target.APIKeyEnv != "" || len(fixture.vault.values) != 0 {
-		test.Fatal("Codex target accepted configurable endpoint or API key")
+	profile := fixture.console.state.Providers["codex_oauth"]
+	if profile.BaseURL != codexEndpoint || profile.APIKeyEnv != "" || len(fixture.vault.values) != 0 {
+		test.Fatal("Codex profile accepted configurable endpoint or API key")
 	}
 	state := fixture.value(fixture.call("GET", "/manage/api/state", nil, ""))
-	if state["targets"].(map[string]any)["codex-focus"].(map[string]any)["available"] != false {
-		test.Fatal("disconnected OAuth target reported available")
+	configured := state["providers"].(map[string]any)["codex_oauth"].(map[string]any)["classes"].(map[string]any)["fast"].(map[string]any)
+	if configured["available"] != false {
+		test.Fatal("disconnected OAuth profile reported available")
 	}
 	runtime.ready = true
 	state = fixture.value(fixture.call("GET", "/manage/api/state", nil, ""))
-	if state["targets"].(map[string]any)["codex-focus"].(map[string]any)["available"] != true {
-		test.Fatal("connected OAuth target reported unavailable")
+	configured = state["providers"].(map[string]any)["codex_oauth"].(map[string]any)["classes"].(map[string]any)["fast"].(map[string]any)
+	if configured["available"] != true {
+		test.Fatal("connected OAuth profile reported unavailable")
 	}
 }

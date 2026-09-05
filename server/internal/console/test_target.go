@@ -27,7 +27,7 @@ func (console *Console) testTarget(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	console.testActive = true
-	target, exists := console.state.Targets[input.ID]
+	target, exists := console.configuredTarget(input.ID)
 	lookup := console.lookup
 	runtime := console.runtime
 	console.mu.Unlock()

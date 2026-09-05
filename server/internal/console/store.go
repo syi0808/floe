@@ -19,9 +19,21 @@ type Vault interface {
 }
 
 type diskState struct {
-	Targets map[string]inference.Target `json:"targets"`
-	Routes  map[string]inference.Route  `json:"routes"`
-	Clients map[string]string           `json:"clients"`
+	Targets   map[string]inference.Target `json:"targets"`
+	Routes    map[string]inference.Route  `json:"routes"`
+	Providers map[string]providerProfile  `json:"providers,omitempty"`
+	Clients   map[string]string           `json:"clients"`
+}
+
+type providerProfile struct {
+	BaseURL   string                  `json:"base_url"`
+	APIKeyEnv string                  `json:"api_key_env,omitempty"`
+	Classes   map[string]classProfile `json:"classes"`
+}
+
+type classProfile struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 func randomToken() string {
@@ -54,7 +66,7 @@ func writePrivate(path string, value []byte) error {
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Clients: map[string]string{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return state, "", err
 	}
@@ -64,11 +76,24 @@ func readState(directory string) (diskState, string, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(directory, "state.json"))
 	if err == nil {
-		if json.Unmarshal(data, &state) != nil || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Clients) > 16 {
+		if json.Unmarshal(data, &state) != nil || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 {
 			return state, "", errors.New("invalid server state")
 		}
 		if state.Routes == nil {
 			state.Routes = map[string]inference.Route{}
+		}
+		if state.Providers == nil {
+			state.Providers = map[string]providerProfile{}
+		}
+		configuredTargets := len(state.Targets)
+		for _, profile := range state.Providers {
+			if profile.Classes == nil || len(profile.Classes) > 3 {
+				return state, "", errors.New("invalid server state")
+			}
+			configuredTargets += len(profile.Classes)
+		}
+		if configuredTargets > 32 {
+			return state, "", errors.New("invalid server state")
 		}
 	} else if !os.IsNotExist(err) {
 		return state, "", err
@@ -94,12 +119,20 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Clients: map[string]string{}}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}
 	for key, value := range state.Routes {
 		copy.Routes[key] = value
+	}
+	for key, value := range state.Providers {
+		classes := map[string]classProfile{}
+		for class, configured := range value.Classes {
+			classes[class] = configured
+		}
+		value.Classes = classes
+		copy.Providers[key] = value
 	}
 	for key, value := range state.Clients {
 		copy.Clients[key] = value
