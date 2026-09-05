@@ -32,7 +32,10 @@ only its path. The containing directory must have mode 0700; generated files are
 5. Select a provider. Codex uses OAuth; OpenAI-compatible APIs use an endpoint and
    optional Keychain-backed API key. Claude OAuth is visible but not implemented.
 6. Under that provider, set a model and reasoning effort for **High effort**. The
-   Codex model field offers suggestions and also accepts a custom model identifier.
+   Codex model field offers suggestions from the current public Codex catalog and
+   also accepts a custom model identifier. The curated list was refreshed from
+   OpenAI's `codex-rs/models-manager/models.json` on 2026-09-05; account-specific
+   availability still requires a connection test.
    Saving makes this provider active for every non-empty class in the form.
 7. Click **Check connection** in Floe. The app reports whether the server has the
    required class configured; model selection remains in this dashboard.

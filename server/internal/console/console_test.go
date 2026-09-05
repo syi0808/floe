@@ -274,6 +274,11 @@ func TestDashboardUsesProviderHierarchyWithoutTargetControls(test *testing.T) {
 			test.Fatalf("dashboard still exposes %q", removed)
 		}
 	}
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.2", "gpt-5.3-codex", "gpt-5.3-codex-spark"} {
+		if !strings.Contains(response.Body.String(), model) {
+			test.Fatalf("dashboard model suggestions omitted %q", model)
+		}
+	}
 }
 
 func TestCredentialFailureIsAtomicAndRedacted(test *testing.T) {

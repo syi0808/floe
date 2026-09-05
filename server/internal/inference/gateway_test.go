@@ -42,6 +42,18 @@ func fixtureGateway(test *testing.T, providerName, endpoint string) *Gateway {
 	return gateway
 }
 
+func TestExtendedReasoningEffortsAreAccepted(test *testing.T) {
+	for _, effort := range []string{"max", "ultra"} {
+		_, err := New(Config{
+			Targets: map[string]Target{"codex": {Provider: "codex_oauth", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "fixture-model"}},
+			Routes:  map[string]Route{"high_effort": {Target: "codex", ReasoningEffort: effort}},
+		}, testToken, func(string) string { return "" }, &fixtureCodex{})
+		if err != nil {
+			test.Errorf("reasoning effort %q was rejected: %v", effort, err)
+		}
+	}
+}
+
 func invoke(gateway *Gateway, input Request) *httptest.ResponseRecorder {
 	body, _ := json.Marshal(input)
 	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(body))
