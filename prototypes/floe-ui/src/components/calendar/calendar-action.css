@@ -1,0 +1,13 @@
+.s3-action-card .s1-card-heading svg { color: var(--primary-500); }
+.s3-action-card p { margin: 20px 0 10px; font-size: 15px; line-height: 1.8; color: var(--ink-secondary); }
+.s3-action-caption, .s3-action-card small { display: block; color: var(--ink-tertiary); font-size: 11px; line-height: 1.7; }
+.s3-action-card .s1-text-link { margin-top: 18px; }
+.s3-action-description { color: var(--ink-secondary); font-size: 14px; line-height: 1.8; margin: 14px 0 22px; }
+.s3-action-summary { display: grid; gap: 10px; background: var(--primary-50); padding: 22px; font-size: 13px; color: var(--ink-secondary); }
+.s3-action-summary strong { color: var(--ink); font-size: 17px; font-weight: 550; }
+.s3-action-buttons { display: flex; justify-content: flex-end; margin: 22px 0; }
+.s3-action-trace { color: var(--ink-tertiary); font-size: 12px; margin: 22px 0; }
+.s3-action-trace summary { cursor: pointer; }
+.s3-action-warning { color: var(--ink-secondary); background: var(--surface-subtle); padding: 16px; font-size: 13px; line-height: 1.8; }
+.s1-facts select { width: 100%; min-height: 38px; font: inherit; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border); padding: 8px; }
+@media (max-width: 430px) { .s3-action-buttons .sq-button { flex: 1; } }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>app.floe.eventkit-poc</string>
+  <key>CFBundleName</key><string>Floe EventKit PoC</string>
+  <key>CFBundleExecutable</key><string>floe-eventkit-poc</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Validate explicitly approved disposable events in the Floe Validation calendar. Existing events are never modified.</string>
+  <key>NSCalendarsUsageDescription</key><string>Validate explicitly approved disposable events in the Floe Validation calendar.</string>
+</dict></plist>

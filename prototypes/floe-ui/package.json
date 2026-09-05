@@ -10,6 +10,7 @@
   "scripts": {
     "preinstall": "node -e \"if (!process.env.npm_config_user_agent?.startsWith('pnpm/')) { console.error('Use pnpm install for this project.'); process.exit(1); }\"",
     "check:components": "node scripts/check-component-catalog.mjs",
+    "check:actions": "node scripts/check-calendar-actions.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

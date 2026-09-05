@@ -1,5 +1,10 @@
 # S1 Calendar validation
 
+**Latest live checkpoint:** [2026-09-05 EventKit run](eventkit-live-poc.md).
+Real timed-event create/recovery/re-import/edit/delete now have bounded evidence.
+New-calendar auto-inclusion failed; controlled permission, DST/recurrence and cache
+lifecycle gates remain pending. The 2026-09-04 record below is historical.
+
 Date: 2026-09-04. Native provider: macOS EventKit. Actual account data has **not**
 been collected by this implementation run. No external events have been created.
 

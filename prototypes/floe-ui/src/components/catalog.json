@@ -3,6 +3,32 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "calendar-action-card",
+      "export": "CalendarActionCard",
+      "source": "src/components/calendar/CalendarActionCard.jsx",
+      "kind": "composition",
+      "responsibility": "Focus proposal entry and action status summary",
+      "props": ["action", "disabled", "onReview"],
+      "stateOwner": "CalendarScreen: fixture action reducer",
+      "states": ["pending", "disabled", "rejected", "succeeded"],
+      "styles": ["src/calendar.css", "src/components/calendar/calendar-action.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/s3-calendar-action-ui.md"
+    },
+    {
+      "id": "calendar-action-dialog",
+      "export": "CalendarActionDialog",
+      "source": "src/components/calendar/CalendarActionDialog.jsx",
+      "kind": "composition",
+      "responsibility": "Explicit approval, rejection, execution status and lookup-only recovery review",
+      "props": ["action", "calendars", "connected", "onAction", "onClose"],
+      "stateOwner": "CalendarScreen: fixture action reducer and timers",
+      "states": ["pending", "checking", "creating", "importing", "succeeded", "rejected", "conflict", "denied", "expired", "unknown", "looking-up", "read-error"],
+      "styles": ["src/calendar.css", "src/components/calendar/calendar-action.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/s3-calendar-action-ui.md"
+    },
+    {
       "id": "settings-screen",
       "export": "SettingsScreen",
       "source": "src/SettingsScreen.jsx",

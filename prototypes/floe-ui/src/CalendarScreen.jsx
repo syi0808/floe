@@ -1,5 +1,5 @@
 import { CalendarDateToolbar } from './components/calendar/CalendarDateToolbar.jsx';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import './calendar.css';
 import { layoutTimedEvents } from './calendar-layout.js';
 import {
@@ -17,10 +17,23 @@ import { CalendarAgenda } from './components/calendar/CalendarAgenda.jsx';
 import { CalendarContextRail } from './components/calendar/CalendarContextRail.jsx';
 import { CalendarConnections } from './components/calendar/CalendarConnections.jsx';
 import { CalendarDialogs } from './components/calendar/CalendarDialogs.jsx';
-
-const timedEvents = layoutTimedEvents(externalEvents);
+import { CalendarActionCard } from './components/calendar/CalendarActionCard.jsx';
+import { CalendarActionDialog } from './components/calendar/CalendarActionDialog.jsx';
+import { actionReducer, initialAction, actionEvent, actionScenarios } from './calendar-action-state.js';
 
 export function CalendarScreen({ page, onNavigate, notify }) {
+  const [action, dispatchAction] = useReducer(actionReducer, null, () => {
+    const scenario = new URLSearchParams(window.location.search).get('action');
+    return initialAction(actionScenarios.includes(scenario) ? scenario : 'ready');
+  });
+  const [actionOpen, setActionOpen] = useState(false);
+  const timedEvents = layoutTimedEvents([...externalEvents, ...(action.status === 'succeeded' ? [actionEvent(action)] : [])]);
+  useEffect(() => {
+    const type = { checking: 'checked', creating: 'created', importing: 'imported', 'looking-up': 'found' }[action.status];
+    if (!type) return;
+    const pending = setTimeout(() => dispatchAction({ type }), 900);
+    return () => clearTimeout(pending);
+  }, [action.status]);
   const [phase, setPhase] = useState(() => {
     const scenario = new URLSearchParams(window.location.search).get('state');
     return Object.hasOwn(scenarios, scenario) ? scenario : 'connected';
@@ -212,6 +225,8 @@ export function CalendarScreen({ page, onNavigate, notify }) {
                 }
               />
             )}
+            <div className="s1-side-stack">
+            {dayOffset === 0 && <CalendarActionCard action={action} disabled={action.status === 'pending' && phase !== 'connected'} onReview={() => setActionOpen(true)} />}
             <CalendarContextRail
               taskDone={taskDone}
               onTaskChange={(completed) => {
@@ -224,6 +239,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
               hasCache={hasCache}
               onNavigate={onNavigate}
             />
+            </div>
           </div>
         </>
       )}
@@ -252,6 +268,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
           }}
         />
       )}
+      {actionOpen && <CalendarActionDialog action={action} calendars={calendars} connected={phase === 'connected'} onAction={dispatchAction} onClose={() => setActionOpen(false)} />}
     </div>
   );
 }

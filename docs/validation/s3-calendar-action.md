@@ -2,6 +2,11 @@
 
 Date: 2026-09-05. Integration mode: Rust fixture only.
 
+Follow-up: [isolated live EventKit PoC](eventkit-live-poc.md) validates one disposable
+create/response-loss recovery and re-import through the existing app. The Rust
+executor itself remains fixture-only. UI work starts in the
+[HTML prototype](../design/s3-calendar-action-ui.md), not Flutter.
+
 ## Delivered boundary
 
 `floe-core` owns an immutable calendar-create proposal, explicit approve/reject

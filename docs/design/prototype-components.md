@@ -23,6 +23,7 @@ CalendarScreen → ConnectorList → ConnectorServiceCard
                → CalendarConnections / CalendarDateToolbar / CalendarAgenda
                → CalendarContextRail + CalendarStatusBanner
                → CalendarDialogs → Modal + one dialog-content component
+               → CalendarActionCard / CalendarActionDialog → Modal
 CalendarAgenda → CalendarAllDay + TimelineZoom + CalendarEvent + CalendarEmptyState
 TaskDetail → SubtaskList → CheckControl
            → TaskSuggestionCard
@@ -44,6 +45,9 @@ UI and feature components → primitives.jsx
 4. `calendar-fixtures.js`, `progress-fixtures.js` and `data.js` contain sample data;
    `calendar-layout.js` is a pure overlap calculation, not a UI component. Fixtures
    are injected into reusable event/row components by the controller.
+   `calendar-action-state.js` is a pure simulated S3 transition reducer owned by
+   CalendarScreen, not a production executor. Its proposal/execution/external IDs
+   are shared by action review and the re-imported event's source details.
 5. Each exported feature component has its own named file. `primitives.jsx` remains
    the cohesive geometry module. Private subcomponents of the historical reference
    screen are intentionally not promoted into the active reusable API.

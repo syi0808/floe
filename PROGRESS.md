@@ -13,13 +13,32 @@ verified criteria, not estimated implementation percentages.
 
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
-| S1 — Calendar read | Deferred | Fixture end-to-end; EventKit app builds | 0/4 | Live verification remains prerequisite | Connect a dedicated macOS Calendar |
-| S3 — Approved action | Implementing | Rust executor/ledger fixture; no native write | 0/5 | S1 Verified; create/recovery capability; approval UI | Connect approval UI and native adapter after provider PoC |
+| S1 — Calendar read | Deferred | Live timed-event read/edit/delete; inventory/reconnect | 0/4 | New-calendar auto-inclusion fails; permission/DST/recurrence/lifecycle gates | Fix automatic inclusion; finish controlled live matrix |
+| S3 — Approved action | Implementing | Rust fixture; isolated live EventKit create/recovery; prototype UI | 0/5 | S1 Verified; prototype review; trusted native executor binding | Review prototype before Flutter implementation |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### Live EventKit and prototype-first checkpoint — 2026-09-05
+
+- User-approved isolated helper created one disposable event in a dedicated iCloud
+  Calendar, deliberately lost its response, blocked a second create and recovered
+  exactly one matching execution marker from fresh processes.
+- Existing app re-imported it with matching ID, Person and Asia/Seoul times. External
+  test edit preserved occurrence identity and advanced revision 0→1; test deletion
+  disappeared on refresh. The empty test calendar remains; existing events untouched.
+- **S1 defect:** ordinary refresh omitted the new calendar; reconnect required an
+  explicit selection. S1 is not Verified; complete acceptance remains 0/4.
+- Native permission deny/revoke cycles, DST/recurrence, partial failure and offline
+  restart remain unverified. This is local EventKit evidence, not cloud durability.
+- UI is implemented/reviewed in the HTML prototype first: approval/rejection,
+  preflight/create/re-import, blocked states, lookup-only recovery and read-only retry.
+  No Flutter UI or production write API added. S3 remains 0/5.
+- Prototype build, 42 component contracts and 26 reducer assertions pass; seven
+  browser scenarios validated. Swift helper compiles with warnings denied/signs.
+- [Full live record and remaining gates](docs/validation/eventkit-live-poc.md).
 
 The reusable [performance-class routing](docs/decisions/0011-inference-performance-classes.md)
 and local Go model gateway remain implemented. No current product feature invokes
@@ -200,8 +219,9 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 ## Next Priorities
 
 1. Complete S1's live Calendar criteria.
-2. Validate EventKit create/recovery capability, then connect S3 approval/recovery UI
-   and the native executor adapter. Keep live writes disabled until this gate passes.
+2. Review S3 approval/recovery in the HTML prototype first. The isolated EventKit
+   create/recovery PoC passes; native Rust binding and production permission/error
+   handling remain gates before enabling product writes or porting UI to Flutter.
 3. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,

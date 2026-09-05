@@ -73,9 +73,9 @@ export function CalendarEventDetails({
             <dd>demo-macos / You</dd>
             <dt>External occurrence ID</dt>
             <dd>
-              fixture:{calendar.id}:{event.id}:2026-09-
-              {String(4 + dayOffset).padStart(2, '0')}
+              {event.externalId || `fixture:${calendar.id}:${event.id}:2026-09-${String(4 + dayOffset).padStart(2, '0')}`}
             </dd>
+            {event.executionId && <><dt>Approved proposal / execution</dt><dd>{event.proposalId} / {event.executionId}</dd></>}
             <dt>Change token</dt>
             <dd>fixture-revision-04</dd>
             <dt>Integration</dt>

@@ -22,7 +22,8 @@ detail. Task Detail, Notes and Progress remain available.
   as `/?state=disconnected`, `/?state=offline` and `/?state=revoked` load deterministic
   fixtures. All 12 state values are listed in the screen/state specification below.
 - **Local data:** captured notes and tasks survive navigation and Calendar disconnection.
-  S1 has no model suggestions or external write actions. The external-change lab and
+  S1 has no model suggestions or external write actions. S3 adds a clearly labeled
+  simulated focus proposal; no live write is introduced. The external-change lab and
   earlier-reference link are removed from the UI.
 - **Toasts:** save a note, refresh calendars or disconnect to see custom floating
   feedback. Save several notes quickly to review the three-card stack; hover or
@@ -39,7 +40,15 @@ native functionality; the existing native app still uses single-calendar selecti
 See [the screen/state specification](../../docs/design/s1-calendar-ui.md) for the
 interaction matrix and implementation boundaries.
 
-## Run
+## Explore S3
+
+Today → **Review suggestion** opens explicit calendar/title/time/timezone approval.
+Try `/?action=ready`, `conflict`, `denied`, `expired`, `timeout`, `missing` and
+`read-error`. All paths are simulated; reload resets state. See the
+[S3 prototype specification](../../docs/design/s3-calendar-action-ui.md).
+Validate the state machine with `pnpm check:actions`.
+
+## Run locally
 
 Node.js 20.19 or newer is required; the checked-in `.nvmrc` selects Node.js 24.
 Use pnpm, pinned by `packageManager` in `package.json`. If pnpm is not installed,
