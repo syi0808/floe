@@ -27,6 +27,17 @@ impl Core {
         let request = CString::new(request.to_string()).unwrap();
         take_json(unsafe { floe_core_load_day(self.0, request.as_ptr()) })
     }
+
+    fn actions(&self, person_id: &str, operation: Value) -> Value {
+        let request = CString::new(
+            json!({
+                "schema_version": 1, "person_id": person_id, "operation": operation
+            })
+            .to_string(),
+        )
+        .unwrap();
+        take_json(unsafe { floe_core_calendar_actions(self.0, request.as_ptr()) })
+    }
 }
 
 impl Drop for Core {
@@ -73,6 +84,103 @@ fn changed(response: &Value) -> (&str, u64) {
         item["id"].as_str().unwrap(),
         item["revision"].as_u64().unwrap(),
     )
+}
+
+#[test]
+fn calendar_decisions_are_person_scoped_durable_and_never_create() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("actions.db");
+    let person = Uuid::new_v4().to_string();
+    let other = Uuid::new_v4().to_string();
+    let core = Core::open(path.to_str().unwrap());
+    data(&core.execute(command(
+        &person,
+        json!({
+        "type": "select_calendar", "provider": "fixture",
+            "calendar_id": "target", "calendar_name": "Target"
+        }),
+    )));
+    let now = chrono::Utc::now();
+    let proposal = json!({
+        "kind": "propose", "calendar_id": "target", "title": " Focus ",
+        "starts_at": (now + chrono::Duration::hours(1)).to_rfc3339(),
+        "ends_at": (now + chrono::Duration::hours(2)).to_rfc3339(),
+        "timezone": "Asia/Seoul"
+    });
+    let response = core.actions(&person, proposal.clone());
+    let action = &data(&response)["actions"][0];
+    assert_eq!(action["state"]["status"], "pending");
+    assert_eq!(action["title"], "Focus");
+    assert_eq!(action["calendar_name"], "Target");
+    let action_id = action["id"].clone();
+    let decision = json!({"kind": "decide", "action_id": action_id, "decision": "approve"});
+    assert_eq!(
+        core.actions(&other, decision.clone())["error"]["code"],
+        "not_found"
+    );
+    assert_eq!(
+        data(&core.actions(&other, json!({"kind": "list"})))["actions"],
+        json!([])
+    );
+    let approved = core.actions(&person, decision.clone());
+    assert_eq!(data(&approved)["actions"][0]["state"]["status"], "approved");
+    assert!(!data(&approved)["actions"][0]["approved_at"].is_null());
+    assert_eq!(core.actions(&person, decision)["error"]["code"], "conflict");
+    let rejected = core.actions(&person, proposal);
+    let rejected_id = data(&rejected)["actions"][0]["id"].clone();
+    let rejected = core.actions(
+        &person,
+        json!({"kind": "decide", "action_id": rejected_id, "decision": "reject"}),
+    );
+    assert_eq!(data(&rejected)["actions"][0]["state"]["status"], "rejected");
+    drop(core);
+    let core = Core::open(path.to_str().unwrap());
+    let restored = core.actions(&person, json!({"kind": "get", "action_id": action_id}));
+    assert_eq!(data(&restored), data(&approved));
+    assert_eq!(
+        data(&core.actions(&person, json!({"kind": "list"})))["actions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        data(&core.load(json!({"schema_version": 1, "person_id": person, "day": day()})))["items"],
+        json!([])
+    );
+}
+
+#[test]
+fn calendar_action_boundary_rejects_execution_and_caller_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("invalid.db").to_str().unwrap());
+    let person = Uuid::new_v4().to_string();
+    for operation in [
+        json!({"kind": "execute", "action_id": Uuid::new_v4()}),
+        json!({"kind": "list", "now": "2020-01-01T00:00:00Z"}),
+        json!({"kind": "list", "allow_create": true}),
+        json!({"kind": "decide", "action_id": Uuid::new_v4(), "decision": "maybe"}),
+        json!({"kind": "get", "action_id": "invalid"}),
+    ] {
+        assert_eq!(
+            core.actions(&person, operation)["error"]["code"],
+            "validation"
+        );
+    }
+    assert_eq!(
+        core.actions("invalid", json!({"kind": "list"}))["error"]["code"],
+        "validation"
+    );
+    let request = CString::new(
+        json!({"schema_version": 999, "person_id": person, "operation": {"kind": "list"}})
+            .to_string(),
+    )
+    .unwrap();
+    let response = take_json(unsafe { floe_core_calendar_actions(core.0, request.as_ptr()) });
+    assert_eq!(response["error"]["code"], "unsupported_version");
+    let response =
+        take_json(unsafe { floe_core_calendar_actions(std::ptr::null_mut(), request.as_ptr()) });
+    assert_eq!(response["error"]["code"], "validation");
 }
 
 #[test]

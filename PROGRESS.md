@@ -1,6 +1,6 @@
 # Floe Progress
 
-> Last updated: 2026-09-05
+> Last updated: 2026-09-06
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
@@ -14,12 +14,20 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
-| S3 — Approved action | Deferred | Rust fixture; isolated live EventKit create/recovery; prototype UI | 0/5 | S1 Verified; prototype review; trusted native executor binding | Resume after S1 verification |
+| S3 — Approved action | Implementing (bridge only) | Rust fixture; isolated live EventKit create/recovery; prototype UI; Dart decision/ledger bridge | 0/5 | S1 Verified; prototype review; trusted native executor binding | Bind reviewed approval UI after live gates |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S3 decision bridge checkpoint — 2026-09-06
+
+- Added Person-scoped action list/get, proposal and explicit approve/reject over
+  JSON/C ABI, with typed Dart access and durable reload. Rust owns action clocks.
+- No execution/receipt/policy input is exposed; native UI and live writes remain gated.
+- [Contract and automated validation](docs/validation/s3-action-bridge.md).
+  S3 remains 0/5 and S1 is not Verified.
 
 ### S1 scope and recovery checkpoint — 2026-09-05
 

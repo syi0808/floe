@@ -99,6 +99,16 @@ impl TursoStore {
         Ok(())
     }
 
+    pub(crate) async fn calendar_actions(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Vec<crate::CalendarAction>, CoreError> {
+        let mut actions: Vec<crate::CalendarAction> =
+            self.list("calendar_actions", person_id).await?;
+        actions.sort_by_key(|action| (std::cmp::Reverse(action.created_at), action.id));
+        Ok(actions)
+    }
+
     pub(crate) async fn calendar_action(
         &self,
         person_id: PersonId,

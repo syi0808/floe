@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/day_models.dart';
+import '../domain/calendar_action.dart';
 import '../infrastructure/floe_native_bindings.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
@@ -97,6 +98,57 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     }
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
     return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
+  }
+
+  Future<List<CalendarAction>> loadCalendarActions(String personId) =>
+      _calendarActions(personId, {'kind': 'list'});
+
+  Future<CalendarAction> loadCalendarAction(
+    String personId,
+    String actionId,
+  ) async => (await _calendarActions(personId, {
+    'kind': 'get',
+    'action_id': actionId,
+  })).single;
+
+  Future<CalendarAction> proposeCalendarAction({
+    required String personId,
+    required String calendarId,
+    required String title,
+    required DateTime startsAt,
+    required DateTime endsAt,
+    required String timezone,
+  }) async => (await _calendarActions(personId, {
+    'kind': 'propose',
+    'calendar_id': calendarId,
+    'title': title,
+    'starts_at': startsAt.toUtc().toIso8601String(),
+    'ends_at': endsAt.toUtc().toIso8601String(),
+    'timezone': timezone,
+  })).single;
+
+  Future<CalendarAction> decideCalendarAction({
+    required String personId,
+    required String actionId,
+    required CalendarActionDecision decision,
+  }) async => (await _calendarActions(personId, {
+    'kind': 'decide',
+    'action_id': actionId,
+    'decision': decision.name,
+  })).single;
+
+  Future<List<CalendarAction>> _calendarActions(
+    String personId,
+    Map<String, dynamic> operation,
+  ) async {
+    final data = await _request('calendar_actions', {
+      'schema_version': _protocolVersion,
+      'person_id': personId,
+      'operation': operation,
+    });
+    return (data['actions']! as List)
+        .map((value) => CalendarAction.fromJson(_asMap(value)))
+        .toList(growable: false);
   }
 
   @override
@@ -623,9 +675,12 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
       final input = (message['request']! as String).toNativeUtf8();
       Pointer<Utf8> output = nullptr;
       try {
-        output = operation == 'load_day'
-            ? bindings.loadDay(handle, input)
-            : bindings.execute(handle, input);
+        output = switch (operation) {
+          'load_day' => bindings.loadDay(handle, input),
+          'execute' => bindings.execute(handle, input),
+          'calendar_actions' => bindings.calendarActions(handle, input),
+          _ => throw StateError('Unknown core operation: $operation'),
+        };
         if (output == nullptr) {
           throw StateError('Rust core returned an empty response.');
         }

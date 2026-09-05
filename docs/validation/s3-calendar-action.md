@@ -2,6 +2,10 @@
 
 Date: 2026-09-05. Integration mode: Rust fixture only.
 
+2026-09-06 follow-up: [Dart decision/ledger bridge](s3-action-bridge.md) adds
+proposal/list/get/decision APIs, without exposing execution or live writes.
+The no-FFI statements below describe the original executor checkpoint.
+
 Follow-up: [isolated live EventKit PoC](eventkit-live-poc.md) validates one disposable
 create/response-loss recovery and re-import through the existing app. The Rust
 executor itself remains fixture-only. UI work starts in the

@@ -168,6 +168,67 @@ pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult
     snapshot(handle, person_id, &request.day)
 }
 
+#[derive(Serialize)]
+pub struct CalendarActionsResult {
+    pub actions: Vec<floe_core::CalendarAction>,
+}
+
+pub fn calendar_actions(
+    handle: &FloeHandle,
+    request: CalendarActionRequestDto,
+) -> BridgeResult<CalendarActionsResult> {
+    check_version(request.schema_version)?;
+    let person_id = parse_person(&request.person_id)?;
+    let action = match request.operation {
+        CalendarActionOperationDto::List {} => {
+            return handle
+                .runtime
+                .block_on(handle.core.calendar_actions(person_id))
+                .map(|actions| CalendarActionsResult { actions })
+                .map_err(core_error);
+        }
+        CalendarActionOperationDto::Get { action_id } => handle.runtime.block_on(
+            handle
+                .core
+                .calendar_action(person_id, parse_id(&action_id, "action_id", |value| value)?),
+        ),
+        CalendarActionOperationDto::Propose {
+            calendar_id,
+            title,
+            starts_at,
+            ends_at,
+            timezone,
+        } => {
+            let schedule = floe_domain::TimedSchedule::new(
+                parse_time(&starts_at, "starts_at")?,
+                parse_time(&ends_at, "ends_at")?,
+                &timezone,
+            )
+            .map_err(|value| invalid("schedule", value.to_string()))?;
+            handle.runtime.block_on(handle.core.propose_calendar_action(
+                person_id,
+                calendar_id,
+                title,
+                schedule,
+                Utc::now(),
+            ))
+        }
+        CalendarActionOperationDto::Decide {
+            action_id,
+            decision,
+        } => handle.runtime.block_on(handle.core.decide_calendar_action(
+            person_id,
+            parse_id(&action_id, "action_id", |value| value)?,
+            decision == CalendarActionDecisionDto::Approve,
+            Utc::now(),
+        )),
+    }
+    .map_err(core_error)?;
+    Ok(CalendarActionsResult {
+        actions: vec![action],
+    })
+}
+
 pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<MutationResultDto> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
@@ -595,6 +656,20 @@ pub unsafe extern "C" fn floe_core_execute(
 #[unsafe(no_mangle)]
 pub extern "C" fn floe_protocol_version() -> u32 {
     PROTOCOL_VERSION
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_calendar_actions(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request = serde_json::from_str(c_input(request_json, "request_json")?)
+            .map_err(|value| invalid("request_json", value.to_string()))?;
+        calendar_actions(handle, request)
+    })
 }
 
 #[unsafe(no_mangle)]

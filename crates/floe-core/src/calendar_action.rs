@@ -105,6 +105,13 @@ pub trait CalendarActionProvider {
 }
 
 impl FloeCore {
+    pub async fn calendar_actions(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Vec<CalendarAction>, CoreError> {
+        self.store.calendar_actions(person_id).await
+    }
+
     pub async fn propose_calendar_action(
         &self,
         person_id: PersonId,

@@ -5,6 +5,41 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarActionRequestDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub operation: CalendarActionOperationDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CalendarActionOperationDto {
+    List {},
+    Get {
+        action_id: String,
+    },
+    Propose {
+        calendar_id: String,
+        title: String,
+        starts_at: String,
+        ends_at: String,
+        timezone: String,
+    },
+    Decide {
+        action_id: String,
+        decision: CalendarActionDecisionDto,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarActionDecisionDto {
+    Approve,
+    Reject,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DayQueryDto {
     pub date: String,
     pub timezone_offset_seconds: i32,

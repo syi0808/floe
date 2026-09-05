@@ -54,6 +54,10 @@ final class FloeNativeBindings {
   late final FloeOpenDart open;
   late final FloeCallDart loadDay;
   late final FloeCallDart execute;
+  late final FloeCallDart calendarActions = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>(
+        'floe_core_calendar_actions',
+      );
   late final FloeFreeStringDart freeString;
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;
