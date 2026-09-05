@@ -81,22 +81,22 @@ OS-mode and narrow-viewport visual verification remain unperformed in this check
 
 ## Flutter
 
-`FloeCheckbox`, `FloeCheckboxTile` and `FloeRadioTile` share native Material input
-semantics, Floe theme colors, hover surfaces, and an explicit focus border. Pointer
-down does not scale either the row or control. Native mark transitions remain
-Flutter's standard control animation rather than a pixel-identical CSS animation.
+`FloeCheckbox`, `FloeCheckboxTile` and `FloeRadioTile` are custom Flutter controls;
+they do not compose Material Checkbox, Radio or ListTile controls. They share the
+prototype's 20px visual, Floe colors, hover surface, animated mark and outer focus
+ring. Pointer down does not scale either the row or control.
 Disabled surfaces use neutral50, borders neutral200 and marks neutral300; labels
 use neutral500. Radio uses a violet surface with a white 4px-radius center.
-Calendar scope is now an explicit native RadioGroup (All/Selected); included calendars
+Calendar scope retains Flutter's `RadioGroup` registry for group semantics and arrow
+navigation; the visuals and activation targets remain Floe-owned. Included calendars
 and task/subtask completion use the shared checkboxes. Existing selection/save/cancel
-behavior is unchanged. Tests cover disabled colors, keyboard checkbox/radio operation,
-disabled activation prevention, no-scale press behavior, and calendar selection
-regression.
+behavior is unchanged. Tests cover semantics, keyboard checkbox/radio operation,
+disabled activation prevention, no-scale press behavior, and calendar selection.
 
 `FloeSelect` and `FloeDropdown` use the prototype's shared squircle trigger and menu
 surface, 44px option targets, violet active treatment, selected check, disabled rows,
 origin-aware placement, and reduced-motion handling. Calendar destination and task
 actions use these controls instead of Material's default dropdown and popup menu.
 
-Flutter validation: 74 tests and analysis pass. The earlier macOS release build and
+Flutter validation: 73 tests and analysis pass. The earlier macOS release build and
 strict deep codesign verification remain recorded; live native visual review is not.

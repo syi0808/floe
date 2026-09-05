@@ -1,4 +1,5 @@
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
@@ -152,15 +153,15 @@ void main() {
       }
 
       await openPicker();
-      final home = find.widgetWithText(CheckboxListTile, 'Home');
-      final work = find.widgetWithText(CheckboxListTile, 'Work');
-      expect(tester.widget<CheckboxListTile>(home).value, isTrue);
+      final home = find.widgetWithText(FloeCheckboxTile, 'Home');
+      final work = find.widgetWithText(FloeCheckboxTile, 'Work');
+      expect(tester.widget<FloeCheckboxTile>(home).value, isTrue);
       await tester.tap(home);
       await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.text('Continue'));
       await tester.pump(const Duration(seconds: 1));
-      expect(find.byType(CheckboxListTile), findsNWidgets(2));
-      expect(find.byType(RadioListTile<bool>), findsNWidgets(2));
+      expect(find.byType(FloeCheckboxTile), findsNWidgets(2));
+      expect(find.byType(FloeRadioTile<bool>), findsNWidgets(2));
       expect(gateway.selected, isEmpty);
       await tester.tap(home);
       await tester.tap(work);

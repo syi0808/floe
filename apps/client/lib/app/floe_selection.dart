@@ -475,13 +475,11 @@ class FloeCheckbox extends StatelessWidget {
   final String? semanticLabel;
 
   @override
-  Widget build(BuildContext context) => _SelectionFeedback(
+  Widget build(BuildContext context) => _FloeChoice(
+    selected: value,
     enabled: onChanged != null,
-    child: Checkbox(
-      value: value,
-      onChanged: onChanged,
-      semanticLabel: semanticLabel,
-    ),
+    semanticLabel: semanticLabel,
+    onActivate: onChanged == null ? null : () => onChanged!(!value),
   );
 }
 
@@ -498,29 +496,15 @@ class FloeCheckboxTile extends StatelessWidget {
   final ValueChanged<bool?>? onChanged;
 
   @override
-  Widget build(BuildContext context) => _SelectionFeedback(
+  Widget build(BuildContext context) => _FloeChoice(
+    selected: value,
     enabled: onChanged != null,
-    child: CheckboxListTile(
-      value: value,
-      title: DefaultTextStyle.merge(
-        style: TextStyle(
-          color: onChanged == null
-              ? FloePalette.neutral500
-              : FloePalette.neutral950,
-          fontSize: 13,
-        ),
-        child: title,
-      ),
-      onChanged: onChanged,
-      controlAffinity: ListTileControlAffinity.leading,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      hoverColor: FloePalette.primary50,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-    ),
+    title: title,
+    onActivate: onChanged == null ? null : () => onChanged!(!value),
   );
 }
 
-class FloeRadioTile<T> extends StatelessWidget {
+class FloeRadioTile<T> extends StatefulWidget {
   const FloeRadioTile({
     required this.value,
     required this.title,
@@ -533,58 +517,307 @@ class FloeRadioTile<T> extends StatelessWidget {
   final bool enabled;
 
   @override
-  Widget build(BuildContext context) => _SelectionFeedback(
-    enabled: enabled,
-    child: RadioListTile<T>(
-      value: value,
-      enabled: enabled,
-      title: DefaultTextStyle.merge(
-        style: TextStyle(
-          color: enabled ? FloePalette.neutral950 : FloePalette.neutral500,
-          fontSize: 13,
-        ),
-        child: title,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      hoverColor: FloePalette.primary50,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-    ),
+  State<FloeRadioTile<T>> createState() => _FloeRadioTileState<T>();
+}
+
+class _FloeRadioTileState<T> extends State<FloeRadioTile<T>>
+    with RadioClient<T> {
+  @override
+  final FocusNode focusNode = FocusNode();
+
+  @override
+  bool get enabled => widget.enabled;
+
+  @override
+  T get radioValue => widget.value;
+
+  @override
+  bool get tristate => false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    registry = RadioGroup.maybeOf<T>(context);
+    assert(registry != null, 'FloeRadioTile must be inside a RadioGroup<$T>.');
+  }
+
+  @override
+  void dispose() {
+    registry = null;
+    focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => _FloeChoice(
+    selected: registry?.groupValue == widget.value,
+    enabled: widget.enabled,
+    radio: true,
+    title: widget.title,
+    focusNode: focusNode,
+    onActivate: widget.enabled ? () => registry?.onChanged(widget.value) : null,
   );
 }
 
-class _SelectionFeedback extends StatefulWidget {
-  const _SelectionFeedback({required this.enabled, required this.child});
+class _FloeChoice extends StatefulWidget {
+  const _FloeChoice({
+    required this.selected,
+    required this.enabled,
+    this.onActivate,
+    this.title,
+    this.semanticLabel,
+    this.focusNode,
+    this.radio = false,
+  });
 
+  final bool selected;
   final bool enabled;
-  final Widget child;
+  final VoidCallback? onActivate;
+  final Widget? title;
+  final String? semanticLabel;
+  final FocusNode? focusNode;
+  final bool radio;
 
   @override
-  State<_SelectionFeedback> createState() => _SelectionFeedbackState();
+  State<_FloeChoice> createState() => _FloeChoiceState();
 }
 
-class _SelectionFeedbackState extends State<_SelectionFeedback> {
+class _FloeChoiceState extends State<_FloeChoice> {
+  FocusNode? internalFocusNode;
+  FocusNode get focusNode =>
+      widget.focusNode ?? (internalFocusNode ??= FocusNode());
+
+  bool hovered = false;
   bool focused = false;
 
   @override
-  Widget build(BuildContext context) => Focus(
-    canRequestFocus: false,
-    onFocusChange: (value) => setState(() => focused = value),
-    child: MouseRegion(
-      cursor: widget.enabled
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.forbidden,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: focused && widget.enabled
-                ? FloePalette.primary600
-                : Colors.transparent,
-            width: 2,
+  void dispose() {
+    internalFocusNode?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = _FloeChoiceVisual(
+      selected: widget.selected,
+      enabled: widget.enabled,
+      hovered: hovered,
+      focused: focused,
+      radio: widget.radio,
+    );
+    final content = widget.title == null
+        ? SizedBox.square(dimension: 44, child: Center(child: visual))
+        : ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  visual,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DefaultTextStyle.merge(
+                      style: TextStyle(
+                        color: widget.enabled
+                            ? FloePalette.neutral950
+                            : FloePalette.neutral500,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        height: 1.5,
+                      ),
+                      child: widget.title!,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+    return Semantics(
+      checked: widget.selected,
+      enabled: widget.enabled,
+      inMutuallyExclusiveGroup: widget.radio,
+      label: widget.semanticLabel,
+      onTap: widget.onActivate,
+      child: FocusableActionDetector(
+        enabled: widget.enabled,
+        focusNode: focusNode,
+        mouseCursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.forbidden,
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        },
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onActivate?.call();
+              return null;
+            },
+          ),
+        },
+        onShowHoverHighlight: (value) => setState(() => hovered = value),
+        onShowFocusHighlight: (value) => setState(() => focused = value),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onActivate,
+          child: AnimatedContainer(
+            duration: FloeMotion.reduceMotion(context)
+                ? Duration.zero
+                : FloeMotion.hoverDuration,
+            decoration: BoxDecoration(
+              color: hovered && widget.enabled
+                  ? FloePalette.primary50
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: content,
           ),
         ),
-        child: widget.child,
       ),
-    ),
-  );
+    );
+  }
+}
+
+class _FloeChoiceVisual extends StatelessWidget {
+  const _FloeChoiceVisual({
+    required this.selected,
+    required this.enabled,
+    required this.hovered,
+    required this.focused,
+    required this.radio,
+  });
+
+  final bool selected;
+  final bool enabled;
+  final bool hovered;
+  final bool focused;
+  final bool radio;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = FloeMotion.reduceMotion(context);
+    final selectedColor = enabled
+        ? FloePalette.primary600
+        : FloePalette.neutral50;
+    final borderColor = !enabled
+        ? FloePalette.neutral200
+        : selected || hovered
+        ? FloePalette.primary600
+        : FloePalette.neutral500;
+    final markColor = enabled ? FloePalette.neutral0 : FloePalette.neutral300;
+    final duration = reduced ? Duration.zero : FloeMotion.hoverDuration;
+    return SizedBox.square(
+      dimension: 20,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            left: -5,
+            top: -5,
+            width: 30,
+            height: 30,
+            child: AnimatedOpacity(
+              opacity: focused && enabled ? 1 : 0,
+              duration: duration,
+              child: DecoratedBox(
+                decoration: ShapeDecoration(
+                  color: Colors.transparent,
+                  shape: radio
+                      ? const CircleBorder(
+                          side: BorderSide(
+                            color: FloePalette.primary600,
+                            width: 2,
+                          ),
+                        )
+                      : floeSquircleBorder(
+                          FloeSquircleSize.sm,
+                          borderColor: FloePalette.primary600,
+                          borderWidth: 2,
+                        ),
+                ),
+              ),
+            ),
+          ),
+          AnimatedContainer(
+            key: const ValueKey('floe-choice-visual'),
+            width: 20,
+            height: 20,
+            duration: duration,
+            curve: FloeMotion.easeOut,
+            decoration: ShapeDecoration(
+              color: selected ? selectedColor : FloePalette.neutral0,
+              shadows: enabled
+                  ? [
+                      BoxShadow(
+                        color: selected
+                            ? FloePalette.primary600.withValues(alpha: .15)
+                            : FloePalette.neutral950.withValues(alpha: .05),
+                        offset: const Offset(0, 1),
+                        blurRadius: 2,
+                      ),
+                    ]
+                  : const [],
+              shape: radio
+                  ? CircleBorder(
+                      side: BorderSide(color: borderColor, width: 1.5),
+                    )
+                  : floeSquircleBorder(
+                      FloeSquircleSize.sm,
+                      borderColor: borderColor,
+                      borderWidth: 1.5,
+                    ),
+            ),
+            child: AnimatedOpacity(
+              opacity: selected ? 1 : 0,
+              duration: reduced
+                  ? Duration.zero
+                  : const Duration(milliseconds: 120),
+              child: Center(
+                child: radio
+                    ? Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: markColor,
+                          shape: BoxShape.circle,
+                        ),
+                      )
+                    : CustomPaint(
+                        size: const Size.square(20),
+                        painter: _FloeCheckPainter(markColor),
+                      ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FloeCheckPainter extends CustomPainter {
+  const _FloeCheckPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(5, 10)
+      ..lineTo(8.2, 13.2)
+      ..lineTo(15, 6.5);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_FloeCheckPainter oldDelegate) =>
+      color != oldDelegate.color;
 }

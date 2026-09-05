@@ -1,29 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 void main() {
-  test('disabled selection uses the subdued prototype palette', () {
-    final theme = FloeTheme.light.checkboxTheme;
-    const disabled = {WidgetState.disabled, WidgetState.selected};
-    expect(theme.fillColor!.resolve(disabled), FloePalette.neutral50);
-    expect(theme.checkColor!.resolve(disabled), FloePalette.neutral300);
-    expect(
-      WidgetStateProperty.resolveAs<BorderSide?>(theme.side, disabled)!.color,
-      FloePalette.neutral200,
-    );
-    expect(
-      theme.fillColor!.resolve({WidgetState.selected}),
-      FloePalette.primary600,
-    );
-  });
-
   testWidgets(
-    'checkbox has native semantics, keyboard toggle and disabled guard',
+    'custom checkbox has semantics, keyboard toggle and disabled guard',
     (tester) async {
       var checked = false;
       var enabled = true;
@@ -51,13 +35,14 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();
       expect(checked, isTrue);
+      expect(find.byType(Checkbox), findsNothing);
       expect(
-        tester.widget<Checkbox>(find.byType(Checkbox)).semanticLabel,
+        tester.getSemantics(find.byType(FloeCheckbox)).label,
         'Complete task',
       );
       update(() => enabled = false);
       await tester.pumpAndSettle();
-      await tester.tap(find.byType(Checkbox));
+      await tester.tap(find.byType(FloeCheckbox));
       await tester.pumpAndSettle();
       expect(checked, isTrue);
     },
@@ -105,13 +90,16 @@ void main() {
         ),
       ),
     );
+    final visual = find.byKey(const ValueKey('floe-choice-visual'));
+    final originalSize = tester.getSize(visual);
     final gesture = await tester.startGesture(
-      tester.getCenter(find.byType(Checkbox)),
+      tester.getCenter(find.byType(FloeCheckbox)),
     );
     await tester.pump();
-    expect(find.byType(AnimatedScale), findsNothing);
+    expect(tester.getSize(visual), originalSize);
     await gesture.up();
     await tester.pumpAndSettle();
+    expect(tester.getSize(visual), originalSize);
   });
 
   testWidgets('custom select commits only enabled options', (tester) async {

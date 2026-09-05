@@ -1,4 +1,5 @@
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
@@ -33,7 +34,7 @@ void main() {
     );
     await tester.pumpWidget(FloeApp(gateway: gateway, query: query));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(Checkbox).first);
+    await tester.tap(find.byType(FloeCheckbox).first);
     await tester.pumpAndSettle();
     expect(find.text('Undo'), findsOneWidget);
     expect(find.byType(SnackBar), findsNothing);

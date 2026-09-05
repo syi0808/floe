@@ -1,4 +1,5 @@
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_context_rail.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -57,7 +58,7 @@ void main() {
       await tester.tap(find.text(task.title));
       expect(openedTask, same(task));
 
-      await mouse.moveTo(tester.getCenter(find.byType(Checkbox)));
+      await mouse.moveTo(tester.getCenter(find.byType(FloeCheckbox)));
       await tester.pump();
       expect(
         RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
