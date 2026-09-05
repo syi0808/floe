@@ -110,14 +110,63 @@ The user explicitly authorized Floe-only Calendar permission reauthorization.
 System Settings off/on did not replace the old code requirement; the supported
 `tccutil reset Calendar app.floe.floeClient` reset only that app/service, after
 which Floe requested access again. No direct TCC DB modification or permission
-change for another app was performed. The protected OS prompt requires user input.
-The debug validation app remains at that prompt; it has not created another event.
-The separate Release app is write-disabled. Do not replace/re-sign the running
-debug app while completing its grant; rebuild it without the opt-in flag after
-the remaining live validation, and never ship the response-loss app copy.
+change for another app was performed. The user subsequently granted Full Access
+in the protected OS prompt. The app completed a fresh read of all 11 previously
+selected calendars without changing the selection or mode.
 Use a stable trusted development/release signing identity for durable app grants;
 do not weaken the designated requirement to avoid permission checks.
 
-S3 is not marked Accepted solely from the helper/fixture evidence. The final app
-permission grant, live UI create/collection, and remaining S1/provider failure
-matrix must be recorded before changing the acceptance count.
+## Signed-app UI evidence after permission grant
+
+At 01:47–01:56 KST on September 6, the original write-enabled debug app, without
+the response-loss shim, completed the following actual Flutter/EventKit flow:
+
+1. Reconnection retained Selected mode and the same 11 calendars. All sources
+   reported a fresh successful collection. Relaunch retained that connection.
+2. The UI prepared a new `Floe S3 — disposable` proposal in the dedicated iCloud
+   calendar, Sep 6 10:00–10:15 Asia/Seoul. Review displayed destination, Person,
+   UTC interval, timezone, expiry, proposal ID and execution ID before approval.
+3. `Approve & create` persisted success with external ID
+   `B5D9C8A2-F4A0-4310-AFBF-687F89B6FF1A|`. The existing Flutter Calendar read
+   MethodChannel/import path reported collection success; Day Canvas displayed
+   exactly one 10:00–10:15 event. Event detail showed the correct calendar source,
+   Asia/Seoul timezone and collection timestamp.
+4. Read retry completed without another create. After quitting and reopening the
+   app, the same event and successful action remained. Review exposed read retry
+   but no create/approve button. A second read retry collected the same event.
+5. Independent fresh EventKit inspection after those operations found exactly one
+   full marker/payload match, with the same external ID as the durable action.
+6. The inspector deleted only that exact disposable event. Fresh lookup returned
+   zero matches. The app's read retry then reported inability to collect the
+   created event, preserved successful execution and offered only read retry.
+   Today returned to `No saved events for this day`.
+7. After app exit, the real C ABI read of its actual DB confirmed that the complete
+   action record was unchanged from before cleanup. Another fresh EventKit lookup
+   returned zero matches, proving no replacement create during the failed read.
+
+Proposal: `0e19374b-7fcf-449c-9e2b-8dc449e44cf5`.
+Execution: `cd79c789-8af8-44b5-97d1-e808b0fe0f9b`.
+Private evidence: `target/s3-validation/private/ui-*.json`.
+This UI run created one additional disposable event after the earlier helper's
+event had already been removed; both were individually verified absent.
+The app's durable successful test action remains as audit history. No existing
+external event, local task/note, selected-calendar list or connection mode changed.
+
+After validation, the app was closed and Debug rebuilt without
+`FLOE_ENABLE_CALENDAR_WRITES`; both ordinary Debug and Release artifacts have
+writing disabled. The rebuilt app is left closed: ad-hoc identity changes can
+require another user-controlled Calendar grant on a future validation build.
+Never ship the private response-loss app copy.
+
+## Acceptance boundary
+
+| Criterion | Result | Evidence / remaining work |
+| --- | --- | --- |
+| S3-A1 | Pending | Actual payload review and approval pass; live rejection/no-write observation remains. |
+| S3-A2 | Pending | Automated policy/Person/staleness/conflict coverage passes; controlled live blocking matrix remains. |
+| S3-A3 | Verified | Durable real-provider response-loss/restart/lookup-only recovery, denied repeat execute, automated concurrent dispatch, and signed-app restart/read retries with exactly one event. |
+| S3-A4 | Verified | Actual app approval → native create → Flutter Calendar read/import → Day Canvas with matching proposal/execution/external IDs. |
+| S3-A5 | Pending | Real response loss and post-create read failure covered; write-denial/revocation and full provider-failure matrix remain. |
+
+S3 has 2/5 verified criteria, not Accepted. S1 verification and dogfood remain
+prerequisites; successful UI execution alone does not satisfy those gates.

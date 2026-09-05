@@ -14,7 +14,7 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
-| S3 — Approved action | Implemented; validating | Proposal/review UI; trusted native executor; live Rust/EventKit response-loss recovery and snapshot import | 0/5 | S1 Verified; final app permission/UI/failure matrix | Complete signed-app validation |
+| S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
@@ -23,6 +23,12 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
 ### S3 native execution checkpoint — 2026-09-06
 
+- After user-granted Calendar permission, the signed Flutter app completed explicit
+  approval → native create → MethodChannel read/import → Day Canvas. Relaunch and
+  read retries retained one event; exact cleanup removed it without changing the
+  successful ledger or creating a replacement. S3-A3/A4 verified (2/5), not Accepted.
+- Existing 11 calendar selections stayed unchanged. Both Debug and Release are
+  restored to write-disabled builds; ad-hoc rebuilds may require a fresh OS grant.
 - Connected proposal preparation, explicit approval, native execution, lookup-only
   recovery and separate Calendar read retry. Normal builds remain write-disabled.
 - Live disposable create through the actual Rust/native adapter survived injected
