@@ -1066,6 +1066,180 @@ abstract class AppLocalizations {
   /// **'{value, plural, one{1 time} other{{value} times}}'**
   String zoomTimes(int value);
 
+  /// No description provided for @calendarProposals.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar proposals'**
+  String get calendarProposals;
+
+  /// No description provided for @actionPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Awaiting your decision'**
+  String get actionPending;
+
+  /// No description provided for @actionApproved.
+  ///
+  /// In en, this message translates to:
+  /// **'Approval saved. No event has been created by this app.'**
+  String get actionApproved;
+
+  /// No description provided for @actionRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Declined. No event was created.'**
+  String get actionRejected;
+
+  /// No description provided for @actionExecuting.
+  ///
+  /// In en, this message translates to:
+  /// **'Execution was interrupted or is in progress. Do not create a replacement; inspect Calendar.'**
+  String get actionExecuting;
+
+  /// No description provided for @actionBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked. A fresh proposal and approval are required before any future execution.'**
+  String get actionBlocked;
+
+  /// No description provided for @actionUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'The result is unconfirmed. Inspect the original calendar; do not create a replacement.'**
+  String get actionUnknown;
+
+  /// No description provided for @actionSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar creation is recorded as successful. This does not confirm collection into Today.'**
+  String get actionSucceeded;
+
+  /// No description provided for @actionReloadRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved state could not be confirmed. Reload proposals before another decision.'**
+  String get actionReloadRequired;
+
+  /// No description provided for @actionLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading or saving proposal state…'**
+  String get actionLoading;
+
+  /// No description provided for @actionEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No saved proposals to review.'**
+  String get actionEmpty;
+
+  /// No description provided for @actionReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Review proposal'**
+  String get actionReview;
+
+  /// No description provided for @actionReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload proposals'**
+  String get actionReload;
+
+  /// No description provided for @actionMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'This proposal is no longer available.'**
+  String get actionMissing;
+
+  /// No description provided for @actionDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'Destination calendar'**
+  String get actionDestination;
+
+  /// No description provided for @actionStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Starts (UTC)'**
+  String get actionStart;
+
+  /// No description provided for @actionEnd.
+  ///
+  /// In en, this message translates to:
+  /// **'Ends (UTC)'**
+  String get actionEnd;
+
+  /// No description provided for @actionPerson.
+  ///
+  /// In en, this message translates to:
+  /// **'Person'**
+  String get actionPerson;
+
+  /// No description provided for @actionExpires.
+  ///
+  /// In en, this message translates to:
+  /// **'Approval expires (UTC)'**
+  String get actionExpires;
+
+  /// No description provided for @actionProposalId.
+  ///
+  /// In en, this message translates to:
+  /// **'Proposal ID'**
+  String get actionProposalId;
+
+  /// No description provided for @actionExecutionId.
+  ///
+  /// In en, this message translates to:
+  /// **'Execution ID'**
+  String get actionExecutionId;
+
+  /// No description provided for @actionApprovedAt.
+  ///
+  /// In en, this message translates to:
+  /// **'Approved at (UTC)'**
+  String get actionApprovedAt;
+
+  /// No description provided for @actionExternalId.
+  ///
+  /// In en, this message translates to:
+  /// **'External event ID'**
+  String get actionExternalId;
+
+  /// No description provided for @actionReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded reason'**
+  String get actionReason;
+
+  /// No description provided for @actionNoExtras.
+  ///
+  /// In en, this message translates to:
+  /// **'No guests or alerts. Times above are UTC; the proposal timezone is shown separately.'**
+  String get actionNoExtras;
+
+  /// No description provided for @actionWriteDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar writing is not enabled. Approval only saves your decision; it does not schedule or queue an event.'**
+  String get actionWriteDisabled;
+
+  /// No description provided for @actionApprovalUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Approval requires Today, an unexpired proposal and a successfully loaded, unchanged calendar connection. Reload or reconnect if needed.'**
+  String get actionApprovalUnavailable;
+
+  /// No description provided for @actionDecline.
+  ///
+  /// In en, this message translates to:
+  /// **'Decline'**
+  String get actionDecline;
+
+  /// No description provided for @actionSaveApproval.
+  ///
+  /// In en, this message translates to:
+  /// **'Save approval only'**
+  String get actionSaveApproval;
+
   /// No description provided for @connectedServicesCount.
   ///
   /// In en, this message translates to:

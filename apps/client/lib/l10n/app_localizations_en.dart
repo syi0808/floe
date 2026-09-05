@@ -577,6 +577,102 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get calendarProposals => 'Calendar proposals';
+
+  @override
+  String get actionPending => 'Awaiting your decision';
+
+  @override
+  String get actionApproved =>
+      'Approval saved. No event has been created by this app.';
+
+  @override
+  String get actionRejected => 'Declined. No event was created.';
+
+  @override
+  String get actionExecuting =>
+      'Execution was interrupted or is in progress. Do not create a replacement; inspect Calendar.';
+
+  @override
+  String get actionBlocked =>
+      'Blocked. A fresh proposal and approval are required before any future execution.';
+
+  @override
+  String get actionUnknown =>
+      'The result is unconfirmed. Inspect the original calendar; do not create a replacement.';
+
+  @override
+  String get actionSucceeded =>
+      'Calendar creation is recorded as successful. This does not confirm collection into Today.';
+
+  @override
+  String get actionReloadRequired =>
+      'The saved state could not be confirmed. Reload proposals before another decision.';
+
+  @override
+  String get actionLoading => 'Reading or saving proposal state…';
+
+  @override
+  String get actionEmpty => 'No saved proposals to review.';
+
+  @override
+  String get actionReview => 'Review proposal';
+
+  @override
+  String get actionReload => 'Reload proposals';
+
+  @override
+  String get actionMissing => 'This proposal is no longer available.';
+
+  @override
+  String get actionDestination => 'Destination calendar';
+
+  @override
+  String get actionStart => 'Starts (UTC)';
+
+  @override
+  String get actionEnd => 'Ends (UTC)';
+
+  @override
+  String get actionPerson => 'Person';
+
+  @override
+  String get actionExpires => 'Approval expires (UTC)';
+
+  @override
+  String get actionProposalId => 'Proposal ID';
+
+  @override
+  String get actionExecutionId => 'Execution ID';
+
+  @override
+  String get actionApprovedAt => 'Approved at (UTC)';
+
+  @override
+  String get actionExternalId => 'External event ID';
+
+  @override
+  String get actionReason => 'Recorded reason';
+
+  @override
+  String get actionNoExtras =>
+      'No guests or alerts. Times above are UTC; the proposal timezone is shown separately.';
+
+  @override
+  String get actionWriteDisabled =>
+      'Calendar writing is not enabled. Approval only saves your decision; it does not schedule or queue an event.';
+
+  @override
+  String get actionApprovalUnavailable =>
+      'Approval requires Today, an unexpired proposal and a successfully loaded, unchanged calendar connection. Reload or reconnect if needed.';
+
+  @override
+  String get actionDecline => 'Decline';
+
+  @override
+  String get actionSaveApproval => 'Save approval only';
+
+  @override
   String connectedServicesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);

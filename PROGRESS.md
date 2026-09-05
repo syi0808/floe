@@ -14,12 +14,21 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
-| S3 — Approved action | Implementing (bridge only) | Rust fixture; isolated live EventKit create/recovery; prototype UI; Dart decision/ledger bridge | 0/5 | S1 Verified; prototype review; trusted native executor binding | Bind reviewed approval UI after live gates |
+| S3 — Approved action | Implementing (review only) | Rust fixture; isolated live EventKit create/recovery; prototype and Flutter review UI; Dart decision/ledger bridge | 0/5 | S1 Verified; trusted native executor binding; live UI validation | Proposal production and native preflight/create/lookup |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S3 native review UI checkpoint — 2026-09-06
+
+- Today loads saved proposals, opens immutable review and records approve/reject
+  through Rust. No proposal producer or live write is enabled.
+- Persistent visible outcomes, guarded approval, in-flight/response-loss handling
+  and read-only reload; narrow/desktop and keyboard widget coverage.
+- [Behavior and validation boundaries](docs/validation/s3-action-review-ui.md).
+  S3 remains 0/5; native execution and S1/live gates remain pending.
 
 ### S3 decision bridge checkpoint — 2026-09-06
 

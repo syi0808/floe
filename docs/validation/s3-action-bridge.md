@@ -3,6 +3,9 @@
 Date: 2026-09-06. Integration: Dart → JSON/C ABI → Rust → disposable Turso DB.
 This checkpoint resumes implementation, not live rollout or acceptance.
 
+Follow-up: [native review UI](s3-action-review-ui.md) binds these decisions to
+the Today rail. The unfinished-UI statements below describe this bridge checkpoint.
+
 ## Contract
 
 `floe_core_calendar_actions` accepts schema version 1, `person_id`, and an

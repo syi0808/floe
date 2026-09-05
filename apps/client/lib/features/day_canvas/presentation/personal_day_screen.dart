@@ -14,6 +14,9 @@ import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
 import '../application/ffi_day_gateway.dart';
 import '../application/calendar_gateway.dart';
+import '../application/calendar_action_gateway.dart';
+import '../application/calendar_action_controller.dart';
+import 'calendar_action_panel.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
 import 'day_appearance.dart';
@@ -46,6 +49,7 @@ class PersonalDayScreen extends StatefulWidget {
 
 class _PersonalDayScreenState extends State<PersonalDayScreen> {
   late final PersonalDayController controller;
+  CalendarActionController? actionController;
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
 
@@ -56,11 +60,18 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       gateway: widget.gateway,
       query: widget.query,
     )..load();
+    if (widget.gateway case final CalendarActionGateway gateway) {
+      actionController = CalendarActionController(
+        gateway: gateway,
+        personId: widget.query.personId,
+      )..load();
+    }
   }
 
   @override
   void dispose() {
     controller.dispose();
+    actionController?.dispose();
     super.dispose();
   }
 
@@ -224,6 +235,17 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (actionController case final actions?) ...[
+          CalendarActionPanel(
+            controller: actions,
+            connection: () =>
+                controller.loadState == DayLoadState.ready &&
+                    DateUtils.isSameDay(controller.query.date, DateTime.now())
+                ? controller.snapshot?.calendar
+                : null,
+          ),
+          SizedBox(height: 24),
+        ],
         CalendarContextRail(
           snapshot: snapshot,
           disabled: controller.commandPending,

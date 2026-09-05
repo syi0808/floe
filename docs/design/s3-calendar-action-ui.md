@@ -3,6 +3,10 @@
 2026-09-05. User direction: implement/review UI in the HTML prototype before
 porting to Flutter. This is an interactive design reference, not live execution.
 
+2026-09-06: [Flutter ledger review](../validation/s3-action-review-ui.md) now ports
+the inspection/decision boundary. It intentionally uses **Save approval only**,
+not simulated create progress; live writes and proposal production remain disabled.
+
 Today includes a quiet focus suggestion beside the timeline. Review opens the
 existing accessible dialog shell with explicit destination (writable fixture
 calendars only), title, date, start/end, timezone, Person and no guests/alerts.

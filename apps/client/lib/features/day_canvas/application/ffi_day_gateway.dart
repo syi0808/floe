@@ -13,6 +13,7 @@ import '../domain/calendar_action.dart';
 import '../infrastructure/floe_native_bindings.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
+import 'calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
 
 const _protocolVersion = 1;
@@ -28,7 +29,8 @@ final class FfiDayGatewayException implements Exception {
   String toString() => message;
 }
 
-final class FfiDayGateway implements DayGateway, CalendarGateway {
+final class FfiDayGateway
+    implements DayGateway, CalendarGateway, CalendarActionGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -100,6 +102,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
   }
 
+  @override
   Future<List<CalendarAction>> loadCalendarActions(String personId) =>
       _calendarActions(personId, {'kind': 'list'});
 
@@ -127,6 +130,7 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     'timezone': timezone,
   })).single;
 
+  @override
   Future<CalendarAction> decideCalendarAction({
     required String personId,
     required String actionId,
