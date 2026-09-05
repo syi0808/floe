@@ -15,6 +15,13 @@ pub struct CalendarActionRequestDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CalendarActionOperationDto {
+    Capabilities {},
+    Execute {
+        action_id: String,
+    },
+    Recover {
+        action_id: String,
+    },
     List {},
     Get {
         action_id: String,

@@ -9,6 +9,8 @@ import '../../../app/floe_squircle.dart';
 import '../application/calendar_action_controller.dart';
 import '../domain/calendar_action.dart';
 import '../domain/day_models.dart';
+import '../application/calendar_action_gateway.dart';
+import 'calendar_action_proposal.dart';
 
 String _status(AppLocalizations strings, CalendarActionStatus status) =>
     switch (status) {
@@ -45,6 +47,19 @@ class CalendarActionPanel extends StatelessWidget {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
+            if (controller.gateway is CalendarActionExecutionGateway)
+              FloeButton.outlined(
+                onPressed: controller.canPropose && connection() != null
+                    ? () => showFloeDialog<void>(
+                        context,
+                        (_) => CalendarActionProposal(
+                          controller: controller,
+                          connection: connection,
+                        ),
+                      )
+                    : null,
+                child: Text(strings.actionNewProposal),
+              ),
             if (controller.failed) Text(strings.actionReloadRequired),
             if (controller.busy) Text(strings.actionLoading),
             if (!controller.busy &&
@@ -176,7 +191,58 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
               child: Text(_status(strings, action.status)),
             ),
             const SizedBox(height: 12),
-            Text(strings.actionWriteDisabled),
+            Text(
+              controller.writesEnabled
+                  ? strings.actionWriteEnabled
+                  : strings.actionWriteDisabled,
+            ),
+            if (controller.phase case final phase?)
+              Text(switch (phase) {
+                'executing' => strings.actionCheckingCreating,
+                'recovering' => strings.actionLookingUp,
+                _ => strings.actionCollecting,
+              }),
+            if (controller.collection[action.id] case final collected?)
+              Text(
+                collected == 'collected'
+                    ? strings.actionCollected
+                    : collected == 'failed'
+                    ? strings.actionReadFailed
+                    : strings.actionCollecting,
+              ),
+            if (action.status == CalendarActionStatus.approved &&
+                controller.writesEnabled)
+              FloeButton.filled(
+                onPressed:
+                    controller.canApprove(
+                      action,
+                      widget.connection(),
+                      DateTime.now(),
+                      approved: true,
+                    )
+                    ? () => controller.run(
+                        action.id,
+                        connection: widget.connection(),
+                      )
+                    : null,
+                child: Text(strings.actionExecuteApproved),
+              ),
+            if ((action.status == CalendarActionStatus.unknown ||
+                    action.status == CalendarActionStatus.executing) &&
+                controller.gateway is CalendarActionExecutionGateway)
+              FloeButton.outlined(
+                onPressed: controller.busy || controller.needsReload
+                    ? null
+                    : () => controller.run(action.id, recover: true),
+                child: Text(strings.actionCheckCalendar),
+              ),
+            if (action.status == CalendarActionStatus.succeeded)
+              FloeButton.outlined(
+                onPressed: controller.busy
+                    ? null
+                    : () => controller.retryRead(action.id),
+                child: Text(strings.actionRetryRead),
+              ),
             if (action.status.canDecide && !canApprove) ...[
               const SizedBox(height: 12),
               Text(strings.actionApprovalUnavailable),
@@ -207,7 +273,11 @@ class _CalendarActionDialogState extends State<CalendarActionDialog> {
                             DateTime.now(),
                           )
                         : null,
-                    child: Text(strings.actionSaveApproval),
+                    child: Text(
+                      controller.writesEnabled
+                          ? strings.actionApproveCreate
+                          : strings.actionSaveApproval,
+                    ),
                   ),
                 ],
               ),

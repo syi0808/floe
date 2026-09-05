@@ -326,7 +326,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get eventsFromTheSelectedCalendarAreSaved =>
-      'Events from the selected calendars are saved on this device. macOS requires Full Access even for reading, but Floe never changes external events. Deselecting a calendar removes its local copy.';
+      'Events from the selected calendars are saved on this device. Reading never changes Calendar. In a write-enabled build, only an explicitly approved proposal can create an event. Deselecting a calendar removes its local copy.';
 
   @override
   String get continueAction => 'Continue';
@@ -377,7 +377,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get bringYourCalendarIntoOneDayFloe =>
-      'Bring your calendar into one day. Floe reads events; it never creates, edits, or deletes anything in Calendar.';
+      'Bring your calendar into one day. Connecting only reads events. Calendar creation requires a write-enabled build and your explicit proposal approval; editing and deletion are not available.';
 
   @override
   String get connectedCalendar => 'Connected calendars';
@@ -461,11 +461,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get eventsAreSavedOnThisMacFloe =>
-      'Events are saved on this Mac. Floe never creates, edits, or deletes events in your connected calendar.';
+      'Reading saves events on this Mac without changing Calendar. A write-enabled build can create an event only after explicit proposal approval. Editing and deletion are not available.';
 
   @override
   String get macosCallsThisFullAccessEvenFor =>
-      'macOS calls this “Full Access,” even for reading. That OS permission does not enable writes in Floe.';
+      'macOS calls this “Full Access,” even for reading. OS permission alone never authorizes a write: a write-enabled build and explicit proposal approval are also required.';
 
   @override
   String get whatHappensOffline => 'What happens offline?';
@@ -575,6 +575,58 @@ class AppLocalizationsEn extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get actionNewProposal => 'Plan a Calendar event';
+
+  @override
+  String get actionTitle => 'Event title';
+
+  @override
+  String get actionPrepareReview => 'Prepare for review';
+
+  @override
+  String get actionProposalExplanation =>
+      'Choose a connected calendar and future UTC times (ending in Z), up to 24 hours apart. This only prepares a proposal. You will review and explicitly approve it next. Calendar writability, timezone and conflicts are checked before execution.';
+
+  @override
+  String get actionFormInvalid =>
+      'Check this value and the future UTC interval.';
+
+  @override
+  String get actionWriteEnabled =>
+      'Explicit approval creates one event after fresh checks. No guests or alerts. Ambiguous results are recovered by lookup only.';
+
+  @override
+  String get actionCheckingCreating =>
+      'Checking permission, target and conflicts, then creating once…';
+
+  @override
+  String get actionLookingUp =>
+      'Looking up the original execution marker. No new event is being created…';
+
+  @override
+  String get actionCollecting => 'Collecting the created event into Today…';
+
+  @override
+  String get actionCollected =>
+      'The created event was collected into your saved calendar timeline.';
+
+  @override
+  String get actionReadFailed =>
+      'The event was created, but could not be collected. Retry the read, not creation.';
+
+  @override
+  String get actionExecuteApproved => 'Create this approved event';
+
+  @override
+  String get actionCheckCalendar => 'Check Calendar for this event';
+
+  @override
+  String get actionRetryRead => 'Retry Calendar read';
+
+  @override
+  String get actionApproveCreate => 'Approve & create';
 
   @override
   String get calendarProposals => 'Calendar proposals';

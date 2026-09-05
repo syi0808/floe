@@ -65,6 +65,7 @@ pub struct CalendarActionPolicy {
     pub allow_create: bool,
 }
 
+#[derive(Deserialize)]
 pub struct CalendarPreflight {
     pub person_id: PersonId,
     pub provider: CalendarProvider,
@@ -75,7 +76,7 @@ pub struct CalendarPreflight {
     pub has_conflict: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CalendarCreateReceipt {
     pub execution_id: Uuid,
     pub person_id: PersonId,
@@ -323,6 +324,12 @@ impl FloeCore {
         let mirror = self.store.calendar_mirror(action.person_id).await?;
         if mirror.is_none_or(|mirror| {
             mirror.connection.revision != action.connection_revision
+                || mirror.connection.disconnected
+                || mirror
+                    .connection
+                    .source_statuses
+                    .get(&action.calendar_id)
+                    .is_some_and(|status| status.error.is_some())
                 || mirror.connection.provider != action.provider
                 || mirror.connection.error.is_some()
                 || !mirror

@@ -14,12 +14,24 @@ verified criteria, not estimated implementation percentages.
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
-| S3 — Approved action | Implementing (review only) | Rust fixture; isolated live EventKit create/recovery; prototype and Flutter review UI; Dart decision/ledger bridge | 0/5 | S1 Verified; trusted native executor binding; live UI validation | Proposal production and native preflight/create/lookup |
+| S3 — Approved action | Implemented; validating | Proposal/review UI; trusted native executor; live Rust/EventKit response-loss recovery and snapshot import | 0/5 | S1 Verified; final app permission/UI/failure matrix | Complete signed-app validation |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S3 native execution checkpoint — 2026-09-06
+
+- Connected proposal preparation, explicit approval, native execution, lookup-only
+  recovery and separate Calendar read retry. Normal builds remain write-disabled.
+- Live disposable create through the actual Rust/native adapter survived injected
+  response loss and process restart; duplicate create was blocked. Exact cleanup
+  and absence verification passed. Existing calendar selections were preserved.
+- Fixed legacy mirror CAS compatibility (`8c068da`); diagnosed ad-hoc signing/TCC
+  mismatch and began user-authorized Floe-only Calendar reauthorization.
+- 46 Rust tests, 70 Flutter tests and eight native assertions pass.
+- [Implementation, evidence and remaining gates](docs/validation/s3-native-executor.md).
 
 ### S3 native review UI checkpoint — 2026-09-06
 
@@ -246,9 +258,9 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 ## Next Priorities
 
 1. Complete S1's live Calendar criteria.
-2. Review S3 approval/recovery in the HTML prototype first. The isolated EventKit
-   create/recovery PoC passes; native Rust binding and production permission/error
-   handling remain gates before enabling product writes or porting UI to Flutter.
+2. Complete signed-app S3 approval/create/collection and provider-failure validation.
+   Prototype review, Flutter UI and native Rust binding are implemented; keep
+   ordinary builds write-disabled until the live acceptance gates pass.
 3. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,

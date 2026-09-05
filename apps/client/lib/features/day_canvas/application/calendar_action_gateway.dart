@@ -9,3 +9,24 @@ abstract interface class CalendarActionGateway {
     required CalendarActionDecision decision,
   });
 }
+
+abstract interface class CalendarActionExecutionGateway
+    implements CalendarActionGateway {
+  Future<bool> calendarWritesEnabled(String personId);
+  Future<CalendarAction> executeCalendarAction(
+    String personId,
+    String actionId,
+  );
+  Future<CalendarAction> recoverCalendarAction(
+    String personId,
+    String actionId,
+  );
+  Future<CalendarAction> proposeCalendarAction({
+    required String personId,
+    required String calendarId,
+    required String title,
+    required DateTime startsAt,
+    required DateTime endsAt,
+    required String timezone,
+  });
+}

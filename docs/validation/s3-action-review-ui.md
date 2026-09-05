@@ -2,6 +2,10 @@
 
 Date: 2026-09-06. Scope: Flutter review of the existing Rust action ledger.
 
+Follow-up: [native execution checkpoint](s3-native-executor.md) adds proposal
+preparation, gated execution, lookup and collection. Review-only statements below
+describe this earlier checkpoint.
+
 The Today context rail now loads Person-scoped proposals for gateways implementing
 `CalendarActionGateway`. Opening Review reloads the ledger, then shows the immutable
 destination/provider/ID, title, start/end, timezone, Person, expiry, proposal and

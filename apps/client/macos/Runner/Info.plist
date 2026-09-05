@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Show calendar events in your day. macOS requires Full Access even for reading, but Floe only reads events and never changes your calendars.</string>
+    <string>Show calendar events in your day. In a write-enabled build, create an event only after you explicitly approve its details. Floe does not edit or delete your existing events.</string>
     <key>NSCalendarsUsageDescription</key>
-    <string>Read calendar events to show them in your day. Floe never changes your calendars.</string>
+    <string>Read calendar events and, in a write-enabled build, create explicitly approved events. Floe does not edit or delete your existing events.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>

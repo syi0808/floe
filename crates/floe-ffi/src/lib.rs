@@ -1,3 +1,5 @@
+mod native_calendar;
+
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -171,6 +173,8 @@ pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult
 #[derive(Serialize)]
 pub struct CalendarActionsResult {
     pub actions: Vec<floe_core::CalendarAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writes_enabled: Option<bool>,
 }
 
 pub fn calendar_actions(
@@ -179,12 +183,74 @@ pub fn calendar_actions(
 ) -> BridgeResult<CalendarActionsResult> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
+    let recover = matches!(
+        &request.operation,
+        CalendarActionOperationDto::Recover { .. }
+    );
     let action = match request.operation {
+        CalendarActionOperationDto::Capabilities {} => {
+            return Ok(CalendarActionsResult {
+                actions: vec![],
+                writes_enabled: Some(
+                    person_id.to_string() == native_calendar::LOCAL_PERSON
+                        && native_calendar::NativeCalendar::enabled(),
+                ),
+            });
+        }
+        CalendarActionOperationDto::Execute { action_id }
+        | CalendarActionOperationDto::Recover { action_id } => {
+            let id = parse_id(&action_id, "action_id", |value| value)?;
+            if person_id.to_string() != native_calendar::LOCAL_PERSON {
+                return Err(invalid(
+                    "person_id",
+                    "native Calendar is bound to this device's Person",
+                ));
+            }
+            let connection = handle
+                .runtime
+                .block_on(handle.core.calendar_connection(person_id))
+                .map_err(core_error)?;
+            let calendar_ids = connection
+                .as_ref()
+                .map(|connection| {
+                    connection
+                        .selected_calendars()
+                        .into_iter()
+                        .map(|calendar| calendar.calendar_id)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let provider = native_calendar::NativeCalendar::new(calendar_ids);
+            if recover {
+                handle.runtime.block_on(
+                    handle
+                        .core
+                        .recover_calendar_action(person_id, id, &provider),
+                )
+            } else {
+                let policy = floe_core::CalendarActionPolicy {
+                    person_id,
+                    provider: floe_domain::CalendarProvider::EventKit,
+                    allowed_calendar_ids: provider.calendar_ids.clone(),
+                    allow_create: native_calendar::NativeCalendar::enabled(),
+                };
+                handle.runtime.block_on(handle.core.execute_calendar_action(
+                    person_id,
+                    id,
+                    &policy,
+                    &provider,
+                    Utc::now,
+                ))
+            }
+        }
         CalendarActionOperationDto::List {} => {
             return handle
                 .runtime
                 .block_on(handle.core.calendar_actions(person_id))
-                .map(|actions| CalendarActionsResult { actions })
+                .map(|actions| CalendarActionsResult {
+                    actions,
+                    writes_enabled: None,
+                })
                 .map_err(core_error);
         }
         CalendarActionOperationDto::Get { action_id } => handle.runtime.block_on(
@@ -226,6 +292,7 @@ pub fn calendar_actions(
     .map_err(core_error)?;
     Ok(CalendarActionsResult {
         actions: vec![action],
+        writes_enabled: None,
     })
 }
 

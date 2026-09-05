@@ -6,6 +6,17 @@ use floe_domain::*;
 use crate::{CoreError, ErrorCode, FloeCore};
 
 impl FloeCore {
+    pub async fn calendar_connection(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<CalendarConnection>, CoreError> {
+        Ok(self
+            .store
+            .calendar_mirror(person_id)
+            .await?
+            .map(|mirror| mirror.connection))
+    }
+
     pub async fn select_calendar(
         &self,
         person_id: PersonId,

@@ -3,6 +3,10 @@
 Date: 2026-09-06. Integration: Dart → JSON/C ABI → Rust → disposable Turso DB.
 This checkpoint resumes implementation, not live rollout or acceptance.
 
+The later [native execution checkpoint](s3-native-executor.md) adds ID-only
+execution/recovery and capability queries. The no-execution contract below is
+historical; caller-supplied policy, time and receipts remain prohibited.
+
 Follow-up: [native review UI](s3-action-review-ui.md) binds these decisions to
 the Today rail. The unfinished-UI statements below describe this bridge checkpoint.
 

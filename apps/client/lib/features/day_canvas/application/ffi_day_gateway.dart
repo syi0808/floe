@@ -30,7 +30,7 @@ final class FfiDayGatewayException implements Exception {
 }
 
 final class FfiDayGateway
-    implements DayGateway, CalendarGateway, CalendarActionGateway {
+    implements DayGateway, CalendarGateway, CalendarActionExecutionGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -114,6 +114,7 @@ final class FfiDayGateway
     'action_id': actionId,
   })).single;
 
+  @override
   Future<CalendarAction> proposeCalendarAction({
     required String personId,
     required String calendarId,
@@ -154,6 +155,34 @@ final class FfiDayGateway
         .map((value) => CalendarAction.fromJson(_asMap(value)))
         .toList(growable: false);
   }
+
+  @override
+  Future<bool> calendarWritesEnabled(String personId) async {
+    final data = await _request('calendar_actions', {
+      'schema_version': _protocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'capabilities'},
+    });
+    return data['writes_enabled'] == true;
+  }
+
+  @override
+  Future<CalendarAction> executeCalendarAction(
+    String personId,
+    String actionId,
+  ) async => (await _calendarActions(personId, {
+    'kind': 'execute',
+    'action_id': actionId,
+  })).single;
+
+  @override
+  Future<CalendarAction> recoverCalendarAction(
+    String personId,
+    String actionId,
+  ) async => (await _calendarActions(personId, {
+    'kind': 'recover',
+    'action_id': actionId,
+  })).single;
 
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async {
@@ -559,6 +588,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
           as String,
     ),
     isAllDay: isAllDay,
+    calendarId: source?['calendar_id'] as String?,
     calendarName: source == null
         ? null
         : source['calendar_name'] as String? ?? 'Previous calendar connection',

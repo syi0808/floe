@@ -27,3 +27,16 @@ if [[ -z "${SIGNING_IDENTITY}" ]]; then
   SIGNING_IDENTITY="-"
 fi
 codesign --force --sign "${SIGNING_IDENTITY}" "${DESTINATION_LIBRARY}"
+
+NATIVE_FLAGS=()
+if [[ "${FLOE_ENABLE_CALENDAR_WRITES:-0}" == "1" ]]; then
+  NATIVE_FLAGS+=(-D FLOE_CALENDAR_WRITES)
+fi
+NATIVE_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib"
+xcrun swiftc -emit-library -warnings-as-errors \
+  -target "$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" \
+  "${NATIVE_FLAGS[@]}" \
+  "${SRCROOT}/CalendarActions/EventKitActions.swift" \
+  -o "${NATIVE_LIBRARY}"
+install_name_tool -id "@rpath/libfloe_eventkit.dylib" "${NATIVE_LIBRARY}"
+codesign --force --sign "${SIGNING_IDENTITY}" "${NATIVE_LIBRARY}"

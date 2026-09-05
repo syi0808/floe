@@ -69,6 +69,7 @@ final class EventItem extends DayItem {
     required this.endsAt,
     this.isAllDay = false,
     this.calendarName,
+    this.calendarId,
     this.externalId,
     this.provider,
     this.timezone,
@@ -78,6 +79,7 @@ final class EventItem extends DayItem {
   final DateTime endsAt;
   final bool isAllDay;
   final String? calendarName;
+  final String? calendarId;
   final String? externalId;
   final String? provider;
   final String? timezone;

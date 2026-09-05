@@ -19,6 +19,7 @@ import '../application/calendar_action_controller.dart';
 import 'calendar_action_panel.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
+import '../domain/calendar_action.dart';
 import 'day_appearance.dart';
 import 'calendar_agenda.dart';
 import 'calendar_context_rail.dart';
@@ -64,6 +65,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       actionController = CalendarActionController(
         gateway: gateway,
         personId: widget.query.personId,
+        collect: _collectAction,
       )..load();
     }
   }
@@ -73,6 +75,48 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     controller.dispose();
     actionController?.dispose();
     super.dispose();
+  }
+
+  Future<void> _collectAction(CalendarAction action) async {
+    if (widget.gateway is! CalendarGateway) {
+      throw StateError('Calendar read unavailable');
+    }
+    final gateway = widget.gateway as CalendarGateway;
+    final start = action.startsAt.toLocal();
+    final end = action.endsAt
+        .subtract(const Duration(microseconds: 1))
+        .toLocal();
+    var day = DateTime(start.year, start.month, start.day);
+    final last = DateTime(end.year, end.month, end.day);
+    var matched = false;
+    while (!day.isAfter(last)) {
+      final snapshot = await gateway.syncCalendar(
+        DayQuery.local(
+          personId: action.personId,
+          date: day,
+          now: DateTime.now(),
+        ),
+      );
+      final connection = snapshot.calendar;
+      if (connection == null ||
+          connection.error != null ||
+          connection.calendars.any(
+            (calendar) =>
+                calendar.id == action.calendarId && calendar.error != null,
+          )) {
+        throw StateError('Calendar collection failed');
+      }
+      matched =
+          matched ||
+          snapshot.items.whereType<EventItem>().any(
+            (event) =>
+                event.externalId == action.externalId &&
+                event.calendarId == action.calendarId,
+          );
+      day = DateTime(day.year, day.month, day.day + 1);
+    }
+    if (mounted) await controller.load();
+    if (!matched) throw StateError('Created event has not been collected yet');
   }
 
   @override
