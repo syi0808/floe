@@ -12,9 +12,8 @@ Date: 2026-09-05, macOS arm64. Extends S2, not S4 acceptance.
 - Go: management/inference separation, exact Host/Origin/CSRF, cookie attributes,
   pairing approval/expiry/proof bounds, restart persistence and revocation, credential
   redaction/failure atomicity, endpoint key isolation, consent and synthetic tests.
-- Go protocol fixture: auth initialization, notification ordering, logout, arbitrary
-  RPC refusal and authorization URL allowlist. Race detector and vet pass.
-- Opt-in installed Codex 0.153.2 handshake: independent CODEX_HOME, no inherited login.
+- Go OAuth fixtures: PKCE/state callback, token exchange, refresh rotation, Keychain
+  boundary, logout, no-tool structured Codex request and bounded SSE output.
 - Opt-in Security.framework test: disposable synthetic credential write/read/delete
   passes. No real provider API key is read or registered by this test.
 - Actual Flutter → Rust → Go console → synthetic provider integration passes on
@@ -28,7 +27,7 @@ Date: 2026-09-05, macOS arm64. Extends S2, not S4 acceptance.
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cd server
-FLOE_TEST_INSTALLED_CODEX=1 FLOE_TEST_KEYCHAIN=1 go test -race ./...
+FLOE_TEST_KEYCHAIN=1 go test -race ./...
 go vet ./...
 cd ../apps/client
 flutter test
@@ -44,7 +43,7 @@ temporary server state; it does not touch the live node or native app Keychain.
 ## Interactive checkpoint
 
 - Local node started at `http://127.0.0.1:8431`; dashboard opens and login works.
-- Browser dashboard Check status shows Codex `disconnected`, inference disabled.
+- Browser dashboard supports direct Codex OAuth and reports whether inference is enabled.
 - The operator confirmed native app code entry, dashboard approval and pairing work.
   Native UI automation still times out; Keychain persistence across an app relaunch
   and independent visual verification remain manual checkpoints.
@@ -64,7 +63,8 @@ temporary server state; it does not touch the live node or native app Keychain.
 5. Start Codex browser login, complete consent yourself, verify completion, cancel a
    new pending flow, disconnect and reconnect. Check five-minute expiry with the page
    closed. Verify this does not alter an existing non-Floe Codex login.
-6. Keep Codex inference disabled until no-tool execution, context/file isolation,
-   structured output, cancellation and live provider eligibility have been evaluated.
+6. Add a Codex OAuth target, run the synthetic test, then request a focus proposal.
+   Verify no tool request, minimal context, structured output, cancellation, token
+   refresh and subscription-limit behavior before treating the adapter as live-verified.
 
 Real model quality, S1 Calendar gates and S2 acceptance remain pending.

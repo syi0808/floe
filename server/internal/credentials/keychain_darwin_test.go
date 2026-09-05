@@ -23,6 +23,15 @@ func TestKeychainRoundTrip(test *testing.T) {
 	if err := store.Delete(name); err != nil {
 		test.Fatal(err)
 	}
+	if err := store.Put(name, "first"); err != nil || store.Put(name, "rotated") != nil {
+		test.Fatal("credential rotation failed")
+	}
+	if value, err := store.Get(name); err != nil || value != "rotated" {
+		test.Fatal("rotated credential unavailable")
+	}
+	if err := store.Delete(name); err != nil {
+		test.Fatal(err)
+	}
 	if _, err := store.Get(name); err == nil {
 		test.Fatal("deleted credential still present")
 	}

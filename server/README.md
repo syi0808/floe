@@ -5,8 +5,8 @@ CLIProxyAPI dependency. Architecture: [ADR 0009](../docs/decisions/0009-contextu
 
 This is a manually launched, single-operator loopback service, not the hosted
 server. The local console adds target registration, macOS Keychain credentials,
-app pairing, and a Codex authentication preview ([ADR 0010](../docs/decisions/0010-local-connection-console.md)).
-Accounts, sync, Codex inference, Apple Foundation Models, streaming and usage
+app pairing, and server-owned Codex OAuth ([ADR 0010](../docs/decisions/0010-local-connection-console.md)).
+Accounts, sync, Apple Foundation Models, general streaming and usage
 accounting remain separate work. Native models will not be forced through a remote server.
 
 ## Local dashboard and app pairing
@@ -45,21 +45,21 @@ a private state directory and explicitly selects console mode. No LAN, remote
 deployment, TLS termination or multi-user authorization is supported in this slice.
 Do not share one data directory between concurrently running server processes.
 
-### Codex authentication preview
+### Codex / ChatGPT OAuth
 
-Install Codex separately from its official distribution; Floe does not download it.
-**Check status** starts `codex app-server --listen stdio://`; **Start browser login**
-returns a provider link for the user to open. Login completion updates the dashboard.
-Cancel and disconnect use the official account RPCs. The five-minute login window
-is cancelled server-side, even if the dashboard closes.
+**Start browser login** runs a PKCE OAuth flow owned by the Go server, using a
+five-minute callback listener on `localhost:1455`. Access, refresh and identity
+tokens are stored as one macOS Keychain credential and are never returned through
+the management or app APIs. **Disconnect Codex** deletes that credential.
 
-The adapter uses a dedicated `codex-home` under the server data directory and
-`cli_auth_credentials_store="keyring"`, without plaintext fallback. It does not
-import `~/.codex/auth.json`, inherit API-key environment variables, expose arbitrary
-RPCs, start threads/turns, or invoke inference. Credential presence is not a live
-provider-validity test. Actual OAuth consent, token refresh/revocation behavior and
-safe no-tool inference remain evaluation gates; **inference stays disabled**.
-Protocol smoke tested with installed Codex CLI 0.153.2; upgrades require retesting.
+After connecting, add a `Codex / ChatGPT OAuth` target and enter a model available
+to the account. The endpoint and credential are fixed server-side. Requests go to
+the ChatGPT Codex Responses backend with an empty tool list, `tool_choice: none`,
+bounded context, structured output and the same per-request external-transfer
+consent as other network providers. The server refreshes expiring access tokens and
+stores the rotated result in Keychain. This integration follows the Codex CLI OAuth
+wire contract directly rather than launching `codex app-server`; upstream protocol,
+model availability and subscription limits can change and require live retesting.
 
 ## Legacy headless mode
 
@@ -170,7 +170,6 @@ startup/failure summaries only, not prompts, outputs or credentials.
 ```sh
 go test -race ./...
 go vet ./...
-FLOE_TEST_INSTALLED_CODEX=1 go test ./internal/codexauth
 FLOE_TEST_KEYCHAIN=1 go test ./internal/credentials
 ```
 

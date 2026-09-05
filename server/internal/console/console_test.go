@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,6 +18,18 @@ import (
 type memoryVault struct {
 	values map[string]string
 	fail   bool
+}
+
+type fakeAuthRuntime struct{ ready bool }
+
+func (runtime *fakeAuthRuntime) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected", "inference_enabled": runtime.ready}, nil
+}
+
+func (runtime *fakeAuthRuntime) Ready() bool { return runtime.ready }
+
+func (*fakeAuthRuntime) Generate(context.Context, string, string, json.RawMessage, json.RawMessage) (string, error) {
+	return `{"ok":true}`, nil
 }
 
 func (vault *memoryVault) Get(key string) (string, error) { return vault.values[key], nil }
@@ -238,5 +251,27 @@ func TestUnavailableCredentialsDoNotDisableDashboard(test *testing.T) {
 	management, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
 	if err != nil || management.gateway == nil || !management.unavailable["focus"] {
 		test.Fatal("missing credential prevented management startup")
+	}
+}
+
+func TestCodexTargetUsesOAuthRuntimeWithoutAPIKey(test *testing.T) {
+	fixture := setup(test)
+	runtime := &fakeAuthRuntime{}
+	fixture.console.runtime = runtime
+	fixture.value(fixture.call("POST", "/manage/api/target", map[string]string{
+		"id": "codex-focus", "provider": "codex_oauth", "base_url": "https://evil.example", "model": "fixture", "api_key": "must-not-be-stored",
+	}, ""))
+	target := fixture.console.state.Targets["codex-focus"]
+	if target.BaseURL != "https://chatgpt.com/backend-api/codex" || target.APIKeyEnv != "" || len(fixture.vault.values) != 0 {
+		test.Fatal("Codex target accepted configurable endpoint or API key")
+	}
+	state := fixture.value(fixture.call("GET", "/manage/api/state", nil, ""))
+	if state["targets"].(map[string]any)["codex-focus"].(map[string]any)["available"] != false {
+		test.Fatal("disconnected OAuth target reported available")
+	}
+	runtime.ready = true
+	state = fixture.value(fixture.call("GET", "/manage/api/state", nil, ""))
+	if state["targets"].(map[string]any)["codex-focus"].(map[string]any)["available"] != true {
+		test.Fatal("connected OAuth target reported unavailable")
 	}
 }

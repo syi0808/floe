@@ -24,9 +24,17 @@ type provider struct {
 	credential string
 	external   bool
 	client     *http.Client
+	codex      CodexClient
 }
 
-func newProvider(target Target, lookup func(string) string) (*provider, error) {
+func newProvider(target Target, lookup func(string) string, codex CodexClient) (*provider, error) {
+	if target.Provider == "codex_oauth" {
+		if target.BaseURL != "https://chatgpt.com/backend-api/codex" || target.APIKeyEnv != "" || codex == nil ||
+			strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
+			return nil, errors.New("invalid Codex OAuth target")
+		}
+		return &provider{target: target, external: true, codex: codex}, nil
+	}
 	endpoint, err := url.Parse(target.BaseURL)
 	if err != nil {
 		return nil, errors.New("invalid provider endpoint")
@@ -70,6 +78,16 @@ func newProvider(target Target, lookup func(string) string) (*provider, error) {
 }
 
 func (adapter *provider) generate(ctx context.Context, request Request) (string, error) {
+	if adapter.target.Provider == "codex_oauth" {
+		output, err := adapter.codex.Generate(ctx, adapter.target.Model, request.Instructions, request.Input, request.OutputSchema)
+		if err != nil {
+			return "", errProvider
+		}
+		if !validOutput(output) {
+			return "", errInvalidOutput
+		}
+		return output, nil
+	}
 	if adapter.target.Provider == "ollama" {
 		return adapter.ollama(ctx, request)
 	}

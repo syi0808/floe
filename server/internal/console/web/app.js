@@ -66,6 +66,7 @@ async function refresh() {
       for (const name of ['provider', 'base_url', 'model']) form.elements[name].value = target[name];
       form.elements.id.value = identifier;
       form.elements.api_key.value = '';
+      syncProviderForm();
       form.elements.id.focus();
     }), button('Test connection', async () => {
       if (!confirm(target.requires_external_consent ? 'Send a synthetic test to this provider? No calendar data is sent. Provider charges may apply.' : 'Run a synthetic local-model test? No calendar data is sent.')) return;
@@ -104,10 +105,25 @@ element('target-form').addEventListener('submit', (event) => {
     await api('target', input); await refresh(); notice('Target saved. Run a synthetic connection test when ready.');
   });
 });
+function syncProviderForm() {
+  const form = element('target-form');
+  const provider = form.elements.provider.value;
+  const codex = provider === 'codex_oauth';
+  element('endpoint-field').hidden = codex;
+  element('api-key-field').hidden = codex;
+  element('api-key-help').hidden = codex;
+  if (codex) form.elements.base_url.value = 'https://chatgpt.com/backend-api/codex';
+  form.elements.api_key.value = '';
+}
 element('target-form').elements.provider.addEventListener('change', (event) => {
   const form = element('target-form');
-  form.elements.base_url.value = event.target.value === 'ollama' ? 'http://127.0.0.1:11434' : 'https://api.openai.com/v1';
-  form.elements.api_key.value = '';
+  const endpoints = {
+    ollama: 'http://127.0.0.1:11434',
+    openai_compatible: 'https://api.openai.com/v1',
+    codex_oauth: 'https://chatgpt.com/backend-api/codex',
+  };
+  form.elements.base_url.value = endpoints[event.target.value];
+  syncProviderForm();
 });
 element('refresh').onclick = () => action(element('refresh'), refresh);
 element('logout').onclick = () => action(element('logout'), async () => { await api('logout', {}); lock(); });
@@ -118,7 +134,7 @@ for (const operation of ['approve', 'reject']) element(operation).onclick = () =
 async function codex(operation) {
   const value = await api(`codex/${operation}`, {});
   codexPending = value.status === 'pending';
-  element('codex-state').textContent = `Authentication: ${value.status} · Inference disabled (preview)`;
+  element('codex-state').textContent = `Authentication: ${value.status} · Inference ${value.inference_enabled ? 'enabled' : 'unavailable'}`;
   const link = element('codex-link');
   link.hidden = !value.auth_url;
   if (value.auth_url) link.href = value.auth_url;
@@ -135,3 +151,4 @@ setInterval(async () => {
   finally { polling = false; }
 }, 5000);
 refresh().catch(() => lock());
+syncProviderForm();

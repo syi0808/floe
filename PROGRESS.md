@@ -43,8 +43,9 @@ implementation slice. This does not advance S4 server/sync acceptance.
   storage, target management, synthetic tests and paired app tokens. Flutter exposes
   the deployment-neutral server boundary under **Settings → Remote server**; S2 still
   accepts loopback addresses only pending a hosted transport/authentication design.
-- Codex official App Server authentication preview uses an isolated credential space;
-  Codex inference stays disabled. Live OAuth consent/refresh, Apple inference, streaming,
+- The Go server now owns Codex PKCE OAuth, keeps rotating tokens in macOS Keychain
+  and exposes Codex as a no-tool structured-output target. Live account consent,
+  refresh/revocation and subscription-limit validation remain pending; Apple inference,
   usage accounting and hosted/multi-user operation remain deferred.
 
 ### Local connection console checkpoint

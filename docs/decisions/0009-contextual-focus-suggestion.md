@@ -46,7 +46,7 @@ Rust host → validate returned proposal → Flutter presentation
 
 The headless baseline below is extended by [ADR 0010](0010-local-connection-console.md):
 the default local console adds managed target registration, Keychain-backed credentials,
-app pairing/configurable local address and a gated Codex authentication preview.
+app pairing/configurable local address and a server-owned Codex OAuth adapter.
 
 The Go module lives under `server/`, has no third-party Go dependencies, and
 runs explicitly as a loopback-only developer service on `127.0.0.1:8431`.

@@ -22,6 +22,7 @@ var assets embed.FS
 
 type AuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	inference.CodexClient
 }
 
 type session struct {
@@ -82,13 +83,13 @@ func (console *Console) rebuild() {
 	lookup := func(name string) string { return secrets[name] }
 	console.unavailable = map[string]bool{}
 	for identifier, target := range console.state.Targets {
-		if _, err := inference.New(inference.Config{Targets: map[string]inference.Target{identifier: target}}, console.internalToken, lookup); err != nil {
+		if _, err := inference.New(inference.Config{Targets: map[string]inference.Target{identifier: target}}, console.internalToken, lookup, console.runtime); err != nil {
 			console.unavailable[identifier] = true
 		} else {
 			config.Targets[identifier] = target
 		}
 	}
-	console.gateway, _ = inference.New(config, console.internalToken, lookup)
+	console.gateway, _ = inference.New(config, console.internalToken, lookup, console.runtime)
 }
 
 func reply(writer http.ResponseWriter, status int, value any) {
@@ -311,7 +312,11 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 	if request.URL.Path == "/manage/api/state" && request.Method == "GET" {
 		targets := map[string]any{}
 		for identifier, target := range console.state.Targets {
-			targets[identifier] = map[string]any{"provider": target.Provider, "model": target.Model, "base_url": target.BaseURL, "has_credential": target.APIKeyEnv != "", "available": !console.unavailable[identifier], "requires_external_consent": target.Provider != "ollama"}
+			available := !console.unavailable[identifier]
+			if target.Provider == "codex_oauth" {
+				available = available && console.runtime != nil && console.runtime.Ready()
+			}
+			targets[identifier] = map[string]any{"provider": target.Provider, "model": target.Model, "base_url": target.BaseURL, "has_credential": target.APIKeyEnv != "", "available": available, "requires_external_consent": target.Provider != "ollama"}
 		}
 		clients := []string{}
 		for identifier := range console.state.Clients {
@@ -409,6 +414,10 @@ func (console *Console) updateTarget(writer http.ResponseWriter, request *http.R
 		return
 	}
 	old := console.state.Targets[input.ID]
+	if input.Provider == "codex_oauth" {
+		input.BaseURL = "https://chatgpt.com/backend-api/codex"
+		input.APIKey = ""
+	}
 	target := inference.Target{Provider: input.Provider, BaseURL: input.BaseURL, Model: input.Model}
 	if input.APIKey != "" {
 		target.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(randomToken())
@@ -419,7 +428,7 @@ func (console *Console) updateTarget(writer http.ResponseWriter, request *http.R
 	if input.APIKey != "" {
 		lookup = func(string) string { return input.APIKey }
 	}
-	if _, err := inference.New(inference.Config{Targets: map[string]inference.Target{input.ID: target}}, console.internalToken, lookup); err != nil {
+	if _, err := inference.New(inference.Config{Targets: map[string]inference.Target{input.ID: target}}, console.internalToken, lookup, console.runtime); err != nil {
 		failure(writer, 400, "invalid_target")
 		return
 	}

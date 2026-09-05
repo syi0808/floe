@@ -40,28 +40,30 @@ separate HTTPS, server-identity, account and multi-user authorization decision.
   atomic 0600 configuration. No plaintext provider-key fallback or read-back API.
   Keys stay out of app/domain storage, model payloads and logs. Endpoint/provider
   changes clear inheritance; deleting a target does not revoke the provider-side key.
-- Codex: official App Server account RPCs only, isolated CODEX_HOME and working
-  directory, OS credential store required, minimal environment, no inherited
-  provider tokens. Existing Codex credentials are never copied. Unknown inbound
-  RPCs are rejected. No thread/turn, shell, file, tool or inference methods are exposed.
+- Codex: the Go server owns a PKCE OAuth callback and stores access, refresh and
+  identity tokens as a single macOS Keychain credential. Existing Codex credentials
+  are never copied. Tokens are not exposed to Flutter or management APIs. The
+  inference adapter fixes the ChatGPT Codex endpoint, sends no tools, requires
+  structured output and retains Floe's per-request external-transfer consent.
 
-## Codex evaluation gate
+## Codex OAuth boundary
 
-Official account APIs support browser login, completion notifications, cancellation,
-status and logout. Floe uses these instead of reproducing OAuth endpoints/client IDs
-or extracting subscription tokens. The callback and provider-token lifecycle belong
-to Codex, not a new generic Floe OAuth broker.
+Floe follows the Codex CLI OAuth wire contract directly rather than embedding
+CLIProxyAPI or launching Codex App Server. The local callback uses PKCE and state,
+expires after five minutes, and accepts only the fixed callback path. Token exchange,
+refresh and inference endpoints are fixed in the binary; redirects and proxy
+environment inheritance are disabled. Token responses and provider failures are
+bounded and redacted.
 
-The installed 0.153.2 runtime successfully initializes and reports no inherited
-account in an isolated home. Fixture protocol tests cover login completion, including
-notification/response ordering, logout and rejection of arbitrary RPCs. This is not
-proof of live consent, refresh/revocation, account eligibility or inference isolation.
-Codex inference is visibly disabled until those gates pass. Apple availability and
-other providers' officially supported OAuth paths remain separate adapters.
+This deliberately trades the App Server's credential ownership for server-owned
+routing. The OAuth client and ChatGPT Codex backend are not a general public OpenAI
+API contract, so compatibility, account eligibility, subscription usage, revocation
+and refresh rotation require live regression checks. Other providers remain separate
+adapters; no generic OAuth broker or token read-back API is introduced.
 
 ## Operations and limits
 
-The console edits explicit API/Ollama targets and runs only user-triggered synthetic
+The console edits explicit API/Ollama/Codex targets and runs only user-triggered synthetic
 tests. It shows configured/unavailable state, not fabricated provider health or usage.
 Registration alone performs no inference. Missing credentials do not prevent
 management startup. No automatic fallback or provider selection is added.
@@ -70,11 +72,12 @@ State writes are atomic; API-key references and hashed app tokens persist across
 restarts. Management sessions and pairing attempts do not. Revocation stops future
 requests; it does not cancel a request already accepted by an immutable gateway
 snapshot. One process must own a state directory. Launch-on-login, remote TLS,
-multi-user permissions, key rotation UI and cross-platform secret stores are deferred.
+multi-user permissions, OAuth client configurability, key rotation UI and
+cross-platform secret stores are deferred.
 
 ## References
 
-- [Official Codex App Server protocol](https://developers.openai.com/codex/app-server/)
-- [Official credential-store configuration](https://openai.com/index/running-codex-safely/)
+- [CLIProxyAPI Codex OAuth reference implementation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/openai_auth.go)
+- [CLIProxyAPI Codex token storage model](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/token.go)
 - [Native OAuth browser/PKCE guidance](https://www.rfc-editor.org/rfc/rfc8252.html)
 - [Validation evidence](../validation/local-connections.md)

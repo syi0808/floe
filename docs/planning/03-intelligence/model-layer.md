@@ -12,9 +12,10 @@
 Apple Foundation Models 같은 기기 내 모델은 native executor 경계로 분리하며
 원격 서버를 필수 경유하지 않는다. CLIProxyAPI 전체 채택은 보류한다.
 [ADR 0010](../../decisions/0010-local-connection-console.md)은 로컬 관리 콘솔,
-Keychain 기반 키 등록, 앱 주소 설정·페어링 및 Codex 공식 인증 preview를 추가한다.
-추론은 API/Ollama의 bounded non-streaming 호출이며 Codex 추론은 비활성이다.
-실제 OAuth consent/refresh·native adapter·streaming·사용량 집계는 완료된 것으로 보지 않는다.
+Keychain 기반 키 등록, 앱 주소 설정·페어링 및 서버 소유 Codex OAuth를 추가한다.
+API/Ollama와 Codex 모두 bounded structured-output 호출이며 도구는 전달하지 않는다.
+실제 Codex consent/refresh·native adapter·일반 streaming·사용량 집계는 검증된
+것으로 보지 않는다.
 
 ## 핵심 원칙
 
@@ -30,7 +31,7 @@ Local
 
 Subscription
 ├─ officially supported subscription-authenticated AI
-└─ Codex/App Server 같은 integration
+└─ Codex OAuth 같은 provider-specific integration
 
 API
 ├─ OpenAI API

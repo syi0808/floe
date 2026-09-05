@@ -35,9 +35,10 @@ func main() {
 		if configured := os.Getenv("FLOE_SERVER_ADDRESS"); configured != "" {
 			address = configured
 		}
-		runtime := codexauth.New(directory)
+		vault := credentials.Keychain{}
+		runtime := codexauth.New(vault)
 		defer runtime.Close()
-		management, err := console.New(directory, address, credentials.Keychain{}, runtime)
+		management, err := console.New(directory, address, vault, runtime)
 		if err != nil {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
 		}

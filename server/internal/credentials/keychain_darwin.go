@@ -29,6 +29,14 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
         CFDictionarySetValue(query, kSecValueData, data);
         CFDictionarySetValue(query, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
         status = SecItemAdd(query, NULL);
+		if (status == errSecDuplicateItem) {
+			CFDictionaryRemoveValue(query, kSecValueData);
+			CFDictionaryRemoveValue(query, kSecAttrAccessible);
+			CFMutableDictionaryRef update = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+			CFDictionarySetValue(update, kSecValueData, data);
+			status = SecItemUpdate(query, update);
+			CFRelease(update);
+		}
         CFRelease(data);
     } else {
         status = SecItemDelete(query);

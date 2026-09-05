@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,18 @@ import (
 
 const testToken = "fixture-gateway-token-at-least-32-bytes"
 const candidate = `{"slot_id":"slot_1","reason":"Unoccupied","source_ids":["schedule"]}`
+
+type fixtureCodex struct{ calls atomic.Int32 }
+
+func (client *fixtureCodex) Ready() bool { return true }
+
+func (client *fixtureCodex) Generate(_ context.Context, model, instructions string, input, schema json.RawMessage) (string, error) {
+	client.calls.Add(1)
+	if model != "fixture-model" || instructions == "" || !json.Valid(input) || !json.Valid(schema) {
+		return "", errors.New("bad request")
+	}
+	return candidate, nil
+}
 
 func fixtureRequest() Request {
 	return Request{SchemaVersion: 1, Target: "focus", Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
@@ -80,6 +93,30 @@ func TestExternalConsentPrecedesAnyProviderCall(test *testing.T) {
 	response := invoke(fixtureGateway(test, "openai_compatible", upstream.URL), fixtureRequest())
 	if response.Code != 403 || !strings.Contains(response.Body.String(), "external_transfer_denied") || calls.Load() != 0 {
 		test.Fatal("external transfer was not blocked")
+	}
+}
+
+func TestCodexOAuthUsesServerRuntimeBehindConsent(test *testing.T) {
+	client := &fixtureCodex{}
+	gateway, err := New(Config{Targets: map[string]Target{"codex": {
+		Provider: "codex_oauth", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "fixture-model",
+	}}}, testToken, func(string) string { return "" }, client)
+	if err != nil {
+		test.Fatal(err)
+	}
+	input := fixtureRequest()
+	input.Target = "codex"
+	if invoke(gateway, input).Code != http.StatusForbidden || client.calls.Load() != 0 {
+		test.Fatal("Codex request bypassed consent")
+	}
+	input.AllowExternal = true
+	if invoke(gateway, input).Code != http.StatusOK || client.calls.Load() != 1 {
+		test.Fatal("Codex OAuth runtime was not used")
+	}
+	if _, err = New(Config{Targets: map[string]Target{"codex": {
+		Provider: "codex_oauth", BaseURL: "https://untrusted.example", Model: "fixture-model",
+	}}}, testToken, func(string) string { return "" }, client); err == nil {
+		test.Fatal("custom Codex endpoint accepted")
 	}
 }
 
