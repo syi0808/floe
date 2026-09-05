@@ -287,21 +287,47 @@ impl FloeCore {
         timezone_offset_seconds: i32,
         now: DateTime<Utc>,
     ) -> Result<DaySnapshot, CoreError> {
+        self.day_snapshot_with_end_offset(person_id, date, timezone_offset_seconds, None, now)
+            .await
+    }
+
+    pub async fn day_snapshot_with_end_offset(
+        &self,
+        person_id: PersonId,
+        date: NaiveDate,
+        timezone_offset_seconds: i32,
+        end_timezone_offset_seconds: Option<i32>,
+        now: DateTime<Utc>,
+    ) -> Result<DaySnapshot, CoreError> {
+        let range = CalendarRange {
+            start_date: date,
+            end_date_exclusive: date
+                .succ_opt()
+                .ok_or_else(|| CoreError::new(ErrorCode::Validation, "date out of range"))?,
+            timezone_offset_seconds,
+            end_timezone_offset_seconds,
+        };
+        if !range.is_valid() {
+            return Err(CoreError::new(ErrorCode::Validation, "invalid day offsets"));
+        }
         let mirror = self.store.calendar_mirror(person_id).await?;
         let mut events = self.store.list_events(person_id).await?;
         if let Some(mirror) = &mirror {
             events.extend(mirror.events.clone());
         }
-        let mut snapshot = project_day(
+        let mut snapshot = project_day_with_end_offset(
             person_id,
             date,
             timezone_offset_seconds,
+            end_timezone_offset_seconds,
             now,
             events,
             self.store.list_tasks(person_id).await?,
             self.store.list_notes(person_id).await?,
         );
-        snapshot.calendar = mirror.map(|mirror| mirror.connection);
+        snapshot.calendar = mirror
+            .filter(|mirror| !mirror.connection.disconnected)
+            .map(|mirror| mirror.connection);
         Ok(snapshot)
     }
 }

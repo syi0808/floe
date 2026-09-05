@@ -84,13 +84,9 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
       snapshot.timezoneOffsetSeconds,
     );
     final empty = events.isEmpty && !widget.loading;
-    final now = snapshot.generatedAt.toUtc().add(
-      Duration(seconds: snapshot.timezoneOffsetSeconds),
-    );
-    final sameDay =
-        now.year == snapshot.date.year &&
-        now.month == snapshot.date.month &&
-        now.day == snapshot.date.day;
+    final axis = CalendarDayAxis(snapshot.date, snapshot.timezoneOffsetSeconds);
+    final currentMinute = axis.minute(snapshot.generatedAt);
+    final sameDay = currentMinute >= 0 && currentMinute < axis.minutes;
     return FloeSquircle(
       key: Key('timeline-card'),
       child: Stack(
@@ -222,7 +218,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                           controller: scroll,
                           child: LayoutBuilder(
                             builder: (context, constraints) => SizedBox(
-                              height: 1440 * zoom + 32,
+                              height: axis.minutes * zoom + 32,
                               child: Stack(
                                 children: [
                                   Positioned.fill(
@@ -230,12 +226,16 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                       painter: _CalendarGuides(zoom),
                                     ),
                                   ),
-                                  for (var hour = 0; hour <= 24; hour++)
+                                  for (
+                                    var hour = 0;
+                                    hour <= axis.minutes / 60;
+                                    hour++
+                                  )
                                     Positioned(
                                       top: 16 + hour * 60 * zoom - 6,
                                       left: 16,
                                       child: Text(
-                                        '${hour.toString().padLeft(2, '0')}:00',
+                                        axis.hourLabel(hour),
                                         style: TextStyle(
                                           fontSize: 10,
                                           height: 1.2,
@@ -271,10 +271,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                     ),
                                   if (sameDay)
                                     Positioned(
-                                      top:
-                                          16 +
-                                          (now.hour * 60 + now.minute) * zoom -
-                                          6,
+                                      top: 16 + currentMinute * zoom - 6,
                                       left: 10,
                                       right: 18,
                                       child: Row(
@@ -282,10 +279,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                           SizedBox(
                                             width: 56,
                                             child: Text(
-                                              calendarTime(
-                                                snapshot.generatedAt,
-                                                snapshot.timezoneOffsetSeconds,
-                                              ),
+                                              axis.time(snapshot.generatedAt),
                                               style: TextStyle(
                                                 fontSize: 10,
                                                 color: FloePalette.primary600,
@@ -337,8 +331,12 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               FloeMascot(size: 38),
                               SizedBox(height: 20),
                               Text(
-                                AppLocalizations.of(context)
-                                    .aLittleBreathingRoom,
+                                snapshot.calendar?.error != null
+                                    ? AppLocalizations.of(
+                                        context,
+                                      ).calendarCouldNotBeCollectedCheckAccess
+                                    : AppLocalizations.of(context)
+                                          .aLittleBreathingRoom,
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w600,
@@ -392,7 +390,7 @@ class CalendarEventCard extends StatelessWidget {
     final tone = DayAppearance.tone(context, event.id, ItemTone.blue);
     final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
     final label =
-        '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds)}';
+        '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds, date: snapshot.date)}';
     return Tooltip(
       message: label,
       child: Semantics(
@@ -451,6 +449,7 @@ class CalendarEventCard extends StatelessWidget {
                                     context,
                                     event,
                                     snapshot.timezoneOffsetSeconds,
+                                    date: snapshot.date,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,

@@ -68,7 +68,8 @@ class _ConnectedCalendars extends StatelessWidget {
                                 size: 15,
                                 color: FloePalette.primary500,
                               ),
-                              text: calendar.title,
+                              text:
+                                  '${calendar.title}${calendar.error == null ? '' : '\n${strings.couldNotCollectEventsShowingTheLast}'}${calendar.lastSuccessAt == null ? '' : '\n${formatTimestamp(context, calendar.lastSuccessAt!)}'}',
                               gap: 10,
                               style: TextStyle(fontSize: 13, height: 1.7),
                             ),
@@ -127,6 +128,30 @@ class _CalendarPanelState extends State<CalendarPanel> {
     }
   }
 
+  Future<void> _disconnect() => _run(() async {
+    final strings = AppLocalizations.of(context);
+    final confirmed = await showFloeDialog<bool>(
+      context,
+      (context) => AlertDialog(
+        title: Text(strings.disconnectCalendar),
+        content: Text(strings.disconnectCalendarExplanation),
+        actions: [
+          FloeButton.text(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(strings.cancel),
+          ),
+          FloeButton.filled(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(strings.disconnectCalendar),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await widget.gateway.disconnectCalendar(widget.query);
+    await widget.onChanged();
+  });
+
   Future<void> _connect() => _run(() async {
     final confirmed = await showFloeDialog<bool>(
       context,
@@ -160,6 +185,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
     }
     final selected =
         widget.connection?.selectedCalendarIds.toSet() ?? <String>{};
+    var includeAll = widget.connection?.includeAll ?? true;
     final choices = await showFloeDialog<List<CalendarChoice>>(
       context,
       (context) => StatefulBuilder(
@@ -171,18 +197,33 @@ class _CalendarPanelState extends State<CalendarPanel> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  CheckboxListTile(
+                    value: includeAll,
+                    title: Text(
+                      AppLocalizations.of(context).allCalendarsIncludingNew,
+                    ),
+                    subtitle: includeAll
+                        ? null
+                        : Text(
+                            AppLocalizations.of(context).selectedCalendarsOnly,
+                          ),
+                    onChanged: (value) =>
+                        setDialogState(() => includeAll = value ?? false),
+                  ),
                   for (final calendar in calendars)
                     CheckboxListTile(
-                      value: selected.contains(calendar.id),
+                      value: includeAll || selected.contains(calendar.id),
                       title: Text(calendar.name),
                       controlAffinity: ListTileControlAffinity.leading,
-                      onChanged: (checked) => setDialogState(() {
-                        if (checked == true) {
-                          selected.add(calendar.id);
-                        } else {
-                          selected.remove(calendar.id);
-                        }
-                      }),
+                      onChanged: includeAll
+                          ? null
+                          : (checked) => setDialogState(() {
+                              if (checked == true) {
+                                selected.add(calendar.id);
+                              } else {
+                                selected.remove(calendar.id);
+                              }
+                            }),
                     ),
                 ],
               ),
@@ -195,11 +236,17 @@ class _CalendarPanelState extends State<CalendarPanel> {
             ),
             FloeButton.filled(
               onPressed:
-                  calendars.any((calendar) => selected.contains(calendar.id))
+                  includeAll ||
+                      calendars.any(
+                        (calendar) => selected.contains(calendar.id),
+                      )
                   ? () => Navigator.pop(
                       context,
                       calendars
-                          .where((calendar) => selected.contains(calendar.id))
+                          .where(
+                            (calendar) =>
+                                includeAll || selected.contains(calendar.id),
+                          )
                           .toList(),
                     )
                   : null,
@@ -211,7 +258,11 @@ class _CalendarPanelState extends State<CalendarPanel> {
     );
     if (choices == null || !mounted) return;
     final query = widget.query;
-    await widget.gateway.selectCalendars(choices, query);
+    await widget.gateway.selectCalendars(
+      choices,
+      query,
+      includeAll: includeAll,
+    );
     try {
       await widget.gateway.syncCalendar(query);
     } finally {
@@ -328,6 +379,9 @@ class _CalendarPanelState extends State<CalendarPanel> {
             Divider(height: 1),
             SizedBox(height: 20),
             for (final entry in <String, String>{
+              AppLocalizations.of(context).calendarScope: connection.includeAll
+                  ? AppLocalizations.of(context).allCalendarsIncludingNew
+                  : AppLocalizations.of(context).selectedCalendarsOnly,
               AppLocalizations.of(context).person: AppLocalizations.of(context)
                   .youThisDevice,
               AppLocalizations.of(context)
@@ -404,6 +458,11 @@ class _CalendarPanelState extends State<CalendarPanel> {
                     : () => _run(widget.gateway.openCalendarSettings),
                 child: Text(AppLocalizations.of(context).manageAccess),
               ),
+              if (connection != null)
+                FloeButton.text(
+                  onPressed: busy ? null : _disconnect,
+                  child: Text(AppLocalizations.of(context).disconnectCalendar),
+                ),
             ],
           ),
           if (busy)

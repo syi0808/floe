@@ -4,6 +4,43 @@ import 'package:floe_client/l10n/app_localizations.dart';
 
 import '../domain/day_models.dart';
 
+class CalendarDayAxis {
+  CalendarDayAxis(DateTime date, int offsetSeconds) {
+    final local = DateTime(date.year, date.month, date.day);
+    usesLocalZone = local.timeZoneOffset.inSeconds == offsetSeconds;
+    start = usesLocalZone
+        ? local.toUtc()
+        : DateTime.utc(
+            date.year,
+            date.month,
+            date.day,
+          ).subtract(Duration(seconds: offsetSeconds));
+    end = usesLocalZone
+        ? DateTime(date.year, date.month, date.day + 1).toUtc()
+        : start.add(Duration(days: 1));
+    offset = offsetSeconds;
+  }
+
+  late final DateTime start;
+  late final DateTime end;
+  late final bool usesLocalZone;
+  late final int offset;
+  double get minutes => end.difference(start).inSeconds / 60;
+  double minute(DateTime value) =>
+      value.toUtc().difference(start).inSeconds / 60;
+  String time(DateTime value) {
+    final local = usesLocalZone
+        ? value.toLocal()
+        : value.toUtc().add(Duration(seconds: offset));
+    final clock =
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    return minutes == 1440 ? clock : '$clock ${local.timeZoneName}';
+  }
+
+  String hourLabel(int hour) =>
+      hour * 60 == minutes ? '24:00' : time(start.add(Duration(hours: hour)));
+}
+
 class CalendarPlacement {
   CalendarPlacement(this.event, this.start, this.end, this.column);
   final EventItem event;
@@ -18,21 +55,15 @@ List<CalendarPlacement> layoutCalendarEvents(
   DateTime date,
   int offsetSeconds,
 ) {
-  final midnight = DateTime.utc(date.year, date.month, date.day);
-  double minute(DateTime value) =>
-      value
-          .toUtc()
-          .add(Duration(seconds: offsetSeconds))
-          .difference(midnight)
-          .inSeconds /
-      60;
+  final axis = CalendarDayAxis(date, offsetSeconds);
+  double minute(DateTime value) => axis.minute(value);
   final sorted =
       events
           .where(
             (event) =>
                 !event.isAllDay &&
                 minute(event.endsAt) > 0 &&
-                minute(event.startsAt) < 1440 &&
+                minute(event.startsAt) < axis.minutes &&
                 event.endsAt.isAfter(event.startsAt),
           )
           .toList()
@@ -55,8 +86,8 @@ List<CalendarPlacement> layoutCalendarEvents(
   }
 
   for (final event in sorted) {
-    final start = minute(event.startsAt).clamp(0.0, 1440.0);
-    final end = minute(event.endsAt).clamp(0.0, 1440.0);
+    final start = minute(event.startsAt).clamp(0.0, axis.minutes);
+    final end = minute(event.endsAt).clamp(0.0, axis.minutes);
     if (start >= groupEnd) finishGroup();
     var column = columnEnds.indexWhere((end) => end <= start);
     if (column == -1) {
@@ -79,10 +110,16 @@ String calendarTime(DateTime value, int offset) {
   return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 }
 
-String calendarRange(BuildContext context, EventItem event, int offset) =>
-    event.isAllDay
+String calendarRange(
+  BuildContext context,
+  EventItem event,
+  int offset, {
+  DateTime? date,
+}) => event.isAllDay
     ? AppLocalizations.of(context).allDay
-    : '${calendarTime(event.startsAt, offset)} – ${calendarTime(event.endsAt, offset)}';
+    : date == null
+    ? '${calendarTime(event.startsAt, offset)} – ${calendarTime(event.endsAt, offset)}'
+    : '${CalendarDayAxis(date, offset).time(event.startsAt)} – ${CalendarDayAxis(date, offset).time(event.endsAt)}';
 
 String formatTimestamp(BuildContext context, DateTime value) =>
     DateFormat.yMMMd(AppLocalizations.of(context).localeName)

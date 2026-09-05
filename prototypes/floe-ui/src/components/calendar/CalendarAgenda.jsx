@@ -20,6 +20,8 @@ export function CalendarAgenda({
   allDayEvents,
   onEventSelect,
   onEmptyAction,
+  dayMinutes = 1440,
+  hourLabels,
 }) {
   const timelineColumns = Math.max(1, ...timedEvents.map((event) => event.columns));
   return (
@@ -41,7 +43,7 @@ export function CalendarAgenda({
             className="s1-timeline-scroll"
             ref={timelineScroll}
             role="region"
-            aria-label="24-hour calendar"
+            aria-label={`${dayMinutes / 60}-hour calendar`}
             tabIndex={0}
             onScroll={(event) => {
               onScrollMinute(event.currentTarget.scrollTop / pixelsPerMinute);
@@ -51,17 +53,17 @@ export function CalendarAgenda({
               className={`s1-time-grid ${stale ? 's1-cached-grid' : ''}`}
               aria-label="Day timeline"
               style={{
-                height: 24 * 60 * pixelsPerMinute,
+                height: dayMinutes * pixelsPerMinute,
                 '--timeline-columns': hasCache ? timelineColumns : 1,
               }}
             >
-              {Array.from({ length: 25 }, (_, index) => (
+              {Array.from({ length: Math.floor(dayMinutes / 60) + 1 }, (_, index) => (
                 <div className="s1-hour" key={index} style={{ top: index * 60 * pixelsPerMinute }}>
-                  <time>{String(index).padStart(2, '0')}:00</time>
+                  <time>{hourLabels?.[index] ?? `${String(index).padStart(2, '0')}:00`}</time>
                   <span />
                 </div>
               ))}
-              {Array.from({ length: 24 }, (_, index) => (
+              {Array.from({ length: Math.floor(dayMinutes / 60) }, (_, index) => (
                 <div
                   key={index}
                   className="s1-half-hour-line"

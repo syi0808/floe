@@ -9,6 +9,7 @@ export const scenarios = {
   syncing: 'Refreshing · keep cached events',
   cached: 'App reopened · cached data',
   offline: 'Read failed · cached data',
+  partial: 'Some sources refreshed · failed source cache preserved',
   denied: 'Permission denied · no data',
   revoked: 'Permission revoked · cached data',
   missing: 'Calendar unavailable',

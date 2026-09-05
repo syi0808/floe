@@ -12,6 +12,10 @@ class PanelCalendarGateway implements CalendarGateway {
   int syncCount = 0;
 
   @override
+  Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
+      FakeDayGateway().loadDay(query);
+
+  @override
   Future<List<CalendarChoice>> calendars() async => const [
     CalendarChoice('home', 'Home'),
     CalendarChoice('work', 'Work'),
@@ -24,8 +28,9 @@ class PanelCalendarGateway implements CalendarGateway {
   @override
   Future<DaySnapshot> selectCalendars(
     List<CalendarChoice> calendars,
-    DayQuery query,
-  ) {
+    DayQuery query, {
+    bool includeAll = false,
+  }) {
     selected = calendars;
     return FakeDayGateway().loadDay(query);
   }
@@ -154,7 +159,7 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.text('Continue'));
       await tester.pump(const Duration(seconds: 1));
-      expect(find.byType(CheckboxListTile), findsNWidgets(2));
+      expect(find.byType(CheckboxListTile), findsNWidgets(3));
       expect(gateway.selected, isEmpty);
       await tester.tap(home);
       await tester.tap(work);

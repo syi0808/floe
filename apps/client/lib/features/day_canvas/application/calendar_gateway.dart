@@ -7,9 +7,11 @@ abstract interface class CalendarGateway {
   Future<DaySnapshot> selectCalendar(CalendarChoice calendar, DayQuery query);
   Future<DaySnapshot> selectCalendars(
     List<CalendarChoice> calendars,
-    DayQuery query,
-  );
+    DayQuery query, {
+    bool includeAll = false,
+  });
   Future<DaySnapshot> syncCalendar(DayQuery query);
+  Future<DaySnapshot> disconnectCalendar(DayQuery query);
   Future<void> openCalendarSettings();
 }
 
@@ -21,7 +23,7 @@ final class CalendarChoice {
 }
 
 abstract interface class CalendarAdapter {
-  Future<List<CalendarChoice>> calendars();
+  Future<List<CalendarChoice>> calendars({bool requestAccess = true});
   Future<List<Map<String, dynamic>>> read(String calendarId, DayQuery query);
   Future<void> openSettings();
 }
@@ -31,8 +33,10 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
   static const _channel = MethodChannel('floe/calendar');
 
   @override
-  Future<List<CalendarChoice>> calendars() async {
-    final values = await _channel.invokeListMethod<dynamic>('calendars');
+  Future<List<CalendarChoice>> calendars({bool requestAccess = true}) async {
+    final values = await _channel.invokeListMethod<dynamic>('calendars', {
+      'request_access': requestAccess,
+    });
     return values!
         .map(
           (value) =>
@@ -46,15 +50,10 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
     String calendarId,
     DayQuery query,
   ) async {
-    final start = DateTime.utc(
-      query.date.year,
-      query.date.month,
-      query.date.day,
-    ).subtract(Duration(seconds: query.timezoneOffsetSeconds));
     final values = await _channel.invokeListMethod<dynamic>('read', {
       'calendar_id': calendarId,
-      'starts_at': start.toIso8601String(),
-      'ends_at': start.add(const Duration(days: 1)).toIso8601String(),
+      'starts_at': query.startsAt.toIso8601String(),
+      'ends_at': query.endsAt.toIso8601String(),
     });
     return values!
         .map(

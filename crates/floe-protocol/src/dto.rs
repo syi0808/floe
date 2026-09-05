@@ -8,6 +8,8 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub struct DayQueryDto {
     pub date: String,
     pub timezone_offset_seconds: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_timezone_offset_seconds: Option<i32>,
     pub now: String,
 }
 
@@ -170,8 +172,33 @@ pub struct CalendarRecordDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarBatchDto {
+    pub calendar_id: String,
+    pub records: Vec<CalendarRecordDto>,
+    pub failure: Option<floe_domain::CalendarFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandDto {
+    DisconnectCalendar {
+        expected_revision: u64,
+    },
+    SetCalendarScope {
+        provider: floe_domain::CalendarProvider,
+        calendars: Vec<floe_domain::CalendarSelection>,
+        scope: floe_domain::CalendarScope,
+    },
+    DiscoverCalendars {
+        expected_revision: u64,
+        calendars: Vec<floe_domain::CalendarSelection>,
+    },
+    ImportCalendarSources {
+        expected_revision: u64,
+        range: floe_domain::CalendarRange,
+        batches: Vec<CalendarBatchDto>,
+        occurred_at: String,
+    },
     SelectCalendars {
         provider: floe_domain::CalendarProvider,
         calendars: Vec<floe_domain::CalendarSelection>,

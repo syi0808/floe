@@ -1,5 +1,9 @@
 # EventKit live Calendar checkpoint
 
+Follow-up: the user clarified separate Selected and All modes after this run.
+The auto-inclusion defect below applies to All only; Selected deliberately preserves
+explicit IDs. Implementation and remaining gates are in [scope recovery](s1-scope-recovery.md).
+
 Date: 2026-09-05, approximately 22:28–22:44 KST.
 Environment: macOS 26.5.2 (25F84), arm64, iCloud source via local EventKit.
 Working-tree base: `41629f1`. The pre-existing debug app was **not rebuilt** in this

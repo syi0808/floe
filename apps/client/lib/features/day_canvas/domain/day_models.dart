@@ -8,12 +8,40 @@ final class DayQuery {
     required this.date,
     required this.now,
     required this.timezoneOffsetSeconds,
+    this.endTimezoneOffsetSeconds,
   });
 
   final String personId;
   final DateTime date;
   final DateTime now;
   final int timezoneOffsetSeconds;
+  final int? endTimezoneOffsetSeconds;
+
+  factory DayQuery.local({
+    required String personId,
+    required DateTime date,
+    required DateTime now,
+  }) {
+    final start = DateTime(date.year, date.month, date.day);
+    final end = DateTime(date.year, date.month, date.day + 1);
+    return DayQuery(
+      personId: personId,
+      date: start,
+      now: now,
+      timezoneOffsetSeconds: start.timeZoneOffset.inSeconds,
+      endTimezoneOffsetSeconds: end.timeZoneOffset.inSeconds,
+    );
+  }
+
+  DateTime get startsAt => DateTime.utc(
+    date.year,
+    date.month,
+    date.day,
+  ).subtract(Duration(seconds: timezoneOffsetSeconds));
+  DateTime get endsAt =>
+      DateTime.utc(date.year, date.month, date.day + 1).subtract(
+        Duration(seconds: endTimezoneOffsetSeconds ?? timezoneOffsetSeconds),
+      );
 }
 
 sealed class DayItem {
@@ -116,10 +144,17 @@ final class DaySnapshot {
 }
 
 final class ConnectedCalendar {
-  const ConnectedCalendar({required this.id, required this.name});
+  const ConnectedCalendar({
+    required this.id,
+    required this.name,
+    this.error,
+    this.lastSuccessAt,
+  });
 
   final String id;
   final String name;
+  final String? error;
+  final DateTime? lastSuccessAt;
 
   String? get account {
     final separator = name.indexOf(' · ');
@@ -144,6 +179,7 @@ final class CalendarConnection {
     this.rangeEnd,
     this.calendarIds = const [],
     this.calendars = const [],
+    this.includeAll = false,
   });
   final String id;
   final String name;
@@ -155,6 +191,7 @@ final class CalendarConnection {
   final String? rangeEnd;
   final List<String> calendarIds;
   final List<ConnectedCalendar> calendars;
+  final bool includeAll;
   List<ConnectedCalendar> get connectedCalendars =>
       calendars.isEmpty ? [ConnectedCalendar(id: id, name: name)] : calendars;
   List<String> get selectedCalendarIds => calendars.isNotEmpty

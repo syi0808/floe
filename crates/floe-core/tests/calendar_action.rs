@@ -196,6 +196,7 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         start_date: now().date_naive(),
         end_date_exclusive: (now() + Duration::days(1)).date_naive(),
         timezone_offset_seconds: 32_400,
+        end_timezone_offset_seconds: None,
     };
     let records = vec![CalendarRecord {
         calendar_id: Some(receipt.calendar_id),

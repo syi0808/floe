@@ -11,6 +11,7 @@ fn range(day: i64) -> CalendarRange {
         start_date: (now() + Duration::days(day)).date_naive(),
         end_date_exclusive: (now() + Duration::days(day + 1)).date_naive(),
         timezone_offset_seconds: 32_400,
+        end_timezone_offset_seconds: None,
     }
 }
 

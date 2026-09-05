@@ -86,22 +86,24 @@ final class PersonalDayController extends ChangeNotifier {
   }
 
   void moveDay(int offset) {
-    _query = DayQuery(
+    _query = DayQuery.local(
       personId: _query.personId,
-      date: _query.date.add(Duration(days: offset)),
+      date: DateTime(
+        _query.date.year,
+        _query.date.month,
+        _query.date.day + offset,
+      ),
       now: DateTime.now(),
-      timezoneOffsetSeconds: DateTime.now().timeZoneOffset.inSeconds,
     );
     refresh();
   }
 
   void goToday() {
     final now = DateTime.now();
-    _query = DayQuery(
+    _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(now.year, now.month, now.day),
       now: now,
-      timezoneOffsetSeconds: now.timeZoneOffset.inSeconds,
     );
     refresh();
   }

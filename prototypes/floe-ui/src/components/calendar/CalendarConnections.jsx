@@ -21,6 +21,8 @@ export function CalendarConnections({
   onOpenDialog,
   onRefresh,
   onBack,
+  scope,
+  onScope,
 }) {
   const accounts = Object.groupBy(calendars, (calendar) => calendar.account);
   return (
@@ -44,7 +46,7 @@ export function CalendarConnections({
             </SquircleBlock>
           </div>
           <p className="s1-body-copy">
-            Bring all calendars on this Mac into one day. Floe reads their events; it never creates,
+            Bring your included calendars into one day. Floe reads their events; it never creates,
             edits, or deletes anything in Calendar.
           </p>
           <div className="s1-connection-record">
@@ -76,6 +78,7 @@ export function CalendarConnections({
                       <li key={item.id}>
                         <span className={'tone-dot ' + item.color} aria-hidden="true" />
                         <strong>{item.name}</strong>
+                        {phase === 'partial' && <small>{item.id === 'team' ? 'Unavailable · saved at 2:28 PM' : 'Up to date · collected at 2:30 PM'}</small>}
                       </li>
                     ))}
                   </ul>
@@ -84,6 +87,7 @@ export function CalendarConnections({
             </div>
           )}
           <dl className="s1-facts">
+            <div><dt>Calendar scope</dt><dd>{scope === 'all' ? 'All calendars · new ones join on refresh' : 'Selected calendars only · selection stays fixed'}</dd></div>
             <div>
               <dt>Person</dt>
               <dd>You · this device</dd>
@@ -114,6 +118,7 @@ export function CalendarConnections({
             </div>
           </dl>
           <div className="s1-actions">
+            <SquircleButton className="secondary-button" onClick={onScope}>Choose calendar scope</SquircleButton>
             <SquircleButton
               className="primary-button"
               disabled={phase === 'syncing' || phase === 'loadError'}
@@ -125,7 +130,7 @@ export function CalendarConnections({
                     : onOpenDialog('disclosure')
               }
             >
-              {hasConnection ? 'Refresh all calendars' : 'Connect Calendar'}
+              {hasConnection ? 'Refresh included calendars' : 'Connect Calendar'}
               <ArrowRight size={16} />
             </SquircleButton>
             <SquircleButton className="secondary-button" onClick={() => onOpenDialog('settings')}>
@@ -146,7 +151,7 @@ export function CalendarConnections({
             <ShieldCheck size={23} className="s1-violet" />
             <h2>A clear boundary.</h2>
             <p className="s1-body-copy">
-              All calendars available through macOS Calendar are included. Titles, times, time
+              Your calendar scope controls which calendars Floe includes. Titles, times, time
               zones, and source identifiers stay on this Mac.
             </p>
             <div className="s1-note s1-connection-note">

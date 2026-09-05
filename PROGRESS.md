@@ -13,13 +13,23 @@ verified criteria, not estimated implementation percentages.
 
 | Slice | Status | Integration evidence | Acceptance | Blocker / prerequisite | Next demo |
 | --- | --- | --- | --- | --- | --- |
-| S1 — Calendar read | Deferred | Live timed-event read/edit/delete; inventory/reconnect | 0/4 | New-calendar auto-inclusion fails; permission/DST/recurrence/lifecycle gates | Fix automatic inclusion; finish controlled live matrix |
-| S3 — Approved action | Implementing | Rust fixture; isolated live EventKit create/recovery; prototype UI | 0/5 | S1 Verified; prototype review; trusted native executor binding | Review prototype before Flutter implementation |
+| S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
+| S3 — Approved action | Deferred | Rust fixture; isolated live EventKit create/recovery; prototype UI | 0/5 | S1 Verified; prototype review; trusted native executor binding | Resume after S1 verification |
 | S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
 | S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S1 scope and recovery checkpoint — 2026-09-05
+
+- Selected retains explicit IDs; All discovers new calendars on refresh/date reads.
+  Legacy connections remain Selected. Scope UI was implemented in the prototype first.
+- Per-source recovery, missing-source cache, disconnect revision tombstones,
+  23/25-hour civil-day reads/timelines and ordinary EventKit move identity are implemented.
+- [Validation and remaining live gates](docs/validation/s1-scope-recovery.md).
+- Historical notes below predate this two-mode decision; auto-inclusion is required
+  only in All mode. S1 remains 0/4 verified, not complete from fixture evidence.
 
 ### Live EventKit and prototype-first checkpoint — 2026-09-05
 

@@ -33,7 +33,7 @@ class DelayedCalendarGateway extends DelayedGateway implements CalendarGateway {
 }
 
 void main() {
-  final date = DateTime.utc(2026, 9, 4);
+  final date = DateTime(2026, 9, 4);
   final query = DayQuery(
     personId: 'test',
     date: date,

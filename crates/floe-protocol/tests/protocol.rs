@@ -91,6 +91,7 @@ fn command_and_nested_union_tags_are_stable() {
         day: DayQueryDto {
             date: "2026-09-02".into(),
             timezone_offset_seconds: 32_400,
+            end_timezone_offset_seconds: None,
             now: "2026-09-02T10:30:00Z".into(),
         },
         command: CommandDto::ClassifyCapture {
@@ -146,6 +147,7 @@ fn load_day_request_has_a_stable_wire_shape() {
         day: DayQueryDto {
             date: "2026-09-02".into(),
             timezone_offset_seconds: 32_400,
+            end_timezone_offset_seconds: None,
             now: "2026-09-02T10:30:00Z".into(),
         },
     };

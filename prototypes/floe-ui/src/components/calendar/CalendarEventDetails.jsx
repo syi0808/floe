@@ -8,6 +8,7 @@ export function CalendarEventDetails({
   dateShort,
   dayOffset,
   stale,
+  displayTimezone = 'Asia/Seoul',
 }) {
   return (
     <>
@@ -25,7 +26,7 @@ export function CalendarEventDetails({
         <Clock3 size={20} />
         <div>
           <strong>{event.time}</strong>
-          <span>{dateLabel} · Asia/Seoul</span>
+          <span>{dateLabel} · {displayTimezone}</span>
         </div>
       </SquircleBlock>
       <dl className="s1-facts">

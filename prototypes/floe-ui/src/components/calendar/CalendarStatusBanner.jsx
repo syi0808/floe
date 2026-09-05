@@ -19,6 +19,11 @@ export function CalendarStatusBanner({
   onPicker,
 }) {
   const states = {
+    partial: [
+      'warning', WifiOff, 'Some calendars couldn’t refresh.',
+      'Work and Personal are up to date. Product team is showing its last saved events. Missing events do not mean free time.',
+      'View calendars', onPicker,
+    ],
     disconnected: [
       'neutral',
       Link2,

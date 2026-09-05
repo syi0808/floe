@@ -151,11 +151,13 @@ fn snapshot(
     let now = parse_time(&day.now, "day.now")?;
     let value = handle
         .runtime
-        .block_on(
-            handle
-                .core
-                .day_snapshot(person_id, date, day.timezone_offset_seconds, now),
-        )
+        .block_on(handle.core.day_snapshot_with_end_offset(
+            person_id,
+            date,
+            day.timezone_offset_seconds,
+            day.end_timezone_offset_seconds,
+            now,
+        ))
         .map_err(core_error)?;
     value.try_into().map_err(conversion_error)
 }
@@ -175,6 +177,90 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
     let mut capture = None;
 
     match request.command {
+        CommandDto::DisconnectCalendar { expected_revision } => {
+            handle
+                .runtime
+                .block_on(
+                    handle
+                        .core
+                        .disconnect_calendar(person_id, expected_revision),
+                )
+                .map_err(core_error)?;
+        }
+        CommandDto::SetCalendarScope {
+            provider,
+            calendars,
+            scope,
+        } => {
+            handle
+                .runtime
+                .block_on(
+                    handle
+                        .core
+                        .set_calendar_scope(person_id, provider, calendars, scope),
+                )
+                .map_err(core_error)?;
+        }
+        CommandDto::DiscoverCalendars {
+            expected_revision,
+            calendars,
+        } => {
+            handle
+                .runtime
+                .block_on(
+                    handle
+                        .core
+                        .discover_calendars(person_id, expected_revision, calendars),
+                )
+                .map_err(core_error)?;
+        }
+        CommandDto::ImportCalendarSources {
+            expected_revision,
+            range,
+            batches,
+            occurred_at,
+        } => {
+            let batches = batches
+                .into_iter()
+                .map(|batch| {
+                    let records = batch
+                        .records
+                        .into_iter()
+                        .map(|record| {
+                            Ok(floe_domain::CalendarRecord {
+                                calendar_id: record.calendar_id,
+                                external_id: record.external_id,
+                                external_revision: record.external_revision,
+                                title: record.title,
+                                schedule: record.schedule.try_into()?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, floe_protocol::ProtocolConversionError>>();
+                    match records {
+                        Ok(records) => floe_domain::CalendarBatch {
+                            calendar_id: batch.calendar_id,
+                            records,
+                            failure: batch.failure,
+                        },
+                        Err(_) => floe_domain::CalendarBatch {
+                            calendar_id: batch.calendar_id,
+                            records: vec![],
+                            failure: Some(floe_domain::CalendarFailure::ProviderUnavailable),
+                        },
+                    }
+                })
+                .collect();
+            handle
+                .runtime
+                .block_on(handle.core.import_calendar_sources(
+                    person_id,
+                    expected_revision,
+                    range,
+                    batches,
+                    parse_time(&occurred_at, "occurred_at")?,
+                ))
+                .map_err(core_error)?;
+        }
         CommandDto::SelectCalendars {
             provider,
             calendars,

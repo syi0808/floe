@@ -17,6 +17,7 @@ export function CalendarDialogs({
   onDeny,
   onRefresh,
   onDisconnect,
+  displayTimezone = 'Asia/Seoul',
 }) {
   return (
     <Modal
@@ -48,6 +49,7 @@ export function CalendarDialogs({
           )}
           {typeof modal === 'object' && (
             <CalendarEventDetails
+              displayTimezone={displayTimezone}
               event={modal}
               calendar={detailCalendar}
               dateLabel={dateLabel}

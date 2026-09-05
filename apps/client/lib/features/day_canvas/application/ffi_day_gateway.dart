@@ -194,8 +194,9 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
   @override
   Future<DaySnapshot> selectCalendars(
     List<CalendarChoice> calendars,
-    DayQuery query,
-  ) async {
+    DayQuery query, {
+    bool includeAll = false,
+  }) async {
     if (calendars.isEmpty ||
         calendars.any(
           (calendar) => calendar.provider != calendars.first.provider,
@@ -205,7 +206,8 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     final data = await _request(
       'execute',
       _commandRequest(query, {
-        'type': 'select_calendars',
+        'type': 'set_calendar_scope',
+        'scope': includeAll ? 'all' : 'selected',
         'provider': calendars.first.provider,
         'calendars': [
           for (final calendar in calendars)
@@ -219,24 +221,65 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
   @override
   Future<DaySnapshot> syncCalendar(DayQuery query) async {
     final current = await loadDay(query);
-    final connection = current.calendar;
+    var connection = current.calendar;
     if (connection == null) return current;
+    final provider = connection.provider;
     try {
+      final inventory = await _calendarAdapter
+          .calendars(requestAccess: false)
+          .timeout(const Duration(seconds: 20));
+      final available = inventory
+          .where((calendar) => calendar.provider == provider)
+          .map((calendar) => calendar.id)
+          .toSet();
+      if (connection.includeAll) {
+        final discovered = await _request(
+          'execute',
+          _commandRequest(query, {
+            'type': 'discover_calendars',
+            'expected_revision': connection.revision,
+            'calendars': [
+              for (final calendar in inventory.where(
+                (calendar) => calendar.provider == provider,
+              ))
+                {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+            ],
+          }),
+        );
+        connection = _decodeSnapshot(_asMap(discovered['snapshot'])).calendar!;
+      }
+      final active = connection;
       final batches = await Future.wait(
-        connection.selectedCalendarIds.map((calendarId) async {
-          final records = await _calendarAdapter.read(calendarId, query);
-          return [
-            for (final record in records)
-              {...record, 'calendar_id': calendarId},
-          ];
+        active.selectedCalendarIds.map((calendarId) async {
+          try {
+            if (!available.contains(calendarId)) {
+              throw PlatformException(code: 'calendar_unavailable');
+            }
+            final records = await _calendarAdapter
+                .read(calendarId, query)
+                .timeout(const Duration(seconds: 20));
+            return {
+              'calendar_id': calendarId,
+              'records': [
+                for (final record in records)
+                  {...record, 'calendar_id': calendarId},
+              ],
+              'failure': null,
+            };
+          } on Object catch (error) {
+            return {
+              'calendar_id': calendarId,
+              'records': <Object>[],
+              'failure': _calendarFailure(error),
+            };
+          }
         }),
-      ).timeout(const Duration(seconds: 20));
-      final records = batches.expand((batch) => batch).toList();
+      );
       final data = await _request(
         'execute',
         _commandRequest(query, {
-          'type': 'import_calendar',
-          'expected_revision': connection.revision,
+          'type': 'import_calendar_sources',
+          'expected_revision': active.revision,
           'occurred_at': _timestamp(_clock()),
           'range': {
             'start_date': _date(query.date),
@@ -248,8 +291,9 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
               ),
             ),
             'timezone_offset_seconds': query.timezoneOffsetSeconds,
+            'end_timezone_offset_seconds': query.endTimezoneOffsetSeconds,
           },
-          'records': records,
+          'batches': batches,
         }),
       );
       return _decodeSnapshot(_asMap(data['snapshot']));
@@ -257,22 +301,30 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
       if (error is FfiDayGatewayException && error.code != 'validation') {
         rethrow;
       }
-      final code = error is PlatformException
-          ? error.code
-          : 'provider_unavailable';
       final data = await _request(
         'execute',
         _commandRequest(query, {
           'type': 'calendar_failed',
-          'expected_revision': connection.revision,
-          'failure':
-              ['permission_denied', 'calendar_unavailable'].contains(code)
-              ? code
-              : 'provider_unavailable',
+          'expected_revision': connection!.revision,
+          'failure': _calendarFailure(error),
         }),
       );
       return _decodeSnapshot(_asMap(data['snapshot']));
     }
+  }
+
+  @override
+  Future<DaySnapshot> disconnectCalendar(DayQuery query) async {
+    final current = await loadDay(query);
+    if (current.calendar == null) return current;
+    final data = await _request(
+      'execute',
+      _commandRequest(query, {
+        'type': 'disconnect_calendar',
+        'expected_revision': current.calendar!.revision,
+      }),
+    );
+    return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
   Future<Map<String, dynamic>> _request(
@@ -318,9 +370,17 @@ final class FfiDayGateway implements DayGateway, CalendarGateway {
     return {
       'date': _date(query.date),
       'timezone_offset_seconds': query.timezoneOffsetSeconds,
+      'end_timezone_offset_seconds': query.endTimezoneOffsetSeconds,
       'now': _timestamp(now),
     };
   }
+}
+
+String _calendarFailure(Object error) {
+  final code = error is PlatformException ? error.code : 'provider_unavailable';
+  return ['permission_denied', 'calendar_unavailable'].contains(code)
+      ? code
+      : 'provider_unavailable';
 }
 
 Map<String, dynamic> _classification(ClassificationDraft value) =>
@@ -467,11 +527,20 @@ CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
                 (calendar) => ConnectedCalendar(
                   id: calendar['calendar_id'] as String,
                   name: calendar['calendar_name'] as String,
+                  error:
+                      (json['source_statuses']
+                              as Map?)?[calendar['calendar_id']]?['error']
+                          as String?,
+                  lastSuccessAt: _optionalTimestamp(
+                    (json['source_statuses']
+                        as Map?)?[calendar['calendar_id']]?['last_success_at'],
+                  ),
                 ),
               )
               .toList() ??
           const [],
       provider: json['provider']! as String,
+      includeAll: json['scope'] == 'all',
       revision: json['revision']! as int,
       lastSuccessAt: _optionalTimestamp(json['last_success_at']),
       error: json['error'] as String?,

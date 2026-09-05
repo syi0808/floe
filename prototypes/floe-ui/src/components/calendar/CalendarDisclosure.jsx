@@ -8,7 +8,7 @@ export function CalendarDisclosure({ onClose, onPermission }) {
         <CalendarDays size={30} />
       </div>
       <p className="s1-body-copy">
-        Connect all calendars already on this Mac. Floe will keep a local copy of their events so
+        Connect calendars already on this Mac and choose all or a fixed selection. Floe keeps a local copy so
         your day is still there when you’re offline.
       </p>
       <ul className="s1-permission-list">

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::{Event, EventSchedule};
 
@@ -32,12 +33,26 @@ pub struct CalendarRange {
     pub start_date: NaiveDate,
     pub end_date_exclusive: NaiveDate,
     pub timezone_offset_seconds: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_timezone_offset_seconds: Option<i32>,
 }
 
 impl CalendarRange {
     pub fn is_valid(&self) -> bool {
         let days = (self.end_date_exclusive - self.start_date).num_days();
-        (1..=31).contains(&days) && self.timezone_offset_seconds.unsigned_abs() <= 86_400
+        (1..=31).contains(&days)
+            && self.timezone_offset_seconds.unsigned_abs() < 86_400
+            && self
+                .end_timezone_offset_seconds
+                .unwrap_or(self.timezone_offset_seconds)
+                .unsigned_abs()
+                < 86_400
+            && days * 86_400 + i64::from(self.timezone_offset_seconds)
+                - i64::from(
+                    self.end_timezone_offset_seconds
+                        .unwrap_or(self.timezone_offset_seconds),
+                )
+                > 0
     }
 
     pub fn contains(&self, schedule: &EventSchedule) -> bool {
@@ -54,7 +69,10 @@ impl CalendarRange {
                     .and_hms_opt(0, 0, 0)
                     .unwrap()
                     .and_utc()
-                    - offset;
+                    - Duration::seconds(i64::from(
+                        self.end_timezone_offset_seconds
+                            .unwrap_or(self.timezone_offset_seconds),
+                    ));
                 value.starts_at < end && value.ends_at > start
             }
         }
@@ -67,8 +85,20 @@ pub struct CalendarSelection {
     pub calendar_name: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CalendarScope {
+    #[default]
+    Selected,
+    All,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarConnection {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disconnected: bool,
+    #[serde(default)]
+    pub scope: CalendarScope,
     pub provider: CalendarProvider,
     pub calendar_id: String,
     pub calendar_name: String,
@@ -78,6 +108,22 @@ pub struct CalendarConnection {
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_statuses: BTreeMap<String, CalendarSyncStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarSyncStatus {
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_range: Option<CalendarRange>,
+    pub error: Option<CalendarFailure>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CalendarBatch {
+    pub calendar_id: String,
+    pub records: Vec<CalendarRecord>,
+    pub failure: Option<CalendarFailure>,
 }
 
 impl CalendarConnection {

@@ -724,6 +724,36 @@ abstract class AppLocalizations {
   /// **'Choose calendars'**
   String get chooseACalendar;
 
+  /// No description provided for @allCalendarsIncludingNew.
+  ///
+  /// In en, this message translates to:
+  /// **'All calendars, including new ones'**
+  String get allCalendarsIncludingNew;
+
+  /// No description provided for @selectedCalendarsOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Only selected calendars'**
+  String get selectedCalendarsOnly;
+
+  /// No description provided for @calendarScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar scope'**
+  String get calendarScope;
+
+  /// No description provided for @disconnectCalendar.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnect from Floe'**
+  String get disconnectCalendar;
+
+  /// No description provided for @disconnectCalendarExplanation.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove imported Calendar copies from this Mac? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.'**
+  String get disconnectCalendarExplanation;
+
   /// No description provided for @calendarAccessWasDeniedOrRevokedAllow.
   ///
   /// In en, this message translates to:

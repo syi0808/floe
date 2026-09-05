@@ -774,6 +774,8 @@
   font-weight: 550;
   font-size: 18px;
 }
+.s1-scope-options { display: grid; gap: 14px; margin: 20px 0; padding: 16px; border: 1px solid var(--border); font-size: 13px; }
+.s1-scope-options label { display: flex; align-items: center; gap: 12px; line-height: 1.7; }
 .s1-facts {
   margin: 20px 0 26px;
   font-size: 12px;

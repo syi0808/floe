@@ -100,6 +100,9 @@ final class CalendarBridge {
       result(nil)
     case "calendars":
       if canRead { list(result); return }
+      if let arguments = call.arguments as? [String: Any], arguments["request_access"] as? Bool == false {
+        result(failure("permission_denied")); return
+      }
       let completion: (Bool, Error?) -> Void = { granted, _ in
         DispatchQueue.main.async {
           if granted { self.list(result) }
@@ -163,7 +166,8 @@ final class CalendarBridge {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let identifier = event.calendarItemIdentifier
-    let occurrence = event.occurrenceDate.map { formatter.string(from: $0) } ?? ""
+    let occurrence = (event.hasRecurrenceRules || event.isDetached)
+      ? event.occurrenceDate.map { formatter.string(from: $0) } ?? "" : ""
     let dateFormatter = DateFormatter()
     dateFormatter.calendar = Calendar(identifier: .gregorian)
     dateFormatter.locale = Locale(identifier: "en_US_POSIX")

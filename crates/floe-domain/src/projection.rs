@@ -29,6 +29,29 @@ pub fn project_day(
     date: NaiveDate,
     timezone_offset_seconds: i32,
     now: DateTime<Utc>,
+    events: Vec<Event>,
+    tasks: Vec<Task>,
+    notes: Vec<Note>,
+) -> DaySnapshot {
+    project_day_with_end_offset(
+        person_id,
+        date,
+        timezone_offset_seconds,
+        None,
+        now,
+        events,
+        tasks,
+        notes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn project_day_with_end_offset(
+    person_id: PersonId,
+    date: NaiveDate,
+    timezone_offset_seconds: i32,
+    end_timezone_offset_seconds: Option<i32>,
+    now: DateTime<Utc>,
     mut events: Vec<Event>,
     mut tasks: Vec<Task>,
     mut notes: Vec<Note>,
@@ -36,7 +59,12 @@ pub fn project_day(
     let day_start =
         DateTime::<Utc>::from_naive_utc_and_offset(date.and_hms_opt(0, 0, 0).unwrap(), Utc)
             - chrono::Duration::seconds(i64::from(timezone_offset_seconds));
-    let day_end = day_start + chrono::Duration::days(1);
+    let day_end = day_start
+        + chrono::Duration::days(1)
+        + chrono::Duration::seconds(
+            i64::from(timezone_offset_seconds)
+                - i64::from(end_timezone_offset_seconds.unwrap_or(timezone_offset_seconds)),
+        );
     events.retain(|item| {
         item.person_id == person_id
             && item.deleted_at.is_none()

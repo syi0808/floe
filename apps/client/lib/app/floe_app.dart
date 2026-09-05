@@ -40,11 +40,10 @@ class _FloeAppState extends State<FloeApp> {
     final now = DateTime.now();
     final effectiveQuery =
         widget.query ??
-        DayQuery(
+        DayQuery.local(
           personId: localPersonId,
           date: DateTime(now.year, now.month, now.day),
           now: now,
-          timezoneOffsetSeconds: now.timeZoneOffset.inSeconds,
         );
     return MaterialApp(
       title: 'Floe',

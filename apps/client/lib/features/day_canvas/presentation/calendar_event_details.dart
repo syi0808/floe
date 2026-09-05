@@ -60,6 +60,7 @@ class CalendarEventDetails extends StatelessWidget {
                       context,
                       event,
                       snapshot.timezoneOffsetSeconds,
+                      date: snapshot.date,
                     ),
                     style: TextStyle(
                       fontSize: 18,

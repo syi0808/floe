@@ -14,7 +14,7 @@ export function CalendarPermission({ onDeny, onRefresh }) {
         <ShieldCheck size={26} />
         <h3>“Floe” would like full access to Calendar</h3>
         <p className="s1-body-copy">
-          Floe reads all calendars on this Mac. It won’t change your external events.
+          Floe reads calendars within your chosen scope. It won’t change your external events.
         </p>
       </Surface>
       <div className="s1-modal-actions">

@@ -3,6 +3,13 @@
 Date: 2026-09-04. Status: interactive HTML design reference, **not native acceptance**.
 Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-calendar-read.md).
 
+2026-09-05 update: Connect exposes explicit All/Selected scope. Selected preserves
+checked IDs; All includes new sources on refresh. Cancel keeps saved scope, and an
+empty selected subset cannot be saved. This picker was implemented in the prototype
+before Flutter. Partial-source cache status and disconnect are reflected natively.
+`?dst=spring` and `?dst=fall` show 23/25-hour elapsed timelines, with timezone labels
+distinguishing repeated wall-clock hours. Fixture date navigation is disabled.
+
 ## Design intent
 
 - Today starts with the date and one refresh action, then the unified day timeline.

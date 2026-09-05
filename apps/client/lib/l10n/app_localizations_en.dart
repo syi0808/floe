@@ -339,6 +339,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chooseACalendar => 'Choose calendars';
 
   @override
+  String get allCalendarsIncludingNew => 'All calendars, including new ones';
+
+  @override
+  String get selectedCalendarsOnly => 'Only selected calendars';
+
+  @override
+  String get calendarScope => 'Calendar scope';
+
+  @override
+  String get disconnectCalendar => 'Disconnect from Floe';
+
+  @override
+  String get disconnectCalendarExplanation =>
+      'Remove imported Calendar copies from this Mac? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.';
+
+  @override
   String get calendarAccessWasDeniedOrRevokedAllow =>
       'Calendar access was denied or revoked. Allow access in Settings, then try again.';
 

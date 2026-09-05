@@ -3,6 +3,19 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "calendar-scope-picker",
+      "export": "CalendarScopePicker",
+      "source": "src/components/calendar/CalendarScopePicker.jsx",
+      "kind": "composition",
+      "responsibility": "Explicit all/fixed-selection scope and cancel-safe inclusion draft",
+      "props": ["calendars", "scope", "selectedIds", "onScope", "onToggle", "onSave", "onCancel"],
+      "stateOwner": "CalendarScreen: committed scope and draft selection",
+      "states": ["all", "selected", "empty selection", "cancel"],
+      "styles": ["src/calendar.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/s1-calendar-ui.md"
+    },
+    {
       "id": "calendar-action-card",
       "export": "CalendarActionCard",
       "source": "src/components/calendar/CalendarActionCard.jsx",
@@ -245,7 +258,9 @@
         "calendars",
         "allDayEvents",
         "onEventSelect",
-        "onEmptyAction"
+        "onEmptyAction",
+        "dayMinutes",
+        "hourLabels"
       ],
       "stateOwner": "caller: data, zoom, scroll position and phase",
       "states": [
@@ -303,7 +318,9 @@
         "calendars",
         "onOpenDialog",
         "onRefresh",
-        "onBack"
+        "onBack",
+        "scope",
+        "onScope"
       ],
       "stateOwner": "caller: phase and connection records",
       "states": [],
@@ -377,7 +394,8 @@
         "onPermission",
         "onDeny",
         "onRefresh",
-        "onDisconnect"
+        "onDisconnect",
+        "displayTimezone"
       ],
       "stateOwner": "caller: modal",
       "states": [
@@ -499,7 +517,8 @@
         "dateLabel",
         "dateShort",
         "dayOffset",
-        "stale"
+        "stale",
+        "displayTimezone"
       ],
       "stateOwner": "caller: event; browser: details expansion",
       "states": [],

@@ -9,6 +9,9 @@ import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 class FixtureCalendarAdapter implements CalendarAdapter {
   bool denied = false;
   String? deniedCalendarId;
+  List<CalendarChoice> inventory = [
+    const CalendarChoice('fixture', 'Test calendar', provider: 'fixture'),
+  ];
   List<Map<String, dynamic>> records = [
     {
       'external_id': 'fixture-1',
@@ -34,9 +37,11 @@ class FixtureCalendarAdapter implements CalendarAdapter {
   ];
 
   @override
-  Future<List<CalendarChoice>> calendars() async => [
-    const CalendarChoice('fixture', 'Test calendar', provider: 'fixture'),
-  ];
+  Future<List<CalendarChoice>> calendars({bool requestAccess = true}) async {
+    if (denied) throw PlatformException(code: 'permission_denied');
+    return inventory;
+  }
+
   @override
   Future<List<Map<String, dynamic>>> read(
     String calendarId,
@@ -60,6 +65,65 @@ final query = DayQuery(
 );
 
 void main() {
+  test('selected scope stays fixed; all scope discovers and preserves unavailable source cache after reopen', () async {
+    final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+    expect(
+      library.existsSync(),
+      isTrue,
+      reason: 'cargo build -p floe-ffi required',
+    );
+    final directory = await Directory.systemTemp.createTemp('floe-scope-');
+    final adapter = FixtureCalendarAdapter();
+    Future<FfiDayGateway> open() => FfiDayGateway.open(
+      libraryPath: library.path,
+      databasePath: '${directory.path}/scope.db',
+      calendarAdapter: adapter,
+      clock: () => query.now,
+    );
+    var gateway = await open();
+    try {
+      await gateway.selectCalendars(adapter.inventory, query);
+      await gateway.syncCalendar(query);
+      adapter.inventory = [
+        ...adapter.inventory,
+        const CalendarChoice('new', 'New', provider: 'fixture'),
+      ];
+      var snapshot = await gateway.syncCalendar(query);
+      expect(snapshot.calendar!.includeAll, isFalse);
+      expect(snapshot.calendar!.selectedCalendarIds, ['fixture']);
+      expect(snapshot.items, hasLength(2));
+      await gateway.selectCalendars(
+        [adapter.inventory.first],
+        query,
+        includeAll: true,
+      );
+      snapshot = await gateway.syncCalendar(query);
+      expect(snapshot.items, hasLength(4));
+      final identifiers = snapshot.items.map((item) => item.id).toSet();
+      await gateway.close();
+      gateway = await open();
+      snapshot = await gateway.loadDay(query);
+      expect(snapshot.calendar!.includeAll, isTrue);
+      adapter.inventory = [adapter.inventory.last];
+      snapshot = await gateway.syncCalendar(query);
+      expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
+      expect(
+        snapshot.calendar!.connectedCalendars
+            .firstWhere((source) => source.id == 'fixture')
+            .error,
+        'calendar_unavailable',
+      );
+      expect(
+        snapshot.calendar!.connectedCalendars
+            .firstWhere((source) => source.id == 'new')
+            .error,
+        isNull,
+      );
+    } finally {
+      await gateway.close();
+      await directory.delete(recursive: true);
+    }
+  });
   test(
     'multiple calendars preserve sources, selection, and atomic cache',
     () async {
@@ -81,6 +145,7 @@ void main() {
         CalendarChoice('home', 'Home', provider: 'fixture'),
         CalendarChoice('work', 'Work', provider: 'fixture'),
       ];
+      adapter.inventory = calendars;
       try {
         await gateway.selectCalendars(calendars, query);
         var snapshot = await gateway.syncCalendar(query);
@@ -100,22 +165,24 @@ void main() {
         snapshot = await gateway.loadDay(query);
         expect(snapshot.calendar!.selectedCalendarIds, ['home', 'work']);
         expect(
-          snapshot.calendar!.connectedCalendars.map((calendar) => calendar.name),
+          snapshot.calendar!.connectedCalendars.map(
+            (calendar) => calendar.name,
+          ),
           ['Home', 'Work'],
         );
         adapter.records = [];
         adapter.deniedCalendarId = 'work';
         snapshot = await gateway.syncCalendar(query);
         expect(snapshot.calendar!.error, 'permission_denied');
-        expect(snapshot.items.map((item) => item.id).toSet(), identifiers);
-        snapshot = await gateway.selectCalendars([calendars.first], query);
         expect(snapshot.items, hasLength(2));
         expect(
           snapshot.items.whereType<EventItem>().every(
-            (event) => event.calendarName == 'Home',
+            (event) => event.calendarName == 'Work',
           ),
           isTrue,
         );
+        snapshot = await gateway.selectCalendars([calendars.first], query);
+        expect(snapshot.items, isEmpty);
         expect(
           snapshot.items.every((item) => identifiers.contains(item.id)),
           isTrue,

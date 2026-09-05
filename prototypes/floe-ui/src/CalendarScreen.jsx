@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import './calendar.css';
 import { layoutTimedEvents } from './calendar-layout.js';
 import {
-  calendars,
+  calendars as fixtureCalendars,
   scenarios,
   externalEvents,
   getAllDayEvents,
@@ -19,15 +19,23 @@ import { CalendarConnections } from './components/calendar/CalendarConnections.j
 import { CalendarDialogs } from './components/calendar/CalendarDialogs.jsx';
 import { CalendarActionCard } from './components/calendar/CalendarActionCard.jsx';
 import { CalendarActionDialog } from './components/calendar/CalendarActionDialog.jsx';
+import { CalendarScopePicker } from './components/calendar/CalendarScopePicker.jsx';
+import { Modal } from './components/ui/Modal.jsx';
+import { dstFixture } from './calendar-dst-fixture.js';
 import { actionReducer, initialAction, actionEvent, actionScenarios } from './calendar-action-state.js';
 
 export function CalendarScreen({ page, onNavigate, notify }) {
+  const dst = dstFixture(new URLSearchParams(window.location.search).get('dst'));
+  const [scope, setScope] = useState('all');
+  const [selectedIds, setSelectedIds] = useState(fixtureCalendars.map(calendar => calendar.id));
+  const [scopeDraft, setScopeDraft] = useState(null);
+  const calendars = fixtureCalendars.filter(calendar => scope === 'all' || selectedIds.includes(calendar.id));
   const [action, dispatchAction] = useReducer(actionReducer, null, () => {
     const scenario = new URLSearchParams(window.location.search).get('action');
     return initialAction(actionScenarios.includes(scenario) ? scenario : 'ready');
   });
   const [actionOpen, setActionOpen] = useState(false);
-  const timedEvents = layoutTimedEvents([...externalEvents, ...(action.status === 'succeeded' ? [actionEvent(action)] : [])]);
+  const timedEvents = layoutTimedEvents([...(dst?.events ?? externalEvents), ...(!dst && action.status === 'succeeded' ? [actionEvent(action)] : [])].filter(event => calendars.some(calendar => calendar.id === event.calendarId)));
   useEffect(() => {
     const type = { checking: 'checked', creating: 'created', importing: 'imported', 'looking-up': 'found' }[action.status];
     if (!type) return;
@@ -45,7 +53,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
   const [modal, setModal] = useState(null);
   const [taskDone, setTaskDone] = useState(false);
   const [readDates, setReadDates] = useState(() =>
-    ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'uncollected'].includes(
+    ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'uncollected', 'partial'].includes(
       phase,
     )
       ? [0]
@@ -53,7 +61,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
   );
   const timer = useRef(null);
   const announceRead = useRef(false);
-  const date = new Date(Date.UTC(2026, 8, 4 + dayOffset));
+  const date = dst ? new Date(`${dst.date}T00:00:00Z`) : new Date(Date.UTC(2026, 8, 4 + dayOffset));
   const dateLabel = date.toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
@@ -66,12 +74,12 @@ export function CalendarScreen({ page, onNavigate, notify }) {
     timeZone: 'UTC',
   });
   const hasCache =
-    ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing'].includes(phase) &&
+    ['connected', 'syncing', 'cached', 'offline', 'revoked', 'missing', 'partial'].includes(phase) &&
     dayOffset === 0 &&
     readDates.includes(0);
   const hasConnection = !['disconnected', 'denied', 'noCalendars'].includes(phase);
-  const stale = ['cached', 'offline', 'revoked', 'missing'].includes(phase);
-  const statusTone = ['offline', 'revoked', 'missing', 'loadError'].includes(phase)
+  const stale = ['cached', 'offline', 'revoked', 'missing', 'partial'].includes(phase);
+  const statusTone = ['offline', 'revoked', 'missing', 'loadError', 'partial'].includes(phase)
     ? 'warning'
     : ['connected', 'empty'].includes(phase)
       ? ''
@@ -122,6 +130,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
   const statusLabel =
     {
       connected: 'Up to date',
+      partial: 'Some calendars couldn’t refresh',
       syncing: 'Refreshing…',
       cached: 'Saved on this Mac',
       offline: 'Couldn’t refresh',
@@ -158,12 +167,14 @@ export function CalendarScreen({ page, onNavigate, notify }) {
           onOpenDialog={setModal}
           onRefresh={() => refresh()}
           onBack={() => onNavigate('connections')}
+          scope={scope}
+          onScope={() => setScopeDraft({ scope, selectedIds: [...selectedIds] })}
         />
       ) : (
         <>
           <CalendarDateToolbar
             dateLabel={dateLabel}
-            disabled={phase === 'syncing'}
+            disabled={phase === 'syncing' || !!dst}
             refreshDisabled={phase === 'syncing' || phase === 'loadError'}
             showRefresh={hasConnection}
             onPrevious={() => moveDay(dayOffset - 1)}
@@ -201,10 +212,12 @@ export function CalendarScreen({ page, onNavigate, notify }) {
               </Surface>
             ) : (
               <CalendarAgenda
+                dayMinutes={dst?.minutes}
+                hourLabels={dst?.labels}
                 hasCache={hasCache}
                 phase={phase}
                 stale={stale}
-                currentTime={dayOffset === 0 ? { minutes: 14 * 60 + 28, label: '2:28 PM' } : null}
+                currentTime={!dst && dayOffset === 0 ? { minutes: 14 * 60 + 28, label: '2:28 PM' } : null}
                 dateShort={dateShort}
                 pixelsPerMinute={pixelsPerMinute}
                 onZoomChange={setPixelsPerMinute}
@@ -214,7 +227,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
                 }}
                 timedEvents={timedEvents}
                 calendars={calendars}
-                allDayEvents={getAllDayEvents(dateShort)}
+                allDayEvents={dst ? [] : getAllDayEvents(dateShort).filter(event => calendars.some(calendar => calendar.id === event.calendarId))}
                 onEventSelect={setModal}
                 onEmptyAction={() =>
                   phase === 'empty'
@@ -226,7 +239,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
               />
             )}
             <div className="s1-side-stack">
-            {dayOffset === 0 && <CalendarActionCard action={action} disabled={action.status === 'pending' && phase !== 'connected'} onReview={() => setActionOpen(true)} />}
+            {!dst && dayOffset === 0 && <CalendarActionCard action={action} disabled={action.status === 'pending' && phase !== 'connected'} onReview={() => setActionOpen(true)} />}
             <CalendarContextRail
               taskDone={taskDone}
               onTaskChange={(completed) => {
@@ -246,6 +259,7 @@ export function CalendarScreen({ page, onNavigate, notify }) {
 
       {modal && (
         <CalendarDialogs
+          displayTimezone={dst ? 'America/Los_Angeles' : 'Asia/Seoul'}
           modal={modal}
           detailCalendar={detailCalendar}
           dateLabel={dateLabel}
@@ -268,7 +282,14 @@ export function CalendarScreen({ page, onNavigate, notify }) {
           }}
         />
       )}
-      {actionOpen && <CalendarActionDialog action={action} calendars={calendars} connected={phase === 'connected'} onAction={dispatchAction} onClose={() => setActionOpen(false)} />}
+      {actionOpen && <CalendarActionDialog action={action} calendars={fixtureCalendars} connected={phase === 'connected'} onAction={dispatchAction} onClose={() => setActionOpen(false)} />}
+      {scopeDraft && <Modal title="Choose calendar scope" onClose={() => setScopeDraft(null)}><CalendarScopePicker
+        calendars={fixtureCalendars} scope={scopeDraft.scope} selectedIds={scopeDraft.selectedIds}
+        onScope={scope => setScopeDraft(current => ({ ...current, scope }))}
+        onToggle={id => setScopeDraft(current => ({ ...current, selectedIds: current.selectedIds.includes(id) ? current.selectedIds.filter(value => value !== id) : [...current.selectedIds, id] }))}
+        onCancel={() => setScopeDraft(null)}
+        onSave={() => { setScope(scopeDraft.scope); setSelectedIds(scopeDraft.selectedIds); setScopeDraft(null); refresh(); }}
+      /></Modal>}
     </div>
   );
 }
