@@ -82,7 +82,7 @@ These are the nontrivial data contracts used by the calendar:
 | `SquircleSurface` | Outer border + inner surface, semantic `as`, shared radius/smoothing | `.sq-border`, `.sq-surface`, caller classes |
 | `SquircleButton` | Real button; forwards native attributes/events/ref, defaults to type button | `.sq-button`, button variants |
 | `SquircleBlock` | Shape wrapper; `asChild` preserves semantic child element | Caller classes |
-| `CheckControl` | Controlled `checked`, accessible `label`, emits `onClick`; aria-pressed toggle | `.check-control`, `.check-visual` |
+| `CheckControl` | Compact `Checkbox` adapter; controlled `checked`, accessible `label`, emits `onClick`; native checkbox semantics | `.floe-choice--compact` |
 | `DotSpinner` | Eight 4px circles in a 32px ring, continuous 900ms rotation; optional screen-reader-only label with status role; static under reduced motion | `.floe-dot-spinner`, `.floe-dot-spinner-ring` |
 | `Modal` | Mount opens native dialog, locks body scroll; Escape/backdrop/X calls `onClose`; unmount restores focus/scroll; unique title ID | `.s1-dialog`, `.s1-modal*` |
 | `GlobalSidebar` | Controlled screen and `onNavigate(destination)`; icon-only names, tooltips, aria-current | `.sidebar-shell`, `.global-sidebar`, `.global-nav`, `.nav-link`, `.brand` |

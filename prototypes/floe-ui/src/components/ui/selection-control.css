@@ -1,0 +1,84 @@
+.floe-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color 140ms var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+.floe-choice-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.floe-choice-visual {
+  display: grid;
+  place-items: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--ink-tertiary);
+  border-radius: 7px;
+  corner-shape: squircle;
+  background: var(--surface);
+  color: white;
+  box-shadow: 0 1px 2px rgb(21 24 43 / 5%);
+  pointer-events: none;
+  transition: transform 140ms var(--ease-out), background-color 140ms var(--ease-out), border-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+.floe-choice--radio .floe-choice-visual { border-radius: 50%; corner-shape: round; }
+.floe-choice-mark {
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+  transform: scale(.92);
+  transition: transform 160ms var(--ease-out), opacity 120ms var(--ease-out);
+}
+.floe-choice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0;
+  transform: scale(.9);
+  transition: transform 160ms var(--ease-out), opacity 120ms var(--ease-out);
+}
+.floe-choice-input:checked + .floe-choice-visual {
+  border-color: var(--primary-600);
+  background: var(--primary-600);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 20%), 0 1px 2px rgb(81 56 191 / 15%);
+}
+.floe-choice-input:checked + .floe-choice-visual > * { opacity: 1; transform: scale(1); }
+.floe-choice-input:focus-visible + .floe-choice-visual { outline: 2px solid var(--primary-600); outline-offset: 4px; }
+.floe-choice:active:not(:has(input:disabled)) .floe-choice-visual { transform: scale(.97); transition-duration: 100ms; }
+.floe-choice-copy { display: grid; gap: 3px; min-width: 0; pointer-events: none; }
+.floe-choice-label { font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.floe-choice-description { color: var(--ink-secondary); font-size: 12px; line-height: 1.5; }
+.floe-choice:has(input:disabled) { cursor: not-allowed; color: var(--ink-secondary); }
+.floe-choice-input:disabled + .floe-choice-visual { background: var(--surface-subtle); border-color: var(--border-strong); color: var(--ink-tertiary); box-shadow: none; }
+.floe-choice--compact { width: 44px; min-width: 44px; min-height: 44px; padding: 12px; }
+.floe-choice--compact .floe-choice-copy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (hover: hover) and (pointer: fine) {
+  .floe-choice:hover:not(:has(input:disabled)) { background: var(--primary-50); }
+  .floe-choice:hover .floe-choice-input:not(:disabled):not(:checked) + .floe-choice-visual { border-color: var(--primary-600); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .floe-choice, .floe-choice-visual, .floe-choice-mark, .floe-choice-dot { transition: none; }
+  .floe-choice .floe-choice-visual, .floe-choice .floe-choice-mark, .floe-choice .floe-choice-dot,
+  .floe-choice:active:not(:has(input:disabled)) .floe-choice-visual { transform: none; }
+}
+@media (forced-colors: active) {
+  .floe-choice-visual { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
+  .floe-choice-input:checked + .floe-choice-visual { border-color: Highlight; background: Highlight; color: HighlightText; }
+  .floe-choice-input:disabled + .floe-choice-visual { border-color: GrayText; background: Canvas; color: GrayText; }
+  .floe-choice-input:focus-visible + .floe-choice-visual { outline-color: Highlight; }
+}

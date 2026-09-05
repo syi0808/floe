@@ -1,5 +1,6 @@
 import { ArrowRight, Link2 } from 'lucide-react';
 import { CalendarSurface as Surface } from './CalendarSurface.jsx';
+import { Checkbox } from '../ui/SelectionControl.jsx';
 
 export function CalendarContextRail({ taskDone, onTaskChange, hasCache, onNavigate }) {
   return (
@@ -8,16 +9,9 @@ export function CalendarContextRail({ taskDone, onTaskChange, hasCache, onNaviga
         <div className="s1-card-heading">
           <h2>Your own rhythm</h2>
         </div>
-        <label className={`s1-local-task ${taskDone ? 'done' : ''}`}>
-          <input
-            type="checkbox"
-            checked={taskDone}
-            onChange={(event) => onTaskChange(event.target.checked)}
-          />
-          <span>
-            Finish the launch brief<small>One good thing to move forward</small>
-          </span>
-        </label>
+        <div className={`s1-local-task ${taskDone ? 'done' : ''}`}>
+          <Checkbox checked={taskDone} onChange={onTaskChange} label="Finish the launch brief" description="One good thing to move forward" />
+        </div>
         <button className="s1-text-link" onClick={() => onNavigate('tasks')}>
           <span>See your tasks</span> <ArrowRight size={15} />
         </button>

@@ -625,19 +625,6 @@
   margin: 24px 0;
   cursor: pointer;
 }
-.s1-local-task input {
-  margin: 2px 0;
-  width: 16px;
-  height: 16px;
-  accent-color: var(--primary-600);
-}
-.s1-local-task small {
-  margin-top: 5px;
-}
-.s1-local-task.done > span {
-  text-decoration: line-through;
-  color: var(--ink-tertiary);
-}
 .s1-text-link {
   display: inline-flex;
   align-items: center;
@@ -774,8 +761,9 @@
   font-weight: 550;
   font-size: 18px;
 }
-.s1-scope-options { display: grid; gap: 14px; margin: 20px 0; padding: 16px; border: 1px solid var(--border); font-size: 13px; }
-.s1-scope-options label { display: flex; align-items: center; gap: 12px; line-height: 1.7; }
+.s1-scope-options { display: grid; gap: 4px; min-width: 0; margin: 20px 0; padding: 8px; border: 1px solid var(--border); border-radius: 20px; font-size: 13px; }
+.s1-scope-options legend { padding: 0 8px; color: var(--ink-secondary); font-size: 12px; }
+.s1-local-task.done .floe-choice-label { text-decoration: line-through; color: var(--ink-tertiary); }
 .s1-facts {
   margin: 20px 0 26px;
   font-size: 12px;

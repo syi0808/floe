@@ -3,6 +3,32 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "checkbox",
+      "export": "Checkbox",
+      "source": "src/components/ui/SelectionControl.jsx",
+      "kind": "control",
+      "responsibility": "Native checkbox semantics with Floe squircle selection and interruptible feedback",
+      "props": ["checked", "label", "description", "disabled", "name", "value", "onChange", "compact"],
+      "stateOwner": "caller: checked; browser: focus and press",
+      "states": ["unchecked", "checked", "disabled", "focus", "press", "compact", "reduced motion", "forced colors"],
+      "styles": ["src/components/ui/selection-control.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/selection-controls.md"
+    },
+    {
+      "id": "radio",
+      "export": "Radio",
+      "source": "src/components/ui/SelectionControl.jsx",
+      "kind": "control",
+      "responsibility": "Named native radio groups with Floe selection dot and keyboard navigation",
+      "props": ["checked", "label", "description", "disabled", "name", "value", "onChange"],
+      "stateOwner": "caller: selected value; browser: focus and press",
+      "states": ["unchecked", "checked", "disabled", "focus", "press", "reduced motion", "forced colors"],
+      "styles": ["src/components/ui/selection-control.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/selection-controls.md"
+    },
+    {
       "id": "calendar-scope-picker",
       "export": "CalendarScopePicker",
       "source": "src/components/calendar/CalendarScopePicker.jsx",
@@ -827,7 +853,7 @@
       "export": "CheckControl",
       "source": "src/components/ui/CheckControl.jsx",
       "kind": "control",
-      "responsibility": "Accessible controlled task completion toggle",
+      "responsibility": "Compact native Checkbox adapter for controlled task completion",
       "props": [
         "checked",
         "label",
@@ -840,7 +866,7 @@
         "focus"
       ],
       "styles": [
-        "src/styles.css"
+        "src/components/ui/selection-control.css"
       ],
       "status": "prototype",
       "spec": "../../docs/design/prototype-components.md"

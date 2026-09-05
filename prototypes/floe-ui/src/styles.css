@@ -781,34 +781,6 @@ p {
   font-size: 12px;
 }
 
-.check-control {
-  width: 44px;
-  min-width: 44px;
-  padding: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.check-visual {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1.5px var(--border-strong);
-}
-
-.check-control.checked {
-  background: transparent;
-  box-shadow: none;
-  color: white;
-}
-
-.check-visual.checked {
-  background: var(--primary-600);
-  box-shadow: inset 0 0 0 1.5px var(--primary-600);
-}
-
 .card-footer-action {
   display: flex;
   align-items: center;
