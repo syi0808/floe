@@ -63,8 +63,9 @@
 .floe-choice-copy { display: grid; gap: 3px; min-width: 0; pointer-events: none; }
 .floe-choice-label { font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
 .floe-choice-description { color: var(--ink-secondary); font-size: 12px; line-height: 1.5; }
-.floe-choice:has(input:disabled) { cursor: not-allowed; color: var(--ink-secondary); }
-.floe-choice-input:disabled + .floe-choice-visual { background: var(--surface-subtle); border-color: var(--border-strong); color: var(--ink-tertiary); box-shadow: none; }
+.floe-choice:has(input:disabled) { cursor: not-allowed; color: var(--ink-tertiary); }
+.floe-choice:has(input:disabled) .floe-choice-description { color: color-mix(in srgb, var(--ink-tertiary) 70%, var(--surface)); }
+.floe-choice-input:disabled + .floe-choice-visual { background: var(--surface-subtle); border-color: var(--border); color: var(--border-strong); box-shadow: none; }
 .floe-choice--compact { width: 44px; min-width: 44px; min-height: 44px; padding: 12px; }
 .floe-choice--compact .floe-choice-copy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) {
@@ -80,5 +81,6 @@
   .floe-choice-visual { forced-color-adjust: none; border-color: CanvasText; background: Canvas; }
   .floe-choice-input:checked + .floe-choice-visual { border-color: Highlight; background: Highlight; color: HighlightText; }
   .floe-choice-input:disabled + .floe-choice-visual { border-color: GrayText; background: Canvas; color: GrayText; }
+  .floe-choice:has(input:disabled), .floe-choice:has(input:disabled) .floe-choice-description { color: GrayText; }
   .floe-choice-input:focus-visible + .floe-choice-visual { outline-color: Highlight; }
 }
