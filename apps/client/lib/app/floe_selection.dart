@@ -832,9 +832,9 @@ class _FloeCheckPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final path = Path()
-      ..moveTo(5.5, 10.4)
-      ..lineTo(8.6, 13.3)
-      ..lineTo(15.2, 6.9);
+      ..moveTo(5, 9.5)
+      ..lineTo(8.2, 12.7)
+      ..lineTo(15, 6);
     canvas.drawPath(path, paint);
   }
 
