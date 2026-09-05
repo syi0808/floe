@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ExternalLink, Server, SlidersHorizontal } from 'lucide-react';
 import { SQUIRCLE_RADIUS, SquircleButton, SquircleSurface } from './primitives.jsx';
 import './components/settings/settings.css';
+import { SelectionControlsDemo } from './components/ui/SelectionControlsDemo.jsx';
 
 export function SettingsScreen({ notify }) {
   const [connected, setConnected] = useState(true);
@@ -65,6 +66,7 @@ export function SettingsScreen({ notify }) {
             <strong>Connection boundary</strong>
             <p>Pairing authorizes this app to call registered targets. External data transfer is still approved per request. Provider credentials remain on the server.</p>
           </div>
+          <SelectionControlsDemo />
         </div>
       </div>
     </section>

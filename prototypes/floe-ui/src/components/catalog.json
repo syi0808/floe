@@ -3,6 +3,45 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "select",
+      "export": "Select",
+      "source": "src/components/ui/Select.jsx",
+      "kind": "control",
+      "responsibility": "Controlled single choice with origin-aware listbox and explicit selection",
+      "props": ["label", "value", "options", "onChange", "disabled", "placeholder", "description"],
+      "stateOwner": "caller: value; control: open, active option and placement",
+      "states": ["closed", "open", "selected", "disabled", "keyboard", "empty", "reduced motion", "forced colors"],
+      "styles": ["src/components/ui/selection-popover.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/selection-controls.md"
+    },
+    {
+      "id": "dropdown",
+      "export": "Dropdown",
+      "source": "src/components/ui/Select.jsx",
+      "kind": "control",
+      "responsibility": "Action menu that invokes only an explicitly activated enabled item",
+      "props": ["label", "items", "onAction", "disabled"],
+      "stateOwner": "control: open, active item and placement; caller: action effects",
+      "states": ["closed", "open", "disabled", "keyboard", "empty", "reduced motion", "forced colors"],
+      "styles": ["src/components/ui/selection-popover.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/selection-controls.md"
+    },
+    {
+      "id": "selection-controls-demo",
+      "export": "SelectionControlsDemo",
+      "source": "src/components/ui/SelectionControlsDemo.jsx",
+      "kind": "composition",
+      "responsibility": "Clearly isolated settings interaction preview without external effects",
+      "props": [],
+      "stateOwner": "SelectionControlsDemo: preview selection and feedback",
+      "states": ["default", "selected", "action feedback"],
+      "styles": ["src/components/ui/selection-popover.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/selection-controls.md"
+    },
+    {
       "id": "checkbox",
       "export": "Checkbox",
       "source": "src/components/ui/SelectionControl.jsx",

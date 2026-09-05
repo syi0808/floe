@@ -1,5 +1,52 @@
 # Floe selection controls
 
+## Select and Dropdown — September 2026 prototype
+
+`Select` is a controlled single value; `Dropdown` is an action menu, not another
+value field. The requested “Dropbox” is interpreted as Dropdown, not a connection
+to the Dropbox service. Both live in `prototypes/floe-ui/src/components/ui/Select.jsx`.
+The Settings interaction preview is explicitly non-persistent and has no external
+effects. Select also supports calendar destination review without exposing IDs.
+
+- Keep the visible label, current choice, and only useful distinguishing context
+  (such as account or read-only status). Internal values never become labels.
+- Use shared continuous-corner geometry, neutral surfaces, a faint floating shadow,
+  violet focus and an explicit selected check. Rows have 44px minimum targets.
+- Open toward available space and animate from the trigger-facing edge: 160ms,
+  0.97 scale and opacity, Floe ease-out. Press feedback is 120ms/0.985 scale.
+  Dismiss immediately rather than delaying a user's next action. There is no spring
+  overshoot, blur or row-motion on frequent keyboard navigation.
+- Reduced motion removes entrance/press transforms. Forced colors retains system
+  borders, focus and disabled distinctions.
+
+This interpretation draws specifically on Emil Kowalski's
+[Good vs Great Animations](https://emilkowal.ski/ui/good-vs-great-animations):
+origin-aware dropdown motion and strong ease-out, adapted to Floe's existing timing
+contract rather than importing another visual system.
+
+### Semantics and keyboard contract
+
+The labeled button owns a listbox (`Select`) or menu (`Dropdown`). DOM focus moves
+to the popup; `aria-activedescendant` tracks the active row, distinct from committed
+selection. Enter/Space opens and explicitly commits; Up/Down opens or moves;
+Home/End jumps; prefix typing searches enabled labels, repeated letters cycle.
+Disabled rows are skipped and cannot invoke callbacks. Escape cancels and restores
+trigger focus; Tab closes and continues from the trigger in normal tab order.
+Pointer/focus outside dismiss without stealing focus. Portals stay inside a parent
+native dialog to preserve its modal accessibility boundary. Resize and scroll
+reposition the popup; the active row scrolls into view.
+
+Callers supply unique stable `value` keys and readable `label` strings in options
+or items, with optional `description` and `disabled`. `onChange(value)` and
+`onAction(value)` fire only on explicit activation, never on focus or dismissal.
+List options are expected to remain stable while open; loading/searchable or
+multi-select controls are not part of this prototype contract.
+
+Validation commands: `node scripts/check-selection-controls.mjs`,
+`pnpm check:components`, and `pnpm build`. The standalone assertions exercise the
+actual navigation helpers and guard the semantic/motion contract in source;
+browser interaction validation is recorded separately from these static checks.
+
 Prototype reference: 2026-09-05. Flutter implementation added 2026-09-06.
 
 `Checkbox` and `Radio` share a controlled native input and Floe visual layer. Checkbox
