@@ -3,6 +3,19 @@
   "scope": "HTML prototype as-built; not a native product contract",
   "entries": [
     {
+      "id": "settings-screen",
+      "export": "SettingsScreen",
+      "source": "src/SettingsScreen.jsx",
+      "kind": "screen",
+      "responsibility": "Device settings navigation and remote Floe server connection boundary",
+      "props": ["notify"],
+      "stateOwner": "self: prototype address and connection state; caller: toast feedback",
+      "states": ["connected", "not connected", "edited address", "desktop", "narrow"],
+      "styles": ["src/styles.css", "src/components/settings/settings.css"],
+      "status": "prototype",
+      "spec": "../../docs/design/prototype-components.md"
+    },
+    {
       "id": "toast-viewport",
       "export": "ToastViewport",
       "source": "src/components/ui/ToastViewport.jsx",

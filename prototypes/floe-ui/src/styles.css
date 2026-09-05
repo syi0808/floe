@@ -301,6 +301,12 @@ p {
   color: var(--ink);
 }
 
+.sq-button.settings-action.active,
+.sq-button.settings-action.active:hover:not(:disabled) {
+  background: var(--primary-100);
+  color: var(--primary-600);
+}
+
 .icon-button {
   width: 44px;
   min-width: 44px;

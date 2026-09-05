@@ -47,7 +47,7 @@ export function GlobalSidebar({ screen, onNavigate }) {
           );
         })}
       </nav>
-      <SquircleButton className="settings-action nav-link" aria-label="Settings" title="Settings" onClick={() => onNavigate('connections')}>
+      <SquircleButton className={screen === 'settings' ? 'settings-action nav-link active' : 'settings-action nav-link'} aria-current={screen === 'settings' ? 'page' : undefined} aria-label="Settings" title="Settings" onClick={() => onNavigate('settings')}>
         <Settings size={19} strokeWidth={1.8} aria-hidden="true" />
       </SquircleButton>
     </SquircleSurface>

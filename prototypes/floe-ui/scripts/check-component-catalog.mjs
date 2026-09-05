@@ -44,7 +44,7 @@ async function componentFiles(directory) {
 
 const sources = [
   ...(await componentFiles(resolve(root, 'src/components'))),
-  ...['App.jsx', 'CalendarScreen.jsx', 'ProgressScreen.jsx', 'primitives.jsx'].map((name) =>
+  ...['App.jsx', 'CalendarScreen.jsx', 'ProgressScreen.jsx', 'SettingsScreen.jsx', 'primitives.jsx'].map((name) =>
     resolve(root, 'src', name),
   ),
 ];

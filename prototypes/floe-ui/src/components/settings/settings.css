@@ -1,0 +1,41 @@
+.settings-screen {
+  max-width: 1040px;
+  min-height: calc(100dvh - 16px);
+  padding: 44px 40px 64px;
+}
+.settings-heading { margin-bottom: 36px; }
+.settings-heading h1 { margin-bottom: 8px; font-size: 32px; letter-spacing: -.025em; }
+.settings-heading p, .settings-content p { color: var(--ink-secondary); font-size: 14px; line-height: 1.55; }
+.settings-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 48px; }
+.settings-sections { display: flex; flex-direction: column; gap: 6px; }
+.settings-sections button {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px;
+  border-radius: 14px; background: transparent; color: var(--ink-secondary); text-align: left;
+}
+.settings-sections button:hover { background: var(--surface-subtle); color: var(--ink); }
+.settings-sections button.active { background: var(--primary-100); color: var(--primary-700); font-weight: 580; }
+.settings-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.settings-title-row h2 { margin-bottom: 8px; font-size: 24px; letter-spacing: -.018em; }
+.settings-status { flex: none; padding: 7px 10px; border-radius: 18px; background: var(--surface-subtle); color: var(--ink-secondary); font-size: 12px; }
+.settings-status.connected { background: var(--mint-50); color: #267b62; }
+.server-settings-card { padding: 0; }
+.server-settings-card form { padding: 24px; }
+.server-settings-card label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 580; }
+.server-settings-card input { width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface); }
+.settings-help { margin-top: 12px !important; }
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.settings-actions .settings-primary { background: var(--primary-600); color: white; box-shadow: none; }
+.settings-actions .settings-primary:hover { background: var(--primary-700); box-shadow: none; }
+.settings-actions .sq-button { gap: 8px; }
+.settings-text-action { min-height: 44px; padding: 0 10px; background: transparent; color: var(--ink-secondary); }
+.settings-text-action:hover { color: var(--ink); }
+.settings-boundary { margin-top: 24px; padding: 0 4px; }
+.settings-boundary strong { font-size: 13px; }
+.settings-boundary p { margin-top: 6px; }
+@media (max-width: 760px) {
+  .settings-screen { padding: 28px 20px 88px; }
+  .settings-layout { grid-template-columns: 1fr; gap: 28px; }
+  .settings-sections { flex-direction: row; overflow-x: auto; }
+  .settings-sections button { flex: none; }
+  .settings-title-row { flex-direction: column; gap: 12px; }
+}

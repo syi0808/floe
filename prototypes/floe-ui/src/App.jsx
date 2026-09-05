@@ -6,6 +6,7 @@ import { TaskDetail } from './components/tasks/TaskDetail.jsx';
 import { NotesCollection } from './components/notes/NotesCollection.jsx';
 import { CalendarScreen } from './CalendarScreen.jsx';
 import { ProgressScreen } from './ProgressScreen.jsx';
+import { SettingsScreen } from './SettingsScreen.jsx';
 
 export function App() {
   const [screen, setScreen] = useState('today');
@@ -41,6 +42,7 @@ export function App() {
           {screen === 'tasks' && <TaskDetail />}
           {screen === 'notes' && <NotesCollection />}
           {screen === 'progress' && <ProgressScreen />}
+          {screen === 'settings' && <SettingsScreen notify={notify} />}
         </div>
       </div>
       <ToastViewport toasts={toasts} onDismiss={dismissToast} heights={heights} onMeasure={measureToast} />
