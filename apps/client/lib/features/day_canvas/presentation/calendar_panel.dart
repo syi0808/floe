@@ -8,6 +8,7 @@ import '../../../app/floe_feedback.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_button.dart';
+import '../../../app/floe_selection.dart';
 import '../../../app/floe_squircle.dart';
 import '../application/calendar_gateway.dart';
 import '../domain/day_models.dart';
@@ -197,24 +198,32 @@ class _CalendarPanelState extends State<CalendarPanel> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CheckboxListTile(
-                    value: includeAll,
-                    title: Text(
-                      AppLocalizations.of(context).allCalendarsIncludingNew,
-                    ),
-                    subtitle: includeAll
-                        ? null
-                        : Text(
-                            AppLocalizations.of(context).selectedCalendarsOnly,
-                          ),
+                  RadioGroup<bool>(
+                    groupValue: includeAll,
                     onChanged: (value) =>
                         setDialogState(() => includeAll = value ?? false),
+                    child: Column(
+                      children: [
+                        FloeRadioTile<bool>(
+                          value: true,
+                          title: Text(
+                            AppLocalizations.of(context)
+                                .allCalendarsIncludingNew,
+                          ),
+                        ),
+                        FloeRadioTile<bool>(
+                          value: false,
+                          title: Text(
+                            AppLocalizations.of(context).selectedCalendarsOnly,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   for (final calendar in calendars)
-                    CheckboxListTile(
+                    FloeCheckboxTile(
                       value: includeAll || selected.contains(calendar.id),
                       title: Text(calendar.name),
-                      controlAffinity: ListTileControlAffinity.leading,
                       onChanged: includeAll
                           ? null
                           : (checked) => setDialogState(() {

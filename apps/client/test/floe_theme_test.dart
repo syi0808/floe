@@ -12,7 +12,6 @@ void main() {
       theme.textButtonTheme.style!.mouseCursor!,
       theme.iconButtonTheme.style!.mouseCursor!,
       theme.segmentedButtonTheme.style!.mouseCursor!,
-      theme.checkboxTheme.mouseCursor!,
       theme.sliderTheme.mouseCursor!,
       theme.listTileTheme.mouseCursor!,
       theme.popupMenuTheme.mouseCursor!,
@@ -22,6 +21,16 @@ void main() {
       expect(cursor.resolve({}), SystemMouseCursors.click);
       expect(cursor.resolve({WidgetState.hovered}), SystemMouseCursors.click);
       expect(cursor.resolve({WidgetState.disabled}), SystemMouseCursors.basic);
+    }
+    for (final cursor in [
+      theme.checkboxTheme.mouseCursor!,
+      theme.radioTheme.mouseCursor!,
+    ]) {
+      expect(cursor.resolve({}), SystemMouseCursors.click);
+      expect(
+        cursor.resolve({WidgetState.disabled}),
+        SystemMouseCursors.forbidden,
+      );
     }
   });
 

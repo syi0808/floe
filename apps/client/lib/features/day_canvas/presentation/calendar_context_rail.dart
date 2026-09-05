@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_selection.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_squircle.dart';
 import '../domain/day_models.dart';
@@ -47,7 +48,8 @@ class CalendarContextRail extends StatelessWidget {
               for (final task in tasks.take(3))
                 Row(
                   children: [
-                    Checkbox(
+                    FloeCheckbox(
+                      semanticLabel: task.title,
                       value: task.isCompleted,
                       onChanged: disabled
                           ? null

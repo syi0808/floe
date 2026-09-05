@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_selection.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_mascot.dart';
 import '../../../app/floe_motion.dart';
@@ -1103,7 +1104,8 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   children: [
                     SizedBox(
                       width: 44,
-                      child: Checkbox(
+                      child: FloeCheckbox(
+                        semanticLabel: subtask.title,
                         value: subtaskChecks[subtask.title] ?? subtask.done,
                         onChanged: (value) => setState(
                           () => subtaskChecks[subtask.title] = value ?? false,
@@ -1471,7 +1473,8 @@ class _DayRow extends StatelessWidget {
         dimension: 44,
         child: Center(
           child: task != null
-              ? Checkbox(
+              ? FloeCheckbox(
+                  semanticLabel: task.title,
                   value: task.isCompleted,
                   onChanged: disabled
                       ? null

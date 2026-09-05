@@ -159,7 +159,8 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.text('Continue'));
       await tester.pump(const Duration(seconds: 1));
-      expect(find.byType(CheckboxListTile), findsNWidgets(3));
+      expect(find.byType(CheckboxListTile), findsNWidgets(2));
+      expect(find.byType(RadioListTile<bool>), findsNWidgets(2));
       expect(gateway.selected, isEmpty);
       await tester.tap(home);
       await tester.tap(work);

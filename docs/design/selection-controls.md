@@ -1,6 +1,6 @@
 # Floe selection controls
 
-Prototype-only, 2026-09-05. Native Flutter is unchanged.
+Prototype reference: 2026-09-05. Flutter implementation added 2026-09-06.
 
 `Checkbox` and `Radio` share a controlled native input and Floe visual layer. Checkbox
 uses a softened squircle (rounded fallback); Radio retains circular group semantics.
@@ -31,3 +31,19 @@ pass. Browser scope dialog visually inspected; ArrowDown changes the radio selec
 Space toggles a checkbox, All disables included-source checkboxes, and clearing the
 selected subset disables Save. Reduced-motion/forced-color styles are implemented;
 OS-mode and narrow-viewport visual verification remain unperformed in this checkpoint.
+
+## Flutter
+
+`FloeCheckbox`, `FloeCheckboxTile` and `FloeRadioTile` share native Material input
+semantics, Floe theme colors, 0.97/120ms press feedback, and an explicit focus border.
+Native mark transitions remain Flutter's standard control animation rather than a
+pixel-identical CSS animation. Reduced motion suppresses the added press scale.
+Disabled surfaces use neutral50, borders neutral200 and marks neutral300; labels
+use neutral500. Radio uses a violet surface with a white 4px-radius center.
+Calendar scope is now an explicit native RadioGroup (All/Selected); included calendars
+and task/subtask completion use the shared checkboxes. Existing selection/save/cancel
+behavior is unchanged. Tests cover disabled colors, keyboard checkbox/radio operation,
+disabled activation prevention, reduced-motion press, and calendar selection regression.
+
+Flutter validation: 57 tests pass; analysis, macOS release build and strict deep
+codesign verification pass. Live native visual review is not recorded in this run.

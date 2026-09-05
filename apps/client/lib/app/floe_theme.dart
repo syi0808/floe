@@ -185,10 +185,68 @@ abstract final class FloeTheme {
         ),
       ),
       checkboxTheme: CheckboxThemeData(
-        mouseCursor: WidgetStateMouseCursor.clickable,
+        mouseCursor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? SystemMouseCursors.forbidden
+              : SystemMouseCursors.click,
+        ),
         shape: floeSquircleBorder(FloeSquircleSize.xs),
-        side: const BorderSide(color: FloePalette.neutral300, width: 1.5),
+        side: WidgetStateBorderSide.resolveWith(
+          (states) => BorderSide(
+            color: states.contains(WidgetState.disabled)
+                ? FloePalette.neutral200
+                : states.contains(WidgetState.selected)
+                ? FloePalette.primary600
+                : FloePalette.neutral500,
+            width: 1.5,
+          ),
+        ),
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? FloePalette.neutral50
+              : states.contains(WidgetState.selected)
+              ? FloePalette.primary600
+              : FloePalette.neutral0,
+        ),
+        checkColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? FloePalette.neutral300
+              : FloePalette.neutral0,
+        ),
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      ),
+      radioTheme: RadioThemeData(
+        mouseCursor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? SystemMouseCursors.forbidden
+              : SystemMouseCursors.click,
+        ),
+        innerRadius: const WidgetStatePropertyAll(4),
+        side: WidgetStateBorderSide.resolveWith(
+          (states) => BorderSide(
+            color: states.contains(WidgetState.disabled)
+                ? FloePalette.neutral200
+                : states.contains(WidgetState.selected)
+                ? FloePalette.primary600
+                : FloePalette.neutral500,
+            width: 1.5,
+          ),
+        ),
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? FloePalette.neutral300
+              : states.contains(WidgetState.selected)
+              ? FloePalette.neutral0
+              : FloePalette.neutral500,
+        ),
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? FloePalette.neutral50
+              : states.contains(WidgetState.selected)
+              ? FloePalette.primary600
+              : FloePalette.neutral0,
+        ),
       ),
       listTileTheme: const ListTileThemeData(
         mouseCursor: WidgetStateMouseCursor.clickable,

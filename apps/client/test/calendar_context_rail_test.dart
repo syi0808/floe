@@ -61,7 +61,7 @@ void main() {
       await tester.pump();
       expect(
         RendererBinding.instance.mouseTracker.debugDeviceActiveCursor(1),
-        disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
+        disabled ? SystemMouseCursors.forbidden : SystemMouseCursors.click,
       );
     });
   }
