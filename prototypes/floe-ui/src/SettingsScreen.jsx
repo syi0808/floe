@@ -48,10 +48,6 @@ export function SettingsScreen({ notify }) {
                 spellCheck="false"
                 autoCapitalize="none"
               />
-              <p className="settings-help">
-                The S2 node currently listens on this Mac. The same connection contract can move
-                to a remote deployment after HTTPS and account authentication are available.
-              </p>
               <div className="settings-actions">
                 <SquircleButton className="settings-primary" type="submit">Save connection</SquircleButton>
                 <SquircleButton onClick={() => notify('Dashboard opened', 'Provider and model settings stay on the server.')}>

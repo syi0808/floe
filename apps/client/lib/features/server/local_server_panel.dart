@@ -194,11 +194,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           enabled: !busy && proof == null && connection == null,
           autocorrect: false,
           enableSuggestions: false,
-          decoration: const InputDecoration(
-            labelText: 'Server address',
-            helperText:
-                'S2 currently supports this Mac · http://127.0.0.1:port',
-          ),
+          decoration: const InputDecoration(labelText: 'Server address'),
         ),
         const SizedBox(height: 16),
         Semantics(liveRegion: true, child: Text(status)),
