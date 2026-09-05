@@ -190,6 +190,7 @@ void main() {
     );
 
     expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.byType(AnimatedScale), findsNothing);
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
@@ -208,6 +209,29 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('floe-selection-popup'))).width,
       greaterThan(280),
     );
+    List<Color?> optionColors() => tester
+        .widgetList<Container>(
+          find.byKey(const ValueKey('floe-selection-option')),
+        )
+        .map((widget) => (widget.decoration! as ShapeDecoration).color)
+        .toList();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.text('Home').last));
+    await tester.pump();
+    expect(optionColors(), [
+      FloePalette.primary50,
+      Colors.transparent,
+      Colors.transparent,
+    ]);
+    await mouse.moveTo(tester.getCenter(find.text('Work')));
+    await tester.pump();
+    expect(optionColors(), [
+      Colors.transparent,
+      FloePalette.primary50,
+      Colors.transparent,
+    ]);
     await tester.tap(find.text('Team'));
     await tester.pumpAndSettle();
     expect(selected, 'home');

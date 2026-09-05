@@ -531,11 +531,8 @@ class _FloeSelectionOptionRow<T> extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: option.enabled ? onPressed : null,
-        child: AnimatedContainer(
+        child: Container(
           key: const ValueKey('floe-selection-option'),
-          duration: FloeMotion.reduceMotion(context)
-              ? Duration.zero
-              : FloeMotion.hoverDuration,
           constraints: const BoxConstraints(minHeight: 44),
           padding: const EdgeInsets.all(10),
           decoration: ShapeDecoration(
@@ -622,7 +619,6 @@ class _FloeSelectionTrigger extends StatefulWidget {
 class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
   bool hovered = false;
   bool focused = false;
-  bool pressed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -661,79 +657,63 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
             }
             return KeyEventResult.ignored;
           },
-          child: Listener(
-            onPointerDown: (_) => setState(() => pressed = widget.enabled),
-            onPointerUp: (_) => setState(() => pressed = false),
-            onPointerCancel: (_) => setState(() => pressed = false),
-            child: AnimatedScale(
-              scale: pressed && !reduced ? .985 : 1,
-              duration: reduced
-                  ? Duration.zero
-                  : const Duration(milliseconds: 120),
-              curve: FloeMotion.easeOut,
-              child: AnimatedContainer(
-                duration: reduced ? Duration.zero : FloeMotion.hoverDuration,
-                constraints: BoxConstraints(
-                  minWidth: iconOnly ? 44 : 0,
-                  minHeight: 44,
-                ),
-                decoration: ShapeDecoration(
-                  color: highlighted
-                      ? FloePalette.neutral50
-                      : FloePalette.neutral0,
-                  shape: floeSquircleBorder(
-                    FloeSquircleSize.md,
-                    borderColor: focused
-                        ? FloePalette.primary600
-                        : highlighted
-                        ? FloePalette.primary500
-                        : FloePalette.neutral300,
-                    borderWidth: focused ? 2 : 1,
-                  ),
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  shape: floeSquircleBorder(FloeSquircleSize.md),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: widget.enabled ? widget.onPressed : null,
-                    overlayColor: const WidgetStatePropertyAll(
-                      Colors.transparent,
-                    ),
-                    child: Padding(
-                      padding: iconOnly
-                          ? const EdgeInsets.all(11)
-                          : const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                      child: iconOnly
-                          ? widget.icon
-                          : Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    widget.value,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: widget.enabled
-                                          ? FloePalette.neutral950
-                                          : FloePalette.neutral500,
-                                      fontSize: 14,
-                                    ),
-                                  ),
+          child: AnimatedContainer(
+            duration: reduced ? Duration.zero : FloeMotion.hoverDuration,
+            constraints: BoxConstraints(
+              minWidth: iconOnly ? 44 : 0,
+              minHeight: 44,
+            ),
+            decoration: ShapeDecoration(
+              color: highlighted ? FloePalette.neutral50 : FloePalette.neutral0,
+              shape: floeSquircleBorder(
+                FloeSquircleSize.md,
+                borderColor: focused
+                    ? FloePalette.primary600
+                    : highlighted
+                    ? FloePalette.primary500
+                    : FloePalette.neutral300,
+                borderWidth: focused ? 2 : 1,
+              ),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              shape: floeSquircleBorder(FloeSquircleSize.md),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: widget.enabled ? widget.onPressed : null,
+                overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+                child: Padding(
+                  padding: iconOnly
+                      ? const EdgeInsets.all(11)
+                      : const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                  child: iconOnly
+                      ? widget.icon
+                      : Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                widget.value,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: widget.enabled
+                                      ? FloePalette.neutral950
+                                      : FloePalette.neutral500,
+                                  fontSize: 14,
                                 ),
-                                const SizedBox(width: 16),
-                                const Icon(
-                                  LucideIcons.chevronDown,
-                                  size: 16,
-                                  color: FloePalette.neutral600,
-                                ),
-                              ],
+                              ),
                             ),
-                    ),
-                  ),
+                            const SizedBox(width: 16),
+                            const Icon(
+                              LucideIcons.chevronDown,
+                              size: 16,
+                              color: FloePalette.neutral600,
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ),
