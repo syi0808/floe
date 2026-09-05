@@ -170,9 +170,33 @@ impl TursoStore {
         let payload = to_string(mirror).map_err(storage_error)?;
         let connection = self.connection().await?;
         let changed = if let Some(previous) = previous {
+            let mut rows = connection
+                .query(
+                    "SELECT payload FROM calendar_mirrors WHERE id = ? AND person_id = ?",
+                    (person_id.to_string(), person_id.to_string()),
+                )
+                .await
+                .map_err(storage_error)?;
+            let stored = match rows.next().await.map_err(storage_error)? {
+                Some(row) => row.get::<String>(0).map_err(storage_error)?,
+                None => {
+                    return Err(CoreError::new(
+                        ErrorCode::Conflict,
+                        "calendar changed during sync; reload and retry",
+                    ));
+                }
+            };
+            drop(rows);
+            let expected: floe_domain::CalendarMirror = from_str(&stored).map_err(storage_error)?;
+            if &expected != previous {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "calendar changed during sync; reload and retry",
+                ));
+            }
             connection.execute(
                 "UPDATE calendar_mirrors SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
-                (payload, person_id.to_string(), person_id.to_string(), to_string(previous).map_err(storage_error)?),
+                (payload, person_id.to_string(), person_id.to_string(), stored),
             ).await.map_err(storage_error)?
         } else {
             connection.execute(
@@ -342,6 +366,57 @@ fn storage_error(error: impl std::fmt::Display) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_calendar_defaults_can_update_without_weakening_stale_cas() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = crate::FloeCore::open(directory.path().join("legacy-mirror.db"))
+            .await
+            .unwrap();
+        let person = PersonId::new();
+        core.select_calendar(
+            person,
+            floe_domain::CalendarProvider::Fixture,
+            "target".into(),
+            "Target".into(),
+        )
+        .await
+        .unwrap();
+        let previous = core.store.calendar_mirror(person).await.unwrap().unwrap();
+        let mut legacy = serde_json::to_value(&previous).unwrap();
+        legacy["connection"]
+            .as_object_mut()
+            .unwrap()
+            .remove("scope");
+        core.store
+            .connection()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE calendar_mirrors SET payload = ? WHERE id = ?",
+                (legacy.to_string(), person.to_string()),
+            )
+            .await
+            .unwrap();
+        let mut updated = previous.clone();
+        updated.connection.revision += 1;
+        core.store
+            .put_calendar_mirror(person, &updated, Some(&previous))
+            .await
+            .unwrap();
+        assert_eq!(
+            core.store.calendar_mirror(person).await.unwrap().unwrap(),
+            updated
+        );
+        assert_eq!(
+            core.store
+                .put_calendar_mirror(person, &updated, Some(&previous))
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+    }
 
     #[tokio::test]
     async fn migration_removes_legacy_focus_preferences() {
