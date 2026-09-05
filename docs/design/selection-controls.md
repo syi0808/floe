@@ -85,6 +85,8 @@ OS-mode and narrow-viewport visual verification remain unperformed in this check
 they do not compose Material Checkbox, Radio or ListTile controls. They share the
 prototype's 20px visual, Floe colors, hover surface, animated mark and outer focus
 ring. Pointer down does not scale either the row or control.
+Hover ownership is exclusive and its surface clears immediately, preventing adjacent
+rows from retaining overlapping hover fills. The check path is optically offset left.
 Disabled surfaces use neutral50, borders neutral200 and marks neutral300; labels
 use neutral500. Radio uses a violet surface with a white 4px-radius center.
 Calendar scope retains Flutter's `RadioGroup` registry for group semantics and arrow
@@ -99,7 +101,9 @@ and origin-aware placement. Their custom overlay matches the prototype's 160ms e
 opacity and 0.97-to-1 scale transition, using the trigger-facing edge as its transform
 origin instead of Flutter's 500ms staged height/item fade. Calendar destination and
 task actions use these controls instead of Material's default dropdown and popup menu.
+Closing reverses the overlay transition, while pointer hover changes only the active
+row and never invokes automatic scroll; keyboard navigation still reveals its target.
 
-Flutter validation: 74 tests and analysis pass. The earlier macOS release build and
+Flutter validation: 75 tests and analysis pass. The earlier macOS release build and
 strict deep codesign verification remain recorded. Checkbox, Radio and Select pointer
 transitions were also reviewed in a dedicated native macOS debug harness.

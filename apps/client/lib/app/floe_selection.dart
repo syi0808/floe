@@ -168,7 +168,9 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
 
   @override
   void dispose() {
-    popupEntry?.remove();
+    final entry = popupEntry;
+    popupEntry = null;
+    entry?.remove();
     popupAnimation.dispose();
     focusNode.dispose();
     popupFocusNode.dispose();
@@ -181,7 +183,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
   }
 
   void show({bool last = false}) {
-    if (open || !widget.enabled) return;
+    if (open || popupEntry != null || !widget.enabled) return;
     final overlay = Overlay.of(context);
     final overlayBox = overlay.context.findRenderObject()! as RenderBox;
     final triggerBox =
@@ -246,15 +248,20 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
     });
   }
 
-  void close({bool restoreFocus = true}) {
-    if (!open) return;
-    popupEntry?.remove();
-    popupEntry = null;
-    popupAnimation.reset();
+  void close({bool restoreFocus = true, VoidCallback? onClosed}) {
+    final entry = popupEntry;
+    if (!open || entry == null) return;
     searchText = '';
     searchedAt = null;
     if (mounted) setState(() => open = false);
     if (restoreFocus) focusNode.requestFocus();
+    popupAnimation.reverse().whenCompleteOrCancel(() {
+      if (popupEntry != entry) return;
+      popupEntry = null;
+      entry.remove();
+      popupAnimation.reset();
+      if (mounted) onClosed?.call();
+    });
   }
 
   void choose(int index) {
@@ -264,8 +271,8 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
       return;
     }
     final value = widget.options[index].value;
-    close();
-    widget.onSelected(value);
+    final onSelected = widget.onSelected;
+    close(onClosed: () => onSelected(value));
   }
 
   int _nextEnabled(int current, int direction) {
@@ -278,10 +285,11 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
     return -1;
   }
 
-  void setActive(int index) {
+  void setActive(int index, {bool reveal = false}) {
     if (index == active || index < 0 || !widget.options[index].enabled) return;
     active = index;
     popupEntry?.markNeedsBuild();
+    if (!reveal) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final optionContext = optionKeys[index].currentContext;
       if (optionContext != null) {
@@ -300,13 +308,13 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.arrowDown) {
-      setActive(_nextEnabled(active, 1));
+      setActive(_nextEnabled(active, 1), reveal: true);
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      setActive(_nextEnabled(active < 0 ? 0 : active, -1));
+      setActive(_nextEnabled(active < 0 ? 0 : active, -1), reveal: true);
     } else if (key == LogicalKeyboardKey.home) {
-      setActive(firstEnabled);
+      setActive(firstEnabled, reveal: true);
     } else if (key == LogicalKeyboardKey.end) {
-      setActive(_nextEnabled(0, -1));
+      setActive(_nextEnabled(0, -1), reveal: true);
     } else if (key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.space) {
       choose(active);
@@ -336,7 +344,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
             (active + offset + widget.options.length) % widget.options.length;
         final option = widget.options[index];
         if (option.enabled && option.label.toLowerCase().startsWith(query)) {
-          setActive(index);
+          setActive(index, reveal: true);
           break;
         }
       }
@@ -967,11 +975,8 @@ class _FloeChoiceState extends State<_FloeChoice> {
             behavior: HitTestBehavior.opaque,
             onTapDown: widget.enabled ? (_) => clearPointerFocus() : null,
             onTap: widget.onActivate,
-            child: AnimatedContainer(
+            child: Container(
               key: const ValueKey('floe-choice-hover-surface'),
-              duration: FloeMotion.reduceMotion(context)
-                  ? Duration.zero
-                  : FloeMotion.hoverDuration,
               decoration: BoxDecoration(
                 color: hovered && widget.enabled
                     ? FloePalette.primary50
@@ -1113,7 +1118,7 @@ class _FloeCheckPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.translate(-.75, -.5);
+    canvas.translate(-1.25, -.5);
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
