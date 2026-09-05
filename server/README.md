@@ -23,9 +23,9 @@ Open `http://127.0.0.1:8431/manage/`. Unlock with the administrator token in
 do not paste its contents into chat, logs or committed files. The server prints
 only its path. The containing directory must have mode 0700; generated files are 0600.
 
-1. In Floe, open **Connections → Local inference server**.
+1. In Floe, open **Settings → Remote server**.
 2. Enter `http://127.0.0.1:8431` (or `http://localhost:8431`, normalized to the literal address).
-3. Click **Connect server**, compare the eight-character code in the dashboard,
+3. Click **Pair this device**, compare the eight-character code in the dashboard,
    and approve only the request you initiated. Requests expire after five minutes.
 4. The app confirms connectivity and saves its credential/address to Keychain.
    Finder launches now work without shared shell environment variables.

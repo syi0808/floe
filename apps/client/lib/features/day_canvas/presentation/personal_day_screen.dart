@@ -12,6 +12,7 @@ import '../../../app/floe_theme.dart';
 import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
 import '../application/focus_gateway.dart';
+import '../application/ffi_day_gateway.dart';
 import 'focus_dialog.dart';
 import '../application/calendar_gateway.dart';
 import '../application/personal_day_controller.dart';
@@ -21,8 +22,16 @@ import 'calendar_agenda.dart';
 import 'calendar_context_rail.dart';
 import 'connector_screen.dart';
 import '../../../app/floe_feedback.dart';
+import '../../server/settings_screen.dart';
 
-enum _DestinationView { today, tasks, notes, connections }
+enum _DestinationView { today, tasks, notes, connections, settings }
+
+const _primaryDestinations = [
+  _DestinationView.today,
+  _DestinationView.tasks,
+  _DestinationView.notes,
+  _DestinationView.connections,
+];
 
 class PersonalDayScreen extends StatefulWidget {
   const PersonalDayScreen({
@@ -112,6 +121,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         onChanged: controller.load,
       );
     }
+    if (destination == _DestinationView.settings) {
+      return SettingsScreen(
+        client: widget.gateway is FfiDayGateway
+            ? (widget.gateway as FfiDayGateway).serverClient
+            : null,
+      );
+    }
     if (controller.loadState == DayLoadState.failure) {
       return _FailureDay(
         retry: controller.load,
@@ -187,6 +203,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             onDelete: controller.deleteItem,
           ),
           _DestinationView.connections => SizedBox.shrink(),
+          _DestinationView.settings => SizedBox.shrink(),
           _DestinationView.notes => _NotesScreen(
             notes: snapshot.items.whereType<NoteItem>().toList(),
             narrow: narrow,
@@ -304,10 +321,10 @@ class _AdaptiveNavigation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final settings = FloeButton.icon(
-      tooltip: AppLocalizations.of(context).settings,
-      onPressed: () => onSelected(_DestinationView.connections),
-      icon: Icon(LucideIcons.settings, size: 20),
+    final settings = _DestinationButton(
+      view: _DestinationView.settings,
+      selected: selected == _DestinationView.settings,
+      onPressed: () => onSelected(_DestinationView.settings),
     );
     if (narrow) {
       return Positioned(
@@ -320,7 +337,7 @@ class _AdaptiveNavigation extends StatelessWidget {
           padding: EdgeInsets.all(7),
           child: Row(
             children: [
-              for (final view in _DestinationView.values)
+              for (final view in _primaryDestinations)
                 Expanded(
                   child: _DestinationButton(
                     view: view,
@@ -344,7 +361,7 @@ class _AdaptiveNavigation extends StatelessWidget {
           SizedBox(height: 4),
           FloeMascot(size: 40),
           SizedBox(height: 32),
-          for (final view in _DestinationView.values) ...[
+          for (final view in _primaryDestinations) ...[
             _DestinationButton(
               view: view,
               selected: selected == view,
@@ -386,6 +403,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
     _DestinationView.tasks => AppLocalizations.of(context).tasks,
     _DestinationView.notes => AppLocalizations.of(context).notes,
     _DestinationView.connections => AppLocalizations.of(context).connect,
+    _DestinationView.settings => AppLocalizations.of(context).settings,
   };
 
   IconData get icon => switch (view) {
@@ -393,6 +411,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
     _DestinationView.tasks => LucideIcons.listTodo,
     _DestinationView.notes => LucideIcons.notebookPen,
     _DestinationView.connections => LucideIcons.link,
+    _DestinationView.settings => LucideIcons.settings,
   };
 
   @override

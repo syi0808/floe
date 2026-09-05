@@ -207,7 +207,7 @@ class _FocusDialogState extends State<FocusDialog> {
           FloeInfoNote(text: strings.focusDisclosure),
           if (serverUnavailable)
             const FloeInfoNote(
-              text: 'Check your local server connection in Connections before requesting a suggestion.',
+              text: 'Check the remote server connection in Settings before requesting a suggestion.',
             ),
           const SizedBox(height: 16),
           TextField(

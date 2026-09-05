@@ -42,7 +42,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       }
       address.text = saved.address;
       targets = await widget.client.targets(saved);
-      status = 'Connected to local Floe server';
+      status = 'Connected to Floe server';
     });
   }
 
@@ -113,7 +113,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           proof = null;
           code = null;
           address.text = base;
-          status = 'Connected to local Floe server';
+          status = 'Connected to Floe server';
         });
         await widget.client.request(
           base,
@@ -180,12 +180,12 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Local inference server',
+          'Remote server connection',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 12),
         const Text(
-          'Connect this Mac to your Floe node. Provider credentials stay with the server; app access is saved in Keychain.',
+          'Connect Floe to the Go server that routes network model requests. Provider credentials stay with the server; app access is saved in Keychain.',
         ),
         const SizedBox(height: 20),
         TextField(
@@ -197,7 +197,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           decoration: const InputDecoration(
             labelText: 'Server address',
             helperText:
-                'Local only · http://127.0.0.1:port (localhost also accepted)',
+                'S2 currently supports this Mac · http://127.0.0.1:port',
           ),
         ),
         const SizedBox(height: 16),
@@ -225,7 +225,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
             if (connection == null && proof == null)
               FloeButton.filled(
                 onPressed: busy ? null : _pair,
-                child: const Text('Connect server'),
+                child: const Text('Pair this device'),
               ),
             FloeButton.outlined(
               onPressed: busy

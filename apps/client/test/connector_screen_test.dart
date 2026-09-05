@@ -52,6 +52,7 @@ void main() {
     await tester.tap(find.text(strings.backToConnections));
     await tester.pumpAndSettle();
     expect(find.text(strings.availableServices), findsOneWidget);
+    expect(find.text('Remote server connection'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

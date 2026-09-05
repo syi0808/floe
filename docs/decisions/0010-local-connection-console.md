@@ -17,6 +17,12 @@ pairs through explicit dashboard approval, and stores its address/credential in
 macOS Keychain. Remote URLs and network-address aliases are rejected; the UI
 normalizes `localhost` to `127.0.0.1`. Rust independently checks the connection.
 
+The client presents this under **Settings → Remote server** rather than as an
+inference provider or a primary connection. The deployment-neutral label reserves
+the client/server boundary for the future Go service, while the S2 implementation
+continues to enforce loopback transport. Enabling a remote address requires a
+separate HTTPS, server-identity, account and multi-user authorization decision.
+
 ## Separate authorities
 
 - Management: private administrator token file, exchanged for a 12-hour,

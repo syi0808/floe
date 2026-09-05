@@ -7,7 +7,7 @@ Date: 2026-09-05, macOS arm64. Extends S2, not S4 acceptance.
 - Rust workspace: 34 tests; Clippy warnings denied. New tests reject remote,
   credential-bearing, path/query/fragment and invalid-port gateway addresses and
   malformed bearer credentials before networking.
-- Flutter: 54 tests, analyzer clean; local address normalization, credential
+- Flutter: 56 tests, analyzer clean; Settings placement, local address normalization, credential
   persistence, invalid-store recovery, redirect refusal and panel disposal covered.
 - Go: management/inference separation, exact Host/Origin/CSRF, cookie attributes,
   pairing approval/expiry/proof bounds, restart persistence and revocation, credential
@@ -45,16 +45,17 @@ temporary server state; it does not touch the live node or native app Keychain.
 
 - Local node started at `http://127.0.0.1:8431`; dashboard opens and login works.
 - Browser dashboard Check status shows Codex `disconnected`, inference disabled.
-- Fresh debug app process launched. Native UI automation currently times out;
-  actual app code entry, approval, native Keychain persistence/relaunch and visual
-  verification remain manual checkpoints, not claimed completed by the fixture.
+- The operator confirmed native app code entry, dashboard approval and pairing work.
+  Native UI automation still times out; Keychain persistence across an app relaunch
+  and independent visual verification remain manual checkpoints.
 - No real provider is registered and no live OAuth consent or inference is claimed.
 
 ## Manual walkthrough
 
 1. Start the node using the [server README](../../server/README.md), unlock the
-   dashboard, enter its address in Floe Connections and compare the pairing code.
-2. Approve; verify `Connected to local Floe server`. Restart Floe and the server;
+   dashboard, enter its address in **Settings → Remote server** and compare the
+   pairing code.
+2. Approve; verify `Connected to Floe server`. Restart Floe and the server;
    check again without a shell token. Revoke in the dashboard and verify denial.
 3. Add a model; test with synthetic data. Confirm an external test requires explicit
    confirmation, then choose a default target in Floe. No automatic model download.

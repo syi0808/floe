@@ -209,7 +209,8 @@ void main() {
       }
       await tester.tap(find.byTooltip('Settings'));
       await tester.pumpAndSettle();
-      expect(find.text('Connections'), findsWidgets);
+      expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('Remote server'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

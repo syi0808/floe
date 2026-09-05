@@ -84,7 +84,7 @@ void main() {
       await tester.tap(find.text('Forget connection'));
       await tester.pumpAndSettle();
       expect(store.value, isNull);
-      expect(find.text('Connect server'), findsOneWidget);
+      expect(find.text('Pair this device'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       expect(tester.takeException(), isNull);
     },

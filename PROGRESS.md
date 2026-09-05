@@ -39,8 +39,10 @@ implementation slice. This does not advance S4 server/sync acceptance.
 - The Floe-owned Go gateway has API-key/OpenAI-compatible and local Ollama adapters,
   authenticated loopback transport, explicit target selection, deadlines/cancellation,
   body/concurrency limits, redacted errors and no retry/redirect/cloud fallback.
-- No CLIProxyAPI dependency. The local connection console adds API-key Keychain
-  storage, target management, synthetic tests, paired app tokens and local address entry.
+- No CLIProxyAPI dependency. The Go connection console adds API-key Keychain
+  storage, target management, synthetic tests and paired app tokens. Flutter exposes
+  the deployment-neutral server boundary under **Settings → Remote server**; S2 still
+  accepts loopback addresses only pending a hosted transport/authentication design.
 - Codex official App Server authentication preview uses an isolated credential space;
   Codex inference stays disabled. Live OAuth consent/refresh, Apple inference, streaming,
   usage accounting and hosted/multi-user operation remain deferred.
@@ -49,11 +51,12 @@ implementation slice. This does not advance S4 server/sync acceptance.
 
 [ADR 0010](docs/decisions/0010-local-connection-console.md) and its
 [validation record](docs/validation/local-connections.md) extend the S2 baseline.
-Rust 34 tests, Flutter 54 tests, paired non-default-port end-to-end fixture, Go
+Rust 34 tests, Flutter 56 tests, paired non-default-port end-to-end fixture, Go
 race/vet, installed Codex handshake and disposable Keychain round trip pass.
-Local server/dashboard are running; actual native app pairing/relaunch remains a
-manual checkpoint because native UI automation timed out. No real model or OAuth
-consent is claimed. S2 acceptance stays 0/4.
+Local server/dashboard are running and the operator confirmed native app pairing.
+Keychain persistence across a relaunch remains a manual checkpoint because native
+UI automation timed out. No real model or OAuth consent is claimed. S2 acceptance
+stays 0/4.
 
 ### S2 validation evidence
 
