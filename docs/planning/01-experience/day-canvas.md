@@ -37,8 +37,12 @@ Wednesday, Sep 2
 - Floe Intervention은 별도 dashboard가 아니다. 일반 제안은 contextual rail, 좁은 화면에서는 예약된 inline slot을 사용한다. 특정 time block과 직접 관련된 제안은 해당 block 가장자리에 표준 Floe squircle button 하나를 둘 수 있지만 timeline 위의 말풍선으로 표현하지 않는다.
 - 데이터 원본의 모든 metadata를 기본 화면에서 보여주지 않는다.
 - 캘린더 하단에는 별도 입력창을 두지 않는다. 메모 작성은 Notes 페이지에서 제공한다.
+- Calendar 생성은 contextual rail의 별도 기능이 아니라 툴바 `+`와 빈 시간대
+  더블클릭으로 시작한다. 일정 이동과 삭제도 event block의 drag/context menu에서
+  시작하며 공통 Action Authority와 Review 파이프라인을 통과한다.
 
 상세한 화면 구성과 반응형 동작은 [`docs/design/screens/day-canvas.md`](../../design/screens/day-canvas.md)를 따른다.
+Calendar 직접 조작 규칙은 [Calendar Direct Manipulation](calendar-direct-manipulation.md)을 따른다.
 
 ## 내부 모델과 UI projection 분리
 

@@ -136,12 +136,17 @@ The initial Calendar slice may project its existing durable action ledger into
 Review and Activity while the generic records are introduced. New domains must
 not add their own proposal inbox.
 
+Calendar toolbar, double-click, drag and context-menu interactions create these
+same intents; they do not introduce a second confirmation system. See
+[Calendar Direct Manipulation](calendar-direct-manipulation.md).
+
 ## Delivery sequence
 
 1. Enable the Calendar executor in Release while retaining runtime policy checks.
 2. Project only actionable Calendar records into Review requests.
 3. Add a separate Activity destination for terminal Calendar records.
 4. Add persistent Calendar create authority with `allow`, `ask` and `deny`.
-5. Move Calendar action initiation and copy out of proposal-specific UI.
+5. Move Calendar action initiation to direct calendar manipulation and out of
+   proposal-specific UI.
 6. Generalize storage/contracts for report, permission, change and recovery kinds.
 7. Add actor, scope and expiry controls plus broad permission presets.

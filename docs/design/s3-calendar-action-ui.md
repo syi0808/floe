@@ -9,6 +9,11 @@ Calendar-specific surface with shared Review and Activity, enables the trusted
 executor in Release, and makes runtime Action Authority the authorization gate.
 Debug builds remain write-disabled unless explicitly enabled.
 
+This document retains the validated decision surface but no longer defines the
+Calendar entry point. The labeled planning button is superseded by the Calendar
+toolbar `+`, empty-slot double-click and event direct-manipulation contract in
+[Calendar Direct Manipulation](../planning/01-experience/calendar-direct-manipulation.md).
+
 ## Decision-first review
 
 Review is a decision surface, not a ledger inspector. Its first screen answers:

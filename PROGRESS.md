@@ -16,6 +16,9 @@
   unless explicitly enabled. Runtime policy and fresh provider checks still gate
   every execution.
 - [Product and domain contract](docs/planning/01-experience/review-authority-and-activity.md).
+- Planned Apple Calendar-familiar direct manipulation: toolbar `+`, empty-slot
+  double-click, drag-to-move and capability-aware context menus, all routed
+  through the same authority/review/activity boundary rather than a proposal UI.
 
 ## Delivery Board
 

@@ -44,9 +44,22 @@ Order content as toolbar, Now/Next, timeline, high-priority tasks, optional sugg
 
 - Date movement preserves focus and announces the new date.
 - Selecting an item opens semantic detail without losing timeline position.
+- The Calendar toolbar exposes one icon-only `Create event` button. A labeled
+  Calendar-planning control does not live in the contextual rail.
+- Double-clicking empty timed space opens an anchored quick event editor at that
+  time. Double-clicking an event opens that event instead.
+- Writable timed events support drag-to-move with a ghost, 15-minute snapping,
+  edge auto-scroll and Escape cancellation. The original mirror does not move
+  until provider execution and re-import succeed.
+- Right-click opens a capability-aware event menu. The same actions remain
+  reachable through keyboard, an event More button and touch long-press.
 - Completing a task updates locally and offers undo.
 - The calendar has no bottom capture input; create notes from the Notes page.
-- Activating the Floe button opens its anchored proposal; accepting the proposal performs only the explicitly named, policy-approved action.
+- Activating the Floe button opens its suggestion. Consequential responses enter
+  shared Review only when Action Authority requires a decision.
+
+Detailed create, drag, context-menu and authority behavior follows
+[Calendar Direct Manipulation](../../planning/01-experience/calendar-direct-manipulation.md).
 
 ## Empty and exceptional states
 

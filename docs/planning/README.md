@@ -32,6 +32,7 @@ floe-planning/
 │
 ├── 01-experience/
 │   ├── day-canvas.md
+│   ├── calendar-direct-manipulation.md
 │   ├── capture-and-transcription.md
 │   ├── voice-and-presence.md
 │   ├── interventions.md
