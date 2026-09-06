@@ -3,6 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+Future<void> toggleDesignFeedback(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+}
+
 void main() {
   testWidgets('selects a rendered target and creates an editable pin', (
     tester,
@@ -20,8 +29,8 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Design feedback (⌘⇧F)'));
-    await tester.pump();
+    expect(find.byTooltip('Design feedback (⌘⇧F)'), findsNothing);
+    await toggleDesignFeedback(tester);
     await tester.tap(find.text('Inspect'));
     await tester.pump();
     await tester.tapAt(tester.getCenter(find.text('Review target')));
@@ -75,8 +84,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Design feedback (⌘⇧F)'));
-    await tester.pump();
+    await toggleDesignFeedback(tester);
     await tester.tap(find.text('Inspect'));
     await tester.pump();
     await tester.tapAt(tester.getCenter(find.text('Export target')));

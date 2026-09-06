@@ -1,15 +1,24 @@
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app/floe_app.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
+import 'preview/design_feedback_overlay.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final gateway = await FfiDayGateway.openDefault();
-    runApp(FloeApp(gateway: gateway));
+    runApp(
+      FloeApp(
+        gateway: gateway,
+        builder: kDebugMode
+            ? (context, child) => DesignFeedbackOverlay(child: child!)
+            : null,
+      ),
+    );
   } on Object catch (error) {
     runApp(_StartupErrorApp(message: error.toString()));
   }

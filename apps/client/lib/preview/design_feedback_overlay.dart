@@ -317,7 +317,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
                 ),
               ),
             ),
-          Positioned(top: 12, right: 12, child: _buildToolbar()),
+          if (_enabled) Positioned(top: 12, right: 12, child: _buildToolbar()),
           if (_draftTarget != null)
             Positioned(top: 76, right: 12, child: _buildEditor()),
         ],
@@ -325,70 +325,55 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     ),
   );
 
-  Widget _buildToolbar() {
-    if (!_enabled) {
-      return Material(
-        key: const ValueKey('design-feedback-toolbar-collapsed'),
-        elevation: 6,
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: IconButton(
-          tooltip: 'Design feedback (⌘⇧F)',
-          onPressed: _toggle,
-          icon: const Icon(Icons.rate_review_outlined),
-        ),
-      );
-    }
-    return Material(
-      key: const ValueKey('design-feedback-toolbar-expanded'),
-      elevation: 8,
-      borderRadius: BorderRadius.circular(16),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextButton.icon(
-              onPressed: _selecting ? _cancelCurrentAction : _startSelecting,
-              icon: Icon(_selecting ? Icons.close : Icons.ads_click, size: 18),
-              label: Text(_selecting ? 'Cancel' : 'Inspect'),
-            ),
+  Widget _buildToolbar() => Material(
+    key: const ValueKey('design-feedback-toolbar-expanded'),
+    elevation: 8,
+    borderRadius: BorderRadius.circular(16),
+    clipBehavior: Clip.antiAlias,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton.icon(
+            onPressed: _selecting ? _cancelCurrentAction : _startSelecting,
+            icon: Icon(_selecting ? Icons.close : Icons.ads_click, size: 18),
+            label: Text(_selecting ? 'Cancel' : 'Inspect'),
+          ),
+          const SizedBox(width: 4),
+          Text('${_annotations.length} pins'),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Copy Markdown',
+            onPressed: _annotations.isEmpty ? null : _copyMarkdown,
+            icon: const Icon(Icons.description_outlined),
+          ),
+          IconButton(
+            tooltip: 'Copy JSON',
+            onPressed: _annotations.isEmpty ? null : _copyJson,
+            icon: const Icon(Icons.data_object),
+          ),
+          IconButton(
+            tooltip: 'Clear feedback',
+            onPressed: _annotations.isEmpty
+                ? null
+                : () => setState(_annotations.clear),
+            icon: const Icon(Icons.delete_sweep_outlined),
+          ),
+          IconButton(
+            tooltip: 'Close design feedback',
+            onPressed: _toggle,
+            icon: const Icon(Icons.close),
+          ),
+          if (_status case final status?) ...[
             const SizedBox(width: 4),
-            Text('${_annotations.length} pins'),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'Copy Markdown',
-              onPressed: _annotations.isEmpty ? null : _copyMarkdown,
-              icon: const Icon(Icons.description_outlined),
-            ),
-            IconButton(
-              tooltip: 'Copy JSON',
-              onPressed: _annotations.isEmpty ? null : _copyJson,
-              icon: const Icon(Icons.data_object),
-            ),
-            IconButton(
-              tooltip: 'Clear feedback',
-              onPressed: _annotations.isEmpty
-                  ? null
-                  : () => setState(_annotations.clear),
-              icon: const Icon(Icons.delete_sweep_outlined),
-            ),
-            IconButton(
-              tooltip: 'Close design feedback',
-              onPressed: _toggle,
-              icon: const Icon(Icons.close),
-            ),
-            if (_status case final status?) ...[
-              const SizedBox(width: 4),
-              Text(status, key: const Key('design-feedback-status')),
-              const SizedBox(width: 8),
-            ],
+            Text(status, key: const Key('design-feedback-status')),
+            const SizedBox(width: 8),
           ],
-        ),
+        ],
       ),
-    );
-  }
+    ),
+  );
 
   Widget _buildEditor() => Material(
     elevation: 10,
