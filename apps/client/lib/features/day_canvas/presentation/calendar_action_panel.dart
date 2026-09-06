@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
@@ -131,9 +132,10 @@ class ActivityPanel extends StatelessWidget {
                     style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
                   ),
                 ),
-                FloeButton.text(
+                FloeButton.icon(
+                  tooltip: 'Reload activity',
                   onPressed: controller.busy ? null : controller.load,
-                  child: const Text('Reload activity'),
+                  icon: const Icon(LucideIcons.refreshCw, size: 18),
                 ),
               ],
             ),

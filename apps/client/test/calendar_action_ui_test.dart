@@ -327,7 +327,7 @@ void main() {
     );
 
     final titleBounds = tester.getRect(find.text('Activity'));
-    final reloadBounds = tester.getRect(find.text('Reload activity'));
+    final reloadBounds = tester.getRect(find.byTooltip('Reload activity'));
     final activityBounds = tester.getRect(find.text('Quiet focus'));
     expect(reloadBounds.center.dy, closeTo(titleBounds.center.dy, 8));
     expect(reloadBounds.right, greaterThan(activityBounds.center.dx));
