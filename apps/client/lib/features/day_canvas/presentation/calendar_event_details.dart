@@ -38,7 +38,7 @@ class CalendarEventDetails extends StatelessWidget {
               style: TextStyle(color: FloePalette.neutral600),
             ),
           ),
-          if (event.externalId != null) FloeReadOnlyPill(),
+          if (event.externalId != null && !event.canModify) FloeReadOnlyPill(),
         ],
       ),
       SizedBox(height: 24),
@@ -114,7 +114,7 @@ class CalendarEventDetails extends StatelessWidget {
             ],
           ),
         ),
-      if (event.externalId != null) ...[
+      if (event.externalId != null && !event.canModify) ...[
         SizedBox(height: 24),
         FloeInfoNote(
           icon: LucideIcons.lockKeyhole,

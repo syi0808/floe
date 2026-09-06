@@ -40,7 +40,7 @@ class ReviewRequestPanel extends StatelessWidget {
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
       final requests = controller.actions
-          .where((action) => action.status.needsReview)
+          .where((action) => action.needsReview)
           .toList(growable: false);
       return FloeSquircle(
         padding: const EdgeInsets.all(24),
@@ -115,7 +115,7 @@ class ActivityPanel extends StatelessWidget {
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
       final history = controller.actions
-          .where((action) => !action.status.needsReview)
+          .where((action) => !action.needsReview)
           .toList(growable: false);
       return FloeLoadingOverlay(
         loading: controller.busy,
@@ -165,7 +165,13 @@ class ActivityPanel extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text(_status(strings, action.status)),
+                            Text(
+                              action.direct &&
+                                      action.status ==
+                                          CalendarActionStatus.succeeded
+                                  ? '${action.operation} · By you'
+                                  : _status(strings, action.status),
+                            ),
                           ],
                         ),
                       ),
@@ -245,7 +251,9 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
           action != null &&
           controller.canApprove(action, widget.connection(), DateTime.now());
       return FloeDetailDialog(
-        title: strings.actionReview,
+        title: action?.direct == true
+            ? 'Calendar activity'
+            : strings.actionReview,
         loading: controller.busy,
         loadingLabel: strings.actionLoading,
         children: [
@@ -289,7 +297,10 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
             if (!controller.writesEnabled) Text(strings.actionWriteDisabled),
             if (controller.phase case final phase?)
               Text(switch (phase) {
-                'executing' => strings.actionCheckingCreating,
+                'executing' =>
+                  action.direct
+                      ? 'Checking and saving calendar changes…'
+                      : strings.actionCheckingCreating,
                 'recovering' => strings.actionLookingUp,
                 _ => strings.actionCollecting,
               }),
@@ -316,7 +327,11 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
                         connection: widget.connection(),
                       )
                     : null,
-                child: Text(strings.actionExecuteApproved),
+                child: Text(
+                  action.direct
+                      ? 'Complete calendar change'
+                      : strings.actionExecuteApproved,
+                ),
               ),
             if ((action.status == CalendarActionStatus.unknown ||
                     action.status == CalendarActionStatus.executing) &&

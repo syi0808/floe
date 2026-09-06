@@ -20,9 +20,11 @@ CalendarAction action({
   DateTime? endsAt,
   DateTime? expiresAt,
   String? reason,
+  bool direct = false,
 }) {
   final now = DateTime.now().toUtc();
   return CalendarAction.fromJson({
+    'direct': direct,
     'id': 'proposal',
     'person_id': person,
     'provider': 'fixture',

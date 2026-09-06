@@ -19,6 +19,13 @@ concepts. They are not navigation destinations or product terminology.
 
 ## Unified pipeline
 
+Explicit calendar UI commands are already user decisions: save, drag drop and
+confirmed delete create durable direct actions, not Review requests. This direct
+origin survives restart and applies to failures/recovery as well as success.
+Automation `allow/ask/deny` rules govern delegated work, not the user's own edits.
+Both paths retain OS permission, provider capability, fresh validation, one-shot
+execution and Activity auditing. Legacy actions without origin remain unchanged.
+
 ```text
 Intent / report / permission need
               ↓
@@ -136,8 +143,9 @@ The initial Calendar slice may project its existing durable action ledger into
 Review and Activity while the generic records are introduced. New domains must
 not add their own proposal inbox.
 
-Calendar toolbar, double-click, drag and context-menu interactions create these
-same intents; they do not introduce a second confirmation system. See
+Calendar toolbar, double-click, drag and context-menu interactions create direct
+authorized intents without a second Review confirmation. Delete's event-specific
+confirmation supplies its explicit user decision. See
 [Calendar Direct Manipulation](calendar-direct-manipulation.md).
 
 ## Delivery sequence

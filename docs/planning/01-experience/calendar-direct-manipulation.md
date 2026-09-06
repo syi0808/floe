@@ -1,6 +1,51 @@
 # Calendar Direct Manipulation
 
-> Status: Product direction and interaction contract
+> Status: Implementation contract, revised 2026-09-07
+
+## Current delivery
+
+- Desktop time entry uses a date-picker button and separate two-digit hour/minute
+  segments, direct typing, Up/Down keys and visible steppers. No clock-face picker
+  or raw date-time string. Floe squircle surfaces, neutral fills, primary accents
+  and tabular digits preserve the app's visual language.
+- Changing start preserves elapsed duration; changing end changes duration.
+  Midnight rollover is allowed, end must follow start, maximum duration is 24 hours.
+  Past events are valid for direct user entry. Nonexistent local clock times are
+  rejected rather than silently normalized. The editor displays device-local time.
+- Desktop drag moves within the visible day, preserves duration, snaps to 15
+  elapsed minutes on the existing DST-aware day axis, and auto-scrolls at edges.
+  The origin dims and a single snapped ghost shows the candidate time. Escape,
+  outside drop, loading or changing day cancels. Cross-day moves use Edit's date
+  picker; cross-day pointer dragging and duration resize are not yet supported.
+- Right-click, More, menu key, Shift+F10 and touch long-press expose details,
+  edit and delete. Delete has one event-specific confirmation. Touch uses Edit
+  rather than drag so scrolling remains reliable.
+- Provider import supplies `can_modify`; missing metadata fails closed until a
+  refresh. Writable, non-recurring timed events without guests or alerts are
+  editable. Native execution checks these capabilities again and compares the
+  original provider revision, including last-modified metadata.
+- User-confirmed create/edit/delete is durable direct authority, not a request
+  for automated authority. It never appears in Review, including after restart
+  or an uncertain result. Activity retains its origin, operation and execution
+  status. Existing records without origin keep their previous Review semantics;
+  their origin cannot be safely inferred retroactively.
+- Execution still uses the existing one-shot ledger, native permission checks,
+  selected-calendar scope, conflict checks and provider re-import. Updates
+  exclude their original event from conflict checks. Delete ignores overlap.
+  Existing event URLs are preserved.
+- Failed or uncertain execution does not optimistically change the mirror.
+  Activity offers lookup, never a repeated write. An update can reconcile its
+  exact target and final state. Absence alone cannot prove a delete succeeded:
+  response-loss deletion remains unresolved, rather than reporting false success.
+  While unresolved, further direct writes are conservatively unavailable.
+
+## Next iterations
+
+Anchored editor/sheet positioning, cross-day drag, duration resizing, Duplicate,
+Move to calendar, source-app navigation, recurrence scopes, attendee/alert handling,
+Undo and durable native deletion receipts require separate capability work. Do not
+enable placeholder menu actions. Validate live EventKit behavior only against a
+disposable calendar with explicit user consent.
 
 ## Goal
 
@@ -8,9 +53,10 @@ Floe Calendar should feel familiar to Apple Calendar users without copying its
 visual design. Creation, movement and deletion happen in the calendar itself;
 they are not presented as a separate `Calendar Proposal` feature.
 
-All mutations still use the shared Action Authority, Review and Activity
-pipeline. Direct manipulation changes how an intent is expressed, not which
-safety checks or permissions apply.
+All mutations still use the shared execution ledger and Activity pipeline.
+Review is for automation requests, not a second approval of the user's explicit
+save, drag or confirmed deletion. Direct authority does not skip safety checks
+or provider permissions. Automation policy remains independent.
 
 ## Primary create entry
 
@@ -85,21 +131,17 @@ The quick editor contains title, destination calendar, start/end and an explicit
 timed, non-recurring event without guests or alerts. Unsupported fields must not
 appear editable.
 
-Submitting the editor creates an internal action intent:
+Submitting the editor creates an internal, explicitly authorized action intent:
 
 ```text
-calendar.create intent
+direct calendar.create intent
         ↓
-Action Authority
-  allow → validate and execute
-  ask   → Review request
-  deny  → explain and link to Action permissions
+durable approved ledger → fresh validation → execute once → Activity
 ```
 
-The editor closes after a valid submission. If review is required, the provisional
-block is removed and the Review request becomes visible. If automatic execution
-succeeds, the imported provider event replaces it. An uncertain result never
-creates a second provisional or external event.
+The editor closes after successful execution. Provider re-import replaces the
+provisional block. Errors remain explicit and point to Activity; uncertain results
+never create a second provisional or external event.
 
 ## Drag to move
 
@@ -118,10 +160,8 @@ The first delivery does not resize duration.
 Drop submits `calendar.update.time`; it does not immediately rewrite the local
 mirror:
 
-- `allow`: validate against fresh provider state, execute once, then re-import;
-- `ask`: restore the event to its authoritative position and create a Review
-  request showing old and new time;
-- `deny`: restore it and explain why moving is unavailable.
+- direct authority: validate fresh provider state, execute once, then re-import;
+- blocked or uncertain: restore the authoritative position and point to Activity.
 
 Conflict policy remains explicit. A visual overlap is not proof that the provider
 will accept or reject the move. Validation uses current local and provider events
@@ -146,10 +186,10 @@ keep details and source navigation but disable mutations with an explanation.
 The same menu is available from an event `More` button, keyboard menu key or
 `Shift+F10`; touch uses long-press.
 
-`Delete…` submits a separate `calendar.delete` intent and defaults to `ask`, even
-when Calendar create is automatic. The Review describes the exact event,
-calendar, recurrence scope and attendee/notification side effects. The initial
-non-recurring implementation must not imply recurring-series support.
+`Delete…` confirms the exact event and calendar before submitting a direct delete.
+It does not create a Review request. The initial non-recurring implementation must
+not imply recurring-series support. Automation-initiated delete is a separate,
+future capability and must not inherit this direct authority.
 
 ## Feedback and history
 
@@ -186,5 +226,5 @@ must enumerate create, update and delete separately before confirmation.
 4. Add capability-aware event context menu.
 5. Implement durable Calendar update/delete intents and native executors.
 6. Add drag ghost, snapping, cancellation and auto-scroll.
-7. Connect move/delete to Review, Activity and per-action authority.
+7. Keep direct move/delete in Activity, separate from automation Review.
 8. Add keyboard and touch equivalents, then validate DST and recovery matrices.

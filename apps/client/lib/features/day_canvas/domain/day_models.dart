@@ -73,6 +73,7 @@ final class EventItem extends DayItem {
     this.externalId,
     this.provider,
     this.timezone,
+    this.canModify = false,
   });
 
   final DateTime startsAt;
@@ -83,6 +84,7 @@ final class EventItem extends DayItem {
   final String? externalId;
   final String? provider;
   final String? timezone;
+  final bool canModify;
   String get sourceLabel => calendarName == null
       ? ''
       : '${provider == 'fixture' ? 'Fixture' : 'Calendar'} · $calendarName';

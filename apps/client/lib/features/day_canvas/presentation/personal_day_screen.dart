@@ -122,7 +122,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       day = DateTime(day.year, day.month, day.day + 1);
     }
     if (mounted) await controller.load();
-    if (!matched) throw StateError('Created event has not been collected yet');
+    final deleting = action.mutation?['delete'] == true;
+    if (deleting ? matched : !matched) {
+      throw StateError('Calendar change has not been collected yet');
+    }
   }
 
   @override
@@ -239,7 +242,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                     controller,
                     narrow: narrow,
                     onCreateEvent:
-                        actionController?.canPropose == true &&
+                        actionController?.canDirect == true &&
                             controller.snapshot?.calendar != null
                         ? () => _openCalendarEditor()
                         : null,
@@ -305,20 +308,21 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final actions = actionController;
     final showReviews =
-        actions != null &&
-        (actions.busy ||
-            actions.failed ||
-            actions.actions.any((action) => action.status.needsReview));
+        actions != null && actions.actions.any((action) => action.needsReview);
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
       onCreateEvent:
-          actionController?.canPropose == true && snapshot.calendar != null
+          actionController?.canDirect == true && snapshot.calendar != null
           ? (startsAt) => _openCalendarEditor(startsAt)
           : null,
       draftStartsAt: draftEventStart,
+      canModify: (event) => actionController?.canModify(event) == true,
+      onEditEvent: (event) => _editCalendarEvent(event),
+      onDeleteEvent: _deleteCalendarEvent,
+      onMoveEvent: _moveCalendarEvent,
     );
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -381,7 +385,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   Future<void> _openCalendarEditor([DateTime? startsAt]) async {
     final actions = actionController;
     final connection = controller.snapshot?.calendar;
-    if (actions == null || !actions.canPropose || connection == null) return;
+    if (actions == null || !actions.canDirect || connection == null) return;
     final date = controller.query.date;
     final now = DateTime.now();
     final initialStart =
@@ -401,6 +405,82 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     if (mounted && draftEventStart == initialStart) {
       setState(() => draftEventStart = null);
     }
+  }
+
+  Future<void> _editCalendarEvent(EventItem event) async {
+    final actions = actionController;
+    if (actions == null || !actions.canModify(event)) return;
+    await showFloeDialog<void>(
+      context,
+      (_) => CalendarEventComposer(
+        controller: actions,
+        connection: () => controller.snapshot?.calendar,
+        event: event,
+      ),
+    );
+  }
+
+  Future<void> _moveCalendarEvent(EventItem event, DateTime start) =>
+      _changeCalendarEvent(event, start: start);
+
+  Future<void> _deleteCalendarEvent(EventItem event) async {
+    final confirmed = await showFloeDialog<bool>(
+      context,
+      (dialogContext) => FloeDetailDialog(
+        title: 'Delete event?',
+        children: [
+          Text(
+            '“${event.title}” will be removed from ${event.calendarName ?? 'your calendar'}.',
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              FloeButton.text(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 12),
+              FloeButton.filled(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Delete event'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _changeCalendarEvent(event, delete: true);
+    }
+  }
+
+  Future<void> _changeCalendarEvent(
+    EventItem event, {
+    DateTime? start,
+    bool delete = false,
+  }) async {
+    final actions = actionController;
+    if (actions == null || !actions.canModify(event)) return;
+    final startsAt = (start ?? event.startsAt).toLocal();
+    final result = await actions.direct(
+      calendarId: event.calendarId!,
+      title: event.title,
+      startsAt: startsAt,
+      endsAt: startsAt.add(event.endsAt.difference(event.startsAt)),
+      timezone: calendarStorageTimezone(startsAt.timeZoneOffset),
+      eventId: event.id,
+      eventRevision: event.revision,
+      delete: delete,
+    );
+    if (!mounted) return;
+    FloeToastHost.of(context).show(
+      title: result != null && actions.collection[result.id] == 'failed'
+          ? 'Saved. Calendar refresh failed; retry in Activity.'
+          : result?.status == CalendarActionStatus.succeeded
+          ? (delete ? 'Event deleted' : 'Event moved')
+          : 'Change not confirmed. Check Activity and reload your calendar.',
+    );
   }
 
   Future<void> _setTaskCompleted(TaskItem task, bool completed) async {

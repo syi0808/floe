@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
-import 'package:intl/intl.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_selection.dart';
+import '../../../app/floe_toast.dart';
 import '../application/calendar_action_controller.dart';
 import '../domain/day_models.dart';
-import 'calendar_action_panel.dart';
+import 'calendar_date_time_field.dart';
+import '../domain/calendar_action.dart';
 
 class CalendarEventComposer extends StatefulWidget {
   const CalendarEventComposer({
@@ -15,10 +16,12 @@ class CalendarEventComposer extends StatefulWidget {
     required this.controller,
     required this.connection,
     this.initialStart,
+    this.event,
   });
   final CalendarActionController controller;
   final CalendarConnection? Function() connection;
   final DateTime? initialStart;
+  final EventItem? event;
 
   @override
   State<CalendarEventComposer> createState() => _CalendarEventComposerState();
@@ -27,8 +30,8 @@ class CalendarEventComposer extends StatefulWidget {
 class _CalendarEventComposerState extends State<CalendarEventComposer> {
   final form = GlobalKey<FormState>();
   final title = TextEditingController();
-  final start = TextEditingController();
-  final end = TextEditingController();
+  late DateTime start;
+  late DateTime end;
   String? calendarId;
   bool saving = false;
   bool failed = false;
@@ -40,31 +43,19 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     final next =
         widget.initialStart ??
         DateTime(now.year, now.month, now.day, now.hour + 1);
-    start.text = _localInput(next);
-    end.text = _localInput(next.add(const Duration(minutes: 45)));
-    calendarId = widget.connection()?.selectedCalendarIds.firstOrNull;
+    start = widget.event?.startsAt.toLocal() ?? next;
+    end =
+        widget.event?.endsAt.toLocal() ?? next.add(const Duration(minutes: 45));
+    title.text = widget.event?.title ?? '';
+    calendarId =
+        widget.event?.calendarId ??
+        widget.connection()?.selectedCalendarIds.firstOrNull;
   }
 
   @override
   void dispose() {
     title.dispose();
-    start.dispose();
-    end.dispose();
     super.dispose();
-  }
-
-  DateTime? parse(String text) {
-    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$')
-        .firstMatch(text.trim());
-    if (match == null) return null;
-    final value = DateTime(
-      int.parse(match[1]!),
-      int.parse(match[2]!),
-      int.parse(match[3]!),
-      int.parse(match[4]!),
-      int.parse(match[5]!),
-    );
-    return _localInput(value) == text.trim() ? value : null;
   }
 
   Future<void> save() async {
@@ -79,35 +70,28 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
       saving = true;
       failed = false;
     });
-    final startsAt = parse(start.text)!;
-    final action = await widget.controller.propose(
+    final action = await widget.controller.direct(
       calendarId: calendarId!,
       title: title.text.trim(),
-      startsAt: startsAt,
-      endsAt: parse(end.text)!,
-      timezone: _storageTimezone(startsAt.timeZoneOffset),
+      startsAt: start,
+      endsAt: end,
+      timezone: calendarStorageTimezone(start.timeZoneOffset),
+      eventId: widget.event?.id,
+      eventRevision: widget.event?.revision,
     );
     if (!mounted) return;
-    if (action == null) {
+    if (action == null || action.status != CalendarActionStatus.succeeded) {
       setState(() {
         saving = false;
         failed = true;
       });
       return;
     }
-    final navigator = Navigator.of(context);
-    final parent = navigator.context;
-    if (!parent.mounted) return;
-    navigator.pop();
-    if (!action.status.needsReview) return;
-    showFloeDialog<void>(
-      parent,
-      (_) => ActionReviewDialog(
-        controller: widget.controller,
-        actionId: action.id,
-        connection: widget.connection,
-      ),
-    );
+    if (widget.controller.collection[action.id] == 'failed') {
+      FloeToastHost.of(context)
+          .show(title: 'Saved. Calendar refresh failed; retry in Activity.');
+    }
+    Navigator.of(context).pop();
   }
 
   @override
@@ -116,9 +100,11 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     final calendars =
         widget.connection()?.connectedCalendars ?? <ConnectedCalendar>[];
     return FloeDetailDialog(
-      title: strings.actionNewProposal,
+      title: widget.event == null ? 'New event' : 'Edit event',
       children: [
-        Text(strings.actionProposalExplanation),
+        const Text(
+          'Changes are saved to your calendar. Only writable, non-recurring events without guests or alerts are supported.',
+        ),
         const SizedBox(height: 16),
         Form(
           key: form,
@@ -138,7 +124,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                       ),
                     )
                     .toList(),
-                enabled: !saving,
+                enabled: !saving && widget.event == null,
                 onChanged: (value) => setState(() => calendarId = value),
                 validator: (value) =>
                     value == null ? strings.actionFormInvalid : null,
@@ -153,37 +139,39 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                     : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
-                controller: start,
+              CalendarDateTimeField(
+                label: strings.actionStart,
+                value: start,
                 enabled: !saving,
-                decoration: InputDecoration(labelText: strings.actionStart),
-                validator: (value) =>
-                    parse(value ?? '')?.isAfter(DateTime.now()) == true
-                    ? null
-                    : strings.actionFormInvalid,
+                onChanged: (value) => setState(() {
+                  end = value.add(end.difference(start));
+                  start = value;
+                }),
               ),
               const SizedBox(height: 12),
-              TextFormField(
-                controller: end,
+              CalendarDateTimeField(
+                label: strings.actionEnd,
+                value: end,
                 enabled: !saving,
-                decoration: InputDecoration(labelText: strings.actionEnd),
+                onChanged: (value) => setState(() => end = value),
                 validator: (value) {
-                  final starts = parse(start.text);
-                  final ends = parse(value ?? '');
-                  return starts != null &&
-                          ends != null &&
-                          ends.isAfter(starts) &&
-                          ends.difference(starts) <= const Duration(hours: 24)
+                  return end.isAfter(start) &&
+                          end.difference(start) <= const Duration(hours: 24)
                       ? null
                       : strings.actionFormInvalid;
                 },
               ),
               const SizedBox(height: 16),
-              if (failed) Text(strings.actionReloadRequired),
+              if (failed)
+                const Text(
+                  'The change could not be confirmed. Check Activity and reload your calendar before trying again.',
+                ),
               FloeButton.filled(
-                onPressed: saving ? null : save,
+                onPressed: saving || !widget.controller.canDirect ? null : save,
                 loading: saving,
-                child: Text(strings.actionPrepareReview),
+                child: Text(
+                  widget.event == null ? 'Create event' : 'Save changes',
+                ),
               ),
             ],
           ),
@@ -193,10 +181,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   }
 }
 
-String _localInput(DateTime value) =>
-    DateFormat('yyyy-MM-dd HH:mm').format(value);
-
-String _storageTimezone(Duration offset) {
+String calendarStorageTimezone(Duration offset) {
   final sign = offset.isNegative ? '-' : '+';
   final minutes = offset.inMinutes.abs();
   final hours = (minutes ~/ 60).toString().padLeft(2, '0');

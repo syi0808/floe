@@ -34,7 +34,9 @@ enum CalendarActionStatus {
 
 final class CalendarAction {
   CalendarAction.fromJson(Map<String, dynamic> json)
-    : id = json['id'] as String,
+    : direct = json['direct'] as bool? ?? false,
+      mutation = json['mutation'] as Map<String, dynamic>?,
+      id = json['id'] as String,
       personId = json['person_id'] as String,
       provider = json['provider'] as String,
       calendarId = json['calendar_id'] as String,
@@ -59,6 +61,14 @@ final class CalendarAction {
       externalId = (json['state'] as Map)['external_id'] as String?;
 
   final String id;
+  final bool direct;
+  final Map<String, dynamic>? mutation;
+  bool get needsReview => !direct && status.needsReview;
+  String get operation => mutation == null
+      ? 'Created'
+      : mutation!['delete'] == true
+      ? 'Deleted'
+      : 'Updated';
   final String personId;
   final String provider;
   final String calendarId;

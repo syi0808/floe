@@ -174,6 +174,87 @@ final class CalendarActionController extends ChangeNotifier {
             action.status == CalendarActionStatus.executing,
       );
 
+  bool get canDirect =>
+      gateway is CalendarDirectActionGateway &&
+      gateway is CalendarActionExecutionGateway &&
+      writesEnabled &&
+      !busy &&
+      !needsReload &&
+      !actions.any(
+        (action) =>
+            action.status == CalendarActionStatus.unknown ||
+            action.status == CalendarActionStatus.executing,
+      );
+
+  bool canModify(EventItem event) =>
+      canDirect &&
+      event.canModify &&
+      !event.isAllDay &&
+      event.provider == 'event_kit' &&
+      event.calendarId != null &&
+      event.externalId?.endsWith('|') == true;
+
+  Future<CalendarAction?> direct({
+    required String calendarId,
+    required String title,
+    required DateTime startsAt,
+    required DateTime endsAt,
+    required String timezone,
+    String? eventId,
+    int? eventRevision,
+    bool delete = false,
+  }) async {
+    if (!canDirect || _disposed) return null;
+    busy = true;
+    failed = false;
+    final minimum = FloeLoading.minimumVisibility();
+    notifyListeners();
+    try {
+      final action = await (gateway as CalendarDirectActionGateway)
+          .submitDirectCalendarAction(
+            personId: personId,
+            calendarId: calendarId,
+            title: title,
+            startsAt: startsAt,
+            endsAt: endsAt,
+            timezone: timezone,
+            eventId: eventId,
+            eventRevision: eventRevision,
+            delete: delete,
+          );
+      if (_disposed) return null;
+      if (action.personId != personId ||
+          !action.direct ||
+          action.status != CalendarActionStatus.approved) {
+        throw StateError('Unexpected direct action');
+      }
+      actions = List.unmodifiable([action, ...actions]);
+      phase = 'executing';
+      notifyListeners();
+      final executed = await (gateway as CalendarActionExecutionGateway)
+          .executeCalendarAction(personId, action.id);
+      if (_disposed) return null;
+      _replace(executed, action);
+      if (executed.status == CalendarActionStatus.succeeded) {
+        await _collect(executed);
+      }
+      return executed;
+    } on Object {
+      if (!_disposed) {
+        failed = true;
+        needsReload = true;
+      }
+      return null;
+    } finally {
+      await minimum;
+      if (!_disposed) {
+        busy = false;
+        phase = null;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<CalendarAction?> propose({
     required String calendarId,
     required String title,
@@ -261,6 +342,7 @@ final class CalendarActionController extends ChangeNotifier {
   void _replace(CalendarAction result, CalendarAction original) {
     if (result.id != original.id ||
         result.personId != personId ||
+        result.direct != original.direct ||
         result.executionId != original.executionId) {
       throw StateError('Unexpected execution result');
     }

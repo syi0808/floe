@@ -30,7 +30,11 @@ final class FfiDayGatewayException implements Exception {
 }
 
 final class FfiDayGateway
-    implements DayGateway, CalendarGateway, CalendarActionExecutionGateway {
+    implements
+        DayGateway,
+        CalendarGateway,
+        CalendarActionExecutionGateway,
+        CalendarDirectActionGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -112,6 +116,29 @@ final class FfiDayGateway
   ) async => (await _calendarActions(personId, {
     'kind': 'get',
     'action_id': actionId,
+  })).single;
+
+  @override
+  Future<CalendarAction> submitDirectCalendarAction({
+    required String personId,
+    required String calendarId,
+    required String title,
+    required DateTime startsAt,
+    required DateTime endsAt,
+    required String timezone,
+    String? eventId,
+    int? eventRevision,
+    bool delete = false,
+  }) async => (await _calendarActions(personId, {
+    'kind': 'direct',
+    'calendar_id': calendarId,
+    'title': title,
+    'starts_at': startsAt.toUtc().toIso8601String(),
+    'ends_at': endsAt.toUtc().toIso8601String(),
+    'timezone': timezone,
+    'event_id': eventId,
+    'event_revision': eventRevision,
+    'delete': delete,
   })).single;
 
   @override
@@ -616,6 +643,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
         ? null
         : source['calendar_name'] as String? ?? 'Previous calendar connection',
     externalId: source?['external_id'] as String?,
+    canModify: source?['can_modify'] as bool? ?? false,
     provider: source?['provider'] as String?,
     timezone: schedule['timezone'] as String?,
   );

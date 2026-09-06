@@ -1,8 +1,10 @@
 import 'package:floe_client/l10n/app_localizations.dart';
 
 import 'dart:ui';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
@@ -11,6 +13,7 @@ import '../../../app/floe_loading.dart';
 import '../../../app/floe_squircle.dart';
 import '../domain/day_models.dart';
 import 'calendar_event_details.dart';
+import 'calendar_event_actions.dart';
 import 'calendar_layout.dart';
 import 'day_appearance.dart';
 
@@ -22,12 +25,20 @@ class CalendarAgenda extends StatefulWidget {
     this.onCreateEvent,
     this.draftStartsAt,
     this.loading = false,
+    this.canModify,
+    this.onMoveEvent,
+    this.onEditEvent,
+    this.onDeleteEvent,
   });
   final DaySnapshot snapshot;
   final VoidCallback onConnections;
   final ValueChanged<DateTime>? onCreateEvent;
   final DateTime? draftStartsAt;
   final bool loading;
+  final bool Function(EventItem)? canModify;
+  final void Function(EventItem, DateTime)? onMoveEvent;
+  final ValueChanged<EventItem>? onEditEvent;
+  final ValueChanged<EventItem>? onDeleteEvent;
   @override
   State<CalendarAgenda> createState() => _CalendarAgendaState();
 }
@@ -36,6 +47,156 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
   final scroll = ScrollController(initialScrollOffset: 480);
   double zoom = 1;
   bool restored = false;
+  final viewportKey = GlobalKey();
+  EventItem? dragging;
+  DateTime? movedStart;
+  Offset pointer = Offset.zero;
+  Offset dragOrigin = Offset.zero;
+  double dragScroll = 0;
+  Timer? autoScroll;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(cancelDrag);
+  }
+
+  bool cancelDrag(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        dragging != null) {
+      clearDrag();
+      return true;
+    }
+    return false;
+  }
+
+  void clearDrag() {
+    autoScroll?.cancel();
+    if (mounted) {
+      setState(() {
+        dragging = null;
+        movedStart = null;
+      });
+    }
+  }
+
+  void updateDrag() {
+    final event = dragging;
+    if (event == null || !scroll.hasClients) return;
+    final axis = CalendarDayAxis(
+      widget.snapshot.date,
+      widget.snapshot.timezoneOffsetSeconds,
+    );
+    final minutes =
+        axis.minute(event.startsAt) +
+        (pointer.dy - dragOrigin.dy + scroll.offset - dragScroll) / zoom;
+    final snapped = (minutes / 15).round() * 15;
+    final candidate = axis.start.add(Duration(minutes: snapped));
+    final valid =
+        snapped >= 0 &&
+        axis.minute(candidate.add(event.endsAt.difference(event.startsAt))) <=
+            axis.minutes;
+    setState(() => movedStart = valid ? candidate : null);
+  }
+
+  void beginDrag(EventItem event) {
+    dragScroll = scroll.offset;
+    setState(() {
+      dragging = event;
+      movedStart = event.startsAt;
+    });
+    updateDrag();
+    autoScroll = Timer.periodic(const Duration(milliseconds: 32), (_) {
+      final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box == null || dragging == null || !scroll.hasClients) return;
+      final local = box.globalToLocal(pointer);
+      if (local.dx < 80 ||
+          local.dx > box.size.width ||
+          local.dy < 0 ||
+          local.dy > box.size.height) {
+        return;
+      }
+      final delta = local.dy < 48
+          ? -12.0
+          : local.dy > box.size.height - 48
+          ? 12.0
+          : 0.0;
+      if (delta != 0) {
+        scroll.jumpTo(
+          (scroll.offset + delta).clamp(0, scroll.position.maxScrollExtent),
+        );
+        updateDrag();
+      }
+    });
+  }
+
+  void finishDrag() {
+    final event = dragging;
+    final start = movedStart;
+    final box = viewportKey.currentContext?.findRenderObject() as RenderBox?;
+    final local = box?.globalToLocal(pointer);
+    final valid =
+        box != null &&
+        local != null &&
+        local.dx >= 80 &&
+        local.dx <= box.size.width &&
+        local.dy >= 0 &&
+        local.dy <= box.size.height;
+    clearDrag();
+    if (valid &&
+        event != null &&
+        start != null &&
+        !start.isAtSameMomentAs(event.startsAt) &&
+        !widget.loading &&
+        widget.canModify?.call(event) == true) {
+      widget.onMoveEvent?.call(event, start);
+    }
+  }
+
+  Widget interactiveEvent(EventItem event, Widget child) {
+    final editable = !widget.loading && widget.canModify?.call(event) == true;
+    final actions = CalendarEventActions(
+      event: event,
+      snapshot: widget.snapshot,
+      onEdit: editable && widget.onEditEvent != null
+          ? () => widget.onEditEvent!(event)
+          : null,
+      onDelete: editable && widget.onDeleteEvent != null
+          ? () => widget.onDeleteEvent!(event)
+          : null,
+      child: child,
+    );
+    if (!editable || widget.onMoveEvent == null || event.isAllDay) {
+      return actions;
+    }
+    return Listener(
+      onPointerDown: (details) {
+        pointer = details.position;
+        dragOrigin = pointer;
+      },
+      onPointerMove: (details) => pointer = details.position,
+      child: Draggable<EventItem>(
+        data: event,
+        feedback: const SizedBox.shrink(),
+        maxSimultaneousDrags: switch (Theme.of(context).platform) {
+          TargetPlatform.iOS || TargetPlatform.android => 0,
+          _ => 1,
+        },
+        childWhenDragging: Opacity(
+          opacity: dragging == null ? 1 : .3,
+          child: actions,
+        ),
+        onDragStarted: () => beginDrag(event),
+        onDragUpdate: (details) {
+          updateDrag();
+        },
+        onDragEnd: (_) => finishDrag(),
+        child: actions,
+      ),
+    );
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -51,6 +212,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
 
   @override
   void dispose() {
+    autoScroll?.cancel();
+    HardwareKeyboard.instance.removeHandler(cancelDrag);
     scroll.dispose();
     super.dispose();
   }
@@ -58,6 +221,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
   @override
   void didUpdateWidget(CalendarAgenda oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.snapshot != widget.snapshot || widget.loading) clearDrag();
     if (oldWidget.snapshot.date != widget.snapshot.date && scroll.hasClients) {
       scroll.jumpTo((480 * zoom).clamp(0, scroll.position.maxScrollExtent));
     }
@@ -141,26 +305,32 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                   if (allDay.isEmpty)
                                     SizedBox(height: 24, child: Text('—')),
                                   for (final event in allDay)
-                                    FloeTextLink(
-                                      color: FloePalette.neutral950,
-                                      leading: Container(
-                                        width: 10,
-                                        height: 10,
-                                        decoration: BoxDecoration(
-                                          shape: BoxShape.circle,
-                                          color: DayAppearance.tone(
-                                            context,
-                                            event.id,
-                                            ItemTone.mint,
-                                          ).accent,
-                                        ),
-                                      ),
-                                      label:
-                                          '${event.title}${event.calendarName == null ? '' : '   ${event.calendarName}'}',
-                                      onPressed: () => openCalendarEvent(
-                                        context,
+                                    SizedBox(
+                                      height: 32,
+                                      child: interactiveEvent(
                                         event,
-                                        snapshot,
+                                        FloeTextLink(
+                                          color: FloePalette.neutral950,
+                                          leading: Container(
+                                            width: 10,
+                                            height: 10,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: DayAppearance.tone(
+                                                context,
+                                                event.id,
+                                                ItemTone.mint,
+                                              ).accent,
+                                            ),
+                                          ),
+                                          label:
+                                              '${event.title}${event.calendarName == null ? '' : '   ${event.calendarName}'}',
+                                          onPressed: () => openCalendarEvent(
+                                            context,
+                                            event,
+                                            snapshot,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                 ],
@@ -237,6 +407,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                       _EmptyDayStatus(onConnections: widget.onConnections),
                     Expanded(
                       child: Stack(
+                        key: viewportKey,
                         children: [
                           Positioned.fill(
                             child: Scrollbar(
@@ -328,13 +499,62 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                   (placement.end -
                                                       placement.start) *
                                                   zoom,
-                                              child: CalendarEventCard(
-                                                event: placement.event,
-                                                snapshot: snapshot,
-                                                height:
-                                                    (placement.end -
-                                                        placement.start) *
-                                                    zoom,
+                                              child: interactiveEvent(
+                                                placement.event,
+                                                CalendarEventCard(
+                                                  event: placement.event,
+                                                  snapshot: snapshot,
+                                                  height:
+                                                      (placement.end -
+                                                          placement.start) *
+                                                      zoom,
+                                                ),
+                                              ),
+                                            ),
+                                          if (dragging != null &&
+                                              movedStart != null)
+                                            Positioned(
+                                              top:
+                                                  16 +
+                                                  axis.minute(movedStart!) *
+                                                      zoom,
+                                              left: 80,
+                                              right: 20,
+                                              height:
+                                                  dragging!.endsAt
+                                                      .difference(
+                                                        dragging!.startsAt,
+                                                      )
+                                                      .inMinutes *
+                                                  zoom,
+                                              child: IgnorePointer(
+                                                child: FloeSquircle(
+                                                  key: const Key(
+                                                    'calendar-drag-preview',
+                                                  ),
+                                                  fill: FloePalette.primary100,
+                                                  borderColor:
+                                                      FloePalette.primary500,
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 12,
+                                                      ),
+                                                  child: Align(
+                                                    alignment:
+                                                        Alignment.centerLeft,
+                                                    child: Text(
+                                                      '${axis.time(movedStart!)}  ${dragging!.title}',
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
                                               ),
                                             ),
                                           if (widget.draftStartsAt
@@ -606,7 +826,7 @@ class CalendarEventCard extends StatelessWidget {
                     ),
                   )
                 : Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
                     child: Row(
                       children: [
                         Container(
@@ -668,15 +888,6 @@ class CalendarEventCard extends StatelessWidget {
                             ],
                           ),
                         ),
-                        if (event.externalId != null && height >= 30)
-                          Padding(
-                            padding: EdgeInsets.only(left: 6),
-                            child: Icon(
-                              LucideIcons.lockKeyhole,
-                              size: 13,
-                              color: FloePalette.neutral500,
-                            ),
-                          ),
                       ],
                     ),
                   ),
