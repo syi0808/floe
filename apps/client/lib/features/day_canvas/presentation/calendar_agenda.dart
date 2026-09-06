@@ -219,177 +219,218 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                     ),
                     if (empty &&
                         widget.draftStartsAt == null &&
-                        snapshot.calendar?.error == null)
-                      _EmptyDayStatus(
-                        confirmed: confirmedEmpty,
-                        onConnections: widget.onConnections,
-                      ),
+                        snapshot.calendar?.error == null &&
+                        !confirmedEmpty)
+                      _EmptyDayStatus(onConnections: widget.onConnections),
                     Expanded(
-                      child: Scrollbar(
-                        controller: scroll,
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          key: Key('calendar-scroll'),
-                          controller: scroll,
-                          child: LayoutBuilder(
-                            builder: (context, constraints) => GestureDetector(
-                              key: const Key('calendar-time-grid'),
-                              behavior: HitTestBehavior.opaque,
-                              onDoubleTapDown: widget.onCreateEvent == null
-                                  ? null
-                                  : (details) {
-                                      final minute =
-                                          ((details.localPosition.dy - 16) /
-                                                  zoom)
-                                              .clamp(0.0, axis.minutes - 1);
-                                      if (placements.any(
-                                        (placement) =>
-                                            minute >= placement.start &&
-                                            minute < placement.end,
-                                      )) {
-                                        return;
-                                      }
-                                      final snapped =
-                                          (minute / 15).round() * 15;
-                                      widget.onCreateEvent!(
-                                        axis.start
-                                            .add(Duration(minutes: snapped))
-                                            .toLocal(),
-                                      );
-                                    },
-                              child: SizedBox(
-                                height: axis.minutes * zoom + 32,
-                                child: Stack(
-                                  children: [
-                                    Positioned.fill(
-                                      child: CustomPaint(
-                                        painter: _CalendarGuides(zoom),
-                                      ),
-                                    ),
-                                    for (
-                                      var hour = 0;
-                                      hour <= axis.minutes / 60;
-                                      hour++
-                                    )
-                                      Positioned(
-                                        top: 16 + hour * 60 * zoom - 6,
-                                        left: 16,
-                                        child: Text(
-                                          axis.hourLabel(hour),
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            height: 1.2,
-                                            color: FloePalette.neutral600,
-                                          ),
-                                        ),
-                                      ),
-                                    for (final placement in placements)
-                                      Positioned(
-                                        top: 16 + placement.start * zoom,
-                                        left:
-                                            80 +
-                                            (constraints.maxWidth - 100) *
-                                                placement.column /
-                                                placement.columns,
-                                        width:
-                                            ((constraints.maxWidth - 100) /
-                                                        placement.columns -
-                                                    (placement.columns > 1
-                                                        ? 6
-                                                        : 0))
-                                                .clamp(1, double.infinity),
-                                        height:
-                                            (placement.end - placement.start) *
-                                            zoom,
-                                        child: CalendarEventCard(
-                                          event: placement.event,
-                                          snapshot: snapshot,
-                                          height:
-                                              (placement.end -
-                                                  placement.start) *
-                                              zoom,
-                                        ),
-                                      ),
-                                    if (widget.draftStartsAt case final start?
-                                        when axis.minute(start) >= 0 &&
-                                            axis.minute(start) < axis.minutes)
-                                      Positioned(
-                                        top: 16 + axis.minute(start) * zoom,
-                                        left: 80,
-                                        right: 20,
-                                        height: 45 * zoom,
-                                        child: IgnorePointer(
-                                          child: DecoratedBox(
-                                            decoration: BoxDecoration(
-                                              color: FloePalette.primary100,
-                                              border: Border.all(
-                                                color: FloePalette.primary500,
-                                              ),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Padding(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                  ),
-                                              child: Align(
-                                                alignment: Alignment.centerLeft,
-                                                child: Text(
-                                                  AppLocalizations.of(context)
-                                                      .newEvent,
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    fontWeight: FontWeight.w600,
-                                                    color:
-                                                        FloePalette.primary700,
-                                                  ),
-                                                ),
-                                              ),
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: Scrollbar(
+                              controller: scroll,
+                              thumbVisibility: true,
+                              child: SingleChildScrollView(
+                                key: Key('calendar-scroll'),
+                                controller: scroll,
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) => GestureDetector(
+                                    key: const Key('calendar-time-grid'),
+                                    behavior: HitTestBehavior.opaque,
+                                    onDoubleTapDown:
+                                        widget.onCreateEvent == null
+                                        ? null
+                                        : (details) {
+                                            final minute =
+                                                ((details.localPosition.dy -
+                                                            16) /
+                                                        zoom)
+                                                    .clamp(
+                                                      0.0,
+                                                      axis.minutes - 1,
+                                                    );
+                                            if (placements.any(
+                                              (placement) =>
+                                                  minute >= placement.start &&
+                                                  minute < placement.end,
+                                            )) {
+                                              return;
+                                            }
+                                            final snapped =
+                                                (minute / 15).round() * 15;
+                                            widget.onCreateEvent!(
+                                              axis.start
+                                                  .add(
+                                                    Duration(minutes: snapped),
+                                                  )
+                                                  .toLocal(),
+                                            );
+                                          },
+                                    child: SizedBox(
+                                      height: axis.minutes * zoom + 32,
+                                      child: Stack(
+                                        children: [
+                                          Positioned.fill(
+                                            child: CustomPaint(
+                                              painter: _CalendarGuides(zoom),
                                             ),
                                           ),
-                                        ),
-                                      ),
-                                    if (sameDay)
-                                      Positioned(
-                                        top: 16 + currentMinute * zoom - 6,
-                                        left: 10,
-                                        right: 18,
-                                        child: Row(
-                                          children: [
-                                            SizedBox(
-                                              width: 56,
+                                          for (
+                                            var hour = 0;
+                                            hour <= axis.minutes / 60;
+                                            hour++
+                                          )
+                                            Positioned(
+                                              top: 16 + hour * 60 * zoom - 6,
+                                              left: 16,
                                               child: Text(
-                                                axis.time(snapshot.generatedAt),
+                                                axis.hourLabel(hour),
                                                 style: TextStyle(
                                                   fontSize: 10,
-                                                  color: FloePalette.primary600,
+                                                  height: 1.2,
+                                                  color: FloePalette.neutral600,
                                                 ),
                                               ),
                                             ),
-                                            Container(
-                                              width: 5,
-                                              height: 5,
-                                              decoration: BoxDecoration(
-                                                shape: BoxShape.circle,
-                                                color: FloePalette.primary500,
+                                          for (final placement in placements)
+                                            Positioned(
+                                              top: 16 + placement.start * zoom,
+                                              left:
+                                                  80 +
+                                                  (constraints.maxWidth - 100) *
+                                                      placement.column /
+                                                      placement.columns,
+                                              width:
+                                                  ((constraints.maxWidth -
+                                                                  100) /
+                                                              placement
+                                                                  .columns -
+                                                          (placement.columns > 1
+                                                              ? 6
+                                                              : 0))
+                                                      .clamp(
+                                                        1,
+                                                        double.infinity,
+                                                      ),
+                                              height:
+                                                  (placement.end -
+                                                      placement.start) *
+                                                  zoom,
+                                              child: CalendarEventCard(
+                                                event: placement.event,
+                                                snapshot: snapshot,
+                                                height:
+                                                    (placement.end -
+                                                        placement.start) *
+                                                    zoom,
                                               ),
                                             ),
-                                            Expanded(
-                                              child: Divider(
-                                                color: FloePalette.primary500,
-                                                height: 1,
+                                          if (widget.draftStartsAt
+                                              case final start?
+                                              when axis.minute(start) >= 0 &&
+                                                  axis.minute(start) <
+                                                      axis.minutes)
+                                            Positioned(
+                                              top:
+                                                  16 +
+                                                  axis.minute(start) * zoom,
+                                              left: 80,
+                                              right: 20,
+                                              height: 45 * zoom,
+                                              child: IgnorePointer(
+                                                child: DecoratedBox(
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        FloePalette.primary100,
+                                                    border: Border.all(
+                                                      color: FloePalette
+                                                          .primary500,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                  ),
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 12,
+                                                        ),
+                                                    child: Align(
+                                                      alignment:
+                                                          Alignment.centerLeft,
+                                                      child: Text(
+                                                        AppLocalizations.of(
+                                                          context,
+                                                        ).newEvent,
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color: FloePalette
+                                                              .primary700,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
                                               ),
                                             ),
-                                          ],
-                                        ),
+                                          if (sameDay)
+                                            Positioned(
+                                              top:
+                                                  16 + currentMinute * zoom - 6,
+                                              left: 10,
+                                              right: 18,
+                                              child: Row(
+                                                children: [
+                                                  SizedBox(
+                                                    width: 56,
+                                                    child: Text(
+                                                      axis.time(
+                                                        snapshot.generatedAt,
+                                                      ),
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: FloePalette
+                                                            .primary600,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Container(
+                                                    width: 5,
+                                                    height: 5,
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      color: FloePalette
+                                                          .primary500,
+                                                    ),
+                                                  ),
+                                                  Expanded(
+                                                    child: Divider(
+                                                      color: FloePalette
+                                                          .primary500,
+                                                      height: 1,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                  ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
+                          if (confirmedEmpty && widget.draftStartsAt == null)
+                            Positioned(
+                              top: 12,
+                              left: 92,
+                              right: 24,
+                              child: IgnorePointer(child: _EmptyDayBanner()),
+                            ),
+                        ],
                       ),
                     ),
                   ],
@@ -411,9 +452,8 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
 }
 
 class _EmptyDayStatus extends StatelessWidget {
-  const _EmptyDayStatus({required this.confirmed, required this.onConnections});
+  const _EmptyDayStatus({required this.onConnections});
 
-  final bool confirmed;
   final VoidCallback onConnections;
 
   @override
@@ -431,18 +471,12 @@ class _EmptyDayStatus extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    confirmed
-                        ? strings.aLittleBreathingRoom
-                        : strings.yourDayIsStillEmpty,
+                    strings.yourDayIsStillEmpty,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    confirmed
-                        ? MediaQuery.sizeOf(context).width <= 780
-                              ? strings.emptyDayCreateHintTouch
-                              : strings.emptyDayCreateHint
-                        : strings.emptyDayConnectHint,
+                    strings.emptyDayConnectHint,
                     style: const TextStyle(
                       fontSize: 12,
                       color: FloePalette.neutral600,
@@ -451,11 +485,68 @@ class _EmptyDayStatus extends StatelessWidget {
                 ],
               ),
             ),
-            if (!confirmed)
-              FloeTextLink(
-                label: strings.viewConnectedCalendars,
-                onPressed: onConnections,
+            FloeTextLink(
+              label: strings.viewConnectedCalendars,
+              onPressed: onConnections,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyDayBanner extends StatelessWidget {
+  const _EmptyDayBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    final touchLayout = MediaQuery.sizeOf(context).width <= 780;
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: FloeSquircle(
+        key: const Key('empty-day-banner'),
+        size: FloeSquircleSize.md,
+        fill: FloePalette.primary50,
+        borderColor: FloePalette.primary200,
+        elevation: 2,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(
+              LucideIcons.cloudSun,
+              size: 18,
+              color: FloePalette.primary600,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    strings.aLittleBreathingRoom,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: FloePalette.neutral950,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    touchLayout
+                        ? strings.emptyDayCreateHintTouch
+                        : strings.emptyDayCreateHint,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                ],
               ),
+            ),
           ],
         ),
       ),

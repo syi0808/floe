@@ -20,7 +20,7 @@
   from the toolbar `+` or an empty 15-minute-snapped double-click rather than a
   labeled proposal control in the contextual rail.
 - Empty days retain the full interactive time grid. `A little breathing room` is
-  now a compact inline status rather than a blurred, inert overlay.
+  now a compact, non-blocking floating banner rather than an inert overlay.
 - Drag-to-move and capability-aware context menus remain the next interaction slice;
   they will use the same authority/review/activity boundary.
 

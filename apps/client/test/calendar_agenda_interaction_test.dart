@@ -58,6 +58,19 @@ void main() {
         find.text('No events on this day. Double-click a time to create one.'),
         findsOneWidget,
       );
+      final banner = find.byKey(const Key('empty-day-banner'));
+      final viewport = tester.getRect(find.byKey(const Key('calendar-scroll')));
+      expect(tester.getRect(banner).overlaps(viewport), isTrue);
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find
+                  .ancestor(of: banner, matching: find.byType(IgnorePointer))
+                  .first,
+            )
+            .ignoring,
+        isTrue,
+      );
       final timeline = find.byKey(const Key('timeline-card'));
       final pointerGuard = tester.widget<IgnorePointer>(
         find
@@ -66,8 +79,7 @@ void main() {
       );
       expect(pointerGuard.ignoring, isFalse);
 
-      final viewport = tester.getRect(find.byKey(const Key('calendar-scroll')));
-      final point = viewport.center;
+      final point = tester.getRect(banner).center;
       await tester.tapAt(point);
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tapAt(point);
