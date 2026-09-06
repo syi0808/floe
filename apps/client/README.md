@@ -61,9 +61,12 @@ Use `flutter run -d macos -t lib/main_preview.dart` to review design and interac
 Both normal macOS debug runs and the preview entry point include a review overlay. Press
 `Command-Shift-F`, choose **Inspect**, and click any rendered element to attach a numbered
 comment. Existing pins can be reopened, edited, or deleted. The toolbar copies all feedback
-as Markdown or structured JSON, including the widget path, logical-pixel position and bounds,
-and capture viewport. There is no persistent review button, release builds do not mount the
-overlay, and feedback resets with the running process.
+as Markdown or structured JSON. Each pin records a stable selector, key/text/tooltip/semantics,
+the Floe component and page path, render-object creator chain, nearby labels, scroll offsets,
+local and normalized geometry, viewport details, and a cropped PNG around the selected element.
+Screenshots are written under the system temporary `floe-design-feedback` directory and linked
+from exports. There is no persistent review button, release builds do not mount the overlay,
+and feedback resets with the running process.
 
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
 dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
