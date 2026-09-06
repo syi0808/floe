@@ -306,6 +306,37 @@ void main() {
     });
   }
 
+  testWidgets('activity reload is positioned in the page header', (
+    tester,
+  ) async {
+    final gateway = Gateway()..saved = [action(status: 'succeeded')];
+    final controller = CalendarActionController(
+      gateway: gateway,
+      personId: 'person',
+    );
+    await loadController(tester, controller);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: ActivityPanel(controller: controller, connection: connection),
+        ),
+      ),
+    );
+
+    final titleBounds = tester.getRect(find.text('Activity'));
+    final reloadBounds = tester.getRect(find.text('Reload activity'));
+    final activityBounds = tester.getRect(find.text('Quiet focus'));
+    expect(reloadBounds.center.dy, closeTo(titleBounds.center.dy, 8));
+    expect(reloadBounds.right, greaterThan(activityBounds.center.dx));
+    expect(reloadBounds.bottom, lessThan(activityBounds.top));
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
   testWidgets(
     'overnight review shows both local dates and a plain-language block reason',
     (tester) async {

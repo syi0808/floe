@@ -122,9 +122,20 @@ class ActivityPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Activity',
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Activity',
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                FloeButton.text(
+                  onPressed: controller.busy ? null : controller.load,
+                  child: const Text('Reload activity'),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             const Text(
@@ -171,10 +182,6 @@ class ActivityPanel extends StatelessWidget {
                   ),
                 ),
               ),
-            FloeButton.text(
-              onPressed: controller.busy ? null : controller.load,
-              child: const Text('Reload activity'),
-            ),
           ],
         ),
       );
