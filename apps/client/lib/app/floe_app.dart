@@ -17,10 +17,12 @@ class FloeApp extends StatefulWidget {
     required this.gateway,
     this.query,
     this.locale = const Locale('en'),
+    this.builder,
   });
   final Locale locale;
   final DayGateway gateway;
   final DayQuery? query;
+  final TransitionBuilder? builder;
 
   @override
   State<FloeApp> createState() => _FloeAppState();
@@ -52,6 +54,7 @@ class _FloeAppState extends State<FloeApp> {
       locale: widget.locale,
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
+      builder: widget.builder,
       home: FloeToastHost(
         child: PersonalDayScreen(
           gateway: widget.gateway,

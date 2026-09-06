@@ -56,6 +56,15 @@ This uses Flutter's paint-transform rendering path, not a separate GPU-accelerat
 
 Use `flutter run -d macos -t lib/main_preview.dart` to review design and interaction manually at desktop and narrow window sizes. `../../docs/design/flutter-visual-parity.md` retains historical comparison notes, not an automated layout contract.
 
+### Design feedback mode
+
+The preview entry point includes a review overlay that is never mounted by the production
+entry point. Click the review button or press `Command-Shift-F`, choose **Inspect**, and
+click any rendered element to attach a numbered comment. Existing pins can be reopened,
+edited, or deleted. The toolbar copies all feedback as Markdown or structured JSON,
+including the widget path, logical-pixel position and bounds, and capture viewport.
+Feedback stays in memory and resets with the preview process.
+
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
 dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
 the Rust core, which owns all Turso reads and writes. Local data is stored under
