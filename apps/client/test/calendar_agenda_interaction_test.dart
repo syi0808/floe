@@ -60,7 +60,7 @@ void main() {
       );
       final banner = find.byKey(const Key('empty-day-banner'));
       final viewport = tester.getRect(find.byKey(const Key('calendar-scroll')));
-      expect(tester.getRect(banner).overlaps(viewport), isTrue);
+      expect(tester.getRect(banner).bottom, lessThanOrEqualTo(viewport.top));
       expect(
         tester
             .widget<IgnorePointer>(
@@ -79,7 +79,7 @@ void main() {
       );
       expect(pointerGuard.ignoring, isFalse);
 
-      final point = tester.getRect(banner).center;
+      final point = viewport.center;
       await tester.tapAt(point);
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tapAt(point);

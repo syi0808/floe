@@ -55,8 +55,8 @@ Do not blur, dim, cover or wrap the empty calendar in `IgnorePointer`. Do not us
 a full-card empty overlay or replace the grid with a mascot illustration. Those
 treat the best surface for creating the first event as unavailable.
 
-Communicate the free day with one quiet floating banner over the top of the timed
-grid:
+Communicate the free day with one quiet banner in the unused leading side of the
+Calendar tools row:
 
 ```text
 A little breathing room
@@ -64,8 +64,8 @@ No events on this day. Double-click a time to create one.
 ```
 
 - The message has `status` semantics but does not take focus automatically.
-- It does not participate in layout, occupies a compact fixed region, and never
-  intercepts grid gestures.
+- It shares the tools row's existing height, stays clear of the timeline, and
+  never intercepts grid gestures.
 - The `+` button remains the explicit accessible action; the message does not need
   another create button.
 - On touch layouts, the helper says `Use + or press and hold a time to create an

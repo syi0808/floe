@@ -177,8 +177,20 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         vertical: 8,
                       ),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
+                          if (confirmedEmpty &&
+                              widget.draftStartsAt == null) ...[
+                            Expanded(
+                              child: IgnorePointer(
+                                child: _EmptyDayBanner(
+                                  compact:
+                                      MediaQuery.sizeOf(context).width <= 780,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                          ] else
+                            const Spacer(),
                           IconButton(
                             tooltip: AppLocalizations.of(context).zoomOut,
                             onPressed: zoom <= 1
@@ -186,19 +198,20 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                 : () => setZoom(zoom - 1),
                             icon: Icon(LucideIcons.zoomOut, size: 16),
                           ),
-                          SizedBox(
-                            width: 150,
-                            child: Slider(
-                              semanticFormatterCallback: (value) =>
-                                  AppLocalizations.of(context)
-                                      .zoomTimes(value.round()),
-                              min: 1,
-                              max: 12,
-                              divisions: 11,
-                              value: zoom,
-                              onChanged: setZoom,
+                          if (MediaQuery.sizeOf(context).width > 780)
+                            SizedBox(
+                              width: 150,
+                              child: Slider(
+                                semanticFormatterCallback: (value) =>
+                                    AppLocalizations.of(context)
+                                        .zoomTimes(value.round()),
+                                min: 1,
+                                max: 12,
+                                divisions: 11,
+                                value: zoom,
+                                onChanged: setZoom,
+                              ),
                             ),
-                          ),
                           IconButton(
                             tooltip: AppLocalizations.of(context).zoomIn,
                             onPressed: zoom >= 12
@@ -423,13 +436,6 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               ),
                             ),
                           ),
-                          if (confirmedEmpty && widget.draftStartsAt == null)
-                            Positioned(
-                              top: 12,
-                              left: 92,
-                              right: 24,
-                              child: IgnorePointer(child: _EmptyDayBanner()),
-                            ),
                         ],
                       ),
                     ),
@@ -497,12 +503,13 @@ class _EmptyDayStatus extends StatelessWidget {
 }
 
 class _EmptyDayBanner extends StatelessWidget {
-  const _EmptyDayBanner();
+  const _EmptyDayBanner({required this.compact});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final strings = AppLocalizations.of(context);
-    final touchLayout = MediaQuery.sizeOf(context).width <= 780;
     return Semantics(
       container: true,
       liveRegion: true,
@@ -511,39 +518,43 @@ class _EmptyDayBanner extends StatelessWidget {
         size: FloeSquircleSize.md,
         fill: FloePalette.primary50,
         borderColor: FloePalette.primary200,
-        elevation: 2,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
             const Icon(
               LucideIcons.cloudSun,
-              size: 18,
+              size: 16,
               color: FloePalette.primary600,
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+              child: Row(
                 children: [
                   Text(
                     strings.aLittleBreathingRoom,
+                    maxLines: 1,
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 11,
+                      height: 1.3,
                       fontWeight: FontWeight.w600,
                       color: FloePalette.neutral950,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    touchLayout
-                        ? strings.emptyDayCreateHintTouch
-                        : strings.emptyDayCreateHint,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: FloePalette.neutral600,
+                  if (!compact) ...[
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        strings.emptyDayCreateHint,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          height: 1.3,
+                          color: FloePalette.neutral600,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
