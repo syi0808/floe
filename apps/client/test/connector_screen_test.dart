@@ -1,8 +1,10 @@
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/connector_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:figma_squircle/figma_squircle.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -45,7 +47,11 @@ void main() {
           .ancestor(of: find.byType(InkWell), matching: find.byType(Material))
           .first,
     );
-    expect(serviceMaterial.type, MaterialType.transparency);
+    expect(serviceMaterial.color, FloePalette.neutral0);
+    expect(serviceMaterial.clipBehavior, Clip.antiAlias);
+    final serviceShape = serviceMaterial.shape! as SmoothRectangleBorder;
+    expect(serviceShape.side.color, FloePalette.neutral200);
+    expect(serviceShape.side.width, 1);
     await tester.tap(find.text(strings.macosCalendar));
     await tester.pumpAndSettle();
     expect(find.text(strings.backToConnections), findsOneWidget);

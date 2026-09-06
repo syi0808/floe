@@ -118,7 +118,13 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 280),
           child: Material(
-            type: MaterialType.transparency,
+            color: FloePalette.neutral0,
+            shape: floeSquircleBorder(
+              FloeSquircleSize.lg,
+              borderColor: FloePalette.neutral200,
+              borderWidth: 1,
+            ),
+            clipBehavior: Clip.antiAlias,
             child: InkWell(
               mouseCursor: WidgetStateMouseCursor.clickable,
               customBorder: floeSquircleBorder(FloeSquircleSize.lg),
