@@ -40,6 +40,9 @@ Wednesday, Sep 2
 - Calendar 생성은 contextual rail의 별도 기능이 아니라 툴바 `+`와 빈 시간대
   더블클릭으로 시작한다. 일정 이동과 삭제도 event block의 drag/context menu에서
   시작하며 공통 Action Authority와 Review 파이프라인을 통과한다.
+- 일정이 없는 날도 시간축은 흐리게 하거나 비활성화하지 않는다. `A little
+  breathing room`은 조작을 막는 overlay가 아니라 시간축 위의 조용한 inline
+  status로 전달하며, 첫 일정을 만들 수 있는 grid interaction을 그대로 유지한다.
 
 상세한 화면 구성과 반응형 동작은 [`docs/design/screens/day-canvas.md`](../../design/screens/day-canvas.md)를 따른다.
 Calendar 직접 조작 규칙은 [Calendar Direct Manipulation](calendar-direct-manipulation.md)을 따른다.

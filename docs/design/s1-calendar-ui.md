@@ -77,7 +77,7 @@ no lab, state dropdown, badge or link to the old reference.
 | `revoked` | Cached events with paused-read warning and recovery |
 | `missing` | Calendar/account unavailable warning, retained cache, link to inventory |
 | `noCalendars` | No-source message; manage calendars in macOS then retry |
-| `empty` | Successful all-calendar empty-date message |
+| `empty` | Successful all-calendar empty-date inline status over an enabled grid |
 | `uncollected` | Unknown date with read action, previous cached date retained |
 | `loadError` | Local-load error and retry |
 

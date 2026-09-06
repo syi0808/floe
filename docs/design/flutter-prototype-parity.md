@@ -9,7 +9,7 @@ not certification of live EventKit acceptance.
 
 | Flutter unit | Responsibility / inputs | Prototype counterpart |
 | --- | --- | --- |
-| `CalendarAgenda` | Snapshot, loading and connection navigation; owns persisted zoom/scroll, full-day viewport and centered empty state | CalendarAgenda / TimelineZoom / CalendarAllDay |
+| `CalendarAgenda` | Snapshot, loading and connection navigation; owns persisted zoom/scroll, full-day viewport and non-blocking empty status | CalendarAgenda / TimelineZoom / CalendarAllDay |
 | `layoutCalendarEvents` | Pure clipped display-minute placement and deterministic overlap columns | calendar-layout.js |
 | `CalendarEventCard` | Exact event height, density, hover, tooltip and detail navigation | CalendarEvent |
 | `CalendarEventDetails` | Actual source metadata, read-only note, disclosure; no imported-event mutations | CalendarEventDetails |

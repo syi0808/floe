@@ -63,7 +63,9 @@ Detailed create, drag, context-menu and authority behavior follows
 
 ## Empty and exceptional states
 
-- Empty day: show calm orientation, not filler recommendations.
+- Empty day: keep the full calendar grid interactive. Show `A little breathing
+  room` as a compact inline status with gesture-appropriate creation guidance;
+  never blur, dim, overlay or disable the grid.
 - Conflict: explain which items conflict before offering a resolution.
 - Overdue: use explicit language plus warning styling.
 - Offline or stale: retain local content and identify unavailable actions.

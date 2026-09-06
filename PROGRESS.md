@@ -19,6 +19,8 @@
 - Planned Apple Calendar-familiar direct manipulation: toolbar `+`, empty-slot
   double-click, drag-to-move and capability-aware context menus, all routed
   through the same authority/review/activity boundary rather than a proposal UI.
+- Empty days retain the full interactive time grid. `A little breathing room` is
+  planned as a compact inline status rather than the current blurred, inert overlay.
 
 ## Delivery Board
 

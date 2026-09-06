@@ -156,7 +156,7 @@ available card opens the existing detail/setup flow rather than granting access.
 | `CalendarAllDay` | Receives all-day rows and disabled flag; `onSelect(event)`. Empty list shows dash; first and subsequent rows retain layout | `.s1-all-day`, `.s1-more-all-day`, `.s1-all-day-title` |
 | `CalendarEvent` | Receives laid-out event, resolved calendar, zoom and disabled flag; `onSelect(event)`. Preserves exact start/end, column spacing, height-based density and full accessible name | `.s1-event*`, `[data-density]`, `[data-overlapping]`, `.tone-dot` |
 | `TimelineZoom` | Controlled value; emits numeric `onChange(value)`; native keyboard slider and accessible magnification text | `.s1-timeline-tools`, `.s1-zoom-*` |
-| `CalendarEmptyState` | Phase/date copy with one `onAction`; controller chooses connect, read or navigate. Agenda owns whether it is shown | `.s1-empty-day`, `.s1-empty-content` |
+| `CalendarEmptyState` | Compact non-blocking status above the interactive grid; successful empty reads show guidance while unavailable states retain recovery actions | `.s1-empty-day`, `.s1-empty-content` |
 | `CalendarContextRail` | Controlled task and static note context; emits boolean task change and navigation destination. Local copy is still prototype content | `.s1-side-stack`, `.s1-local-task`, `.s1-personal-note`, `.s1-provenance-hint` |
 | `CalendarConnections` | Controlled inventory, phase/status and collected dates; emits dialog ID and refresh; no permissions or mutations | `.s1-connections-layout`, `.s1-connection-record`, `.s1-connected-calendars`, `.s1-facts`, `.s1-actions` |
 | `CalendarStatusBanner` | Supported phase selects status/alert copy and supplied recovery callback. Connected/empty are not valid banner inputs | `.s1-banner`, `.s1-banner-action` |
@@ -167,9 +167,11 @@ available card opens the existing detail/setup flow rather than granting access.
 | `CalendarDisconnect` | Consequences + close/confirm callbacks. Controller clears saved calendar fixture state | `.s1-permission-list`, `.s1-modal-actions`, `.s1-danger-button` |
 | `CalendarEventDetails` | Event/calendar/date/provenance; browser-owned details disclosure, close callback. No edit/delete callbacks | `.s1-detail-source`, `.s1-pill`, `.s1-event-purpose`, `.s1-detail-time`, `.s1-facts`, `.s1-source-details` |
 
-Loading and empty states occupy the whole box without shifting the calendar. Empty
-background remains inert, aria-hidden and blurred. Existing CSS selectors and DOM
-wrappers are retained; extraction must not add layout wrappers to the timeline.
+Loading preserves the calendar geometry. Empty is an inline status and leaves the
+grid visible and interactive; it does not occupy or disable the whole box. Empty
+status decoration is non-interactive, but the grid behind and around it is neither
+blurred nor pointer-disabled. Existing CSS selectors may be migrated without adding
+layout wrappers that intercept timeline gestures.
 Calendar loading uses DotSpinner without visible text; the status label remains
 available to assistive technology.
 

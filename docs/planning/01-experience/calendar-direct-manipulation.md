@@ -44,6 +44,39 @@ Pointer double-click is an accelerator, not the only path. Keyboard users use
 the toolbar `Create event` button; touch layouts use the button or a deliberate
 long-press on empty time.
 
+## Empty day
+
+An empty day is a useful calendar state, not a disabled state. After a successful
+complete read confirms that the selected calendars contain no events, keep the
+full all-day row, time grid, scrolling, zoom and pointer/keyboard interactions
+available.
+
+Do not blur, dim, cover or wrap the empty calendar in `IgnorePointer`. Do not use
+a full-card empty overlay or replace the grid with a mascot illustration. Those
+treat the best surface for creating the first event as unavailable.
+
+Communicate the free day with one quiet inline status between the Calendar tools
+and the timed grid:
+
+```text
+A little breathing room
+No events on this day. Double-click a time to create one.
+```
+
+- The message has `status` semantics but does not take focus automatically.
+- It occupies a compact fixed region and never intercepts grid gestures.
+- The `+` button remains the explicit accessible action; the message does not need
+  another create button.
+- On touch layouts, the helper says `Use + or press and hold a time to create an
+  event` rather than teaching a desktop gesture.
+- The current-time line remains visible on an empty Today.
+- Creating a provisional block removes the empty message immediately. Canceling
+  restores it; provider re-import remains authoritative.
+
+`No events` is valid only after a successful read of the complete selected scope.
+Not connected, permission denied, stale, partial and failed reads use their own
+status/recovery UI and must not be described as breathing room.
+
 ## Event editor
 
 The quick editor contains title, destination calendar, start/end and an explicit
@@ -147,10 +180,10 @@ must enumerate create, update and delete separately before confirmation.
 ## Delivery sequence
 
 1. Move create entry to the toolbar `+` button.
-2. Add empty-slot double-click and anchored quick editor.
-3. Add capability-aware event context menu.
-4. Implement durable Calendar update/delete intents and native executors.
-5. Add drag ghost, snapping, cancellation and auto-scroll.
-6. Connect move/delete to Review, Activity and per-action authority.
-7. Add keyboard and touch equivalents, then validate DST and recovery matrices.
-
+2. Replace the inert empty overlay with an interactive grid and inline status.
+3. Add empty-slot double-click and anchored quick editor.
+4. Add capability-aware event context menu.
+5. Implement durable Calendar update/delete intents and native executors.
+6. Add drag ghost, snapping, cancellation and auto-scroll.
+7. Connect move/delete to Review, Activity and per-action authority.
+8. Add keyboard and touch equivalents, then validate DST and recovery matrices.
