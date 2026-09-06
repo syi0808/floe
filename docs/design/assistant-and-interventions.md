@@ -24,7 +24,7 @@ Show one structured `Floe suggests` card when an intervention passes policy. A s
 4. dismiss, snooze, or secondary response where applicable;
 5. accessible reason or provenance when the suggestion depends on inferred context.
 
-Suggestions do not mutate data. Accepting one may open confirmation or prepare an action proposal.
+Suggestions do not mutate data. Accepting one may open a shared review request.
 
 ### Active
 
@@ -43,7 +43,8 @@ raw provider codes belong in collapsed technical details,
 not between the proposal and its approval controls. Do not invent rationale from
 an ID or implementation state, and do not conceal guests, alerts or other effects.
 
-See [decision-first action review](s3-calendar-action-ui.md). Metadata remains
+See [Review, Action Authority & Activity](../planning/01-experience/review-authority-and-activity.md)
+and [decision-first action review](s3-calendar-action-ui.md). Metadata remains
 inspectable without becoming mandatory reading for ordinary approval.
 
 ## Placement

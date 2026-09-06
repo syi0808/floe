@@ -35,6 +35,7 @@ floe-planning/
 │   ├── capture-and-transcription.md
 │   ├── voice-and-presence.md
 │   ├── interventions.md
+│   ├── review-authority-and-activity.md
 │   └── platform-experience.md
 │
 ├── 02-domain/

@@ -26,9 +26,13 @@ health.query
 ```text
 LLM / Manager
       ↓
-Action Proposal
+Action Intent
       ↓
 Policy Engine
+  ┌───┴──────────────┐
+  ↓                  ↓
+Review Request   automatic authority
+  └───┬──────────────┘
       ↓
 Validation
       ↓
@@ -72,6 +76,13 @@ Draft automatically: Allowed
 Send automatically: Never
 ```
 
+`allow`는 사람의 반복 결정을 생략할 뿐 validation, provider permission,
+idempotency와 audit을 생략하지 않는다. `ask`인 행동은 공통 Review Request로
+전달되고 완료된 결과는 별도 Activity에 남는다. Calendar를 비롯한 각 domain이
+독립적인 proposal 기능이나 inbox를 만들지 않는다.
+
+제품 계약은 [Review, Action Authority & Activity](../01-experience/review-authority-and-activity.md)를 따른다.
+
 ## 민감 행동
 
 다음은 높은 확인 정책을 가질 수 있다.
@@ -108,4 +119,3 @@ task.create.propose
 Every invocation is mediated by host policy.
 
 Expert permission to *propose* an action does not bypass Person-level Action Authority.
-
