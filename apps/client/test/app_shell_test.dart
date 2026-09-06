@@ -4,11 +4,43 @@ import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
+import 'package:floe_client/features/day_canvas/presentation/calendar_action_proposal.dart';
+import 'package:floe_client/preview/calendar_fixture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 
 void main() {
+  testWidgets('calendar preview enables create entry points', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      FloeApp(gateway: calendarPreviewGateway(), query: calendarPreviewQuery),
+    );
+    await tester.pumpAndSettle();
+
+    final create = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byTooltip('Create event'),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(create.onPressed, isNotNull);
+    expect(
+      tester
+          .widget<GestureDetector>(find.byKey(const Key('calendar-time-grid')))
+          .onDoubleTapDown,
+      isNotNull,
+    );
+
+    await tester.tap(find.byTooltip('Create event'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CalendarEventComposer), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('task toast preserves undo and survives navigation', (
     tester,
   ) async {
