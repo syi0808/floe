@@ -1,4 +1,5 @@
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
@@ -49,6 +50,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Undo'), findsOneWidget);
     await tester.tap(find.text('Undo'));
+    await tester.pump(FloeLoading.minimumDuration);
     await tester.pumpAndSettle();
     expect(
       (await gateway.loadDay(query)).items

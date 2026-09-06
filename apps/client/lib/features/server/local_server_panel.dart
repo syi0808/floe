@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
+import '../../app/floe_loading.dart';
 import '../../app/floe_squircle.dart';
 import 'local_server_client.dart';
 
@@ -48,7 +49,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   Future<void> _run(Future<void> Function() operation) async {
     if (mounted) setState(() => busy = true);
     try {
-      await operation();
+      await FloeLoading.run(operation);
     } on ServerConnectionException catch (error) {
       if (mounted) status = _error(error.code);
     } on Object {
@@ -174,93 +175,93 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   @override
   Widget build(BuildContext context) => FloeSquircle(
     padding: const EdgeInsets.all(24),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Remote server connection',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
-        ),
-        const SizedBox(height: 20),
-        TextField(
-          key: const Key('server-address'),
-          controller: address,
-          enabled: !busy && proof == null && connection == null,
-          autocorrect: false,
-          enableSuggestions: false,
-          decoration: const InputDecoration(labelText: 'Server address'),
-        ),
-        const SizedBox(height: 16),
-        Semantics(liveRegion: true, child: Text(status)),
-        if (code != null) ...[
-          const SizedBox(height: 16),
-          SelectableText(
-            code!,
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 4,
-            ),
+    child: FloeLoadingOverlay(
+      loading: busy,
+      label: status,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Remote server connection',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 12),
-          const FloeInfoNote(
-            text: 'Approve only when this code matches the dashboard. No calendar data is sent when pairing.',
+          const Text(
+            'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
           ),
-        ],
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            if (connection == null && proof == null)
-              FloeButton.filled(
-                onPressed: busy ? null : _pair,
-                child: const Text('Pair this device'),
+          const SizedBox(height: 20),
+          TextField(
+            key: const Key('server-address'),
+            controller: address,
+            enabled: !busy && proof == null && connection == null,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(labelText: 'Server address'),
+          ),
+          const SizedBox(height: 16),
+          Semantics(liveRegion: true, child: Text(status)),
+          if (code != null) ...[
+            const SizedBox(height: 16),
+            SelectableText(
+              code!,
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 4,
               ),
-            FloeButton.outlined(
-              onPressed: busy
-                  ? null
-                  : () => _run(
-                      () => widget.client.openDashboard(
-                        pairingAddress ?? address.text,
-                      ),
-                    ),
-              child: const Text('Open dashboard'),
             ),
-            if (proof != null)
-              FloeButton.text(
-                onPressed: busy ? null : _cancel,
-                child: const Text('Cancel pairing'),
-              ),
-            if (connection != null)
+            const SizedBox(height: 12),
+            const FloeInfoNote(
+              text: 'Approve only when this code matches the dashboard. No calendar data is sent when pairing.',
+            ),
+          ],
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              if (connection == null && proof == null)
+                FloeButton.filled(
+                  onPressed: busy ? null : _pair,
+                  child: const Text('Pair this device'),
+                ),
               FloeButton.outlined(
-                onPressed: busy ? null : _load,
-                child: const Text('Check connection'),
-              ),
-            if (proof == null)
-              FloeButton.text(
                 onPressed: busy
                     ? null
-                    : () => _run(() async {
-                        await _cancel();
-                        await widget.client.store.delete();
-                        if (!mounted) return;
-                        connection = null;
-                        status = 'Forgot this connection. Revoke its access in the dashboard if no longer needed.';
-                      }),
-                child: const Text('Forget connection'),
+                    : () => _run(
+                        () => widget.client.openDashboard(
+                          pairingAddress ?? address.text,
+                        ),
+                      ),
+                child: const Text('Open dashboard'),
               ),
-          ],
-        ),
-        if (busy) ...[
-          const SizedBox(height: 16),
-          const LinearProgressIndicator(),
+              if (proof != null)
+                FloeButton.text(
+                  onPressed: busy ? null : _cancel,
+                  child: const Text('Cancel pairing'),
+                ),
+              if (connection != null)
+                FloeButton.outlined(
+                  onPressed: busy ? null : _load,
+                  child: const Text('Check connection'),
+                ),
+              if (proof == null)
+                FloeButton.text(
+                  onPressed: busy
+                      ? null
+                      : () => _run(() async {
+                          await _cancel();
+                          await widget.client.store.delete();
+                          if (!mounted) return;
+                          connection = null;
+                          status = 'Forgot this connection. Revoke its access in the dashboard if no longer needed.';
+                        }),
+                  child: const Text('Forget connection'),
+                ),
+            ],
+          ),
         ],
-      ],
+      ),
     ),
   );
 }

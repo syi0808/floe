@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_loading.dart';
 import '../../../app/floe_squircle.dart';
 import '../application/calendar_action_controller.dart';
 import '../domain/calendar_action.dart';
@@ -42,48 +43,55 @@ class ReviewRequestPanel extends StatelessWidget {
           .toList(growable: false);
       return FloeSquircle(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              strings.calendarProposals,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-            if (controller.failed) Text(strings.actionReloadRequired),
-            if (controller.busy) Text(strings.actionLoading),
-            if (!controller.busy && !controller.failed && requests.isEmpty)
-              Text(strings.actionEmpty),
-            for (final action in requests)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(action.title),
-                    Text(_status(strings, action.status)),
-                    FloeButton.text(
-                      onPressed: () {
-                        controller.load();
-                        showFloeDialog<void>(
-                          context,
-                          (_) => ActionReviewDialog(
-                            controller: controller,
-                            actionId: action.id,
-                            connection: connection,
-                          ),
-                        );
-                      },
-                      child: Text(strings.actionReview),
-                    ),
-                  ],
+        child: FloeLoadingOverlay(
+          loading: controller.busy,
+          label: strings.actionLoading,
+          blockInteraction: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                strings.calendarProposals,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            FloeButton.text(
-              onPressed: controller.busy ? null : controller.load,
-              child: Text(strings.actionReload),
-            ),
-          ],
+              const SizedBox(height: 12),
+              if (controller.failed) Text(strings.actionReloadRequired),
+              if (!controller.busy && !controller.failed && requests.isEmpty)
+                Text(strings.actionEmpty),
+              for (final action in requests)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(action.title),
+                      Text(_status(strings, action.status)),
+                      FloeButton.text(
+                        onPressed: () {
+                          controller.load();
+                          showFloeDialog<void>(
+                            context,
+                            (_) => ActionReviewDialog(
+                              controller: controller,
+                              actionId: action.id,
+                              connection: connection,
+                            ),
+                          );
+                        },
+                        child: Text(strings.actionReview),
+                      ),
+                    ],
+                  ),
+                ),
+              FloeButton.text(
+                onPressed: controller.busy ? null : controller.load,
+                child: Text(strings.actionReload),
+              ),
+            ],
+          ),
         ),
       );
     },
@@ -108,62 +116,67 @@ class ActivityPanel extends StatelessWidget {
       final history = controller.actions
           .where((action) => !action.status.needsReview)
           .toList(growable: false);
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Activity',
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Automatic actions, decisions, and completed reviews appear here.',
-          ),
-          const SizedBox(height: 28),
-          if (controller.busy) Text(strings.actionLoading),
-          if (controller.failed) Text(strings.actionReloadRequired),
-          if (!controller.busy && !controller.failed && history.isEmpty)
-            const Text('No activity yet.'),
-          for (final action in history)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: FloeSquircle(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            action.title,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(_status(strings, action.status)),
-                        ],
-                      ),
-                    ),
-                    FloeButton.text(
-                      onPressed: () => showFloeDialog<void>(
-                        context,
-                        (_) => ActionReviewDialog(
-                          controller: controller,
-                          actionId: action.id,
-                          connection: connection,
+      return FloeLoadingOverlay(
+        loading: controller.busy,
+        label: strings.actionLoading,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Activity',
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Automatic actions, decisions, and completed reviews appear here.',
+            ),
+            const SizedBox(height: 28),
+            if (controller.failed) Text(strings.actionReloadRequired),
+            if (!controller.busy && !controller.failed && history.isEmpty)
+              const Text('No activity yet.'),
+            for (final action in history)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: FloeSquircle(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              action.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(_status(strings, action.status)),
+                          ],
                         ),
                       ),
-                      child: const Text('View details'),
-                    ),
-                  ],
+                      FloeButton.text(
+                        onPressed: () => showFloeDialog<void>(
+                          context,
+                          (_) => ActionReviewDialog(
+                            controller: controller,
+                            actionId: action.id,
+                            connection: connection,
+                          ),
+                        ),
+                        child: const Text('View details'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            FloeButton.text(
+              onPressed: controller.busy ? null : controller.load,
+              child: const Text('Reload activity'),
             ),
-          FloeButton.text(
-            onPressed: controller.busy ? null : controller.load,
-            child: const Text('Reload activity'),
-          ),
-        ],
+          ],
+        ),
       );
     },
   );
@@ -224,6 +237,8 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
           controller.canApprove(action, widget.connection(), DateTime.now());
       return FloeDetailDialog(
         title: strings.actionReview,
+        loading: controller.busy,
+        loadingLabel: strings.actionLoading,
         children: [
           if (action == null)
             Text(strings.actionMissing)
@@ -389,7 +404,6 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
               ],
             ),
           ],
-          if (controller.busy) Text(strings.actionLoading),
           if (controller.failed) ...[
             const SizedBox(height: 16),
             Text(strings.actionReloadRequired),

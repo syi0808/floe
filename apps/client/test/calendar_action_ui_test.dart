@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_gateway.dart';
@@ -225,6 +226,17 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> loadController(
+    WidgetTester tester,
+    CalendarActionController controller,
+  ) async {
+    final loading = controller.load();
+    await tester.pump(
+      FloeLoading.minimumDuration + const Duration(milliseconds: 1),
+    );
+    await loading;
+  }
+
   for (final width in [390.0, 1200.0]) {
     testWidgets('review, close and approve without creating at $width', (
       tester,
@@ -234,7 +246,7 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      await loadController(tester, controller);
       await mount(tester, controller, width);
       await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
@@ -312,7 +324,7 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      await loadController(tester, controller);
       await tester.pumpWidget(
         MaterialApp(
           theme: FloeTheme.light,
@@ -353,7 +365,7 @@ void main() {
       gateway: gateway,
       personId: 'person',
     );
-    await controller.load();
+    await loadController(tester, controller);
     await mount(tester, controller, 390);
     await tester.tap(find.text('Review request'));
     await tester.pumpAndSettle();
@@ -376,20 +388,22 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      await loadController(tester, controller);
       await mount(tester, controller, 1200);
       await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Decline'));
       await tester.tap(find.text('Decline'));
-      await tester.pumpAndSettle();
+      await tester.pump();
       await tester.ensureVisible(find.byTooltip('Close'));
       await tester.tap(find.byTooltip('Close'));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.text('Review request'));
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(gateway.decisions, 1);
       gateway.pending!.complete(action(status: 'rejected'));
+      await tester.pump(FloeLoading.minimumDuration);
       await tester.pumpAndSettle();
       expect(find.text('Declined. No event was created.'), findsWidgets);
       expect(find.text('Save approval only'), findsNothing);
@@ -406,7 +420,7 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      await loadController(tester, controller);
       await mount(tester, controller, 390);
       await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
@@ -443,7 +457,7 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      await loadController(tester, controller);
       await mount(tester, controller, 1200);
       await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
@@ -453,7 +467,7 @@ void main() {
       expect(gateway.decisions, 0);
       for (final status in ['rejected', 'blocked', 'succeeded']) {
         gateway.saved = [action(status: status)];
-        await controller.load();
+        await loadController(tester, controller);
         await tester.pumpAndSettle();
         expect(find.text('Review request'), findsNothing);
         await tester.pumpWidget(

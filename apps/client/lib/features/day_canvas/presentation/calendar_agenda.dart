@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_loading.dart';
 import '../../../app/floe_squircle.dart';
 import '../domain/day_models.dart';
 import 'calendar_event_details.dart';
@@ -400,7 +401,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
             Positioned.fill(
               child: ColoredBox(
                 color: FloePalette.neutral0.withValues(alpha: .55),
-                child: Center(child: FloeDotSpinner()),
+                child: Center(child: FloeSpinner()),
               ),
             ),
         ],

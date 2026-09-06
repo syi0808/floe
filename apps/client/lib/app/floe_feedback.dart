@@ -1,12 +1,12 @@
 import 'package:floe_client/l10n/app_localizations.dart';
 
-import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'design_tokens.dart';
+import 'floe_loading.dart';
 import 'floe_motion.dart';
 import 'floe_squircle.dart';
 
@@ -54,66 +54,6 @@ class FloeTextLink extends StatelessWidget {
         if (icon != null) ...[Icon(icon, size: 16), SizedBox(width: 8)],
         Flexible(child: Text(label)),
       ],
-    ),
-  );
-}
-
-class FloeDotSpinner extends StatefulWidget {
-  const FloeDotSpinner({super.key});
-  @override
-  State<FloeDotSpinner> createState() => _FloeDotSpinnerState();
-}
-
-class _FloeDotSpinnerState extends State<FloeDotSpinner>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController animation = AnimationController(
-    vsync: this,
-    duration: Duration(milliseconds: 1100),
-  );
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (FloeMotion.reduceMotion(context)) {
-      animation.stop();
-    } else {
-      animation.repeat();
-    }
-  }
-
-  @override
-  void dispose() {
-    animation.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    label: AppLocalizations.of(context).loadingCalendar,
-    liveRegion: true,
-    child: RotationTransition(
-      turns: animation,
-      child: SizedBox.square(
-        dimension: 32,
-        child: Stack(
-          children: [
-            for (var index = 0; index < 8; index++)
-              Positioned(
-                left: 13 + 11 * math.cos(index * math.pi / 4),
-                top: 13 + 11 * math.sin(index * math.pi / 4),
-                child: Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: FloePalette.primary600.withValues(
-                      alpha: .25 + index * .1,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
     ),
   );
 }
@@ -167,9 +107,13 @@ class FloeDetailDialog extends StatelessWidget {
     super.key,
     required this.title,
     required this.children,
+    this.loading = false,
+    this.loadingLabel,
   });
   final String title;
   final List<Widget> children;
+  final bool loading;
+  final String? loadingLabel;
   @override
   Widget build(BuildContext context) => Dialog(
     constraints: BoxConstraints(maxWidth: 540),
@@ -200,7 +144,14 @@ class FloeDetailDialog extends StatelessWidget {
             ],
           ),
           SizedBox(height: 24),
-          ...children,
+          FloeLoadingOverlay(
+            loading: loading,
+            label: loadingLabel,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
         ],
       ),
     ),

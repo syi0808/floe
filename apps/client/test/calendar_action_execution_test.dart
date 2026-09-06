@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_gateway.dart';
@@ -202,7 +203,9 @@ void main() {
         gateway: gateway,
         personId: 'person',
       );
-      await controller.load();
+      final initialLoad = controller.load();
+      await tester.pump(FloeLoading.minimumDuration);
+      await initialLoad;
       await tester.pumpWidget(
         MaterialApp(
           theme: FloeTheme.light,

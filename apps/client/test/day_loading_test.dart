@@ -57,27 +57,27 @@ void main() {
       gateway.requests.single.complete(snapshot(date));
       await initial;
 
-      controller.moveDay(1);
+      final nextLoad = controller.moveDay(1);
       expect(gateway.syncQueries.last.date, date.add(const Duration(days: 1)));
       expect(controller.loadState, DayLoadState.loading);
-      controller.moveDay(-2);
+      final previousLoad = controller.moveDay(-2);
       final previousDay = date.subtract(const Duration(days: 1));
       expect(gateway.syncQueries.last.date, previousDay);
       gateway.syncRequests.last.complete(snapshot(previousDay));
-      await Future<void>.delayed(Duration.zero);
+      await previousLoad;
       gateway.syncRequests.first.complete(
         snapshot(date.add(const Duration(days: 1))),
       );
-      await Future<void>.delayed(Duration.zero);
+      await nextLoad;
       expect(controller.snapshot!.date, previousDay);
       expect(controller.loadState, DayLoadState.ready);
 
-      controller.goToday();
+      final todayLoad = controller.goToday();
       final today = DateTime.now();
       final selected = gateway.syncQueries.last.date;
       expect(selected, DateTime(today.year, today.month, today.day));
       gateway.syncRequests.last.complete(snapshot(selected));
-      await Future<void>.delayed(Duration.zero);
+      await todayLoad;
       expect(controller.snapshot!.date, selected);
       expect(gateway.requests, hasLength(1));
     },
@@ -87,9 +87,9 @@ void main() {
     final gateway = DelayedGateway();
     final controller = PersonalDayController(gateway: gateway, query: query);
     final first = controller.load();
-    controller.moveDay(1);
+    final latest = controller.moveDay(1);
     gateway.requests[1].complete(snapshot(date.add(const Duration(days: 1))));
-    await Future<void>.delayed(Duration.zero);
+    await latest;
     gateway.requests[0].complete(snapshot(date));
     await first;
     expect(controller.snapshot!.date.day, 5);

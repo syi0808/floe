@@ -182,6 +182,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
               if (failed) Text(strings.actionReloadRequired),
               FloeButton.filled(
                 onPressed: saving ? null : save,
+                loading: saving,
                 child: Text(strings.actionPrepareReview),
               ),
             ],

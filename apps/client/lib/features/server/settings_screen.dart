@@ -3,6 +3,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_loading.dart';
 import '../../app/floe_squircle.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -110,76 +111,79 @@ class _ActionPermissions extends StatelessWidget {
     animation: controller,
     builder: (context, _) => FloeSquircle(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Action permissions',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Choose when Floe must ask before changing an external service. OS and connector permissions still apply.',
-            style: TextStyle(color: FloePalette.neutral600, height: 1.5),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'Create Calendar events',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<ActionAuthorityMode>(
-            key: ValueKey(controller.authority.calendarCreate),
-            initialValue: controller.authority.calendarCreate,
-            decoration: const InputDecoration(labelText: 'Floe may'),
-            items: const [
-              DropdownMenuItem(
-                value: ActionAuthorityMode.allow,
-                child: Text('Allow automatically'),
-              ),
-              DropdownMenuItem(
-                value: ActionAuthorityMode.ask,
-                child: Text('Ask every time'),
-              ),
-              DropdownMenuItem(
-                value: ActionAuthorityMode.deny,
-                child: Text('Do not allow'),
-              ),
-            ],
-            onChanged: controller.busy
-                ? null
-                : (value) {
-                    if (value != null) {
-                      controller.setCalendarCreateAuthority(value);
-                    }
-                  },
-          ),
-          const SizedBox(height: 12),
-          FloeButton.outlined(
-            onPressed: controller.busy
-                ? null
-                : () => controller.setCalendarCreateAuthority(
-                    ActionAuthorityMode.allow,
-                  ),
-            child: const Text('Allow all supported actions'),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Currently this preset covers Calendar event creation only. It never bypasses macOS permission or safety checks.',
-            style: TextStyle(color: FloePalette.neutral600, height: 1.4),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            controller.writesEnabled
-                ? 'Calendar writing is available in this build.'
-                : 'Calendar writing is unavailable in this build.',
-            style: const TextStyle(color: FloePalette.neutral600),
-          ),
-          if (controller.failed) ...[
+      child: FloeLoadingOverlay(
+        loading: controller.busy,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Action permissions',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 8),
-            const Text('The permission could not be saved. Try again.'),
+            const Text(
+              'Choose when Floe must ask before changing an external service. OS and connector permissions still apply.',
+              style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Create Calendar events',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<ActionAuthorityMode>(
+              key: ValueKey(controller.authority.calendarCreate),
+              initialValue: controller.authority.calendarCreate,
+              decoration: const InputDecoration(labelText: 'Floe may'),
+              items: const [
+                DropdownMenuItem(
+                  value: ActionAuthorityMode.allow,
+                  child: Text('Allow automatically'),
+                ),
+                DropdownMenuItem(
+                  value: ActionAuthorityMode.ask,
+                  child: Text('Ask every time'),
+                ),
+                DropdownMenuItem(
+                  value: ActionAuthorityMode.deny,
+                  child: Text('Do not allow'),
+                ),
+              ],
+              onChanged: controller.busy
+                  ? null
+                  : (value) {
+                      if (value != null) {
+                        controller.setCalendarCreateAuthority(value);
+                      }
+                    },
+            ),
+            const SizedBox(height: 12),
+            FloeButton.outlined(
+              onPressed: controller.busy
+                  ? null
+                  : () => controller.setCalendarCreateAuthority(
+                      ActionAuthorityMode.allow,
+                    ),
+              child: const Text('Allow all supported actions'),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Currently this preset covers Calendar event creation only. It never bypasses macOS permission or safety checks.',
+              style: TextStyle(color: FloePalette.neutral600, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              controller.writesEnabled
+                  ? 'Calendar writing is available in this build.'
+                  : 'Calendar writing is unavailable in this build.',
+              style: const TextStyle(color: FloePalette.neutral600),
+            ),
+            if (controller.failed) ...[
+              const SizedBox(height: 8),
+              const Text('The permission could not be saved. Try again.'),
+            ],
           ],
-        ],
+        ),
       ),
     ),
   );

@@ -50,6 +50,8 @@ Flutter automated tests cover controller loading, data processing and native gat
 
 Use `FloeButton.filled`, `.outlined`, `.text`, or `.icon` for app buttons. Text variants accept an optional `icon` alongside `child`; existing Material `ButtonStyle` values still apply. These wrap the entire Material button in `ScaleTransition` (1 → 0.97 → 1, 120 ms), including its background and border, without animating layout dimensions or rebuilding the child on every animation tick.
 
+Use `FloeLoading.run` for asynchronous UI operations so loading feedback remains visible for at least 500 ms. Set `loading` on `FloeButton` for a size-preserving button spinner, or wrap an existing section in `FloeLoadingOverlay` to block interaction and place feedback over the current layout without inserting or removing content. Set `blockInteraction: false` only when the underlying controls must remain available during background work.
+
 For custom controls, use `PressableScale(builder: (states) => InkWell(statesController: states, ...))`. The navigation and Floe anchor use this path with a 0.98 scale. Always connect the supplied state controller to the interactive child so disabled states, keyboard activation, and gesture cancellation follow Flutter's native behavior rather than raw pointer events. Reduced motion suppresses scaling. Checkbox, switch, popup-menu, and platform picker interactions retain their native behavior.
 
 This uses Flutter's paint-transform rendering path, not a separate GPU-acceleration switch. No blanket `RepaintBoundary` or raster-cache hints are added; verify raster performance with a profile build on the target device before adding them.

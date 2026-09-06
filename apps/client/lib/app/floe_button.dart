@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'floe_motion.dart';
+import 'floe_loading.dart';
 
 enum _ButtonKind { filled, outlined, text, icon }
 
@@ -11,6 +12,7 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.filled,
        tooltip = null,
@@ -23,6 +25,7 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.outlined,
        tooltip = null,
@@ -35,6 +38,7 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.text,
        tooltip = null,
@@ -49,6 +53,7 @@ final class FloeButton extends StatelessWidget {
     this.tooltip,
     this.constraints,
     this.padding,
+    this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.icon,
        child = icon,
@@ -63,6 +68,18 @@ final class FloeButton extends StatelessWidget {
   final String? tooltip;
   final BoxConstraints? constraints;
   final EdgeInsetsGeometry? padding;
+  final bool loading;
+
+  Widget get _content => Stack(
+    alignment: Alignment.center,
+    children: [
+      ExcludeSemantics(
+        excluding: loading,
+        child: Opacity(opacity: loading ? 0 : 1, child: child),
+      ),
+      if (loading) const FloeSpinner(size: 18),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) => PressableScale(
@@ -70,63 +87,63 @@ final class FloeButton extends StatelessWidget {
       _ButtonKind.filled =>
         icon == null
             ? FilledButton(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                child: child,
+                child: _content,
               )
             : FilledButton.icon(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                icon: icon,
-                label: child,
+                icon: Opacity(opacity: loading ? 0 : 1, child: icon),
+                label: _content,
               ),
       _ButtonKind.outlined =>
         icon == null
             ? OutlinedButton(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                child: child,
+                child: _content,
               )
             : OutlinedButton.icon(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                icon: icon,
-                label: child,
+                icon: Opacity(opacity: loading ? 0 : 1, child: icon),
+                label: _content,
               ),
       _ButtonKind.text =>
         icon == null
             ? TextButton(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                child: child,
+                child: _content,
               )
             : TextButton.icon(
-                onPressed: onPressed,
+                onPressed: loading ? null : onPressed,
                 style: style,
                 focusNode: focusNode,
                 statesController: states,
-                icon: icon,
-                label: child,
+                icon: Opacity(opacity: loading ? 0 : 1, child: icon),
+                label: _content,
               ),
       _ButtonKind.icon => IconButton(
-        onPressed: onPressed,
+        onPressed: loading ? null : onPressed,
         style: style,
         focusNode: focusNode,
         statesController: states,
         tooltip: tooltip,
         constraints: constraints,
         padding: padding,
-        icon: child,
+        icon: _content,
       ),
     },
   );

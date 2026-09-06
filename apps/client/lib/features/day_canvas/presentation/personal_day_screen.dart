@@ -7,6 +7,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/floe_selection.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_mascot.dart';
+import '../../../app/floe_loading.dart';
 import '../../../app/floe_motion.dart';
 import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
@@ -227,68 +228,76 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       children: [
         if (controller.errorMessage case final message?)
           _ErrorNotice(message: message, dismiss: controller.clearError),
-        _fillDay(switch (destination) {
-          _DestinationView.today => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _DayToolbar(
-                controller,
-                narrow: narrow,
-                onCreateEvent:
-                    actionController?.canPropose == true &&
-                        controller.snapshot?.calendar != null
-                    ? () => _openCalendarEditor()
-                    : null,
-              ),
-              if (snapshot.calendar?.error != null)
-                Padding(
-                  padding: EdgeInsets.only(bottom: 16),
-                  child: FloeSquircle(
-                    fill: FloePalette.amber50,
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          snapshot.calendar!.lastSuccessAt == null
-                              ? AppLocalizations.of(context)
-                                    .calendarCouldNotBeCollectedCheckAccess
-                              : AppLocalizations.of(context)
-                                    .showingSavedEventsCalendarChangesCouldNot,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: FloePalette.neutral600,
-                          ),
-                        ),
-                        FloeTextLink(
-                          label: AppLocalizations.of(context).manageConnection,
-                          onPressed: () =>
-                              _selectDestination(_DestinationView.connections),
-                        ),
-                      ],
-                    ),
+        _fillDay(
+          FloeLoadingOverlay(
+            loading: controller.commandPending,
+            child: switch (destination) {
+              _DestinationView.today => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _DayToolbar(
+                    controller,
+                    narrow: narrow,
+                    onCreateEvent:
+                        actionController?.canPropose == true &&
+                            controller.snapshot?.calendar != null
+                        ? () => _openCalendarEditor()
+                        : null,
                   ),
-                ),
-              Expanded(child: _content(narrow, snapshot)),
-            ],
+                  if (snapshot.calendar?.error != null)
+                    Padding(
+                      padding: EdgeInsets.only(bottom: 16),
+                      child: FloeSquircle(
+                        fill: FloePalette.amber50,
+                        padding: EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              snapshot.calendar!.lastSuccessAt == null
+                                  ? AppLocalizations.of(context)
+                                        .calendarCouldNotBeCollectedCheckAccess
+                                  : AppLocalizations.of(
+                                      context,
+                                    ).showingSavedEventsCalendarChangesCouldNot,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: FloePalette.neutral600,
+                              ),
+                            ),
+                            FloeTextLink(
+                              label: AppLocalizations.of(context)
+                                  .manageConnection,
+                              onPressed: () => _selectDestination(
+                                _DestinationView.connections,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  Expanded(child: _content(narrow, snapshot)),
+                ],
+              ),
+              _DestinationView.tasks => _TasksScreen(
+                snapshot: snapshot,
+                disabled: controller.commandPending,
+                onComplete: _setTaskCompleted,
+                onOpen: (task) => setState(() => selectedTaskId = task.id),
+                onDelete: controller.deleteItem,
+              ),
+              _DestinationView.connections => SizedBox.shrink(),
+              _DestinationView.activity => SizedBox.shrink(),
+              _DestinationView.settings => SizedBox.shrink(),
+              _DestinationView.notes => _NotesScreen(
+                notes: snapshot.items.whereType<NoteItem>().toList(),
+                narrow: narrow,
+                onCreate: _createNote,
+                pending: controller.commandPending,
+              ),
+            },
           ),
-          _DestinationView.tasks => _TasksScreen(
-            snapshot: snapshot,
-            disabled: controller.commandPending,
-            onComplete: _setTaskCompleted,
-            onOpen: (task) => setState(() => selectedTaskId = task.id),
-            onDelete: controller.deleteItem,
-          ),
-          _DestinationView.connections => SizedBox.shrink(),
-          _DestinationView.activity => SizedBox.shrink(),
-          _DestinationView.settings => SizedBox.shrink(),
-          _DestinationView.notes => _NotesScreen(
-            notes: snapshot.items.whereType<NoteItem>().toList(),
-            narrow: narrow,
-            onCreate: _createNote,
-            pending: controller.commandPending,
-          ),
-        }),
+        ),
       ],
     );
   }
@@ -661,23 +670,22 @@ class _DayToolbar extends StatelessWidget {
             onPressed: onCreateEvent,
             icon: const Icon(LucideIcons.plus, size: 18),
           ),
-          IconButton(
+          FloeButton.icon(
             tooltip: AppLocalizations.of(context).refreshCalendar,
-            onPressed: controller.loadState == DayLoadState.loading
-                ? null
-                : () async {
-                    await controller.refresh();
-                    if (!context.mounted ||
-                        controller.loadState != DayLoadState.ready ||
-                        controller.snapshot?.calendar?.error != null) {
-                      return;
-                    }
-                    FloeToastHost.of(context).show(
-                      title: AppLocalizations.of(context).calendarsRefreshed,
-                      description: AppLocalizations.of(context)
-                          .localTasksAndNotesUnchanged,
-                    );
-                  },
+            loading: controller.loadState == DayLoadState.loading,
+            onPressed: () async {
+              await controller.refresh();
+              if (!context.mounted ||
+                  controller.loadState != DayLoadState.ready ||
+                  controller.snapshot?.calendar?.error != null) {
+                return;
+              }
+              FloeToastHost.of(context).show(
+                title: AppLocalizations.of(context).calendarsRefreshed,
+                description: AppLocalizations.of(context)
+                    .localTasksAndNotesUnchanged,
+              );
+            },
             icon: Icon(LucideIcons.refreshCw, size: 18),
           ),
         ],
@@ -874,6 +882,7 @@ class _NotesScreenState extends State<_NotesScreen> {
         shape: floeSquircleBorder(FloeSquircleSize.md),
       ),
       onPressed: widget.pending ? null : _create,
+      loading: widget.pending,
       icon: Icon(LucideIcons.plus, size: 18),
       child: Text(AppLocalizations.of(context).newNote),
     );
@@ -996,7 +1005,7 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
       pending = true;
       failed = false;
     });
-    final saved = await widget.save(content.text.trim());
+    final saved = await FloeLoading.run(() => widget.save(content.text.trim()));
     if (!mounted) return;
     if (saved) {
       Navigator.pop(context, true);
@@ -1039,11 +1048,8 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
         ),
         FloeButton.filled(
           onPressed: pending || content.text.trim().isEmpty ? null : _save,
-          child: Text(
-            pending
-                ? AppLocalizations.of(context).saving
-                : AppLocalizations.of(context).saveNote,
-          ),
+          loading: pending,
+          child: Text(AppLocalizations.of(context).saveNote),
         ),
       ],
     ),

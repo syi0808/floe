@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../app/floe_loading.dart';
+
 import '../domain/calendar_action.dart';
 import '../domain/day_models.dart';
 import 'calendar_action_gateway.dart';
@@ -62,6 +64,7 @@ final class CalendarActionController extends ChangeNotifier {
   Future<void> load() async {
     if (busy || _disposed) return;
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     failed = false;
     notifyListeners();
     try {
@@ -87,6 +90,7 @@ final class CalendarActionController extends ChangeNotifier {
       failed = true;
       needsReload = true;
     } finally {
+      await minimum;
       if (!_disposed) {
         busy = false;
         phase = null;
@@ -114,6 +118,7 @@ final class CalendarActionController extends ChangeNotifier {
       return;
     }
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     failed = false;
     notifyListeners();
     try {
@@ -149,6 +154,7 @@ final class CalendarActionController extends ChangeNotifier {
       failed = true;
       needsReload = true;
     } finally {
+      await minimum;
       if (!_disposed) {
         busy = false;
         phase = null;
@@ -177,6 +183,7 @@ final class CalendarActionController extends ChangeNotifier {
   }) async {
     if (!canPropose || _disposed) return null;
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     failed = false;
     notifyListeners();
     try {
@@ -222,6 +229,7 @@ final class CalendarActionController extends ChangeNotifier {
       }
       return null;
     } finally {
+      await minimum;
       if (!_disposed) {
         busy = false;
         phase = null;
@@ -233,6 +241,7 @@ final class CalendarActionController extends ChangeNotifier {
   Future<void> setCalendarCreateAuthority(ActionAuthorityMode mode) async {
     if (_disposed || busy || gateway is! CalendarActionExecutionGateway) return;
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     failed = false;
     notifyListeners();
     try {
@@ -241,6 +250,7 @@ final class CalendarActionController extends ChangeNotifier {
     } on Object {
       if (!_disposed) failed = true;
     } finally {
+      await minimum;
       if (!_disposed) {
         busy = false;
         notifyListeners();
@@ -283,6 +293,7 @@ final class CalendarActionController extends ChangeNotifier {
       return;
     }
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     failed = false;
     phase = recover ? 'recovering' : 'executing';
     notifyListeners();
@@ -302,6 +313,7 @@ final class CalendarActionController extends ChangeNotifier {
         needsReload = true;
       }
     } finally {
+      await minimum;
       if (!_disposed) {
         busy = false;
         phase = null;
@@ -329,8 +341,10 @@ final class CalendarActionController extends ChangeNotifier {
       return;
     }
     busy = true;
+    final minimum = FloeLoading.minimumVisibility();
     notifyListeners();
     await _collect(action!);
+    await minimum;
     if (!_disposed) {
       busy = false;
       phase = null;

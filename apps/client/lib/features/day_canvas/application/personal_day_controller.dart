@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../app/floe_loading.dart';
+
 import '../domain/day_models.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
@@ -37,9 +39,11 @@ final class PersonalDayController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      final result = sync && _gateway is CalendarGateway
-          ? await (_gateway as CalendarGateway).syncCalendar(query)
-          : await _gateway.loadDay(query);
+      final result = await FloeLoading.run(
+        () => sync && _gateway is CalendarGateway
+            ? (_gateway as CalendarGateway).syncCalendar(query)
+            : _gateway.loadDay(query),
+      );
       if (_disposed || generation != _loadGeneration) return;
       snapshot = result;
       loadState = DayLoadState.ready;
@@ -85,7 +89,7 @@ final class PersonalDayController extends ChangeNotifier {
     });
   }
 
-  void moveDay(int offset) {
+  Future<void> moveDay(int offset) {
     _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(
@@ -95,17 +99,17 @@ final class PersonalDayController extends ChangeNotifier {
       ),
       now: DateTime.now(),
     );
-    refresh();
+    return refresh();
   }
 
-  void goToday() {
+  Future<void> goToday() {
     final now = DateTime.now();
     _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(now.year, now.month, now.day),
       now: now,
     );
-    refresh();
+    return refresh();
   }
 
   void clearError() {
@@ -118,7 +122,7 @@ final class PersonalDayController extends ChangeNotifier {
     errorMessage = null;
     notifyListeners();
     try {
-      await operation();
+      await FloeLoading.run(operation);
       return true;
     } on Object catch (error) {
       errorMessage = error.toString().replaceFirst('FormatException: ', '');
