@@ -17,6 +17,7 @@ fn range(day: i64) -> CalendarRange {
 
 fn record(identifier: &str, day: i64) -> CalendarRecord {
     CalendarRecord {
+        can_modify: false,
         calendar_id: None,
         external_id: identifier.into(),
         external_revision: "v1".into(),

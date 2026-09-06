@@ -9,6 +9,10 @@ use crate::{CoreError, ErrorCode, FloeCore};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarAction {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub direct: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutation: Option<CalendarMutation>,
     pub id: Uuid,
     pub person_id: PersonId,
     pub provider: CalendarProvider,
@@ -22,6 +26,12 @@ pub struct CalendarAction {
     pub approved_at: Option<DateTime<Utc>>,
     pub execution_id: Uuid,
     pub state: CalendarActionState,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CalendarMutation {
+    pub original: Event,
+    pub delete: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -140,6 +150,8 @@ impl FloeCore {
             .find(|calendar| calendar.calendar_id == calendar_id)
             .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
         let action = CalendarAction {
+            direct: false,
+            mutation: None,
             id: Uuid::new_v4(),
             person_id,
             provider: mirror.connection.provider,
@@ -153,6 +165,84 @@ impl FloeCore {
             approved_at: None,
             execution_id: Uuid::new_v4(),
             state: CalendarActionState::Pending,
+        };
+        self.store.save_calendar_action(&action, None).await?;
+        Ok(action)
+    }
+
+    pub async fn direct_calendar_action(
+        &self,
+        person_id: PersonId,
+        calendar_id: String,
+        title: String,
+        schedule: TimedSchedule,
+        event_id: Option<(floe_domain::EventId, floe_domain::Revision)>,
+        delete: bool,
+        now: DateTime<Utc>,
+    ) -> Result<CalendarAction, CoreError> {
+        TimedSchedule::new(schedule.starts_at, schedule.ends_at, &schedule.timezone)?;
+        if title.trim().is_empty() || schedule.ends_at - schedule.starts_at > Duration::hours(24) {
+            return Err(CoreError::new(
+                ErrorCode::Validation,
+                "invalid event interval or title",
+            ));
+        }
+        let mirror = self
+            .store
+            .calendar_mirror(person_id)
+            .await?
+            .ok_or_else(|| CoreError::new(ErrorCode::NotFound, "connect a calendar first"))?;
+        let mutation = if let Some((event_id, revision)) = event_id {
+            let original = mirror
+                .events
+                .iter()
+                .find(|event| event.id == event_id && event.deleted_at.is_none())
+                .cloned()
+                .ok_or_else(|| CoreError::new(ErrorCode::NotFound, "event not found"))?;
+            if original.revision != revision {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "event changed; reload before editing",
+                ));
+            }
+            if !matches!(&original.source, floe_domain::SourceRef::Calendar(source)
+                if source.calendar_id == calendar_id && source.can_modify)
+                || !matches!(original.schedule, floe_domain::EventSchedule::Timed(_))
+            {
+                return Err(CoreError::new(ErrorCode::Validation, "unsupported event"));
+            }
+            Some(CalendarMutation { original, delete })
+        } else {
+            if delete {
+                return Err(CoreError::new(
+                    ErrorCode::Validation,
+                    "delete requires an event",
+                ));
+            }
+            None
+        };
+        let calendar = mirror
+            .connection
+            .selected_calendars()
+            .into_iter()
+            .find(|calendar| calendar.calendar_id == calendar_id)
+            .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
+        let action = CalendarAction {
+            direct: true,
+            mutation,
+            id: Uuid::new_v4(),
+            person_id,
+            provider: mirror.connection.provider,
+            calendar_id,
+            calendar_name: calendar.calendar_name,
+            title: title.trim().to_owned(),
+            schedule,
+            connection_revision: mirror.connection.revision,
+            created_at: now,
+            expires_at: now + Duration::minutes(15),
+            approved_at: Some(now),
+            execution_id: Uuid::new_v4(),
+            state: CalendarActionState::Approved,
         };
         self.store.save_calendar_action(&action, None).await?;
         Ok(action)
@@ -322,6 +412,14 @@ impl FloeCore {
             return Ok(Some(ActionBlockReason::PolicyDenied));
         }
         let mirror = self.store.calendar_mirror(action.person_id).await?;
+        if let Some(mutation) = &action.mutation {
+            if mirror
+                .as_ref()
+                .is_none_or(|mirror| !mirror.events.contains(&mutation.original))
+            {
+                return Ok(Some(ActionBlockReason::CalendarChanged));
+            }
+        }
         if mirror.is_none_or(|mirror| {
             mirror.connection.revision != action.connection_revision
                 || mirror.connection.disconnected
@@ -364,6 +462,10 @@ impl CalendarCreateReceipt {
             && self.provider == action.provider
             && self.calendar_id == action.calendar_id
             && !self.external_id.trim().is_empty()
+            && action.mutation.as_ref().is_none_or(|mutation| {
+                matches!(&mutation.original.source, floe_domain::SourceRef::Calendar(source)
+                    if source.external_id == self.external_id)
+            })
             && self.title == action.title
             && self.schedule == action.schedule
     }

@@ -267,7 +267,12 @@ pub fn calendar_actions(
                     provider: floe_domain::CalendarProvider::EventKit,
                     allowed_calendar_ids: provider.calendar_ids.clone(),
                     allow_create: native_calendar::NativeCalendar::enabled()
-                        && authority.calendar_create != floe_core::ActionAuthorityMode::Deny,
+                        && (handle
+                            .runtime
+                            .block_on(handle.core.calendar_action(person_id, id))
+                            .map_err(core_error)?
+                            .direct
+                            || authority.calendar_create != floe_core::ActionAuthorityMode::Deny),
                 };
                 handle.runtime.block_on(handle.core.execute_calendar_action(
                     person_id,
@@ -312,6 +317,51 @@ pub fn calendar_actions(
                 calendar_id,
                 title,
                 schedule,
+                Utc::now(),
+            ))
+        }
+        CalendarActionOperationDto::Direct {
+            calendar_id,
+            title,
+            starts_at,
+            ends_at,
+            timezone,
+            event_id,
+            event_revision,
+            delete,
+        } => {
+            if person_id.to_string() != native_calendar::LOCAL_PERSON {
+                return Err(invalid(
+                    "person_id",
+                    "direct Calendar is bound to this device's Person",
+                ));
+            }
+            let schedule = floe_domain::TimedSchedule::new(
+                parse_time(&starts_at, "starts_at")?,
+                parse_time(&ends_at, "ends_at")?,
+                &timezone,
+            )
+            .map_err(|value| invalid("schedule", value.to_string()))?;
+            let event_id = event_id
+                .map(|value| parse_id(&value, "event_id", floe_domain::EventId))
+                .transpose()?;
+            let target = match (event_id, event_revision) {
+                (Some(id), Some(revision)) => Some((id, floe_domain::Revision(revision))),
+                (None, None) => None,
+                _ => {
+                    return Err(invalid(
+                        "event_revision",
+                        "target identity and revision are required together",
+                    ));
+                }
+            };
+            handle.runtime.block_on(handle.core.direct_calendar_action(
+                person_id,
+                calendar_id,
+                title,
+                schedule,
+                target,
+                delete,
                 Utc::now(),
             ))
         }
@@ -393,6 +443,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                         .into_iter()
                         .map(|record| {
                             Ok(floe_domain::CalendarRecord {
+                                can_modify: record.can_modify,
                                 calendar_id: record.calendar_id,
                                 external_id: record.external_id,
                                 external_revision: record.external_revision,
@@ -460,6 +511,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .into_iter()
                 .map(|record| {
                     Ok(floe_domain::CalendarRecord {
+                        can_modify: record.can_modify,
                         calendar_id: record.calendar_id,
                         external_id: record.external_id,
                         external_revision: record.external_revision,

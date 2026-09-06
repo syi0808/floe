@@ -42,6 +42,7 @@ impl CalendarActionProvider for Provider {
             timezone_valid: self.block != Some(ActionBlockReason::InvalidTimezone),
             has_conflict: self.block == Some(ActionBlockReason::ScheduleConflict)
                 || local_events.iter().any(|event| event.deleted_at.is_none()
+                    && action.mutation.as_ref().is_none_or(|mutation| !mutation.delete && mutation.original.id != event.id)
                     && matches!(&event.schedule, EventSchedule::Timed(schedule)
                         if schedule.starts_at < action.schedule.ends_at && schedule.ends_at > action.schedule.starts_at)),
         })
@@ -137,6 +138,190 @@ async fn approve(core: &FloeCore, action: &CalendarAction) {
 }
 
 #[tokio::test]
+async fn direct_create_is_durable_explicit_authority_and_executes_only_once() {
+    let (directory, core, proposal, policy) = fixture().await;
+    let schedule = TimedSchedule::new(
+        now() - Duration::hours(2),
+        now() - Duration::hours(1),
+        "UTC",
+    )
+    .unwrap();
+    let direct = core
+        .direct_calendar_action(
+            proposal.person_id,
+            proposal.calendar_id.clone(),
+            "Past event".into(),
+            schedule,
+            None,
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
+    assert!(direct.direct);
+    assert_eq!(direct.state, CalendarActionState::Approved);
+    assert_eq!(direct.expires_at, now() + Duration::minutes(15));
+    drop(core);
+    let core = FloeCore::open(directory.path().join("actions.db"))
+        .await
+        .unwrap();
+    assert_eq!(
+        core.calendar_action(direct.person_id, direct.id)
+            .await
+            .unwrap(),
+        direct
+    );
+    let provider = Provider::default();
+    let result = core
+        .execute_calendar_action(direct.person_id, direct.id, &policy, &provider, now)
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.state,
+        CalendarActionState::Succeeded { .. }
+    ));
+    assert!(
+        core.execute_calendar_action(direct.person_id, direct.id, &policy, &provider, now)
+            .await
+            .is_err()
+    );
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    assert!(
+        !core
+            .calendar_action(proposal.person_id, proposal.id)
+            .await
+            .unwrap()
+            .direct
+    );
+}
+
+#[tokio::test]
+async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targets() {
+    let (_directory, core, proposal, policy) = fixture().await;
+    let range = CalendarRange {
+        start_date: now().date_naive(),
+        end_date_exclusive: (now() + Duration::days(1)).date_naive(),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+    };
+    let records = vec![CalendarRecord {
+        can_modify: true,
+        calendar_id: Some(proposal.calendar_id.clone()),
+        external_id: "external-1".into(),
+        external_revision: "original".into(),
+        title: proposal.title.clone(),
+        schedule: EventSchedule::Timed(proposal.schedule.clone()),
+    }];
+    core.import_calendar(
+        proposal.person_id,
+        proposal.connection_revision,
+        range.clone(),
+        records.clone(),
+        now(),
+    )
+    .await
+    .unwrap();
+    let snapshot = core
+        .day_snapshot(proposal.person_id, now().date_naive(), 0, now())
+        .await
+        .unwrap();
+    let event = snapshot
+        .items
+        .iter()
+        .find_map(|item| match item {
+            TimelineItem::Event(event) => Some(event),
+            _ => None,
+        })
+        .unwrap();
+    let changed = core
+        .direct_calendar_action(
+            proposal.person_id,
+            proposal.calendar_id.clone(),
+            "Edited".into(),
+            proposal.schedule.clone(),
+            Some((event.id, event.revision)),
+            false,
+            now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(&changed.mutation.as_ref().unwrap().original, event);
+    let provider = Provider::default();
+    assert!(matches!(
+        core.execute_calendar_action(changed.person_id, changed.id, &policy, &provider, now)
+            .await
+            .unwrap()
+            .state,
+        CalendarActionState::Succeeded { .. }
+    ));
+    let deletion = core
+        .direct_calendar_action(
+            proposal.person_id,
+            proposal.calendar_id.clone(),
+            proposal.title.clone(),
+            proposal.schedule.clone(),
+            Some((event.id, event.revision)),
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
+    assert!(deletion.mutation.as_ref().unwrap().delete);
+    let connection = core
+        .calendar_connection(proposal.person_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut read_only = records;
+    read_only[0].can_modify = false;
+    core.import_calendar(
+        proposal.person_id,
+        connection.revision,
+        range,
+        read_only,
+        now(),
+    )
+    .await
+    .unwrap();
+    let blocked = core
+        .execute_calendar_action(deletion.person_id, deletion.id, &policy, &provider, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.state,
+        CalendarActionState::Blocked {
+            reason: ActionBlockReason::CalendarChanged
+        }
+    );
+    assert!(
+        core.direct_calendar_action(
+            proposal.person_id,
+            proposal.calendar_id.clone(),
+            proposal.title.clone(),
+            proposal.schedule.clone(),
+            Some((event.id, event.revision)),
+            true,
+            now()
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        core.direct_calendar_action(
+            proposal.person_id,
+            proposal.calendar_id,
+            proposal.title,
+            proposal.schedule,
+            None,
+            true,
+            now()
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn pending_rejected_and_foreign_person_cannot_execute() {
     let (_directory, core, action, policy) = fixture().await;
     let provider = Provider::default();
@@ -199,6 +384,7 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
         end_timezone_offset_seconds: None,
     };
     let records = vec![CalendarRecord {
+        can_modify: true,
         calendar_id: Some(receipt.calendar_id),
         external_id: receipt.external_id,
         external_revision: "1".into(),

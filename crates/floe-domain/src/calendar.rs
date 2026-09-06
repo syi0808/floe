@@ -13,6 +13,8 @@ pub enum CalendarProvider {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarSource {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_modify: bool,
     pub provider: CalendarProvider,
     pub calendar_id: String,
     pub calendar_name: String,
@@ -147,6 +149,7 @@ pub struct CalendarMirror {
 
 #[derive(Clone, Debug)]
 pub struct CalendarRecord {
+    pub can_modify: bool,
     pub calendar_id: Option<String>,
     pub external_id: String,
     pub external_revision: String,

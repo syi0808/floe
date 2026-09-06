@@ -37,6 +37,16 @@ pub enum CalendarActionOperationDto {
         ends_at: String,
         timezone: String,
     },
+    Direct {
+        calendar_id: String,
+        title: String,
+        starts_at: String,
+        ends_at: String,
+        timezone: String,
+        event_id: Option<String>,
+        event_revision: Option<u64>,
+        delete: bool,
+    },
     Decide {
         action_id: String,
         decision: CalendarActionDecisionDto,
@@ -217,6 +227,8 @@ pub struct CommandRequestDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarRecordDto {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_modify: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_id: Option<String>,
     pub external_id: String,

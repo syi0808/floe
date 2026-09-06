@@ -39,4 +39,20 @@ let response = "{\"operation\":\"capabilities\"}".withCString { floeEventKitActi
 let capabilities = try JSONSerialization.jsonObject(with: Data(String(cString: response).utf8)) as! [String: Any]
 floeEventKitFree(response)
 check((capabilities["data"] as? [String: Any])?["writes_enabled"] as? Bool == true, "writes unavailable in default build")
-print("9 native validation assertions passed; no OS permission or event access invoked")
+var original = timed
+original["id"] = "original-event"
+original["source"] = ["Calendar": ["external_id": "external-event|"]]
+var updateRaw = raw
+updateRaw["mutation"] = ["original": original, "delete": false]
+let update = try Proposal(updateRaw)
+check(update.externalID == "external-event|", "update lost target identity")
+let selfConflict = try localConflict([original], update)
+check(!selfConflict, "moving event conflicts with itself")
+var other = timed
+other["id"] = "another-event"
+let otherConflict = try localConflict([original, other], update)
+check(otherConflict, "update ignores other overlaps")
+updateRaw["mutation"] = ["original": original, "delete": true]
+let deletion = try Proposal(updateRaw)
+check(deletion.deleting, "delete operation lost")
+print("13 native validation assertions passed; no OS permission or event access invoked")

@@ -209,6 +209,9 @@ final class CalendarBridge {
     let revision = SHA256.hash(data: revisionData).map { String(format: "%02x", $0) }.joined()
     return [
       "external_id": "\(identifier)|\(occurrence)",
+      "can_modify": event.calendar.allowsContentModifications && !event.calendar.isSubscribed &&
+        !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees && !event.hasAlarms &&
+        event.endDate > event.startDate && event.endDate.timeIntervalSince(event.startDate) <= 86400,
       "external_revision": revision,
       "title": normalizedTitle,
       "schedule": schedule

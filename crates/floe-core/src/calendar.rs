@@ -405,6 +405,7 @@ fn reconcile_records(
             }
         }
         let source = SourceRef::Calendar(CalendarSource {
+            can_modify: record.can_modify,
             provider: mirror.connection.provider,
             calendar_id: calendar.calendar_id.clone(),
             calendar_name: calendar.calendar_name.clone(),
