@@ -7,6 +7,8 @@ import Security
 class MainFlutterWindow: NSWindow {
   private let calendarBridge = CalendarBridge()
   private let serverBridge = LocalServerBridge()
+  private var designFeedbackChannel: FlutterMethodChannel?
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -26,8 +28,25 @@ class MainFlutterWindow: NSWindow {
     channel.setMethodCallHandler(calendarBridge.handle)
     let serverChannel = FlutterMethodChannel(name: "floe/local-server", binaryMessenger: flutterViewController.engine.binaryMessenger)
     serverChannel.setMethodCallHandler(serverBridge.handle)
+    designFeedbackChannel = FlutterMethodChannel(name: "floe/design-feedback", binaryMessenger: flutterViewController.engine.binaryMessenger)
+#if DEBUG
+    installDesignFeedbackMenuItem()
+#endif
 
     super.awakeFromNib()
+  }
+
+  private func installDesignFeedbackMenuItem() {
+    guard let menu = NSApp.mainMenu?.item(withTitle: "View")?.submenu else { return }
+    let item = NSMenuItem(title: "Toggle Design Feedback", action: #selector(toggleDesignFeedback), keyEquivalent: "f")
+    item.keyEquivalentModifierMask = [.command, .shift]
+    item.target = self
+    menu.addItem(NSMenuItem.separator())
+    menu.addItem(item)
+  }
+
+  @objc private func toggleDesignFeedback() {
+    designFeedbackChannel?.invokeMethod("toggle", arguments: nil)
   }
 }
 

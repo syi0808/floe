@@ -13,6 +13,24 @@ Future<void> toggleDesignFeedback(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('opens from the global shortcut while a field owns focus', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DesignFeedbackOverlay(
+          child: const Scaffold(body: TextField(autofocus: true)),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.text('Inspect'), findsNothing);
+    await toggleDesignFeedback(tester);
+    expect(find.text('Inspect'), findsOneWidget);
+  });
+
   testWidgets('selects a rendered target and creates an editable pin', (
     tester,
   ) async {

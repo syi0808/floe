@@ -47,6 +47,9 @@ class _FloeAppState extends State<FloeApp> {
           date: DateTime(now.year, now.month, now.day),
           now: now,
         );
+    final home = FloeToastHost(
+      child: PersonalDayScreen(gateway: widget.gateway, query: effectiveQuery),
+    );
     return MaterialApp(
       title: 'Floe',
       debugShowCheckedModeBanner: false,
@@ -54,13 +57,9 @@ class _FloeAppState extends State<FloeApp> {
       locale: widget.locale,
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
-      builder: widget.builder,
-      home: FloeToastHost(
-        child: PersonalDayScreen(
-          gateway: widget.gateway,
-          query: effectiveQuery,
-        ),
-      ),
+      home: widget.builder == null
+          ? home
+          : Builder(builder: (context) => widget.builder!(context, home)),
     );
   }
 }

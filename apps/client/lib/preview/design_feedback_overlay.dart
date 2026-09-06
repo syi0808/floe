@@ -14,6 +14,7 @@ class DesignFeedbackOverlay extends StatefulWidget {
 }
 
 class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
+  static const _shortcutChannel = MethodChannel('floe/design-feedback');
   final GlobalKey _surfaceKey = GlobalKey();
   final TextEditingController _commentController = TextEditingController();
   final List<_DesignAnnotation> _annotations = [];
@@ -26,10 +27,43 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
   String? _status;
 
   @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    _shortcutChannel.setMethodCallHandler(_handleShortcutCall);
+  }
+
+  @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _shortcutChannel.setMethodCallHandler(null);
     _statusTimer?.cancel();
     _commentController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleShortcutCall(MethodCall call) async {
+    if (call.method == 'toggle') _toggle();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final keyboard = HardwareKeyboard.instance;
+    final isFeedbackShortcut =
+        (event.logicalKey == LogicalKeyboardKey.keyF ||
+            event.physicalKey == PhysicalKeyboardKey.keyF) &&
+        keyboard.isMetaPressed &&
+        keyboard.isShiftPressed;
+    if (isFeedbackShortcut) {
+      _toggle();
+      return true;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        (_selecting || _draftTarget != null)) {
+      _cancelCurrentAction();
+      return true;
+    }
+    return false;
   }
 
   void _toggle() {
@@ -281,48 +315,38 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
   }
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      const SingleActivator(LogicalKeyboardKey.keyF, meta: true, shift: true):
-          _toggle,
-      const SingleActivator(LogicalKeyboardKey.escape): _cancelCurrentAction,
-    },
-    child: Focus(
-      autofocus: true,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          KeyedSubtree(
-            key: _surfaceKey,
-            child: IgnorePointer(ignoring: _selecting, child: widget.child),
-          ),
-          if (_enabled)
-            for (var index = 0; index < _annotations.length; index++)
-              _FeedbackPin(
-                index: index,
-                annotation: _annotations[index],
-                onPressed: () => _editAnnotation(index),
-              ),
-          if (_enabled && _hoveredTarget != null)
-            _TargetHighlight(target: _hoveredTarget!),
-          if (_selecting)
-            Positioned.fill(
-              child: MouseRegion(
-                cursor: SystemMouseCursors.precise,
-                onHover: (event) => _updateHoveredTarget(event.position),
-                onExit: (_) => setState(() => _hoveredTarget = null),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTapDown: _selectTarget,
-                ),
-              ),
-            ),
-          if (_enabled) Positioned(top: 12, right: 12, child: _buildToolbar()),
-          if (_draftTarget != null)
-            Positioned(top: 76, right: 12, child: _buildEditor()),
-        ],
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.expand,
+    children: [
+      KeyedSubtree(
+        key: _surfaceKey,
+        child: IgnorePointer(ignoring: _selecting, child: widget.child),
       ),
-    ),
+      if (_enabled)
+        for (var index = 0; index < _annotations.length; index++)
+          _FeedbackPin(
+            index: index,
+            annotation: _annotations[index],
+            onPressed: () => _editAnnotation(index),
+          ),
+      if (_enabled && _hoveredTarget != null)
+        _TargetHighlight(target: _hoveredTarget!),
+      if (_selecting)
+        Positioned.fill(
+          child: MouseRegion(
+            cursor: SystemMouseCursors.precise,
+            onHover: (event) => _updateHoveredTarget(event.position),
+            onExit: (_) => setState(() => _hoveredTarget = null),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: _selectTarget,
+            ),
+          ),
+        ),
+      if (_enabled) Positioned(top: 12, right: 12, child: _buildToolbar()),
+      if (_draftTarget != null)
+        Positioned(top: 76, right: 12, child: _buildEditor()),
+    ],
   );
 
   Widget _buildToolbar() => Material(
