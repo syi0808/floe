@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
-import '../../app/floe_button.dart';
 import '../../app/floe_loading.dart';
+import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -101,10 +101,51 @@ class SettingsScreen extends StatelessWidget {
   );
 }
 
-class _ActionPermissions extends StatelessWidget {
+enum _ActionPermissionPreset { all, customize }
+
+class _ActionPermissions extends StatefulWidget {
   const _ActionPermissions({required this.controller});
 
   final CalendarActionController controller;
+
+  @override
+  State<_ActionPermissions> createState() => _ActionPermissionsState();
+}
+
+class _ActionPermissionsState extends State<_ActionPermissions> {
+  late _ActionPermissionPreset preset;
+
+  CalendarActionController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    preset = controller.authority.calendarCreate == ActionAuthorityMode.allow
+        ? _ActionPermissionPreset.all
+        : _ActionPermissionPreset.customize;
+  }
+
+  @override
+  void didUpdateWidget(_ActionPermissions oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != controller) {
+      preset = controller.authority.calendarCreate == ActionAuthorityMode.allow
+          ? _ActionPermissionPreset.all
+          : _ActionPermissionPreset.customize;
+    }
+  }
+
+  Future<void> selectPreset(_ActionPermissionPreset? nextPreset) async {
+    if (nextPreset == null || controller.busy) return;
+    setState(() => preset = nextPreset);
+    if (nextPreset == _ActionPermissionPreset.all) {
+      await controller.setCalendarCreateAuthority(ActionAuthorityMode.allow);
+      if (mounted &&
+          controller.authority.calendarCreate != ActionAuthorityMode.allow) {
+        setState(() => preset = _ActionPermissionPreset.customize);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -126,45 +167,51 @@ class _ActionPermissions extends StatelessWidget {
               style: TextStyle(color: FloePalette.neutral600, height: 1.5),
             ),
             const SizedBox(height: 20),
-            const Text(
-              'Create Calendar events',
-              style: TextStyle(fontWeight: FontWeight.w600),
+            RadioGroup<_ActionPermissionPreset>(
+              groupValue: preset,
+              onChanged: selectPreset,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  FloeRadioTile<_ActionPermissionPreset>(
+                    value: _ActionPermissionPreset.all,
+                    enabled: !controller.busy,
+                    title: const Text('Allow all supported actions'),
+                  ),
+                  FloeRadioTile<_ActionPermissionPreset>(
+                    value: _ActionPermissionPreset.customize,
+                    enabled: !controller.busy,
+                    title: const Text('Customize permissions'),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<ActionAuthorityMode>(
-              key: ValueKey(controller.authority.calendarCreate),
-              initialValue: controller.authority.calendarCreate,
-              decoration: const InputDecoration(labelText: 'Floe may'),
-              items: const [
-                DropdownMenuItem(
+            const SizedBox(height: 16),
+            FloeSelect<ActionAuthorityMode>(
+              label: 'Create Calendar events',
+              value: controller.authority.calendarCreate,
+              enabled:
+                  preset == _ActionPermissionPreset.customize &&
+                  !controller.busy,
+              options: const [
+                FloeSelectOption(
                   value: ActionAuthorityMode.allow,
-                  child: Text('Allow automatically'),
+                  label: 'Allow automatically',
                 ),
-                DropdownMenuItem(
+                FloeSelectOption(
                   value: ActionAuthorityMode.ask,
-                  child: Text('Ask every time'),
+                  label: 'Ask every time',
                 ),
-                DropdownMenuItem(
+                FloeSelectOption(
                   value: ActionAuthorityMode.deny,
-                  child: Text('Do not allow'),
+                  label: 'Do not allow',
                 ),
               ],
-              onChanged: controller.busy
-                  ? null
-                  : (value) {
-                      if (value != null) {
-                        controller.setCalendarCreateAuthority(value);
-                      }
-                    },
-            ),
-            const SizedBox(height: 12),
-            FloeButton.outlined(
-              onPressed: controller.busy
-                  ? null
-                  : () => controller.setCalendarCreateAuthority(
-                      ActionAuthorityMode.allow,
-                    ),
-              child: const Text('Allow all supported actions'),
+              onChanged: (value) {
+                if (value != null) {
+                  controller.setCalendarCreateAuthority(value);
+                }
+              },
             ),
             const SizedBox(height: 8),
             const Text(
