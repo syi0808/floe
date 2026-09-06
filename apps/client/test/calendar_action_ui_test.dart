@@ -21,10 +21,16 @@ CalendarAction action({
   DateTime? expiresAt,
   String? reason,
   bool direct = false,
+  String? targetEventId,
 }) {
   final now = DateTime.now().toUtc();
   return CalendarAction.fromJson({
     'direct': direct,
+    if (targetEventId != null)
+      'mutation': {
+        'original': {'id': targetEventId},
+        'delete': false,
+      },
     'id': 'proposal',
     'person_id': person,
     'provider': 'fixture',

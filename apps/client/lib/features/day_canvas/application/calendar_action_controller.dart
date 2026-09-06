@@ -174,7 +174,9 @@ final class CalendarActionController extends ChangeNotifier {
             action.status == CalendarActionStatus.executing,
       );
 
-  bool get canDirect =>
+  bool get canDirect => canDirectFor(null);
+
+  bool canDirectFor(String? eventId) =>
       gateway is CalendarDirectActionGateway &&
       gateway is CalendarActionExecutionGateway &&
       writesEnabled &&
@@ -182,12 +184,13 @@ final class CalendarActionController extends ChangeNotifier {
       !needsReload &&
       !actions.any(
         (action) =>
-            action.status == CalendarActionStatus.unknown ||
-            action.status == CalendarActionStatus.executing,
+            (action.status == CalendarActionStatus.unknown ||
+                action.status == CalendarActionStatus.executing) &&
+            (action.mutation?['original'] as Map?)?['id'] == eventId,
       );
 
   bool canModify(EventItem event) =>
-      canDirect &&
+      canDirectFor(event.id) &&
       event.canModify &&
       !event.isAllDay &&
       event.provider == 'event_kit' &&
@@ -204,7 +207,7 @@ final class CalendarActionController extends ChangeNotifier {
     int? eventRevision,
     bool delete = false,
   }) async {
-    if (!canDirect || _disposed) return null;
+    if (!canDirectFor(eventId) || _disposed) return null;
     busy = true;
     failed = false;
     final minimum = FloeLoading.minimumVisibility();

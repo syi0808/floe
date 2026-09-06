@@ -322,7 +322,11 @@ impl FloeCore {
             Ok(check) if !check.permission_granted => Some(ActionBlockReason::PermissionDenied),
             Ok(check) if !check.can_create => Some(ActionBlockReason::CapabilityUnavailable),
             Ok(check) if !check.timezone_valid => Some(ActionBlockReason::InvalidTimezone),
-            Ok(check) if check.has_conflict => Some(ActionBlockReason::ScheduleConflict),
+            Ok(check)
+                if check.has_conflict && !(executing.direct && executing.mutation.is_some()) =>
+            {
+                Some(ActionBlockReason::ScheduleConflict)
+            }
             Ok(_) => {
                 self.action_block_reason(&executing, policy, clock())
                     .await?

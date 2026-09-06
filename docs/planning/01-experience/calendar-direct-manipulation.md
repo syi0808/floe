@@ -8,6 +8,12 @@
   segments, direct typing, Up/Down keys and visible steppers. No clock-face picker
   or raw date-time string. Floe squircle surfaces, neutral fills, primary accents
   and tabular digits preserve the app's visual language.
+- The date picker and event menu now share a custom, undimmed anchored popover:
+  160ms origin-aware scale/fade, 120ms exit, subtle press feedback, viewport
+  collision handling, focus restoration and reduced-motion support. The date
+  grid includes adjacent days, Today, month stepping, arrow navigation and
+  Page Up/Down. Menu arrows skip disabled actions; Enter selects, Escape cancels.
+  Motion reference: [Emil Kowalski's practical animation tips](https://emilkowal.ski/ui/7-practical-animation-tips).
 - Changing start preserves elapsed duration; changing end changes duration.
   Midnight rollover is allowed, end must follow start, maximum duration is 24 hours.
   Past events are valid for direct user entry. Nonexistent local clock times are
@@ -21,8 +27,9 @@
   edit and delete. Delete has one event-specific confirmation. Touch uses Edit
   rather than drag so scrolling remains reliable.
 - Provider import supplies `can_modify`; missing metadata fails closed until a
-  refresh. Writable, non-recurring timed events without guests or alerts are
-  editable. Native execution checks these capabilities again and compares the
+  refresh. Writable, non-recurring timed events without guests are
+  editable. Existing alerts are now supported and preserved during edits; new
+  creates still do not add alerts. Native execution checks capabilities again and compares the
   original provider revision, including last-modified metadata.
 - User-confirmed create/edit/delete is durable direct authority, not a request
   for automated authority. It never appears in Review, including after restart
@@ -30,19 +37,26 @@
   status. Existing records without origin keep their previous Review semantics;
   their origin cannot be safely inferred retroactively.
 - Execution still uses the existing one-shot ledger, native permission checks,
-  selected-calendar scope, conflict checks and provider re-import. Updates
-  exclude their original event from conflict checks. Delete ignores overlap.
+  selected-calendar scope, conflict checks and provider re-import. Explicit
+  direct updates allow overlapping appointments, like ordinary calendar editing;
+  automation and create conflict checks are unchanged. Delete ignores overlap.
   Existing event URLs are preserved.
 - Failed or uncertain execution does not optimistically change the mirror.
   Activity offers lookup, never a repeated write. An update can reconcile its
   exact target and final state. Absence alone cannot prove a delete succeeded:
   response-loss deletion remains unresolved, rather than reporting false success.
-  While unresolved, further direct writes are conservatively unavailable.
+  While unresolved, writes to the same event are unavailable. Unrelated events
+  remain editable; uncertain creates block further creates, not all calendar drags.
+- Mouse dragging is based on pointer kind rather than the theme's platform;
+  long-press recognition is restricted to touch/pen so holding the mouse before
+  moving cannot let the context menu steal the drag. Touch keeps long-press menus
+  and normal scrolling. Startup refreshes connected
+  EventKit calendars so stale cached capability flags do not disable editing.
 
 ## Next iterations
 
 Anchored editor/sheet positioning, cross-day drag, duration resizing, Duplicate,
-Move to calendar, source-app navigation, recurrence scopes, attendee/alert handling,
+Move to calendar, source-app navigation, recurrence scopes, attendee handling,
 Undo and durable native deletion receipts require separate capability work. Do not
 enable placeholder menu actions. Validate live EventKit behavior only against a
 disposable calendar with explicit user consent.

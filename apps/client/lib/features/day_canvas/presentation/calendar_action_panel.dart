@@ -277,7 +277,11 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
             ),
             Text(localInterval(action)),
             const SizedBox(height: 12),
-            Text(strings.actionNoExtras),
+            Text(
+              action.direct && action.mutation != null
+                  ? 'Existing alerts are preserved. No guest or recurrence changes.'
+                  : strings.actionNoExtras,
+            ),
             const SizedBox(height: 16),
             if (!action.status.canDecide)
               Semantics(

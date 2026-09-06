@@ -103,7 +103,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
       title: widget.event == null ? 'New event' : 'Edit event',
       children: [
         const Text(
-          'Changes are saved to your calendar. Only writable, non-recurring events without guests or alerts are supported.',
+          'Changes are saved to your calendar. Existing alerts are preserved. Recurring events and invitations are managed in the source calendar.',
         ),
         const SizedBox(height: 16),
         Form(
@@ -167,7 +167,13 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   'The change could not be confirmed. Check Activity and reload your calendar before trying again.',
                 ),
               FloeButton.filled(
-                onPressed: saving || !widget.controller.canDirect ? null : save,
+                onPressed:
+                    saving ||
+                        !(widget.event == null
+                            ? widget.controller.canDirect
+                            : widget.controller.canModify(widget.event!))
+                    ? null
+                    : save,
                 loading: saving,
                 child: Text(
                   widget.event == null ? 'Create event' : 'Save changes',

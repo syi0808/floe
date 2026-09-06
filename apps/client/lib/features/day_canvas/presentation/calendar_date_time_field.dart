@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_squircle.dart';
+import '../../../app/floe_date_picker.dart';
+import '../../../app/floe_popover.dart';
 
 class CalendarDateTimeField extends StatelessWidget {
   const CalendarDateTimeField({
@@ -43,32 +45,33 @@ class CalendarDateTimeField extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: TextButton.icon(
-                  onPressed: !enabled
-                      ? null
-                      : () async {
-                          final date = await showDatePicker(
-                            context: context,
-                            initialDate: value,
-                            firstDate: DateTime(1900),
-                            lastDate: DateTime(2200),
-                          );
-                          if (date != null) {
-                            final next = DateTime(
-                              date.year,
-                              date.month,
-                              date.day,
-                              value.hour,
-                              value.minute,
+                child: Builder(
+                  builder: (anchorContext) => TextButton.icon(
+                    onPressed: !enabled
+                        ? null
+                        : () async {
+                            final date = await showFloeDatePicker(
+                              context: context,
+                              anchor: floeAnchorRect(anchorContext),
+                              initialDate: value,
                             );
-                            if (next.hour == value.hour &&
-                                next.minute == value.minute) {
-                              onChanged(next);
+                            if (date != null && context.mounted) {
+                              final next = DateTime(
+                                date.year,
+                                date.month,
+                                date.day,
+                                value.hour,
+                                value.minute,
+                              );
+                              if (next.hour == value.hour &&
+                                  next.minute == value.minute) {
+                                onChanged(next);
+                              }
                             }
-                          }
-                        },
-                  icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                  label: Text(DateFormat.yMMMd().format(value)),
+                          },
+                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                    label: Text(DateFormat.yMMMd().format(value)),
+                  ),
                 ),
               ),
               _TimeSegment(

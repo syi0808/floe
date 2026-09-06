@@ -65,6 +65,57 @@ final query = DayQuery(
 );
 
 void main() {
+  test(
+    'refresh updates cached drag capability through the native JSON bridge',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'floe-drag-capability-',
+      );
+      final adapter = FixtureCalendarAdapter()
+        ..inventory = [const CalendarChoice('fixture', 'Test calendar')];
+      final gateway = await FfiDayGateway.open(
+        libraryPath: File('../../target/debug/libfloe_ffi.dylib').absolute.path,
+        databasePath: '${directory.path}/calendar.db',
+        calendarAdapter: adapter,
+        clock: () => query.now,
+      );
+      try {
+        var snapshot = await gateway.selectCalendars(adapter.inventory, query);
+        expect(
+          snapshot.items.whereType<EventItem>().where(
+            (event) => event.canModify,
+          ),
+          isEmpty,
+        );
+        adapter.records.first['can_modify'] = true;
+        snapshot = await gateway.syncCalendar(query);
+        final event = snapshot.items.whereType<EventItem>().firstWhere(
+          (event) => !event.isAllDay,
+        );
+        expect(event.provider, 'event_kit');
+        expect(event.canModify, isTrue);
+        final cached = await gateway.loadDay(query);
+        expect(
+          cached.items
+              .whereType<EventItem>()
+              .firstWhere((item) => item.id == event.id)
+              .canModify,
+          isTrue,
+        );
+        adapter.records.first['can_modify'] = false;
+        snapshot = await gateway.syncCalendar(query);
+        expect(
+          snapshot.items.whereType<EventItem>().where(
+            (event) => event.canModify,
+          ),
+          isEmpty,
+        );
+      } finally {
+        await gateway.close();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
   test('selected scope stays fixed; all scope discovers and preserves unavailable source cache after reopen', () async {
     final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
     expect(

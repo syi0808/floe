@@ -65,7 +65,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     controller = PersonalDayController(
       gateway: widget.gateway,
       query: widget.query,
-    )..load();
+    );
+    _loadCalendar();
     if (widget.gateway case final CalendarActionGateway gateway) {
       actionController = CalendarActionController(
         gateway: gateway,
@@ -81,6 +82,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     controller.dispose();
     actionController?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadCalendar() async {
+    await controller.load();
+    if (mounted && controller.snapshot?.calendar?.provider == 'event_kit') {
+      await controller.refresh();
+    }
   }
 
   Future<void> _collectAction(CalendarAction action) async {

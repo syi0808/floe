@@ -3,13 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_context_menu.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_agenda.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_date_time_field.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
 Widget host(Widget child) => MaterialApp(
-  theme: FloeTheme.light.copyWith(platform: TargetPlatform.macOS),
+  theme: FloeTheme.light.copyWith(platform: TargetPlatform.iOS),
   localizationsDelegates: AppLocalizations.localizationsDelegates,
   supportedLocales: AppLocalizations.supportedLocales,
   home: Scaffold(body: child),
@@ -96,6 +97,8 @@ void main() {
         origin,
         kind: PointerDeviceKind.mouse,
       );
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(find.byType(FloeContextMenu<String>), findsNothing);
       await drag.moveBy(const Offset(0, 37));
       await tester.pump();
       expect(find.byKey(const Key('calendar-drag-preview')), findsOneWidget);
@@ -172,11 +175,22 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Event actions'));
       await tester.pumpAndSettle();
-      final edit = tester.widget<PopupMenuItem<String>>(
-        find.widgetWithText(PopupMenuItem<String>, 'Edit event…'),
-      );
+      final edit = tester
+          .widget<FloeContextMenu<String>>(find.byType(FloeContextMenu<String>))
+          .entries
+          .firstWhere((entry) => entry.value == 'edit');
       expect(edit.enabled, isFalse);
-      expect(find.byType(Draggable<EventItem>), findsNothing);
+      expect(find.byType(PopupMenuItem<String>), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      final touch = await tester.startGesture(
+        origin,
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(const Duration(milliseconds: 700));
+      await touch.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(FloeContextMenu<String>), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

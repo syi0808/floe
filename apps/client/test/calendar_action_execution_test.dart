@@ -97,6 +97,27 @@ class Executor extends Gateway
 }
 
 void main() {
+  test(
+    'unresolved writes block their own target, not every calendar drag',
+    () async {
+      final gateway = Executor()
+        ..saved = [
+          action(status: 'unknown', direct: true, targetEventId: 'blocked'),
+        ];
+      final controller = CalendarActionController(
+        gateway: gateway,
+        personId: 'person',
+      );
+      await controller.load();
+      expect(controller.canDirectFor('blocked'), isFalse);
+      expect(controller.canDirectFor('another-event'), isTrue);
+      gateway.saved = [action(status: 'unknown', direct: true)];
+      await controller.load();
+      expect(controller.canDirect, isFalse);
+      expect(controller.canDirectFor('another-event'), isTrue);
+      controller.dispose();
+    },
+  );
   test('manual actions stay out of Review after reload regardless of automation policy', () async {
     for (final mode in ActionAuthorityMode.values) {
       final gateway = Executor()

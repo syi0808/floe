@@ -77,7 +77,7 @@ struct Proposal {
     return (original == nil ? event.url == marker : "\(event.calendarItemIdentifier)|" == externalID) && event.calendar.calendarIdentifier == calendarID && event.title == title &&
       abs(event.startDate.timeIntervalSince(start)) < 0.001 && abs(event.endDate.timeIntervalSince(end)) < 0.001 &&
       !event.isAllDay && !event.hasRecurrenceRules &&
-      !event.hasAttendees && !event.hasAlarms
+      !event.hasAttendees && (original != nil || !event.hasAlarms)
   }
 
   func existing(_ store: EKEventStore) throws -> EKEvent? {
@@ -86,7 +86,7 @@ struct Proposal {
           let event = store.calendarItem(withIdentifier: String(externalID.dropLast())) as? EKEvent,
           event.calendar.calendarIdentifier == calendarID,
           !event.isAllDay, !event.hasRecurrenceRules, !event.isDetached,
-          !event.hasAttendees, !event.hasAlarms,
+          !event.hasAttendees,
           let source = original["source"] as? [String: Any],
           let calendar = source["Calendar"] as? [String: Any] else { throw NativeFailure("provider_unavailable") }
     let formatter = ISO8601DateFormatter()
@@ -164,7 +164,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   let scheduleMetadataValid = TimeZone(identifier: proposal.timezone) != nil
   let events = store.events(matching: store.predicateForEvents(withStart: proposal.start, end: proposal.end, calendars: calendars))
   let hasLocalConflict = try localConflict(records, proposal)
-  let conflict = !proposal.deleting && (events.contains {
+  let conflict = proposal.original == nil && (events.contains {
     $0.calendarItemIdentifier != existing?.calendarItemIdentifier && $0.startDate < proposal.end && $0.endDate > proposal.start
   } || hasLocalConflict)
   try requirePermission()
@@ -188,7 +188,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   event.endDate = proposal.end
   if existing == nil { event.timeZone = TimeZone.current }
   if existing == nil { event.url = proposal.marker }
-  event.alarms = nil
+  if existing == nil { event.alarms = nil }
   try requirePermission()
   guard Date() < deadline, Date() < proposal.expiry, target.allowsContentModifications else { throw NativeFailure("timeout") }
   try store.save(event, span: .thisEvent, commit: true)

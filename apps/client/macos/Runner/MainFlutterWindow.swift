@@ -210,7 +210,7 @@ final class CalendarBridge {
     return [
       "external_id": "\(identifier)|\(occurrence)",
       "can_modify": event.calendar.allowsContentModifications && !event.calendar.isSubscribed &&
-        !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees && !event.hasAlarms &&
+        !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees &&
         event.endDate > event.startDate && event.endDate.timeIntervalSince(event.startDate) <= 86400,
       "external_revision": revision,
       "title": normalizedTitle,

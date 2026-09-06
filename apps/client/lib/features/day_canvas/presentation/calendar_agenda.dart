@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -54,6 +55,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
   Offset dragOrigin = Offset.zero;
   double dragScroll = 0;
   Timer? autoScroll;
+  bool primaryPointer = false;
 
   @override
   void initState() {
@@ -172,27 +174,26 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     }
     return Listener(
       onPointerDown: (details) {
+        primaryPointer = details.buttons == kPrimaryMouseButton;
         pointer = details.position;
         dragOrigin = pointer;
       },
       onPointerMove: (details) => pointer = details.position,
-      child: Draggable<EventItem>(
-        data: event,
-        feedback: const SizedBox.shrink(),
-        maxSimultaneousDrags: switch (Theme.of(context).platform) {
-          TargetPlatform.iOS || TargetPlatform.android => 0,
-          _ => 1,
+      child: GestureDetector(
+        supportedDevices: const {PointerDeviceKind.mouse},
+        onPanStart: (details) {
+          if (primaryPointer) beginDrag(event);
         },
-        childWhenDragging: Opacity(
-          opacity: dragging == null ? 1 : .3,
-          child: actions,
-        ),
-        onDragStarted: () => beginDrag(event),
-        onDragUpdate: (details) {
+        onPanUpdate: (details) {
+          pointer = details.globalPosition;
           updateDrag();
         },
-        onDragEnd: (_) => finishDrag(),
-        child: actions,
+        onPanEnd: (_) => finishDrag(),
+        onPanCancel: clearDrag,
+        child: Opacity(
+          opacity: dragging?.id == event.id ? .3 : 1,
+          child: actions,
+        ),
       ),
     );
   }
@@ -803,6 +804,7 @@ class CalendarEventCard extends StatelessWidget {
         '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds, date: snapshot.date)}';
     return Tooltip(
       message: label,
+      triggerMode: TooltipTriggerMode.manual,
       child: Semantics(
         label: label,
         button: true,

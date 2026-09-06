@@ -246,7 +246,10 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
         .await
         .unwrap();
     assert_eq!(&changed.mutation.as_ref().unwrap().original, event);
-    let provider = Provider::default();
+    let provider = Provider {
+        block: Some(ActionBlockReason::ScheduleConflict),
+        ..Provider::default()
+    };
     assert!(matches!(
         core.execute_calendar_action(changed.person_id, changed.id, &policy, &provider, now)
             .await

@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/gestures.dart';
+
+import '../../../app/floe_context_menu.dart';
+import '../../../app/floe_popover.dart';
 
 import '../domain/day_models.dart';
 import 'calendar_event_details.dart';
@@ -20,47 +24,36 @@ class CalendarEventActions extends StatelessWidget {
   final VoidCallback? onDelete;
 
   Future<void> menu(BuildContext context, [Offset? position]) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject()! as RenderBox;
-    final box = context.findRenderObject()! as RenderBox;
-    final anchor = overlay.globalToLocal(
-      position ?? box.localToGlobal(Offset(box.size.width, 0)),
-    );
-    final selected = await showMenu<String>(
+    final rect = floeAnchorRect(context);
+    final anchor = position == null
+        ? Rect.fromLTWH(rect.right - 24, rect.top, 24, 24)
+        : Rect.fromLTWH(position.dx, position.dy, 0, 0);
+    final selected = await showFloeContextMenu<String>(
       context: context,
-      position: RelativeRect.fromSize(
-        Rect.fromLTWH(anchor.dx, anchor.dy, 0, 0),
-        overlay.size,
-      ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      items: [
-        const PopupMenuItem(value: 'open', child: Text('Open details')),
-        PopupMenuItem(
+      anchor: anchor,
+      explanation: onEdit == null
+          ? 'Editing unavailable. Refresh your calendar or check its permissions.'
+          : null,
+      entries: [
+        const FloeMenuEntry(
+          value: 'open',
+          label: 'Open details',
+          icon: Icons.open_in_new,
+        ),
+        FloeMenuEntry(
           value: 'edit',
           enabled: onEdit != null,
-          child: const Text('Edit event…'),
+          label: 'Edit event…',
+          icon: Icons.edit_outlined,
         ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
+        FloeMenuEntry(
           value: 'delete',
           enabled: onDelete != null,
-          child: Text(
-            'Delete event…',
-            style: TextStyle(
-              color: onDelete == null
-                  ? null
-                  : Theme.of(context).colorScheme.error,
-            ),
-          ),
+          label: 'Delete event…',
+          icon: Icons.delete_outline,
+          destructive: true,
+          separator: true,
         ),
-        if (onEdit == null)
-          const PopupMenuItem(
-            enabled: false,
-            child: Text(
-              'Editing unavailable for this event',
-              style: TextStyle(fontSize: 11),
-            ),
-          ),
       ],
     );
     if (!context.mounted) return;
@@ -85,31 +78,37 @@ class CalendarEventActions extends StatelessWidget {
     child: Focus(
       child: GestureDetector(
         onSecondaryTapDown: (details) => menu(context, details.globalPosition),
-        onLongPressStart: (details) => menu(context, details.globalPosition),
-        child: Stack(
-          fit: StackFit.passthrough,
-          children: [
-            child,
-            Positioned(
-              top: 0,
-              right: 0,
-              bottom: 0,
-              child: Center(
-                child: IconButton(
-                  tooltip: 'Event actions',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(
-                    minWidth: 24,
-                    minHeight: 24,
+        child: GestureDetector(
+          supportedDevices: const {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.stylus,
+          },
+          onLongPressStart: (details) => menu(context, details.globalPosition),
+          child: Stack(
+            fit: StackFit.passthrough,
+            children: [
+              child,
+              Positioned(
+                top: 0,
+                right: 0,
+                bottom: 0,
+                child: Center(
+                  child: IconButton(
+                    tooltip: 'Event actions',
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                      minWidth: 24,
+                      minHeight: 24,
+                    ),
+                    padding: const EdgeInsets.all(3),
+                    iconSize: 16,
+                    onPressed: () => menu(context),
+                    icon: const Icon(Icons.more_horiz),
                   ),
-                  padding: const EdgeInsets.all(3),
-                  iconSize: 16,
-                  onPressed: () => menu(context),
-                  icon: const Icon(Icons.more_horiz),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),
