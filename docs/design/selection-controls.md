@@ -98,8 +98,8 @@ disabled activation prevention, no-scale press behavior, and calendar selection.
 `FloeSelect` and `FloeDropdown` use the prototype's shared squircle trigger and menu
 surface, 44px option targets, violet active treatment, selected check, disabled rows,
 and origin-aware placement. Their custom overlay matches the prototype's 160ms ease-out
-opacity and 0.97-to-1 scale transition, using the trigger-facing edge as its transform
-origin instead of Flutter's 500ms staged height/item fade. Calendar destination and
+opacity and 0.97-to-1 scale transition with a top-center transform origin instead of
+Flutter's 500ms staged height/item fade. Calendar destination and
 task actions use these controls instead of Material's default dropdown and popup menu.
 Closing reverses the overlay transition, while pointer hover changes only the active
 row and never invokes automatic scroll; keyboard navigation still reveals its target.

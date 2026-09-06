@@ -386,7 +386,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
                   curve: FloeMotion.easeOut,
                 ),
               ),
-              alignment: opensAbove ? Alignment.bottomLeft : Alignment.topLeft,
+              alignment: Alignment.topCenter,
               child: Material(
                 key: const ValueKey('floe-selection-popup'),
                 color: FloePalette.neutral0,

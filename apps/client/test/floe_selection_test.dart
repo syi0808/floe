@@ -198,6 +198,7 @@ void main() {
     final scale = tester.widget<ScaleTransition>(
       find.byKey(const ValueKey('floe-selection-scale')),
     );
+    expect(scale.alignment, Alignment.topCenter);
     expect(scale.scale.value, greaterThan(.97));
     expect(scale.scale.value, lessThan(1));
     await tester.pumpAndSettle();
