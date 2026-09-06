@@ -27,12 +27,13 @@ import 'connector_screen.dart';
 import '../../../app/floe_feedback.dart';
 import '../../server/settings_screen.dart';
 
-enum _DestinationView { today, tasks, notes, connections, settings }
+enum _DestinationView { today, tasks, notes, activity, connections, settings }
 
 const _primaryDestinations = [
   _DestinationView.today,
   _DestinationView.tasks,
   _DestinationView.notes,
+  _DestinationView.activity,
   _DestinationView.connections,
 ];
 
@@ -180,7 +181,17 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         client: widget.gateway is FfiDayGateway
             ? (widget.gateway as FfiDayGateway).serverClient
             : null,
+        actionController: actionController,
       );
+    }
+    if (destination == _DestinationView.activity) {
+      final actions = actionController;
+      return actions == null
+          ? const Text('Activity is available in the native Floe app.')
+          : ActivityPanel(
+              controller: actions,
+              connection: () => controller.snapshot?.calendar,
+            );
     }
     if (controller.loadState == DayLoadState.failure) {
       return _FailureDay(
@@ -257,6 +268,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             onDelete: controller.deleteItem,
           ),
           _DestinationView.connections => SizedBox.shrink(),
+          _DestinationView.activity => SizedBox.shrink(),
           _DestinationView.settings => SizedBox.shrink(),
           _DestinationView.notes => _NotesScreen(
             notes: snapshot.items.whereType<NoteItem>().toList(),
@@ -280,7 +292,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (actionController case final actions?) ...[
-          CalendarActionPanel(
+          CalendarActionComposerButton(
+            controller: actions,
+            connection: () =>
+                controller.loadState == DayLoadState.ready &&
+                    DateUtils.isSameDay(controller.query.date, DateTime.now())
+                ? controller.snapshot?.calendar
+                : null,
+          ),
+          SizedBox(height: 12),
+          ReviewRequestPanel(
             controller: actions,
             connection: () =>
                 controller.loadState == DayLoadState.ready &&
@@ -455,6 +476,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
     _DestinationView.today => AppLocalizations.of(context).calendar,
     _DestinationView.tasks => AppLocalizations.of(context).tasks,
     _DestinationView.notes => AppLocalizations.of(context).notes,
+    _DestinationView.activity => 'Activity',
     _DestinationView.connections => AppLocalizations.of(context).connect,
     _DestinationView.settings => AppLocalizations.of(context).settings,
   };
@@ -463,6 +485,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
     _DestinationView.today => LucideIcons.calendarDays,
     _DestinationView.tasks => LucideIcons.listTodo,
     _DestinationView.notes => LucideIcons.notebookPen,
+    _DestinationView.activity => LucideIcons.history,
     _DestinationView.connections => LucideIcons.link,
     _DestinationView.settings => LucideIcons.settings,
   };

@@ -29,7 +29,11 @@ fi
 codesign --force --sign "${SIGNING_IDENTITY}" "${DESTINATION_LIBRARY}"
 
 NATIVE_FLAGS=()
-if [[ "${FLOE_ENABLE_CALENDAR_WRITES:-0}" == "1" ]]; then
+CALENDAR_WRITES="${FLOE_ENABLE_CALENDAR_WRITES:-}"
+if [[ -z "${CALENDAR_WRITES}" && "${CONFIGURATION}" != "Debug" ]]; then
+  CALENDAR_WRITES=1
+fi
+if [[ "${CALENDAR_WRITES}" == "1" ]]; then
   NATIVE_FLAGS+=(-D FLOE_CALENDAR_WRITES)
 fi
 NATIVE_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib"

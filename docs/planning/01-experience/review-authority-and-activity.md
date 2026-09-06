@@ -59,13 +59,16 @@ Today may show a compact **Review requests** section. It contains only active
 items that need input now:
 
 - pending decisions;
-- approved work that still requires an explicit restored execution;
 - unresolved execution requiring safe lookup or user inspection.
 
 Resolved, rejected, expired and blocked items leave the inbox immediately.
 Execution progress may remain in the open detail until it finishes, but does not
 turn the inbox into history. A failure returns to the inbox only when the user can
 take a meaningful recovery action.
+
+An approval leaves Review immediately. If a restored approval still needs an
+explicit execution click, Activity exposes that next action without presenting the
+item as an undecided review again.
 
 ## Activity
 
@@ -142,4 +145,3 @@ not add their own proposal inbox.
 5. Move Calendar action initiation and copy out of proposal-specific UI.
 6. Generalize storage/contracts for report, permission, change and recovery kinds.
 7. Add actor, scope and expiry controls plus broad permission presets.
-

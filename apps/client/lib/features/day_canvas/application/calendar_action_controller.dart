@@ -15,6 +15,9 @@ final class CalendarActionController extends ChangeNotifier {
   final String personId;
   final Future<void> Function(CalendarAction)? collect;
   bool writesEnabled = false;
+  ActionAuthority authority = const ActionAuthority(
+    calendarCreate: ActionAuthorityMode.ask,
+  );
   String? phase;
   final Map<String, String> collection = {};
   List<CalendarAction> actions = const [];
@@ -67,12 +70,17 @@ final class CalendarActionController extends ChangeNotifier {
           ? await (gateway as CalendarActionExecutionGateway)
                 .calendarWritesEnabled(personId)
           : false;
+      final loadedAuthority = gateway is CalendarActionExecutionGateway
+          ? await (gateway as CalendarActionExecutionGateway)
+                .loadActionAuthority(personId)
+          : authority;
       if (_disposed) return;
       if (result.any((action) => action.personId != personId)) {
         throw StateError('Unexpected proposal owner');
       }
       actions = List.unmodifiable(result);
       writesEnabled = enabled;
+      authority = loadedAuthority;
       needsReload = false;
     } on Object {
       if (_disposed) return;
@@ -81,6 +89,7 @@ final class CalendarActionController extends ChangeNotifier {
     } finally {
       if (!_disposed) {
         busy = false;
+        phase = null;
         notifyListeners();
       }
     }
@@ -150,6 +159,7 @@ final class CalendarActionController extends ChangeNotifier {
 
   bool get canPropose =>
       gateway is CalendarActionExecutionGateway &&
+      authority.calendarCreate != ActionAuthorityMode.deny &&
       !busy &&
       !needsReload &&
       !actions.any(
@@ -185,6 +195,25 @@ final class CalendarActionController extends ChangeNotifier {
         throw StateError('Unexpected proposal');
       }
       actions = List.unmodifiable([result, ...actions]);
+      if (authority.calendarCreate == ActionAuthorityMode.allow &&
+          writesEnabled) {
+        final approved = await (gateway as CalendarActionExecutionGateway)
+            .decideCalendarAction(
+              personId: personId,
+              actionId: result.id,
+              decision: CalendarActionDecision.approve,
+            );
+        _replace(approved, result);
+        phase = 'executing';
+        notifyListeners();
+        final executed = await (gateway as CalendarActionExecutionGateway)
+            .executeCalendarAction(personId, result.id);
+        _replace(executed, approved);
+        if (executed.status == CalendarActionStatus.succeeded) {
+          await _collect(executed);
+        }
+        return executed;
+      }
       return result;
     } on Object {
       if (!_disposed) {
@@ -192,6 +221,25 @@ final class CalendarActionController extends ChangeNotifier {
         needsReload = true;
       }
       return null;
+    } finally {
+      if (!_disposed) {
+        busy = false;
+        phase = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> setCalendarCreateAuthority(ActionAuthorityMode mode) async {
+    if (_disposed || busy || gateway is! CalendarActionExecutionGateway) return;
+    busy = true;
+    failed = false;
+    notifyListeners();
+    try {
+      authority = await (gateway as CalendarActionExecutionGateway)
+          .setCalendarCreateAuthority(personId, mode);
+    } on Object {
+      if (!_disposed) failed = true;
     } finally {
       if (!_disposed) {
         busy = false;

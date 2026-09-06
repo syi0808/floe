@@ -44,6 +44,7 @@ impl TursoStore {
             "notes",
             "calendar_mirrors",
             "calendar_actions",
+            "action_authorities",
         ] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
@@ -96,7 +97,34 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
         Ok(())
+    }
+
+    pub(crate) async fn action_authority(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<crate::ActionAuthority>, CoreError> {
+        self.get("action_authorities", person_id.to_string()).await
+    }
+
+    pub(crate) async fn put_action_authority(
+        &self,
+        authority: &crate::ActionAuthority,
+    ) -> Result<(), CoreError> {
+        self.put(
+            "action_authorities",
+            authority.person_id.to_string(),
+            authority.person_id,
+            authority,
+        )
+        .await
     }
 
     pub(crate) async fn calendar_actions(

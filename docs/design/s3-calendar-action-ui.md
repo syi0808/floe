@@ -3,9 +3,11 @@
 2026-09-05. User direction: implement/review UI in the HTML prototype before
 porting to Flutter. This is an interactive design reference, not live execution.
 
-2026-09-06: [Native execution](../validation/s3-native-executor.md) now binds the
-Flutter review to the durable ledger. Default builds retain **Save approval only**;
-explicit write-enabled validation builds offer **Approve & create**.
+2026-09-06: [Native execution](../validation/s3-native-executor.md) binds the
+Flutter review to the durable ledger. A later product decision replaces this
+Calendar-specific surface with shared Review and Activity, enables the trusted
+executor in Release, and makes runtime Action Authority the authorization gate.
+Debug builds remain write-disabled unless explicitly enabled.
 
 ## Decision-first review
 
@@ -75,6 +77,7 @@ in Rust; it is not established by this prototype.
 
 The simplified review is implemented in the prototype and Flutter. Production
 decisions/state remain bound to the Rust ledger, not this simulated reducer.
-Default native builds remain write-disabled. This presentation change does not
+Release includes Calendar create while Debug remains write-disabled by default.
+This presentation change does not
 advance the remaining live acceptance or dogfood gates recorded in
 [S3 native validation](../validation/s3-native-executor.md).

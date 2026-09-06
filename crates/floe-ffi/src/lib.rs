@@ -175,6 +175,8 @@ pub struct CalendarActionsResult {
     pub actions: Vec<floe_core::CalendarAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writes_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority: Option<floe_core::ActionAuthority>,
 }
 
 pub fn calendar_actions(
@@ -195,6 +197,34 @@ pub fn calendar_actions(
                     person_id.to_string() == native_calendar::LOCAL_PERSON
                         && native_calendar::NativeCalendar::enabled(),
                 ),
+                authority: None,
+            });
+        }
+        CalendarActionOperationDto::GetAuthority {} => {
+            let authority = handle
+                .runtime
+                .block_on(handle.core.action_authority(person_id))
+                .map_err(core_error)?;
+            return Ok(CalendarActionsResult {
+                actions: vec![],
+                writes_enabled: None,
+                authority: Some(authority),
+            });
+        }
+        CalendarActionOperationDto::SetAuthority { calendar_create } => {
+            let mode = match calendar_create {
+                ActionAuthorityModeDto::Allow => floe_core::ActionAuthorityMode::Allow,
+                ActionAuthorityModeDto::Ask => floe_core::ActionAuthorityMode::Ask,
+                ActionAuthorityModeDto::Deny => floe_core::ActionAuthorityMode::Deny,
+            };
+            let authority = handle
+                .runtime
+                .block_on(handle.core.set_action_authority(person_id, mode))
+                .map_err(core_error)?;
+            return Ok(CalendarActionsResult {
+                actions: vec![],
+                writes_enabled: None,
+                authority: Some(authority),
             });
         }
         CalendarActionOperationDto::Execute { action_id }
@@ -228,11 +258,16 @@ pub fn calendar_actions(
                         .recover_calendar_action(person_id, id, &provider),
                 )
             } else {
+                let authority = handle
+                    .runtime
+                    .block_on(handle.core.action_authority(person_id))
+                    .map_err(core_error)?;
                 let policy = floe_core::CalendarActionPolicy {
                     person_id,
                     provider: floe_domain::CalendarProvider::EventKit,
                     allowed_calendar_ids: provider.calendar_ids.clone(),
-                    allow_create: native_calendar::NativeCalendar::enabled(),
+                    allow_create: native_calendar::NativeCalendar::enabled()
+                        && authority.calendar_create != floe_core::ActionAuthorityMode::Deny,
                 };
                 handle.runtime.block_on(handle.core.execute_calendar_action(
                     person_id,
@@ -250,6 +285,7 @@ pub fn calendar_actions(
                 .map(|actions| CalendarActionsResult {
                     actions,
                     writes_enabled: None,
+                    authority: None,
                 })
                 .map_err(core_error);
         }
@@ -293,6 +329,7 @@ pub fn calendar_actions(
     Ok(CalendarActionsResult {
         actions: vec![action],
         writes_enabled: None,
+        authority: None,
     })
 }
 

@@ -1,5 +1,20 @@
 enum CalendarActionDecision { approve, reject }
 
+enum ActionAuthorityMode { allow, ask, deny }
+
+final class ActionAuthority {
+  const ActionAuthority({required this.calendarCreate});
+
+  factory ActionAuthority.fromJson(Map<String, dynamic> json) =>
+      ActionAuthority(
+        calendarCreate: ActionAuthorityMode.values.byName(
+          json['calendar_create'] as String,
+        ),
+      );
+
+  final ActionAuthorityMode calendarCreate;
+}
+
 enum CalendarActionStatus {
   pending,
   approved,
@@ -10,6 +25,11 @@ enum CalendarActionStatus {
   succeeded;
 
   bool get canDecide => this == pending;
+
+  bool get needsReview => switch (this) {
+    pending || executing || unknown => true,
+    approved || rejected || blocked || succeeded => false,
+  };
 }
 
 final class CalendarAction {

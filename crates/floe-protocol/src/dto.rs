@@ -16,6 +16,10 @@ pub struct CalendarActionRequestDto {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CalendarActionOperationDto {
     Capabilities {},
+    GetAuthority {},
+    SetAuthority {
+        calendar_create: ActionAuthorityModeDto,
+    },
     Execute {
         action_id: String,
     },
@@ -37,6 +41,14 @@ pub enum CalendarActionOperationDto {
         action_id: String,
         decision: CalendarActionDecisionDto,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionAuthorityModeDto {
+    Allow,
+    Ask,
+    Deny,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

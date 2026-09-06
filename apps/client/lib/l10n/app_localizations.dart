@@ -697,7 +697,7 @@ abstract class AppLocalizations {
   /// No description provided for @eventsFromTheSelectedCalendarAreSaved.
   ///
   /// In en, this message translates to:
-  /// **'Events from the selected calendars are saved on this device. Reading never changes Calendar. In a write-enabled build, only an explicitly approved proposal can create an event. Deselecting a calendar removes its local copy.'**
+  /// **'Events from the selected calendars are saved on this device. Reading never changes Calendar. Creating an event follows your Floe action permission and fresh safety checks. Deselecting a calendar removes its local copy.'**
   String get eventsFromTheSelectedCalendarAreSaved;
 
   /// No description provided for @continueAction.
@@ -787,7 +787,7 @@ abstract class AppLocalizations {
   /// No description provided for @bringYourCalendarIntoOneDayFloe.
   ///
   /// In en, this message translates to:
-  /// **'Bring your calendar into one day. Connecting only reads events. Calendar creation requires a write-enabled build and your explicit proposal approval; editing and deletion are not available.'**
+  /// **'Bring your calendar into one day. Connecting only reads events. Calendar creation follows your Floe action permission; editing and deletion are not available.'**
   String get bringYourCalendarIntoOneDayFloe;
 
   /// No description provided for @connectedCalendar.
@@ -925,13 +925,13 @@ abstract class AppLocalizations {
   /// No description provided for @eventsAreSavedOnThisMacFloe.
   ///
   /// In en, this message translates to:
-  /// **'Reading saves events on this Mac without changing Calendar. A write-enabled build can create an event only after explicit proposal approval. Editing and deletion are not available.'**
+  /// **'Reading saves events on this Mac without changing Calendar. Creating an event follows your Floe action permission and fresh safety checks. Editing and deletion are not available.'**
   String get eventsAreSavedOnThisMacFloe;
 
   /// No description provided for @macosCallsThisFullAccessEvenFor.
   ///
   /// In en, this message translates to:
-  /// **'macOS calls this “Full Access,” even for reading. OS permission alone never authorizes a write: a write-enabled build and explicit proposal approval are also required.'**
+  /// **'macOS calls this “Full Access,” even for reading. OS permission alone never authorizes a write: your Floe action permission and fresh safety checks are also required.'**
   String get macosCallsThisFullAccessEvenFor;
 
   /// No description provided for @whatHappensOffline.
@@ -1075,7 +1075,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionProposalExplanation.
   ///
   /// In en, this message translates to:
-  /// **'Choose a connected calendar and future date and time, up to 24 hours apart. Times use your device’s current time. This only prepares a proposal; you will review and explicitly approve it next.'**
+  /// **'Choose a connected calendar and future date and time, up to 24 hours apart. Floe will follow your action permission and ask for review when needed.'**
   String get actionProposalExplanation;
 
   /// No description provided for @actionFormInvalid.
@@ -1147,7 +1147,7 @@ abstract class AppLocalizations {
   /// No description provided for @calendarProposals.
   ///
   /// In en, this message translates to:
-  /// **'Calendar proposals'**
+  /// **'Review requests'**
   String get calendarProposals;
 
   /// No description provided for @actionPending.
@@ -1177,7 +1177,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Blocked. A fresh proposal and approval are required before any future execution.'**
+  /// **'Blocked. A fresh action request is required before any future execution.'**
   String get actionBlocked;
 
   /// No description provided for @actionUnknown.
@@ -1195,37 +1195,37 @@ abstract class AppLocalizations {
   /// No description provided for @actionReloadRequired.
   ///
   /// In en, this message translates to:
-  /// **'The saved state could not be confirmed. Reload proposals before another decision.'**
+  /// **'The saved state could not be confirmed. Reload reviews before another decision.'**
   String get actionReloadRequired;
 
   /// No description provided for @actionLoading.
   ///
   /// In en, this message translates to:
-  /// **'Reading or saving proposal state…'**
+  /// **'Reading or saving review state…'**
   String get actionLoading;
 
   /// No description provided for @actionEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No saved proposals to review.'**
+  /// **'Nothing needs your review.'**
   String get actionEmpty;
 
   /// No description provided for @actionReview.
   ///
   /// In en, this message translates to:
-  /// **'Review proposal'**
+  /// **'Review request'**
   String get actionReview;
 
   /// No description provided for @actionReload.
   ///
   /// In en, this message translates to:
-  /// **'Reload proposals'**
+  /// **'Reload reviews'**
   String get actionReload;
 
   /// No description provided for @actionMissing.
   ///
   /// In en, this message translates to:
-  /// **'This proposal is no longer available.'**
+  /// **'This review request is no longer available.'**
   String get actionMissing;
 
   /// No description provided for @actionDestination.
@@ -1261,7 +1261,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionProposalId.
   ///
   /// In en, this message translates to:
-  /// **'Proposal ID'**
+  /// **'Action request ID'**
   String get actionProposalId;
 
   /// No description provided for @actionExecutionId.
@@ -1327,7 +1327,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionExpiredReason.
   ///
   /// In en, this message translates to:
-  /// **'This proposal has expired. Nothing was created.'**
+  /// **'This review request has expired. Nothing was created.'**
   String get actionExpiredReason;
 
   /// No description provided for @actionPermissionReason.
@@ -1363,7 +1363,7 @@ abstract class AppLocalizations {
   /// No description provided for @actionApprovalUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'This proposal can’t be approved right now. Refresh its status or reconnect Calendar.'**
+  /// **'This action can’t be approved right now. Refresh its status or reconnect Calendar.'**
   String get actionApprovalUnavailable;
 
   /// No description provided for @actionDecline.

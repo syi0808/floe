@@ -24,8 +24,8 @@ String _status(AppLocalizations strings, CalendarActionStatus status) =>
       CalendarActionStatus.succeeded => strings.actionSucceeded,
     };
 
-class CalendarActionPanel extends StatelessWidget {
-  const CalendarActionPanel({
+class ReviewRequestPanel extends StatelessWidget {
+  const ReviewRequestPanel({
     super.key,
     required this.controller,
     required this.connection,
@@ -38,6 +38,9 @@ class CalendarActionPanel extends StatelessWidget {
     animation: controller,
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
+      final requests = controller.actions
+          .where((action) => action.status.needsReview)
+          .toList(growable: false);
       return FloeSquircle(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -48,26 +51,11 @@ class CalendarActionPanel extends StatelessWidget {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
-            if (controller.gateway is CalendarActionExecutionGateway)
-              FloeButton.outlined(
-                onPressed: controller.canPropose && connection() != null
-                    ? () => showFloeDialog<void>(
-                        context,
-                        (_) => CalendarActionProposal(
-                          controller: controller,
-                          connection: connection,
-                        ),
-                      )
-                    : null,
-                child: Text(strings.actionNewProposal),
-              ),
             if (controller.failed) Text(strings.actionReloadRequired),
             if (controller.busy) Text(strings.actionLoading),
-            if (!controller.busy &&
-                !controller.failed &&
-                controller.actions.isEmpty)
+            if (!controller.busy && !controller.failed && requests.isEmpty)
               Text(strings.actionEmpty),
-            for (final action in controller.actions)
+            for (final action in requests)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Column(
@@ -80,7 +68,7 @@ class CalendarActionPanel extends StatelessWidget {
                         controller.load();
                         showFloeDialog<void>(
                           context,
-                          (_) => CalendarActionDialog(
+                          (_) => ActionReviewDialog(
                             controller: controller,
                             actionId: action.id,
                             connection: connection,
@@ -103,8 +91,112 @@ class CalendarActionPanel extends StatelessWidget {
   );
 }
 
-class CalendarActionDialog extends StatefulWidget {
-  const CalendarActionDialog({
+class CalendarActionComposerButton extends StatelessWidget {
+  const CalendarActionComposerButton({
+    super.key,
+    required this.controller,
+    required this.connection,
+  });
+
+  final CalendarActionController controller;
+  final CalendarConnection? Function() connection;
+
+  @override
+  Widget build(BuildContext context) => FloeButton.outlined(
+    onPressed: controller.canPropose && connection() != null
+        ? () => showFloeDialog<void>(
+            context,
+            (_) => CalendarEventComposer(
+              controller: controller,
+              connection: connection,
+            ),
+          )
+        : null,
+    child: Text(AppLocalizations.of(context).actionNewProposal),
+  );
+}
+
+class ActivityPanel extends StatelessWidget {
+  const ActivityPanel({
+    super.key,
+    required this.controller,
+    required this.connection,
+  });
+
+  final CalendarActionController controller;
+  final CalendarConnection? Function() connection;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final strings = AppLocalizations.of(context);
+      final history = controller.actions
+          .where((action) => !action.status.needsReview)
+          .toList(growable: false);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Activity',
+            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Automatic actions, decisions, and completed reviews appear here.',
+          ),
+          const SizedBox(height: 28),
+          if (controller.busy) Text(strings.actionLoading),
+          if (controller.failed) Text(strings.actionReloadRequired),
+          if (!controller.busy && !controller.failed && history.isEmpty)
+            const Text('No activity yet.'),
+          for (final action in history)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: FloeSquircle(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            action.title,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(_status(strings, action.status)),
+                        ],
+                      ),
+                    ),
+                    FloeButton.text(
+                      onPressed: () => showFloeDialog<void>(
+                        context,
+                        (_) => ActionReviewDialog(
+                          controller: controller,
+                          actionId: action.id,
+                          connection: connection,
+                        ),
+                      ),
+                      child: const Text('View details'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          FloeButton.text(
+            onPressed: controller.busy ? null : controller.load,
+            child: const Text('Reload activity'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+class ActionReviewDialog extends StatefulWidget {
+  const ActionReviewDialog({
     super.key,
     required this.controller,
     required this.actionId,
@@ -115,10 +207,10 @@ class CalendarActionDialog extends StatefulWidget {
   final CalendarConnection? Function() connection;
 
   @override
-  State<CalendarActionDialog> createState() => _CalendarActionDialogState();
+  State<ActionReviewDialog> createState() => _ActionReviewDialogState();
 }
 
-class _CalendarActionDialogState extends State<CalendarActionDialog> {
+class _ActionReviewDialogState extends State<ActionReviewDialog> {
   late final Timer _timer;
 
   @override

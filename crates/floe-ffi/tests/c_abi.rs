@@ -151,6 +151,33 @@ fn calendar_decisions_are_person_scoped_durable_and_never_create() {
 }
 
 #[test]
+fn action_authority_defaults_to_ask_and_persists() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("authority.db");
+    let person = Uuid::new_v4().to_string();
+    let core = Core::open(path.to_str().unwrap());
+
+    assert_eq!(
+        data(&core.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
+        "ask"
+    );
+    assert_eq!(
+        data(&core.actions(
+            &person,
+            json!({"kind": "set_authority", "calendar_create": "allow"}),
+        ))["authority"]["calendar_create"],
+        "allow"
+    );
+    drop(core);
+
+    let reopened = Core::open(path.to_str().unwrap());
+    assert_eq!(
+        data(&reopened.actions(&person, json!({"kind": "get_authority"})))["authority"]["calendar_create"],
+        "allow"
+    );
+}
+
+#[test]
 fn calendar_action_boundary_rejects_execution_and_caller_authority() {
     let directory = tempfile::tempdir().unwrap();
     let core = Core::open(directory.path().join("invalid.db").to_str().unwrap());

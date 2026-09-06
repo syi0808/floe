@@ -323,7 +323,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get eventsFromTheSelectedCalendarAreSaved =>
-      'Events from the selected calendars are saved on this device. Reading never changes Calendar. In a write-enabled build, only an explicitly approved proposal can create an event. Deselecting a calendar removes its local copy.';
+      'Events from the selected calendars are saved on this device. Reading never changes Calendar. Creating an event follows your Floe action permission and fresh safety checks. Deselecting a calendar removes its local copy.';
 
   @override
   String get continueAction => 'Continue';
@@ -374,7 +374,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get bringYourCalendarIntoOneDayFloe =>
-      'Bring your calendar into one day. Connecting only reads events. Calendar creation requires a write-enabled build and your explicit proposal approval; editing and deletion are not available.';
+      'Bring your calendar into one day. Connecting only reads events. Calendar creation follows your Floe action permission; editing and deletion are not available.';
 
   @override
   String get connectedCalendar => 'Connected calendars';
@@ -458,11 +458,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get eventsAreSavedOnThisMacFloe =>
-      'Reading saves events on this Mac without changing Calendar. A write-enabled build can create an event only after explicit proposal approval. Editing and deletion are not available.';
+      'Reading saves events on this Mac without changing Calendar. Creating an event follows your Floe action permission and fresh safety checks. Editing and deletion are not available.';
 
   @override
   String get macosCallsThisFullAccessEvenFor =>
-      'macOS calls this “Full Access,” even for reading. OS permission alone never authorizes a write: a write-enabled build and explicit proposal approval are also required.';
+      'macOS calls this “Full Access,” even for reading. OS permission alone never authorizes a write: your Floe action permission and fresh safety checks are also required.';
 
   @override
   String get whatHappensOffline => 'What happens offline?';
@@ -579,7 +579,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionProposalExplanation =>
-      'Choose a connected calendar and future date and time, up to 24 hours apart. Times use your device’s current time. This only prepares a proposal; you will review and explicitly approve it next.';
+      'Choose a connected calendar and future date and time, up to 24 hours apart. Floe will follow your action permission and ask for review when needed.';
 
   @override
   String get actionFormInvalid =>
@@ -621,7 +621,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionApproveCreate => 'Approve & create';
 
   @override
-  String get calendarProposals => 'Calendar proposals';
+  String get calendarProposals => 'Review requests';
 
   @override
   String get actionPending => 'Awaiting your decision';
@@ -639,7 +639,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionBlocked =>
-      'Blocked. A fresh proposal and approval are required before any future execution.';
+      'Blocked. A fresh action request is required before any future execution.';
 
   @override
   String get actionUnknown =>
@@ -650,22 +650,22 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionReloadRequired =>
-      'The saved state could not be confirmed. Reload proposals before another decision.';
+      'The saved state could not be confirmed. Reload reviews before another decision.';
 
   @override
-  String get actionLoading => 'Reading or saving proposal state…';
+  String get actionLoading => 'Reading or saving review state…';
 
   @override
-  String get actionEmpty => 'No saved proposals to review.';
+  String get actionEmpty => 'Nothing needs your review.';
 
   @override
-  String get actionReview => 'Review proposal';
+  String get actionReview => 'Review request';
 
   @override
-  String get actionReload => 'Reload proposals';
+  String get actionReload => 'Reload reviews';
 
   @override
-  String get actionMissing => 'This proposal is no longer available.';
+  String get actionMissing => 'This review request is no longer available.';
 
   @override
   String get actionDestination => 'Destination calendar';
@@ -683,7 +683,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionExpires => 'Approval expires';
 
   @override
-  String get actionProposalId => 'Proposal ID';
+  String get actionProposalId => 'Action request ID';
 
   @override
   String get actionExecutionId => 'Execution ID';
@@ -719,7 +719,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionExpiredReason =>
-      'This proposal has expired. Nothing was created.';
+      'This review request has expired. Nothing was created.';
 
   @override
   String get actionPermissionReason =>
@@ -743,7 +743,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionApprovalUnavailable =>
-      'This proposal can’t be approved right now. Refresh its status or reconnect Calendar.';
+      'This action can’t be approved right now. Refresh its status or reconnect Calendar.';
 
   @override
   String get actionDecline => 'Decline';

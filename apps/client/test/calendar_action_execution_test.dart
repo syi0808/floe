@@ -14,6 +14,19 @@ class Executor extends Gateway implements CalendarActionExecutionGateway {
   int creates = 0;
   int lookups = 0;
   int proposals = 0;
+  ActionAuthority authority = const ActionAuthority(
+    calendarCreate: ActionAuthorityMode.ask,
+  );
+
+  @override
+  Future<ActionAuthority> loadActionAuthority(String personId) async =>
+      authority;
+
+  @override
+  Future<ActionAuthority> setCalendarCreateAuthority(
+    String personId,
+    ActionAuthorityMode mode,
+  ) async => authority = ActionAuthority(calendarCreate: mode);
   DateTime? proposedStart;
   String? proposedTimezone;
   String outcome = 'succeeded';
@@ -58,6 +71,40 @@ class Executor extends Gateway implements CalendarActionExecutionGateway {
 }
 
 void main() {
+  test(
+    'calendar create authority allows automatic execution or denies intent',
+    () async {
+      final gateway = Executor()
+        ..saved = []
+        ..authority = const ActionAuthority(
+          calendarCreate: ActionAuthorityMode.allow,
+        );
+      final controller = CalendarActionController(
+        gateway: gateway,
+        personId: 'person',
+        collect: (_) async {},
+      );
+      addTearDown(controller.dispose);
+      await controller.load();
+
+      final result = await controller.propose(
+        calendarId: 'calendar',
+        title: 'Quiet focus',
+        startsAt: DateTime.now().add(const Duration(hours: 1)),
+        endsAt: DateTime.now().add(const Duration(hours: 2)),
+        timezone: 'UTC+09:00',
+      );
+
+      expect(result?.status, CalendarActionStatus.succeeded);
+      expect(gateway.decisions, 1);
+      expect(gateway.creates, 1);
+      expect(controller.actions.single.status, CalendarActionStatus.succeeded);
+
+      await controller.setCalendarCreateAuthority(ActionAuthorityMode.deny);
+      expect(controller.canPropose, isFalse);
+    },
+  );
+
   test(
     'explicit approval executes once; failed read retries only collection',
     () async {
@@ -162,9 +209,17 @@ void main() {
           supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
             body: SingleChildScrollView(
-              child: CalendarActionPanel(
-                controller: controller,
-                connection: connection,
+              child: Column(
+                children: [
+                  CalendarActionComposerButton(
+                    controller: controller,
+                    connection: connection,
+                  ),
+                  ReviewRequestPanel(
+                    controller: controller,
+                    connection: connection,
+                  ),
+                ],
               ),
             ),
           ),
@@ -180,8 +235,14 @@ void main() {
           .widgetList<TextFormField>(find.byType(TextFormField))
           .toList();
       expect(inputs, hasLength(3));
-      expect(inputs[1].controller!.text, matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'));
-      expect(inputs[2].controller!.text, matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'));
+      expect(
+        inputs[1].controller!.text,
+        matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'),
+      );
+      expect(
+        inputs[2].controller!.text,
+        matches(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$'),
+      );
       final titleField = find.widgetWithText(TextFormField, 'Event title');
       final startField = find.widgetWithText(TextFormField, 'Starts');
       final endField = find.widgetWithText(TextFormField, 'Ends');
@@ -209,7 +270,7 @@ void main() {
       expect(gateway.proposedTimezone, matches(r'^UTC[+-]\d{2}:\d{2}$'));
       expect(gateway.decisions, 0);
       expect(gateway.creates, 0);
-      expect(find.byType(CalendarActionDialog), findsOneWidget);
+      expect(find.byType(ActionReviewDialog), findsOneWidget);
       expect(find.text('Approve & create'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

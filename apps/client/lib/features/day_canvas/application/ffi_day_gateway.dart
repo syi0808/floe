@@ -167,6 +167,29 @@ final class FfiDayGateway
   }
 
   @override
+  Future<ActionAuthority> loadActionAuthority(String personId) async {
+    final data = await _request('calendar_actions', {
+      'schema_version': _protocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'get_authority'},
+    });
+    return ActionAuthority.fromJson(_asMap(data['authority']));
+  }
+
+  @override
+  Future<ActionAuthority> setCalendarCreateAuthority(
+    String personId,
+    ActionAuthorityMode mode,
+  ) async {
+    final data = await _request('calendar_actions', {
+      'schema_version': _protocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'set_authority', 'calendar_create': mode.name},
+    });
+    return ActionAuthority.fromJson(_asMap(data['authority']));
+  }
+
+  @override
   Future<CalendarAction> executeCalendarAction(
     String personId,
     String actionId,

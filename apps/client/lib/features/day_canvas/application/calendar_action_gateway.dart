@@ -12,6 +12,11 @@ abstract interface class CalendarActionGateway {
 
 abstract interface class CalendarActionExecutionGateway
     implements CalendarActionGateway {
+  Future<ActionAuthority> loadActionAuthority(String personId);
+  Future<ActionAuthority> setCalendarCreateAuthority(
+    String personId,
+    ActionAuthorityMode mode,
+  );
   Future<bool> calendarWritesEnabled(String personId);
   Future<CalendarAction> executeCalendarAction(
     String personId,

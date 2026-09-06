@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### Unified review and action authority — 2026-09-06
+
+- Reframed Calendar Proposal as an internal action intent projected into shared
+  Review requests and Activity surfaces.
+- Main Review shows only actionable items; terminal Calendar results move to the
+  separate Activity destination.
+- Added durable Person-scoped Calendar create authority (`allow` / `ask` / `deny`)
+  and an Action permissions settings surface. The default remains `ask`.
+- Release includes Calendar writing by default; Debug remains write-disabled
+  unless explicitly enabled. Runtime policy and fresh provider checks still gate
+  every execution.
+- [Product and domain contract](docs/planning/01-experience/review-authority-and-activity.md).
+
 ## Delivery Board
 
 Delivery follows [ADR 0006](docs/decisions/0006-slice-driven-delivery.md) and the

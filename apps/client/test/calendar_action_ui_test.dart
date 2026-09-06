@@ -214,7 +214,7 @@ void main() {
         supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: SingleChildScrollView(
-            child: CalendarActionPanel(
+            child: ReviewRequestPanel(
               controller: controller,
               connection: connection,
             ),
@@ -236,7 +236,7 @@ void main() {
       );
       await controller.load();
       await mount(tester, controller, width);
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       expect(find.text('Destination calendar'), findsOneWidget);
       expect(find.textContaining('time zone'), findsNothing);
@@ -269,7 +269,7 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       expect(gateway.decisions, 0);
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Save approval only'));
       await tester.tap(find.text('Save approval only'));
@@ -277,6 +277,13 @@ void main() {
       expect(gateway.decisions, 1);
       expect(find.text('Save approval only'), findsNothing);
       expect(controller.actions.single.status, CalendarActionStatus.approved);
+      expect(
+        find.descendant(
+          of: find.byType(ReviewRequestPanel),
+          matching: find.text('Review request'),
+        ),
+        findsNothing,
+      );
       expect(
         find.text('Approval saved. No event has been created by this app.'),
         findsWidgets,
@@ -306,8 +313,17 @@ void main() {
         personId: 'person',
       );
       await controller.load();
-      await mount(tester, controller, 390);
-      await tester.tap(find.text('Review proposal'));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: ActivityPanel(controller: controller, connection: connection),
+          ),
+        ),
+      );
+      await tester.tap(find.text('View details'));
       await tester.pumpAndSettle();
       final format = DateFormat.yMMMd('en').add_jm();
       expect(
@@ -339,10 +355,10 @@ void main() {
     );
     await controller.load();
     await mount(tester, controller, 390);
-    await tester.tap(find.text('Review proposal'));
+    await tester.tap(find.text('Review request'));
     await tester.pumpAndSettle();
     expect(
-      find.text('This proposal has expired. Nothing was created.'),
+      find.text('This review request has expired. Nothing was created.'),
       findsOneWidget,
     );
     expect(find.text('Technical details'), findsOneWidget);
@@ -362,7 +378,7 @@ void main() {
       );
       await controller.load();
       await mount(tester, controller, 1200);
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Decline'));
       await tester.tap(find.text('Decline'));
@@ -370,7 +386,7 @@ void main() {
       await tester.ensureVisible(find.byTooltip('Close'));
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       expect(gateway.decisions, 1);
       gateway.pending!.complete(action(status: 'rejected'));
@@ -392,22 +408,22 @@ void main() {
       );
       await controller.load();
       await mount(tester, controller, 390);
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       gateway.fail = true;
       await tester.ensureVisible(find.text('Save approval only'));
       await tester.tap(find.text('Save approval only'));
       await tester.pumpAndSettle();
       expect(controller.needsReload, isTrue);
-      expect(find.byType(CalendarActionDialog), findsOneWidget);
+      expect(find.byType(ActionReviewDialog), findsOneWidget);
       expect(
         tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
         isNull,
       );
       gateway.fail = false;
       final reload = find.descendant(
-        of: find.byType(CalendarActionDialog),
-        matching: find.text('Reload proposals'),
+        of: find.byType(ActionReviewDialog),
+        matching: find.text('Reload reviews'),
       );
       await tester.ensureVisible(reload);
       await tester.tap(reload);
@@ -429,23 +445,32 @@ void main() {
       );
       await controller.load();
       await mount(tester, controller, 1200);
-      await tester.tap(find.text('Review proposal'));
+      await tester.tap(find.text('Review request'));
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byType(CalendarActionDialog), findsNothing);
+      expect(find.byType(ActionReviewDialog), findsNothing);
       expect(gateway.decisions, 0);
-      for (final status in [
-        'rejected',
-        'executing',
-        'unknown',
-        'blocked',
-        'succeeded',
-      ]) {
+      for (final status in ['rejected', 'blocked', 'succeeded']) {
         gateway.saved = [action(status: status)];
         await controller.load();
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Review proposal'));
+        expect(find.text('Review request'), findsNothing);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: FloeTheme.light,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(
+              body: ActivityPanel(
+                controller: controller,
+                connection: connection,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('View details'));
         await tester.pumpAndSettle();
         expect(find.text('Save approval only'), findsNothing);
         expect(find.text('Decline'), findsNothing);

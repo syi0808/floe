@@ -9,8 +9,8 @@ import '../application/calendar_action_controller.dart';
 import '../domain/day_models.dart';
 import 'calendar_action_panel.dart';
 
-class CalendarActionProposal extends StatefulWidget {
-  const CalendarActionProposal({
+class CalendarEventComposer extends StatefulWidget {
+  const CalendarEventComposer({
     super.key,
     required this.controller,
     required this.connection,
@@ -19,10 +19,10 @@ class CalendarActionProposal extends StatefulWidget {
   final CalendarConnection? Function() connection;
 
   @override
-  State<CalendarActionProposal> createState() => _CalendarActionProposalState();
+  State<CalendarEventComposer> createState() => _CalendarEventComposerState();
 }
 
-class _CalendarActionProposalState extends State<CalendarActionProposal> {
+class _CalendarEventComposerState extends State<CalendarEventComposer> {
   final form = GlobalKey<FormState>();
   final title = TextEditingController();
   final start = TextEditingController();
@@ -95,9 +95,10 @@ class _CalendarActionProposalState extends State<CalendarActionProposal> {
     final parent = navigator.context;
     if (!parent.mounted) return;
     navigator.pop();
+    if (!action.status.needsReview) return;
     showFloeDialog<void>(
       parent,
-      (_) => CalendarActionDialog(
+      (_) => ActionReviewDialog(
         controller: widget.controller,
         actionId: action.id,
         connection: widget.connection,

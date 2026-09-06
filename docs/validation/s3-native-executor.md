@@ -45,11 +45,13 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
 
 ## Rollout gate
 
-Normal builds compile native writing **off**. A validation build requires
-`FLOE_ENABLE_CALENDAR_WRITES=1 flutter build macos --debug`; Dart cannot override
-this native flag. Read/approval UI and OS permission disclosures distinguish the
-two modes. Keep ordinary rollout gated until S1 verification and the live matrix
-are complete. Full Access alone is never authorization to create an event.
+Product direction changed after this checkpoint: Release now compiles the trusted
+Calendar create adapter in, while Debug remains off unless built with
+`FLOE_ENABLE_CALENDAR_WRITES=1`. `FLOE_ENABLE_CALENDAR_WRITES=0` produces an
+explicitly write-disabled Release artifact for recovery or testing. Runtime
+Action Authority defaults Calendar creation to `ask` and supports `allow`, `ask`
+and `deny`. Full Access alone is never authorization to create an event, and the
+existing connection, validation, conflict and duplicate-suppression gates remain.
 
 ## Automated evidence
 
