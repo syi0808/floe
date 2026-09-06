@@ -271,6 +271,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get yourDayIsStillEmpty => 'Your day is still empty.';
 
   @override
+  String get emptyDayCreateHint =>
+      'No events on this day. Double-click a time to create one.';
+
+  @override
+  String get emptyDayCreateHintTouch =>
+      'No events on this day. Use + or press and hold a time to create one.';
+
+  @override
+  String get emptyDayConnectHint =>
+      'Connect a calendar to create and collect events here.';
+
+  @override
+  String get createEvent => 'Create event';
+
+  @override
+  String get newEvent => 'New event';
+
+  @override
   String get noSavedEventsForThisDay => 'No saved events for this day.';
 
   @override

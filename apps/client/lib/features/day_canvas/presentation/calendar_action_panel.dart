@@ -11,7 +11,6 @@ import '../application/calendar_action_controller.dart';
 import '../domain/calendar_action.dart';
 import '../domain/day_models.dart';
 import '../application/calendar_action_gateway.dart';
-import 'calendar_action_proposal.dart';
 
 String _status(AppLocalizations strings, CalendarActionStatus status) =>
     switch (status) {
@@ -88,31 +87,6 @@ class ReviewRequestPanel extends StatelessWidget {
         ),
       );
     },
-  );
-}
-
-class CalendarActionComposerButton extends StatelessWidget {
-  const CalendarActionComposerButton({
-    super.key,
-    required this.controller,
-    required this.connection,
-  });
-
-  final CalendarActionController controller;
-  final CalendarConnection? Function() connection;
-
-  @override
-  Widget build(BuildContext context) => FloeButton.outlined(
-    onPressed: controller.canPropose && connection() != null
-        ? () => showFloeDialog<void>(
-            context,
-            (_) => CalendarEventComposer(
-              controller: controller,
-              connection: connection,
-            ),
-          )
-        : null,
-    child: Text(AppLocalizations.of(context).actionNewProposal),
   );
 }
 

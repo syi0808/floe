@@ -17,6 +17,7 @@ import '../application/calendar_gateway.dart';
 import '../application/calendar_action_gateway.dart';
 import '../application/calendar_action_controller.dart';
 import 'calendar_action_panel.dart';
+import 'calendar_action_proposal.dart';
 import '../application/personal_day_controller.dart';
 import '../domain/day_models.dart';
 import '../domain/calendar_action.dart';
@@ -52,8 +53,10 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen> {
   late final PersonalDayController controller;
   CalendarActionController? actionController;
+  late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
+  DateTime? draftEventStart;
 
   @override
   void initState() {
@@ -69,6 +72,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         collect: _collectAction,
       )..load();
     }
+    screenState = Listenable.merge([controller, ?actionController]);
   }
 
   @override
@@ -122,7 +126,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: controller,
+    animation: screenState,
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth <= 780;
@@ -227,7 +231,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           _DestinationView.today => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _DayToolbar(controller, narrow: narrow),
+              _DayToolbar(
+                controller,
+                narrow: narrow,
+                onCreateEvent:
+                    actionController?.canPropose == true &&
+                        controller.snapshot?.calendar != null
+                    ? () => _openCalendarEditor()
+                    : null,
+              ),
               if (snapshot.calendar?.error != null)
                 Padding(
                   padding: EdgeInsets.only(bottom: 16),
@@ -282,30 +294,30 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
+    final actions = actionController;
+    final showReviews =
+        actions != null &&
+        (actions.busy ||
+            actions.failed ||
+            actions.actions.any((action) => action.status.needsReview));
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
       loading: controller.loadState == DayLoadState.loading,
       onConnections: () => _selectDestination(_DestinationView.connections),
+      onCreateEvent:
+          actionController?.canPropose == true && snapshot.calendar != null
+          ? (startsAt) => _openCalendarEditor(startsAt)
+          : null,
+      draftStartsAt: draftEventStart,
     );
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (actionController case final actions?) ...[
-          CalendarActionComposerButton(
-            controller: actions,
-            connection: () =>
-                controller.loadState == DayLoadState.ready &&
-                    DateUtils.isSameDay(controller.query.date, DateTime.now())
-                ? controller.snapshot?.calendar
-                : null,
-          ),
-          SizedBox(height: 12),
+        if (showReviews) ...[
           ReviewRequestPanel(
             controller: actions,
-            connection: () =>
-                controller.loadState == DayLoadState.ready &&
-                    DateUtils.isSameDay(controller.query.date, DateTime.now())
+            connection: () => controller.loadState == DayLoadState.ready
                 ? controller.snapshot?.calendar
                 : null,
           ),
@@ -355,6 +367,31 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       destination = value;
       selectedTaskId = null;
     });
+  }
+
+  Future<void> _openCalendarEditor([DateTime? startsAt]) async {
+    final actions = actionController;
+    final connection = controller.snapshot?.calendar;
+    if (actions == null || !actions.canPropose || connection == null) return;
+    final date = controller.query.date;
+    final now = DateTime.now();
+    final initialStart =
+        startsAt ??
+        (DateUtils.isSameDay(date, now)
+            ? DateTime(now.year, now.month, now.day, now.hour + 1)
+            : DateTime(date.year, date.month, date.day, 9));
+    setState(() => draftEventStart = initialStart);
+    await showFloeDialog<void>(
+      context,
+      (_) => CalendarEventComposer(
+        controller: actions,
+        connection: () => controller.snapshot?.calendar,
+        initialStart: initialStart,
+      ),
+    );
+    if (mounted && draftEventStart == initialStart) {
+      setState(() => draftEventStart = null);
+    }
   }
 
   Future<void> _setTaskCompleted(TaskItem task, bool completed) async {
@@ -536,9 +573,14 @@ class _DestinationButtonState extends State<_DestinationButton> {
 }
 
 class _DayToolbar extends StatelessWidget {
-  const _DayToolbar(this.controller, {required this.narrow});
+  const _DayToolbar(
+    this.controller, {
+    required this.narrow,
+    required this.onCreateEvent,
+  });
   final PersonalDayController controller;
   final bool narrow;
+  final VoidCallback? onCreateEvent;
 
   @override
   Widget build(BuildContext context) {
@@ -614,6 +656,11 @@ class _DayToolbar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: leading),
+          IconButton(
+            tooltip: AppLocalizations.of(context).createEvent,
+            onPressed: onCreateEvent,
+            icon: const Icon(LucideIcons.plus, size: 18),
+          ),
           IconButton(
             tooltip: AppLocalizations.of(context).refreshCalendar,
             onPressed: controller.loadState == DayLoadState.loading

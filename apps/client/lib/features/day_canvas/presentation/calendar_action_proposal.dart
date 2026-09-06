@@ -14,9 +14,11 @@ class CalendarEventComposer extends StatefulWidget {
     super.key,
     required this.controller,
     required this.connection,
+    this.initialStart,
   });
   final CalendarActionController controller;
   final CalendarConnection? Function() connection;
+  final DateTime? initialStart;
 
   @override
   State<CalendarEventComposer> createState() => _CalendarEventComposerState();
@@ -35,7 +37,9 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   void initState() {
     super.initState();
     final now = DateTime.now();
-    final next = DateTime(now.year, now.month, now.day, now.hour + 1);
+    final next =
+        widget.initialStart ??
+        DateTime(now.year, now.month, now.day, now.hour + 1);
     start.text = _localInput(next);
     end.text = _localInput(next.add(const Duration(minutes: 45)));
     calendarId = widget.connection()?.selectedCalendarIds.firstOrNull;

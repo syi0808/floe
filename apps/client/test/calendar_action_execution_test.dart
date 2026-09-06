@@ -6,6 +6,7 @@ import 'package:floe_client/features/day_canvas/application/calendar_action_cont
 import 'package:floe_client/features/day_canvas/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_action_panel.dart';
+import 'package:floe_client/features/day_canvas/presentation/calendar_action_proposal.dart';
 
 import 'calendar_action_ui_test.dart' show Gateway, action, connection;
 
@@ -209,24 +210,14 @@ void main() {
           supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(
             body: SingleChildScrollView(
-              child: Column(
-                children: [
-                  CalendarActionComposerButton(
-                    controller: controller,
-                    connection: connection,
-                  ),
-                  ReviewRequestPanel(
-                    controller: controller,
-                    connection: connection,
-                  ),
-                ],
+              child: CalendarEventComposer(
+                controller: controller,
+                connection: connection,
               ),
             ),
           ),
         ),
       );
-      await tester.tap(find.text('Plan a Calendar event'));
-      await tester.pumpAndSettle();
       expect(find.text('Starts'), findsOneWidget);
       expect(find.text('Ends'), findsOneWidget);
       expect(find.textContaining('time zone'), findsNothing);

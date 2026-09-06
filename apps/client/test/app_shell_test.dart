@@ -177,6 +177,8 @@ void main() {
       );
       expect(find.byTooltip('Settings'), findsOneWidget);
       final timeline = find.byKey(const Key('timeline-card'));
+      expect(find.byTooltip('Create event'), findsOneWidget);
+      expect(find.text('Plan a Calendar event'), findsNothing);
       expect(find.byType(TextField), findsNothing);
       expect(
         tester.getRect(timeline).bottom,

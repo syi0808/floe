@@ -598,6 +598,36 @@ abstract class AppLocalizations {
   /// **'Your day is still empty.'**
   String get yourDayIsStillEmpty;
 
+  /// No description provided for @emptyDayCreateHint.
+  ///
+  /// In en, this message translates to:
+  /// **'No events on this day. Double-click a time to create one.'**
+  String get emptyDayCreateHint;
+
+  /// No description provided for @emptyDayCreateHintTouch.
+  ///
+  /// In en, this message translates to:
+  /// **'No events on this day. Use + or press and hold a time to create one.'**
+  String get emptyDayCreateHintTouch;
+
+  /// No description provided for @emptyDayConnectHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect a calendar to create and collect events here.'**
+  String get emptyDayConnectHint;
+
+  /// No description provided for @createEvent.
+  ///
+  /// In en, this message translates to:
+  /// **'Create event'**
+  String get createEvent;
+
+  /// No description provided for @newEvent.
+  ///
+  /// In en, this message translates to:
+  /// **'New event'**
+  String get newEvent;
+
   /// No description provided for @noSavedEventsForThisDay.
   ///
   /// In en, this message translates to:

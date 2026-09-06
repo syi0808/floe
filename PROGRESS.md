@@ -16,11 +16,13 @@
   unless explicitly enabled. Runtime policy and fresh provider checks still gate
   every execution.
 - [Product and domain contract](docs/planning/01-experience/review-authority-and-activity.md).
-- Planned Apple Calendar-familiar direct manipulation: toolbar `+`, empty-slot
-  double-click, drag-to-move and capability-aware context menus, all routed
-  through the same authority/review/activity boundary rather than a proposal UI.
+- Began Apple Calendar-familiar direct manipulation: Calendar creation now starts
+  from the toolbar `+` or an empty 15-minute-snapped double-click rather than a
+  labeled proposal control in the contextual rail.
 - Empty days retain the full interactive time grid. `A little breathing room` is
-  planned as a compact inline status rather than the current blurred, inert overlay.
+  now a compact inline status rather than a blurred, inert overlay.
+- Drag-to-move and capability-aware context menus remain the next interaction slice;
+  they will use the same authority/review/activity boundary.
 
 ## Delivery Board
 
