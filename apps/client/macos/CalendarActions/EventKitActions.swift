@@ -19,14 +19,6 @@ private func timestamp(_ value: Any?) throws -> Date {
   return date
 }
 
-private var writesEnabled: Bool {
-  #if FLOE_CALENDAR_WRITES
-  return true
-  #else
-  return false
-  #endif
-}
-
 private func requirePermission() throws {
   let status = EKEventStore.authorizationStatus(for: .event)
   if #available(macOS 14.0, *) {
@@ -103,7 +95,7 @@ func localConflict(_ records: [[String: Any]], _ proposal: Proposal) throws -> B
 
 private func runAction(_ request: [String: Any]) throws -> Any {
   guard let operation = request["operation"] as? String else { throw NativeFailure("uncertain_result") }
-  if operation == "capabilities" { return ["writes_enabled": writesEnabled] }
+  if operation == "capabilities" { return ["writes_enabled": true] }
   guard let raw = request["action"] as? [String: Any] else { throw NativeFailure("uncertain_result") }
   let proposal = try Proposal(raw)
   let deadline = try timestamp(request["deadline"])
@@ -120,7 +112,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
     guard matches.count == 1, proposal.matches(matches[0]) else { throw NativeFailure("uncertain_result") }
     return matches.map { proposal.receipt($0) }
   }
-  guard operation == "preflight" || operation == "create", writesEnabled,
+  guard operation == "preflight" || operation == "create",
         let identifiers = request["calendar_ids"] as? [String], identifiers.contains(proposal.calendarID),
         let records = request["local_events"] as? [[String: Any]],
         let state = raw["state"] as? [String: Any], state["status"] as? String == "executing",

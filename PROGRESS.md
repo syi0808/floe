@@ -12,9 +12,8 @@
   separate Activity destination.
 - Added durable Person-scoped Calendar create authority (`allow` / `ask` / `deny`)
   and an Action permissions settings surface. The default remains `ask`.
-- Release includes Calendar writing by default; Debug remains write-disabled
-  unless explicitly enabled. Runtime policy and fresh provider checks still gate
-  every execution.
+- All app builds include Calendar writing. Runtime policy and fresh provider
+  checks still gate every execution.
 - [Product and domain contract](docs/planning/01-experience/review-authority-and-activity.md).
 - Began Apple Calendar-familiar direct manipulation: Calendar creation now starts
   from the toolbar `+` or an empty 15-minute-snapped double-click rather than a
@@ -64,10 +63,12 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
   approval → native create → MethodChannel read/import → Day Canvas. Relaunch and
   read retries retained one event; exact cleanup removed it without changing the
   successful ledger or creating a replacement. S3-A3/A4 verified (2/5), not Accepted.
-- Existing 11 calendar selections stayed unchanged. Both Debug and Release are
-  restored to write-disabled builds; ad-hoc rebuilds may require a fresh OS grant.
+- Existing 11 calendar selections stayed unchanged. At this checkpoint, both
+  Debug and Release were restored to write-disabled builds; ad-hoc rebuilds may
+  require a fresh OS grant. The current rollout policy enables the executor in all
+  builds.
 - Connected proposal preparation, explicit approval, native execution, lookup-only
-  recovery and separate Calendar read retry. Normal builds remain write-disabled.
+  recovery and separate Calendar read retry.
 - Live disposable create through the actual Rust/native adapter survived injected
   response loss and process restart; duplicate create was blocked. Exact cleanup
   and absence verification passed. Existing calendar selections were preserved.
@@ -302,8 +303,8 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 
 1. Complete S1's live Calendar criteria.
 2. Complete signed-app S3 approval/create/collection and provider-failure validation.
-   Prototype review, Flutter UI and native Rust binding are implemented; keep
-   ordinary builds write-disabled until the live acceptance gates pass.
+   Prototype review, Flutter UI and native Rust binding are implemented; runtime
+   authority and fresh safety checks remain mandatory.
 3. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,

@@ -6,7 +6,7 @@ the actual built EventKit adapter, then replaces a successful create response wi
 `iCloud · Floe Validation`. It does not approve anything or retry a create.
 Rust and Flutter must recover the original execution marker by lookup.
 
-Do not ship this shim or enable writes as part of a normal build. Obtain operator
+Do not ship this shim. Normal builds include the guarded Calendar executor; obtain operator
 authorization for the dedicated calendar, disposable event and cleanup first.
 Never change TCC grants, existing calendars, or unrelated events to make a test pass.
 
@@ -14,12 +14,11 @@ Permission reauthorization is a separate user-approved operation, not part of th
 helper. If an ad-hoc build no longer matches its old grant, stop and obtain explicit
 authorization before resetting Floe's Calendar grant. Never edit the TCC database.
 
-Build the app explicitly with `FLOE_ENABLE_CALENDAR_WRITES=1 flutter build macos --debug`.
-In a disposable copy of that app, rename the signed native library to
+Build the app with `flutter build macos --debug`. In a disposable copy of that app,
+rename the signed native library to
 `libfloe_eventkit_real.dylib`, compile this shim as `libfloe_eventkit.dylib`, and sign
 both libraries and the copied app. Launch only the copied app for fault injection.
-The original build must be restored to write-disabled after validation. Persist
-the exact proposal/execution/time/external IDs in a private evidence record and
+Do not modify the original build. Persist the exact proposal/execution/time/external IDs in a private evidence record and
 remove only the exact disposable event after collection is verified.
 
 Fixture end-to-end coverage (no OS access) is `cargo test -p floe-ffi --test native_action`.

@@ -5,9 +5,9 @@ porting to Flutter. This is an interactive design reference, not live execution.
 
 2026-09-06: [Native execution](../validation/s3-native-executor.md) binds the
 Flutter review to the durable ledger. A later product decision replaces this
-Calendar-specific surface with shared Review and Activity, enables the trusted
-executor in Release, and makes runtime Action Authority the authorization gate.
-Debug builds remain write-disabled unless explicitly enabled.
+Calendar-specific surface with shared Review and Activity and makes runtime
+Action Authority the authorization gate. All app builds include the trusted
+executor.
 
 This document retains the validated decision surface but no longer defines the
 Calendar entry point. The labeled planning button is superseded by the Calendar
@@ -82,7 +82,7 @@ in Rust; it is not established by this prototype.
 
 The simplified review is implemented in the prototype and Flutter. Production
 decisions/state remain bound to the Rust ledger, not this simulated reducer.
-Release includes Calendar create while Debug remains write-disabled by default.
+All app builds include Calendar create.
 This presentation change does not
 advance the remaining live acceptance or dogfood gates recorded in
 [S3 native validation](../validation/s3-native-executor.md).

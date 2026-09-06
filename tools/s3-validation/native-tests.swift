@@ -38,5 +38,5 @@ do { _ = try Proposal(invalid); fatalError("foreign Person accepted") } catch {}
 let response = "{\"operation\":\"capabilities\"}".withCString { floeEventKitAction($0) }!
 let capabilities = try JSONSerialization.jsonObject(with: Data(String(cString: response).utf8)) as! [String: Any]
 floeEventKitFree(response)
-check((capabilities["data"] as? [String: Any])?["writes_enabled"] as? Bool == false, "writes enabled in default build")
+check((capabilities["data"] as? [String: Any])?["writes_enabled"] as? Bool == true, "writes unavailable in default build")
 print("9 native validation assertions passed; no OS permission or event access invoked")

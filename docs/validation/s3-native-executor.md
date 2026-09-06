@@ -32,7 +32,7 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
 - Lookup requires exactly one marker, target, title and UTC-interval match in a
   bounded ±1-day window. EventKit uses the device's current timezone for its event.
   Edited, duplicated, moved-out-of-range or missing markers remain unresolved.
-  Lookup remains available in write-disabled builds and never creates anything.
+  Lookup never creates anything.
 - Explicit new approval can execute immediately in a write-enabled build.
   Restored approvals require an explicit execution click and current checks;
   loading/relaunch never resumes creation. Unknown/executing states offer lookup
@@ -45,13 +45,11 @@ Date: 2026-09-06. macOS, EventKit, Flutter, JSON/C ABI, Rust/Turso.
 
 ## Rollout gate
 
-Product direction changed after this checkpoint: Release now compiles the trusted
-Calendar create adapter in, while Debug remains off unless built with
-`FLOE_ENABLE_CALENDAR_WRITES=1`. `FLOE_ENABLE_CALENDAR_WRITES=0` produces an
-explicitly write-disabled Release artifact for recovery or testing. Runtime
-Action Authority defaults Calendar creation to `ask` and supports `allow`, `ask`
-and `deny`. Full Access alone is never authorization to create an event, and the
-existing connection, validation, conflict and duplicate-suppression gates remain.
+Product direction changed after this checkpoint: every app build compiles the
+trusted Calendar create adapter in. Runtime Action Authority defaults Calendar
+creation to `ask` and supports `allow`, `ask` and `deny`. Full Access alone is
+never authorization to create an event, and the existing connection, validation,
+conflict and duplicate-suppression gates remain.
 
 ## Automated evidence
 
@@ -67,9 +65,9 @@ flutter build macos --debug
 ```
 
 46 Rust tests, 72 Flutter tests and nine native assertions pass. Clippy and Flutter
-analysis are clean. macOS write-enabled debug and default release builds pass
-signature checks. The release library's actual capability response was checked:
-`writes_enabled=false`, without reading Calendar or requesting permission.
+analysis are clean. macOS debug and release builds pass signature checks. The
+native capability response is checked without reading Calendar or requesting
+permission.
 The new Rust integration test runs a copied host with an isolated native fixture:
 real ABI, dynamic loading, execution, lost response, reopen, retry denial, lookup
 and conflict blocking, with exactly one native create call and no OS access.
@@ -156,11 +154,11 @@ event had already been removed; both were individually verified absent.
 The app's durable successful test action remains as audit history. No existing
 external event, local task/note, selected-calendar list or connection mode changed.
 
-After validation, the app was closed and Debug rebuilt without
-`FLOE_ENABLE_CALENDAR_WRITES`; both ordinary Debug and Release artifacts have
-writing disabled. The rebuilt app is left closed: ad-hoc identity changes can
-require another user-controlled Calendar grant on a future validation build.
-Never ship the private response-loss app copy.
+At the time of this validation, the app was closed and restored to the then-default
+write-disabled configuration. The later rollout decision documented above makes
+the executor available in every app build. Ad-hoc identity changes can require
+another user-controlled Calendar grant. Never ship the private response-loss app
+copy.
 
 ## Acceptance boundary
 
