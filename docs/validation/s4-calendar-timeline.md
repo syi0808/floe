@@ -13,7 +13,8 @@ connection revision, one local day, a UTC planning window and expiry.
 The grant allows at most four selected calendars, a planning window of at most
 24 hours and an expiry no more than five minutes away. It is not an Agent-supplied
 request, durable installation record or new permission UI. Host orchestration must
-bind it to explicitly authorized Person/Expert assignments; this component does not
+bind it to explicitly authorized Person/Expert assignments. The [Core turn host now
+checks a durable binding](s4-calendar-bindings.md); this View component alone does not
 automatically grant or broaden registry access, discover calendars or refresh imports.
 
 Before returning evidence, the adapter:

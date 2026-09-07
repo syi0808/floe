@@ -106,7 +106,9 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 This is enablement management for existing packages/assignments, not the complete
 A3 installation/grant editor. Explicit package installation/version changes, new
 Person assignments, dependency/scope details and durable Calendar scope bindings
-remain to expose and govern. It must not be counted as complete registry acceptance.
+remain to expose and govern. [Durable Calendar bindings](s4-calendar-bindings.md) now
+exist in Core, but this screen does not create or edit them. It must not be counted
+as complete registry acceptance.
 
 The default panel still accepts only synthetic sample questions. Connecting the
 Core Calendar turn host to native chat dispatch, model/destination selection and

@@ -144,6 +144,42 @@ pub struct RegistrySnapshot {
     pub packages: Vec<AgentPackage>,
     pub installations: Vec<PackageInstallation>,
     pub assignments: Vec<PackageAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendar_views: Vec<CalendarViewBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarViewBinding {
+    pub handle: Uuid,
+    pub person_id: PersonId,
+    pub provider: floe_domain::CalendarProvider,
+    pub calendar_ids: Vec<String>,
+    pub enabled: bool,
+}
+
+impl CalendarViewBinding {
+    pub fn data_class(&self) -> DataClass {
+        match self.provider {
+            floe_domain::CalendarProvider::Fixture => DataClass::Synthetic,
+            floe_domain::CalendarProvider::EventKit => DataClass::Personal,
+        }
+    }
+
+    fn validate(&self) -> Result<(), AgentFailure> {
+        if self.handle.is_nil()
+            || self.calendar_ids.is_empty()
+            || self.calendar_ids.len() > 4
+            || self
+                .calendar_ids
+                .iter()
+                .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
+            || self.calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -231,6 +267,7 @@ impl AgentRegistry {
                 packages: vec![],
                 installations: vec![],
                 assignments: vec![],
+                calendar_views: vec![],
             },
         }
     }
@@ -257,10 +294,20 @@ impl AgentRegistry {
         if snapshot.packages.len() > 64
             || snapshot.installations.len() > 128
             || snapshot.assignments.len() > 256
+            || snapshot.calendar_views.len() > 256
         {
             return Err(AgentFailure::BudgetExceeded);
         }
         let registry = Self { snapshot };
+        for (index, binding) in registry.snapshot.calendar_views.iter().enumerate() {
+            binding.validate()?;
+            if registry.snapshot.calendar_views[..index]
+                .iter()
+                .any(|other| other.handle == binding.handle)
+            {
+                return Err(AgentFailure::Conflict);
+            }
+        }
         for (index, package) in registry.snapshot.packages.iter().enumerate() {
             package.validate()?;
             if registry.snapshot.packages[..index]
@@ -505,6 +552,65 @@ impl AgentRegistry {
         Ok(resolved)
     }
 
+    pub fn register_calendar_view(
+        &mut self,
+        expected_revision: u64,
+        person_id: PersonId,
+        provider: floe_domain::CalendarProvider,
+        mut calendar_ids: Vec<String>,
+    ) -> Result<Uuid, AgentFailure> {
+        self.check_revision(expected_revision)?;
+        if self.snapshot.calendar_views.len() >= 256 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        calendar_ids.sort();
+        let binding = CalendarViewBinding {
+            handle: Uuid::new_v4(),
+            person_id,
+            provider,
+            calendar_ids,
+            enabled: false,
+        };
+        binding.validate()?;
+        let handle = binding.handle;
+        self.advance()?;
+        self.snapshot.calendar_views.push(binding);
+        Ok(handle)
+    }
+
+    pub fn set_calendar_view_enabled(
+        &mut self,
+        expected_revision: u64,
+        person_id: PersonId,
+        handle: Uuid,
+        enabled: bool,
+    ) -> Result<(), AgentFailure> {
+        self.check_revision(expected_revision)?;
+        let index = self
+            .snapshot
+            .calendar_views
+            .iter()
+            .position(|binding| binding.person_id == person_id && binding.handle == handle)
+            .ok_or(AgentFailure::NotFound)?;
+        self.advance()?;
+        self.snapshot.calendar_views[index].enabled = enabled;
+        Ok(())
+    }
+
+    pub fn calendar_view(
+        &self,
+        person_id: PersonId,
+        handle: Uuid,
+    ) -> Result<&CalendarViewBinding, AgentFailure> {
+        self.snapshot
+            .calendar_views
+            .iter()
+            .find(|binding| {
+                binding.person_id == person_id && binding.handle == handle && binding.enabled
+            })
+            .ok_or(AgentFailure::CapabilityDenied)
+    }
+
     pub fn expert_descriptor(
         &self,
         person_id: PersonId,
@@ -577,6 +683,15 @@ impl AgentRegistry {
         else {
             return Err(AgentFailure::CapabilityDenied);
         };
+        if self
+            .snapshot
+            .calendar_views
+            .iter()
+            .any(|binding| binding.handle == views[0])
+            && self.calendar_view(person_id, views[0])?.data_class() != data_class
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         Ok(ResolvedExpert {
             registry_revision: self.revision(),
             package: package.clone(),
@@ -618,6 +733,23 @@ impl AgentRegistry {
     fn validate_grants(&self, assignment: &PackageAssignment) -> Result<(), AgentFailure> {
         let installation = self.installation(assignment.installation_id)?;
         let package = self.package(&installation.package)?;
+        for handle in &assignment.granted_view_handles {
+            if let Some(binding) = self
+                .snapshot
+                .calendar_views
+                .iter()
+                .find(|binding| binding.handle == *handle)
+            {
+                if binding.person_id != assignment.person_id {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                if let PackageImplementation::TimelineRead { data_class } = package.implementation
+                    && data_class != binding.data_class()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
+        }
         if assignment.granted_view_handles.len() > 4
             || assignment
                 .granted_view_handles

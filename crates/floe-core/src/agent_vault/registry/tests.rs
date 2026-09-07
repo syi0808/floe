@@ -186,6 +186,124 @@ async fn cancelled_configuration_validation_rolls_back_the_staged_enablement_upd
     );
 }
 
+#[tokio::test]
+async fn calendar_bindings_persist_encrypted_without_exposing_sources_in_the_overview() {
+    let mut fixture = Fixture::new().await;
+    let snapshot = fixture.prepare().await;
+    let mut registry =
+        AgentRegistry::restore(snapshot, fixture.vault.registry_instance_id()).unwrap();
+    let revision = registry.revision();
+    let handle = registry
+        .register_calendar_view(
+            revision,
+            fixture.person,
+            floe_domain::CalendarProvider::Fixture,
+            vec!["private-calendar-canary".into()],
+        )
+        .unwrap();
+    fixture
+        .vault
+        .save_expert_registry(revision, &registry.snapshot())
+        .await
+        .unwrap();
+    let revision = registry.revision();
+    registry
+        .set_calendar_view_enabled(revision, fixture.person, handle, true)
+        .unwrap();
+    fixture
+        .vault
+        .save_expert_registry(revision, &registry.snapshot())
+        .await
+        .unwrap();
+    let expected = registry.snapshot();
+    let overview =
+        serde_json::to_string(&fixture.vault.registry_overview().await.unwrap()).unwrap();
+    assert!(
+        !overview.contains("private-calendar-canary") && !overview.contains(&handle.to_string())
+    );
+    drop(fixture.vault);
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap().unwrap(),
+        expected
+    );
+    let bytes = fs::read(
+        fixture
+            .root
+            .path()
+            .join(fixture.person.to_string())
+            .join("sessions.db"),
+    )
+    .unwrap();
+    assert!(
+        !bytes
+            .windows(b"private-calendar-canary".len())
+            .any(|window| window == b"private-calendar-canary")
+    );
+}
+
+#[tokio::test]
+async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_a_legacy_handle() {
+    let fixture = Fixture::new().await;
+    let snapshot = fixture.prepare().await;
+    let mut registry =
+        AgentRegistry::restore(snapshot.clone(), fixture.vault.registry_instance_id()).unwrap();
+    let revision = registry.revision();
+    registry
+        .register_calendar_view(
+            revision,
+            fixture.person,
+            floe_domain::CalendarProvider::Fixture,
+            vec!["home".into()],
+        )
+        .unwrap();
+    let initial = registry.snapshot();
+    for mode in 0..3 {
+        let mut forged = initial.clone();
+        match mode {
+            0 => forged.calendar_views[0].enabled = true,
+            1 => forged.calendar_views[0].person_id = PersonId::new(),
+            _ => forged.calendar_views[0].handle = snapshot.assignments[0].granted_view_handles[0],
+        }
+        assert!(
+            fixture
+                .vault
+                .save_expert_registry(revision, &forged)
+                .await
+                .is_err()
+        );
+    }
+    fixture
+        .vault
+        .save_expert_registry(revision, &initial)
+        .await
+        .unwrap();
+    for mode in 0..4 {
+        let mut forged = initial.clone();
+        forged.revision += 1;
+        match mode {
+            0 => forged.calendar_views[0].calendar_ids = vec!["different".into()],
+            1 => forged.calendar_views[0].provider = floe_domain::CalendarProvider::EventKit,
+            2 => forged.calendar_views[0].handle = Uuid::new_v4(),
+            _ => forged.calendar_views.clear(),
+        }
+        assert_eq!(
+            fixture
+                .vault
+                .save_expert_registry(initial.revision, &forged)
+                .await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            fixture.vault.expert_registry().await.unwrap().unwrap(),
+            initial
+        );
+    }
+}
+
 impl Fixture {
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();

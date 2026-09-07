@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and registry enablement UI; Core Calendar/Expert turn and S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant management; live key/model/source and privacy gates | Durable Calendar scope bindings and native connected-turn dispatch; models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and registry UI; bound Core Calendar/Expert turns and S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant management; live key/model/source and privacy gates | Calendar scope consent/setup and native connected-turn dispatch; models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,23 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 durable Calendar View bindings — 2026-09-07
+
+- Added encrypted Person/provider/exact-calendar scope bindings with fresh handles,
+  default-off registration and explicit enablement. Saved bindings cannot be removed
+  or retargeted; old unbound grants cannot be silently appropriated for Calendar.
+- Core Calendar turns require an exact active binding before model/native dispatch.
+  Proposal publication checks binding revocation and source connection revision,
+  preventing old evidence from being republished against a newer connection state.
+- Validation: 179 workspace Rust tests, three keyring example tests, 25 native
+  assertions, formatting and Clippy with existing exclusions pass. Existing Calendar
+  fixtures now explicitly bind their scopes; no personal source, production vault key
+  or live model was accessed. All 146 Flutter tests, analysis, native/macOS Debug
+  builds and deep strict signature verification pass; UI goldens are unchanged.
+- [Evidence and limits](docs/validation/s4-calendar-bindings.md). Scope consent/setup
+  UI, installation/assignment editing, native connected turns and live gates remain.
+  S4 stays 0/14 and S1/S3 acceptance is unchanged.
 
 ### S4 app registry enablement — 2026-09-07
 

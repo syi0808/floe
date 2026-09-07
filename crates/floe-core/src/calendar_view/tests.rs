@@ -650,7 +650,14 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         vault.registry_instance_id(),
     )
     .unwrap();
-    let snapshot = sample.snapshot().unwrap();
+    let mut snapshot = sample.snapshot().unwrap();
+    snapshot.calendar_views.push(CalendarViewBinding {
+        handle: snapshot.assignments[0].granted_view_handles[0],
+        person_id: fixture.person,
+        provider: CalendarProvider::Fixture,
+        calendar_ids: fixture.grant().calendar_ids,
+        enabled: true,
+    });
     vault.initialize_expert_registry(&snapshot).await.unwrap();
     let assignment = snapshot
         .assignments

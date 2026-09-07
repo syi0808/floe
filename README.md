@@ -48,6 +48,8 @@ projects exact authorized mirror scopes through the common Expert port, with a
 native read-access boundary. [Core turn orchestration](docs/validation/s4-calendar-turn.md)
 now connects ordinary model calls, leased Views, atomic Expert results and governed
 proposal preparation. The app's connected personal-chat route is not enabled yet.
+[Durable Calendar bindings](docs/validation/s4-calendar-bindings.md) now pin each
+connected View to an exact encrypted source scope; scope consent/setup UI remains open.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

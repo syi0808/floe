@@ -72,6 +72,12 @@ impl FloeCore {
             };
             let registry = AgentRegistry::restore(snapshot, vault.registry_instance_id())?;
             let revision = registry.revision();
+            let binding = registry.calendar_view(views.grant().person_id, views.grant().handle)?;
+            let mut calendars = views.grant().calendar_ids.clone();
+            calendars.sort();
+            if binding.provider != views.grant().provider || binding.calendar_ids != calendars {
+                return Err(AgentFailure::CapabilityDenied);
+            }
             let descriptor = registry.expert_descriptor(
                 views.grant().person_id,
                 request.assignment_id,

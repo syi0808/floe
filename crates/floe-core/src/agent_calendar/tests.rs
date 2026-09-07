@@ -149,6 +149,10 @@ impl Fixture {
     }
 
     async fn with_class(class: DataClass) -> Self {
+        Self::with_binding(class, true).await
+    }
+
+    async fn with_binding(class: DataClass, bound: bool) -> Self {
         let provider = if class == DataClass::Personal {
             CalendarProvider::EventKit
         } else {
@@ -201,8 +205,23 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let handle = Uuid::new_v4();
         let mut registry = AgentRegistry::new(vault.registry_instance_id());
+        let handle = if bound {
+            let handle = registry
+                .register_calendar_view(
+                    registry.revision(),
+                    person,
+                    provider,
+                    vec!["private-calendar-id".into()],
+                )
+                .unwrap();
+            registry
+                .set_calendar_view_enabled(registry.revision(), person, handle, true)
+                .unwrap();
+            handle
+        } else {
+            Uuid::new_v4()
+        };
         let tool = PackageRef {
             kind: PackageKind::Tool,
             id: "calendar.timeline".into(),
@@ -1021,4 +1040,197 @@ async fn model_cannot_smuggle_scope_or_execution_fields_through_expert_input() {
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     assert_eq!(fixture.state().await.revision, fixture.revision);
     assert!(result.proposals.is_empty());
+}
+
+#[tokio::test]
+async fn missing_revoked_or_different_durable_calendar_scope_is_denied_before_model_and_native_access()
+ {
+    for mode in 0..4 {
+        let fixture = Fixture::with_binding(DataClass::Synthetic, mode != 0).await;
+        let model = Model::default();
+        let access = Access::default();
+        let mut request = fixture.request();
+        match mode {
+            1 => request
+                .grant
+                .calendar_ids
+                .push("unapproved-calendar".into()),
+            2 => request.grant.calendar_ids = vec!["different-calendar".into()],
+            3 => {
+                let mut registry = AgentRegistry::restore(
+                    fixture.state().await,
+                    fixture.vault.registry_instance_id(),
+                )
+                .unwrap();
+                let revision = registry.revision();
+                registry
+                    .set_calendar_view_enabled(
+                        revision,
+                        fixture.session.person_id,
+                        fixture.grant.handle,
+                        false,
+                    )
+                    .unwrap();
+                fixture
+                    .vault
+                    .save_expert_registry(revision, &registry.snapshot())
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+        assert!(matches!(
+            fixture
+                .core
+                .run_calendar_agent_turn(&fixture.vault, &access, &model, request, now, |_| {})
+                .await,
+            Err(AgentFailure::CapabilityDenied)
+        ));
+        assert!(model.requests.lock().unwrap().is_empty());
+        assert_eq!(access.calls.load(Ordering::Acquire), 0);
+        assert_eq!(
+            fixture
+                .vault
+                .load(fixture.session.person_id, fixture.session.id)
+                .await
+                .unwrap(),
+            fixture.session
+        );
+    }
+}
+
+#[tokio::test]
+async fn revoking_calendar_binding_blocks_publication_of_an_already_committed_expert_proposal() {
+    let fixture = Fixture::new().await;
+    let mut request = fixture.request();
+    request.destination = None;
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            request,
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let AgentMessage::Capability { call_id, .. } = result.session.messages[1] else {
+        panic!("missing receipt")
+    };
+    let mut registry =
+        AgentRegistry::restore(fixture.state().await, fixture.vault.registry_instance_id())
+            .unwrap();
+    let revision = registry.revision();
+    registry
+        .set_calendar_view_enabled(
+            revision,
+            fixture.session.person_id,
+            fixture.grant.handle,
+            false,
+        )
+        .unwrap();
+    fixture
+        .vault
+        .save_expert_registry(revision, &registry.snapshot())
+        .await
+        .unwrap();
+    assert!(matches!(
+        fixture
+            .core
+            .prepare_expert_calendar_action(
+                &fixture.vault,
+                ExpertCalendarRequest {
+                    reference: ExpertProposalReference {
+                        person_id: fixture.session.person_id,
+                        session_id: result.session.id,
+                        invocation_id: call_id
+                    },
+                    destination: fixture.request().destination.unwrap(),
+                    cancellation: Cancellation::default(),
+                    deadline: Instant::now() + Duration::from_secs(1),
+                },
+                now
+            )
+            .await,
+        Err(AgentFailure::CapabilityDenied)
+    ));
+    assert_eq!(
+        fixture
+            .vault
+            .load(fixture.session.person_id, fixture.session.id)
+            .await
+            .unwrap(),
+        result.session
+    );
+    assert!(
+        fixture
+            .core
+            .calendar_action(fixture.session.person_id, call_id)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revision() {
+    let fixture = Fixture::new().await;
+    let mut request = fixture.request();
+    request.destination = None;
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            request,
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let AgentMessage::Capability { call_id, .. } = result.session.messages[1] else {
+        panic!("missing receipt")
+    };
+    fixture
+        .core
+        .import_calendar(
+            fixture.session.person_id,
+            2,
+            fixture.grant.day.clone(),
+            vec![],
+            now(),
+        )
+        .await
+        .unwrap();
+    let mut destination = fixture.request().destination.unwrap();
+    destination.connection_revision = 3;
+    assert!(matches!(
+        fixture
+            .core
+            .prepare_expert_calendar_action(
+                &fixture.vault,
+                ExpertCalendarRequest {
+                    reference: ExpertProposalReference {
+                        person_id: fixture.session.person_id,
+                        session_id: result.session.id,
+                        invocation_id: call_id
+                    },
+                    destination,
+                    cancellation: Cancellation::default(),
+                    deadline: Instant::now() + Duration::from_secs(1),
+                },
+                now
+            )
+            .await,
+        Err(AgentFailure::StaleContext)
+    ));
+    assert!(
+        fixture
+            .core
+            .calendar_action(fixture.session.person_id, call_id)
+            .await
+            .is_err()
+    );
 }

@@ -142,6 +142,31 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if previous.revision != expected_revision {
                 return Err(AgentFailure::Conflict);
             }
+            for binding in &snapshot.calendar_views {
+                match previous
+                    .calendar_views
+                    .iter()
+                    .find(|entry| entry.handle == binding.handle)
+                {
+                    Some(entry)
+                        if entry.person_id == binding.person_id
+                            && entry.provider == binding.provider
+                            && entry.calendar_ids == binding.calendar_ids => {}
+                    None if !binding.enabled
+                        && !previous.assignments.iter().any(|assignment| {
+                            assignment.granted_view_handles.contains(&binding.handle)
+                        }) => {}
+                    _ => return Err(AgentFailure::Conflict),
+                }
+            }
+            if previous.calendar_views.iter().any(|entry| {
+                !snapshot
+                    .calendar_views
+                    .iter()
+                    .any(|binding| binding.handle == entry.handle)
+            }) {
+                return Err(AgentFailure::Conflict);
+            }
             for assignment in &snapshot.assignments {
                 match previous
                     .assignments
@@ -300,6 +325,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
+        if snapshot
+            .calendar_views
+            .iter()
+            .any(|binding| binding.person_id != self.person_id)
+        {
+            return Err(AgentFailure::NotFound);
+        }
         if snapshot
             .assignments
             .iter()

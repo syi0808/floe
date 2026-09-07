@@ -62,6 +62,124 @@ fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
     );
 }
 
+#[test]
+fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() {
+    use floe_domain::CalendarProvider;
+    let mut registry = AgentRegistry::new(Uuid::new_v4());
+    let person = PersonId::new();
+    let handle = registry
+        .register_calendar_view(
+            0,
+            person,
+            CalendarProvider::EventKit,
+            vec!["work".into(), "home".into()],
+        )
+        .unwrap();
+    assert_eq!(
+        registry.calendar_view(person, handle),
+        Err(AgentFailure::CapabilityDenied)
+    );
+    assert_eq!(
+        registry.snapshot().calendar_views[0].calendar_ids,
+        ["home", "work"]
+    );
+    assert_eq!(
+        registry.set_calendar_view_enabled(0, person, handle, true),
+        Err(AgentFailure::Conflict)
+    );
+    registry
+        .set_calendar_view_enabled(1, person, handle, true)
+        .unwrap();
+    assert_eq!(
+        registry.calendar_view(person, handle).unwrap().data_class(),
+        DataClass::Personal
+    );
+    assert_eq!(
+        registry.calendar_view(PersonId::new(), handle),
+        Err(AgentFailure::CapabilityDenied)
+    );
+    assert_eq!(
+        registry.set_calendar_view_enabled(2, PersonId::new(), handle, false),
+        Err(AgentFailure::NotFound)
+    );
+    for calendars in [
+        vec![],
+        vec!["same".into(), "same".into()],
+        vec![" ".into()],
+        vec!["x".repeat(513)],
+        (0..5).map(|index| index.to_string()).collect(),
+    ] {
+        assert_eq!(
+            registry.register_calendar_view(2, person, CalendarProvider::Fixture, calendars),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(registry.revision(), 2);
+    }
+    let encoded = serde_json::to_string(&registry.overview(person)).unwrap();
+    assert!(!encoded.contains("home") && !encoded.contains("work"));
+    registry
+        .set_calendar_view_enabled(2, person, handle, false)
+        .unwrap();
+    assert_eq!(
+        registry.calendar_view(person, handle),
+        Err(AgentFailure::CapabilityDenied)
+    );
+}
+
+#[test]
+fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
+    use floe_domain::CalendarProvider;
+    let fixture = Fixture::new();
+    let snapshot = fixture.registry.lock().unwrap().snapshot();
+    for mode in 0..6 {
+        let mut next = snapshot.clone();
+        let mut binding = CalendarViewBinding {
+            handle: fixture.view.handle,
+            person_id: fixture.person,
+            provider: CalendarProvider::Fixture,
+            calendar_ids: vec!["home".into()],
+            enabled: true,
+        };
+        match mode {
+            0 => binding.person_id = PersonId::new(),
+            1 => binding.provider = CalendarProvider::EventKit,
+            2 => binding.handle = Uuid::nil(),
+            3 => binding.calendar_ids = vec!["work".into(), "home".into()],
+            _ => {}
+        }
+        next.calendar_views = vec![
+            binding.clone();
+            if mode == 5 {
+                257
+            } else if mode == 4 {
+                2
+            } else {
+                1
+            }
+        ];
+        assert!(AgentRegistry::restore(next, fixture.instance).is_err());
+    }
+    let mut encoded = serde_json::to_value(&snapshot).unwrap();
+    encoded.as_object_mut().unwrap().remove("calendar_views");
+    let old: RegistrySnapshot = serde_json::from_value(encoded).unwrap();
+    assert!(old.calendar_views.is_empty());
+    let restored = AgentRegistry::restore(old, fixture.instance).unwrap();
+    assert!(
+        restored
+            .expert_descriptor(
+                fixture.person,
+                fixture.schedule,
+                restored.revision(),
+                fixture.view.handle
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        restored.calendar_view(fixture.person, fixture.view.handle),
+        Err(AgentFailure::CapabilityDenied)
+    );
+}
+
 fn install(
     registry: &mut AgentRegistry,
     person: PersonId,

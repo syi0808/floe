@@ -108,6 +108,15 @@ mod manager {
             clock: &impl Fn() -> DateTime<Utc>,
         ) -> Result<CalendarAction, AgentFailure> {
             let destination = &request.destination;
+            if evidence.source_handle.starts_with("calendar.timeline:")
+                && evidence.source_handle
+                    != format!(
+                        "calendar.timeline:{}:{}",
+                        evidence.view_handle, destination.connection_revision
+                    )
+            {
+                return Err(AgentFailure::StaleContext);
+            }
             if !matches!(
                 (evidence.data_class, destination.provider),
                 (DataClass::Synthetic, CalendarProvider::Fixture)

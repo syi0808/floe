@@ -16,6 +16,9 @@ refresh imports or request OS permission. The assigned Expert and its required T
 must already be enabled for the same Person/View. Their resolved data class must
 match both the Calendar provider projection and the inference decision. Missing or
 disabled configuration is rejected before any model or source call.
+The lease must now also exactly match an enabled [durable Calendar View binding](s4-calendar-bindings.md)
+in the encrypted registry. Unbound sample handles cannot implicitly become Calendar
+scopes, and changing the source set requires a fresh binding and explicit grants.
 
 The registry publishes the resolved read-only Expert descriptor and a bounded input
 JSON schema. The optional `input_schema` field accepts older descriptor payloads
@@ -120,8 +123,8 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 
 The default panel is unchanged: preset synthetic turns, not connected personal chat.
 This Core path is not exposed through the app's native worker/C ABI yet. The app now
-has [registry enablement management](s4-registry-management.md), but durable scope
-binding, new installations/assignments, explicit destination/model selection, Calendar
+has [registry enablement management](s4-registry-management.md) and Core durable
+bindings, but scope consent/setup UI, new installations/assignments, destination/model selection, Calendar
 refresh, proposal/recovery UI and actual local/remote generation remain to connect.
 The current native local model adapter deliberately still denies Personal input until
 the production vault/key and model gates pass; this change does not loosen it.

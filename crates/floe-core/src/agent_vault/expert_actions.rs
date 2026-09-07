@@ -70,7 +70,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::Conflict);
             }
             drop(receipts);
-            AgentRegistry::restore(snapshot, self.vault_id)?.validate_recorded_result(&evidence)?;
+            let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+            if evidence.source_handle.starts_with("calendar.timeline:")
+                && registry.calendar_view(evidence.person_id, evidence.view_handle)?.data_class() != evidence.data_class
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            registry.validate_recorded_result(&evidence)?;
             self.check_access()?;
             let value = publish(evidence).await?;
             self.check_access()?;
