@@ -1,6 +1,8 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_date_picker.dart';
 import 'package:floe_client/app/floe_context_menu.dart';
@@ -21,6 +23,84 @@ Widget host(Widget child, {bool reducedMotion = false}) => MaterialApp(
 );
 
 void main() {
+  testWidgets('menu hover transfers immediately without a trailing highlight', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        const Center(
+          child: SizedBox(
+            width: 248,
+            child: FloeContextMenu<String>(
+              entries: [
+                FloeMenuEntry(
+                  value: 'open',
+                  label: 'Open',
+                  icon: Icons.open_in_new,
+                ),
+                FloeMenuEntry(value: 'edit', label: 'Edit', icon: Icons.edit),
+                FloeMenuEntry(
+                  value: 'delete',
+                  label: 'Delete',
+                  icon: Icons.delete,
+                  destructive: true,
+                  separator: true,
+                ),
+                FloeMenuEntry(
+                  value: 'disabled',
+                  label: 'Disabled',
+                  icon: Icons.block,
+                  enabled: false,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    void expectHighlight(String? label) {
+      for (final title in ['Open', 'Edit', 'Delete', 'Disabled']) {
+        final row = find.ancestor(
+          of: find.text(title),
+          matching: find.byType(AnimatedScale),
+        );
+        final surface = tester.widget<DecoratedBox>(
+          find.descendant(of: row, matching: find.byType(DecoratedBox)),
+        );
+        expect(
+          (surface.decoration as BoxDecoration).color,
+          title == label ? FloePalette.primary50 : Colors.transparent,
+          reason: '$title must update its painted hover background immediately',
+        );
+      }
+    }
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.text('Open')));
+    await tester.pumpAndSettle();
+    expectHighlight('Open');
+
+    for (final title in ['Edit', 'Delete', 'Open', 'Disabled', 'Edit']) {
+      await mouse.moveTo(tester.getCenter(find.text(title)));
+      await tester.pump();
+      expectHighlight(title == 'Disabled' ? null : title);
+      await tester.pump(const Duration(milliseconds: 16));
+      expectHighlight(title == 'Disabled' ? null : title);
+    }
+    await mouse.moveTo(tester.getCenter(find.byType(Divider)));
+    await tester.pump();
+    expectHighlight(null);
+    await mouse.moveTo(tester.getCenter(find.text('Delete')));
+    await tester.pump();
+    expectHighlight('Delete');
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expectHighlight(null);
+  });
+
   testWidgets(
     'custom date popover handles leap months, keyboard and dismissal',
     (tester) async {

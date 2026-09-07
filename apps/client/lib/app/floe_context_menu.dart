@@ -153,10 +153,7 @@ class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
                             : 1,
                         duration: FloeMotion.pressDuration,
                         curve: FloeMotion.easeOut,
-                        child: AnimatedContainer(
-                          duration: FloeMotion.reduceMotion(context)
-                              ? Duration.zero
-                              : const Duration(milliseconds: 80),
+                        child: Container(
                           height: 36,
                           padding: const EdgeInsets.symmetric(horizontal: 10),
                           decoration: BoxDecoration(
