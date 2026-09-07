@@ -925,6 +925,47 @@ class AppLocalizationsEn extends AppLocalizations {
       'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.';
 
   @override
+  String get agentRegistryTitle => 'Tools & Experts';
+
+  @override
+  String get agentRegistryBoundary =>
+      'Manage installed packages and their assignments to this Person. Enabling restores only existing grants; it does not add sources, change grants or approve actions. Disabling blocks new invocations, not existing proposals or approvals.';
+
+  @override
+  String get agentRegistryEmpty =>
+      'No packages are installed yet. The first sample turn sets up the sample Timeline Tool and Schedule Expert. Installing other packages and editing source grants aren’t available here yet.';
+
+  @override
+  String get agentRegistryFailure =>
+      'The current settings could not be confirmed. Refresh before making another change; the previous change may already be saved.';
+
+  @override
+  String get agentRegistryRefresh => 'Refresh settings';
+
+  @override
+  String get agentRegistryInstallation => 'Installation enabled';
+
+  @override
+  String get agentRegistryAssignment => 'Enabled for this Person';
+
+  @override
+  String get agentRegistryInstallationOff =>
+      'This assignment cannot run while its installation is disabled.';
+
+  @override
+  String get agentRegistryUnassigned => 'Not assigned to this Person.';
+
+  @override
+  String agentRegistryGrants(int views, int tools) {
+    return 'Granted Views: $views · Tools: $tools';
+  }
+
+  @override
+  String agentRegistryState(int revision, int count) {
+    return 'State revision $revision · $count completed invocations';
+  }
+
+  @override
   String connectedServicesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);

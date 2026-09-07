@@ -119,8 +119,9 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 ## Remaining app and live work
 
 The default panel is unchanged: preset synthetic turns, not connected personal chat.
-This Core path is not exposed through the app's native worker/C ABI yet. Durable
-scope binding and registry management, explicit destination/model selection, Calendar
+This Core path is not exposed through the app's native worker/C ABI yet. The app now
+has [registry enablement management](s4-registry-management.md), but durable scope
+binding, new installations/assignments, explicit destination/model selection, Calendar
 refresh, proposal/recovery UI and actual local/remote generation remain to connect.
 The current native local model adapter deliberately still denies Personal input until
 the production vault/key and model gates pass; this change does not loosen it.

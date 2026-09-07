@@ -6,6 +6,26 @@ use floe_domain::{
     Priority, SourceRef, Task, TimedSchedule, TimelineItem,
 };
 use floe_protocol::*;
+
+#[test]
+fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations() {
+    let change = serde_json::json!({
+        "instance_id": "00000000-0000-4000-8000-000000000001",
+        "expected_revision": 7,
+        "target": {"kind": "assignment", "id": "00000000-0000-4000-8000-000000000002", "enabled": false}
+    });
+    let action = serde_json::json!({"kind": "registry", "change": change});
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in ["granted_view_handles", "private_state", "person_id"] {
+        let mut forged = action.clone();
+        forged["change"]["target"][field] = serde_json::json!([]);
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+    let mut forged = action;
+    forged["change"]["target"]["kind"] = serde_json::json!("grant_calendar");
+    assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+}
 use serde_json::json;
 use uuid::Uuid;
 

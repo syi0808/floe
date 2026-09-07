@@ -146,6 +146,44 @@ pub struct RegistrySnapshot {
     pub assignments: Vec<PackageAssignment>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryOverview {
+    pub schema_version: u32,
+    pub person_id: PersonId,
+    pub instance_id: Uuid,
+    pub revision: u64,
+    pub installations: Vec<PackageInstallation>,
+    pub assignments: Vec<AssignmentOverview>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentOverview {
+    pub id: Uuid,
+    pub installation_id: Uuid,
+    pub enabled: bool,
+    pub granted_tool_count: usize,
+    pub granted_view_count: usize,
+    pub state_revision: u64,
+    pub completed_invocations: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryConfiguration {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub target: RegistryConfigurationTarget,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RegistryConfigurationTarget {
+    Installation { id: Uuid, enabled: bool },
+    Assignment { id: Uuid, enabled: bool },
+}
+
 pub struct AgentRegistry {
     snapshot: RegistrySnapshot,
 }
@@ -159,6 +197,31 @@ pub(crate) struct ResolvedExpert {
 }
 
 impl AgentRegistry {
+    pub fn overview(&self, person_id: PersonId) -> RegistryOverview {
+        RegistryOverview {
+            schema_version: AGENT_VERSION,
+            person_id,
+            instance_id: self.instance_id(),
+            revision: self.revision(),
+            installations: self.snapshot.installations.clone(),
+            assignments: self
+                .snapshot
+                .assignments
+                .iter()
+                .filter(|assignment| assignment.person_id == person_id)
+                .map(|assignment| AssignmentOverview {
+                    id: assignment.id,
+                    installation_id: assignment.installation_id,
+                    enabled: assignment.enabled,
+                    granted_tool_count: assignment.granted_tool_assignments.len(),
+                    granted_view_count: assignment.granted_view_handles.len(),
+                    state_revision: assignment.private_state.revision,
+                    completed_invocations: assignment.private_state.completed_invocations,
+                })
+                .collect(),
+        }
+    }
+
     pub fn new(instance_id: Uuid) -> Self {
         Self {
             snapshot: RegistrySnapshot {

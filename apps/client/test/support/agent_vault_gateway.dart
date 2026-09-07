@@ -5,8 +5,8 @@ import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 
 import 'agent_gateway.dart';
 
-final class TestVaultGateway extends TestAgentGateway
-    implements AgentVaultGateway {
+class TestVaultGateway extends TestAgentGateway implements AgentVaultGateway {
+  TestVaultGateway({super.personId});
   AgentVaultState state = AgentVaultState.missing;
   int creates = 0;
   int unlocks = 0;

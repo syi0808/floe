@@ -75,6 +75,7 @@ struct Progress {
     done: bool,
     state: Option<AgentVaultStateDto>,
     session: Option<AgentSession>,
+    registry: Option<floe_agent::RegistryOverview>,
     failure: Option<AgentFailure>,
 }
 
@@ -110,9 +111,10 @@ impl Worker {
                     }
                     if let Ok(mut progress) = job.progress.lock() {
                         match result {
-                            Ok((state, session)) => {
+                            Ok((state, session, registry)) => {
                                 progress.state = Some(state);
                                 progress.session = session;
+                                progress.registry = registry;
                             }
                             Err(failure) => {
                                 progress.state = Some(AgentVaultStateDto::Unavailable);
@@ -182,6 +184,7 @@ impl Worker {
             done: progress.done,
             state: progress.state,
             session: progress.session.clone(),
+            registry: progress.registry.clone(),
             failure: progress.failure,
         };
         drop(progress);
@@ -211,7 +214,14 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
     keys: &Keys,
     current: &mut Option<(PersonId, EncryptedAgentVault<Keys>)>,
     job: &Job,
-) -> Result<(AgentVaultStateDto, Option<AgentSession>), AgentFailure> {
+) -> Result<
+    (
+        AgentVaultStateDto,
+        Option<AgentSession>,
+        Option<floe_agent::RegistryOverview>,
+    ),
+    AgentFailure,
+> {
     if current
         .as_ref()
         .is_some_and(|(person, _)| *person != job.person)
@@ -225,7 +235,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::Status {} => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
-                return Ok((AgentVaultStateDto::Ready, None));
+                return Ok((AgentVaultStateDto::Ready, None, None));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
                 Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
@@ -234,7 +244,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None))
+            Ok((state, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -247,7 +257,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None))
+            Ok((AgentVaultStateDto::Ready, None, None))
         }
         AgentVaultActionDto::Unlock {} => {
             if current.is_some() {
@@ -255,11 +265,11 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None))
+            Ok((AgentVaultStateDto::Ready, None, None))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
-            Ok((AgentVaultStateDto::Locked, None))
+            Ok((AgentVaultStateDto::Locked, None, None))
         }
         AgentVaultActionDto::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -312,7 +322,22 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         .await?
                 }
             };
-            Ok((AgentVaultStateDto::Ready, Some(session)))
+            Ok((AgentVaultStateDto::Ready, Some(session), None))
+        }
+        AgentVaultActionDto::Registry { change } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let registry = match change {
+                Some(configuration) => Some(
+                    vault
+                        .configure_registry(configuration.clone(), job.cancellation.clone())
+                        .await?,
+                ),
+                None => vault.registry_overview().await?,
+            };
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            Ok((AgentVaultStateDto::Ready, None, registry))
         }
     }
 }
@@ -415,6 +440,174 @@ mod tests {
             .request(person, id, AgentVaultOperationDto::Release {})
             .unwrap();
         result
+    }
+
+    #[test]
+    fn registry_jobs_are_read_only_until_explicit_change_and_reconcile_duplicate_submits() {
+        use floe_agent::{RegistryConfiguration, RegistryConfigurationTarget};
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("vaults");
+        let person = PersonId::new();
+        let worker = Worker::new(root.clone(), Keys::default()).unwrap();
+        assert_eq!(
+            perform(
+                &worker,
+                person,
+                AgentVaultActionDto::Registry { change: None }
+            )
+            .failure,
+            Some(AgentFailure::VaultUnavailable)
+        );
+        assert!(!root.exists());
+        perform(&worker, person, AgentVaultActionDto::Create {});
+        let empty = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Registry { change: None },
+        );
+        assert_eq!(empty.state, Some(AgentVaultStateDto::Ready));
+        assert!(empty.registry.is_none());
+        let session = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Start {},
+            },
+        )
+        .session
+        .unwrap();
+        perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Turn {
+                    session_id: session.id.to_string(),
+                    expected_revision: 0,
+                    prompt: AgentFixturePromptDto::Today,
+                },
+            },
+        );
+        let before = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Registry { change: None },
+        )
+        .registry
+        .unwrap();
+        let assignment = before
+            .assignments
+            .iter()
+            .find(|assignment| assignment.granted_tool_count == 1)
+            .unwrap();
+        let action = AgentVaultActionDto::Registry {
+            change: Some(RegistryConfiguration {
+                instance_id: before.instance_id,
+                expected_revision: before.revision,
+                target: RegistryConfigurationTarget::Assignment {
+                    id: assignment.id,
+                    enabled: false,
+                },
+            }),
+        };
+        let id = Uuid::new_v4();
+        worker
+            .request(
+                person,
+                id,
+                AgentVaultOperationDto::Submit {
+                    action: action.clone(),
+                },
+            )
+            .unwrap();
+        let done = wait(&worker, person, id);
+        assert_eq!(
+            worker
+                .request(
+                    person,
+                    id,
+                    AgentVaultOperationDto::Submit {
+                        action: action.clone()
+                    }
+                )
+                .unwrap(),
+            done
+        );
+        assert_eq!(
+            worker.request(
+                PersonId::new(),
+                id,
+                AgentVaultOperationDto::Poll { after_sequence: 0 }
+            ),
+            Err(AgentFailure::NotFound)
+        );
+        assert!(done.session.is_none() && done.events.is_empty());
+        let after = done.registry.as_ref().unwrap();
+        assert_eq!(after.revision, before.revision + 1);
+        assert!(
+            !after
+                .assignments
+                .iter()
+                .find(|entry| entry.id == assignment.id)
+                .unwrap()
+                .enabled
+        );
+        worker
+            .request(person, id, AgentVaultOperationDto::Release {})
+            .unwrap();
+        assert_eq!(
+            perform(&worker, person, action).failure,
+            Some(AgentFailure::Conflict)
+        );
+        perform(&worker, person, AgentVaultActionDto::Lock {});
+        perform(&worker, person, AgentVaultActionDto::Unlock {});
+        assert_eq!(
+            perform(
+                &worker,
+                person,
+                AgentVaultActionDto::Registry { change: None }
+            )
+            .registry
+            .as_ref(),
+            Some(after)
+        );
+        let session = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Start {},
+            },
+        )
+        .session
+        .unwrap();
+        let denied = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Turn {
+                    session_id: session.id.to_string(),
+                    expected_revision: 0,
+                    prompt: AgentFixturePromptDto::Today,
+                },
+            },
+        )
+        .session
+        .unwrap();
+        assert!(denied.messages.iter().any(|message| matches!(
+            message,
+            floe_agent::AgentMessage::Capability {
+                result: Err(AgentFailure::CapabilityDenied),
+                ..
+            }
+        )));
+        let current = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Registry { change: None },
+        )
+        .registry
+        .unwrap();
+        assert_eq!(current, *after);
+        perform(&worker, person, AgentVaultActionDto::Lock {});
     }
 
     #[test]

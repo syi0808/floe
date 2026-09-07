@@ -1678,6 +1678,72 @@ abstract class AppLocalizations {
   /// **'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.'**
   String get agentSecureSampleBoundary;
 
+  /// No description provided for @agentRegistryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Tools & Experts'**
+  String get agentRegistryTitle;
+
+  /// No description provided for @agentRegistryBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage installed packages and their assignments to this Person. Enabling restores only existing grants; it does not add sources, change grants or approve actions. Disabling blocks new invocations, not existing proposals or approvals.'**
+  String get agentRegistryBoundary;
+
+  /// No description provided for @agentRegistryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No packages are installed yet. The first sample turn sets up the sample Timeline Tool and Schedule Expert. Installing other packages and editing source grants aren’t available here yet.'**
+  String get agentRegistryEmpty;
+
+  /// No description provided for @agentRegistryFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'The current settings could not be confirmed. Refresh before making another change; the previous change may already be saved.'**
+  String get agentRegistryFailure;
+
+  /// No description provided for @agentRegistryRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh settings'**
+  String get agentRegistryRefresh;
+
+  /// No description provided for @agentRegistryInstallation.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation enabled'**
+  String get agentRegistryInstallation;
+
+  /// No description provided for @agentRegistryAssignment.
+  ///
+  /// In en, this message translates to:
+  /// **'Enabled for this Person'**
+  String get agentRegistryAssignment;
+
+  /// No description provided for @agentRegistryInstallationOff.
+  ///
+  /// In en, this message translates to:
+  /// **'This assignment cannot run while its installation is disabled.'**
+  String get agentRegistryInstallationOff;
+
+  /// No description provided for @agentRegistryUnassigned.
+  ///
+  /// In en, this message translates to:
+  /// **'Not assigned to this Person.'**
+  String get agentRegistryUnassigned;
+
+  /// No description provided for @agentRegistryGrants.
+  ///
+  /// In en, this message translates to:
+  /// **'Granted Views: {views} · Tools: {tools}'**
+  String agentRegistryGrants(int views, int tools);
+
+  /// No description provided for @agentRegistryState.
+  ///
+  /// In en, this message translates to:
+  /// **'State revision {revision} · {count} completed invocations'**
+  String agentRegistryState(int revision, int count);
+
   /// No description provided for @connectedServicesCount.
   ///
   /// In en, this message translates to:

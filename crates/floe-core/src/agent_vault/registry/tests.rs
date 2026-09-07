@@ -60,6 +60,132 @@ struct Fixture {
     root: tempfile::TempDir,
 }
 
+#[tokio::test]
+async fn overview_is_read_only_and_configuration_preserves_private_state_and_grants_after_reopen() {
+    let mut fixture = Fixture::new().await;
+    assert_eq!(fixture.vault.registry_overview().await.unwrap(), None);
+    assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
+    fixture.sample().await;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let overview = fixture.vault.registry_overview().await.unwrap().unwrap();
+    assert_eq!(overview.person_id, fixture.person);
+    let expert = before
+        .assignments
+        .iter()
+        .find(|assignment| !assignment.granted_tool_assignments.is_empty())
+        .unwrap();
+    let encoded = serde_json::to_string(&overview).unwrap();
+    assert!(!encoded.contains("last_invocation_id"));
+    assert!(!encoded.contains(&expert.granted_view_handles[0].to_string()));
+    assert!(!encoded.contains("private_state"));
+    let next = fixture
+        .vault
+        .configure_registry(
+            RegistryConfiguration {
+                instance_id: overview.instance_id,
+                expected_revision: overview.revision,
+                target: RegistryConfigurationTarget::Assignment {
+                    id: expert.id,
+                    enabled: false,
+                },
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.revision, overview.revision + 1);
+    let after = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let updated = after
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == expert.id)
+        .unwrap();
+    assert!(!updated.enabled);
+    assert_eq!(updated.private_state, expert.private_state);
+    assert_eq!(updated.granted_view_handles, expert.granted_view_handles);
+    assert_eq!(after.packages, before.packages);
+    assert_eq!(after.installations, before.installations);
+    drop(fixture.vault);
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
+    assert_eq!(
+        fixture.vault.registry_overview().await.unwrap().unwrap(),
+        next
+    );
+}
+
+#[tokio::test]
+async fn configuration_rejects_stale_instance_revision_unknown_targets_and_cancellation() {
+    let fixture = Fixture::new().await;
+    let before = fixture.prepare().await;
+    for mode in 0..4 {
+        let mut configuration = RegistryConfiguration {
+            instance_id: before.instance_id,
+            expected_revision: before.revision,
+            target: RegistryConfigurationTarget::Installation {
+                id: before.installations[0].id,
+                enabled: false,
+            },
+        };
+        let cancellation = Cancellation::default();
+        match mode {
+            0 => configuration.instance_id = Uuid::new_v4(),
+            1 => configuration.expected_revision -= 1,
+            2 => {
+                configuration.target = RegistryConfigurationTarget::Assignment {
+                    id: Uuid::new_v4(),
+                    enabled: true,
+                }
+            }
+            _ => cancellation.cancel(),
+        }
+        assert!(
+            fixture
+                .vault
+                .configure_registry(configuration, cancellation)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fixture.vault.expert_registry().await.unwrap().unwrap(),
+            before
+        );
+    }
+    fixture.keys.0.fail_on_read.store(2, Ordering::Release);
+    assert_eq!(
+        fixture.vault.registry_overview().await,
+        Err(AgentFailure::VaultUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn cancelled_configuration_validation_rolls_back_the_staged_enablement_update() {
+    let fixture = Fixture::new().await;
+    let before = fixture.prepare().await;
+    let mut registry = AgentRegistry::restore(before.clone(), before.instance_id).unwrap();
+    registry
+        .set_installation_enabled(before.revision, before.installations[0].id, false)
+        .unwrap();
+    let checks = std::sync::atomic::AtomicUsize::new(0);
+    let result = fixture
+        .vault
+        .save_expert_registry_checked(before.revision, &registry.snapshot(), || {
+            if checks.fetch_add(1, Ordering::AcqRel) > 0 {
+                Err(AgentFailure::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .await;
+    assert_eq!(result, Err(AgentFailure::Cancelled));
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap().unwrap(),
+        before
+    );
+}
+
 impl Fixture {
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();

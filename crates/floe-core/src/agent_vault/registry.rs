@@ -6,6 +6,70 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn registry_overview(
+        &self,
+    ) -> Result<Option<floe_agent::RegistryOverview>, AgentFailure> {
+        let overview = self
+            .expert_registry()
+            .await?
+            .map(|snapshot| {
+                AgentRegistry::restore(snapshot, self.vault_id)
+                    .map(|registry| registry.overview(self.person_id))
+            })
+            .transpose()?;
+        self.check_access()?;
+        Ok(overview)
+    }
+
+    pub async fn configure_registry(
+        &self,
+        configuration: floe_agent::RegistryConfiguration,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::RegistryOverview, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if configuration.instance_id != self.vault_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let snapshot = self
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+        match configuration.target {
+            floe_agent::RegistryConfigurationTarget::Installation { id, enabled } => {
+                registry.set_installation_enabled(configuration.expected_revision, id, enabled)?
+            }
+            floe_agent::RegistryConfigurationTarget::Assignment { id, enabled } => registry
+                .set_assignment_enabled(
+                    configuration.expected_revision,
+                    self.person_id,
+                    id,
+                    enabled,
+                )?,
+        }
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        self.save_expert_registry_checked(
+            configuration.expected_revision,
+            &registry.snapshot(),
+            || {
+                if cancellation.is_cancelled() {
+                    Err(AgentFailure::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .await?;
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        Ok(registry.overview(self.person_id))
+    }
+
     pub fn registry_instance_id(&self) -> Uuid {
         self.vault_id
     }
@@ -50,6 +114,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
     ) -> Result<(), AgentFailure> {
+        self.save_expert_registry_checked(expected_revision, snapshot, || Ok(()))
+            .await
+    }
+
+    async fn save_expert_registry_checked(
+        &self,
+        expected_revision: u64,
+        snapshot: &RegistrySnapshot,
+        check: impl Fn() -> Result<(), AgentFailure> + Sync,
+    ) -> Result<(), AgentFailure> {
+        check()?;
         let payload = self.registry_payload(snapshot)?;
         if expected_revision.checked_add(1) != Some(snapshot.revision) {
             return Err(AgentFailure::Conflict);
@@ -102,6 +177,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.update_registry(&transaction, expected_revision, snapshot.revision, payload)
                 .await?;
             self.check_access()?;
+            check()?;
             Ok(())
         }
         .await;

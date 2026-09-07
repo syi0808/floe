@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel; Core model/Calendar/Expert turn with atomic results and S3 preparation; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Explicit scope/registry management and native turn dispatch; local/remote models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and registry enablement UI; Core Calendar/Expert turn and S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant management; live key/model/source and privacy gates | Durable Calendar scope bindings and native connected-turn dispatch; models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,23 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 app registry enablement — 2026-09-07
+
+- Added an unlocked-panel Tools & Experts screen backed by the native vault worker.
+  It shows installed versions, Person assignment flags and minimized grant/state
+  counts, with explicit installation/assignment enablement switches.
+- Configuration checks vault instance/revision and preserves private state/grants
+  atomically. Inspect never initializes packages; no new grants or approvals are exposed.
+- Added response-loss reconciliation, non-optimistic serialized controls, conflict
+  refresh, immediate lock clearing and late-result/key/worker-failure protection.
+- Validation: 172 workspace Rust and 146 Flutter tests, three keyring example tests,
+  25 native assertions, analysis, formatting, Clippy with existing exclusions, native
+  and macOS Debug builds, and deep strict signing verification pass. The new registry
+  golden uses real fonts and was rendered/reviewed; 320px/200% widget checks pass.
+- [Evidence and limits](docs/validation/s4-registry-management.md). New package/assignment
+  installation, detailed source grants, connected chat dispatch and live key/model work
+  remain. S4 stays 0/14, with S1/S3 acceptance unchanged.
 
 ### S4 Core Calendar Agent turns — 2026-09-07
 

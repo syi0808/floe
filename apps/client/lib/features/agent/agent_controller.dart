@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'agent_fixture_gateway.dart';
+import 'agent_registry.dart';
 import 'agent_vault_gateway.dart';
 
 enum AgentProgress { idle, loading, model, capability, stopping }
@@ -26,6 +27,80 @@ final class AgentController extends ChangeNotifier {
   bool _sealed = false;
   Completer<void>? _operationDone;
   Future<void>? _locking;
+  AgentRegistryView? registry;
+  String? registryFailure;
+  bool registryLoaded = false;
+
+  bool get hasRegistryManagement =>
+      usesVault && gateway is AgentRegistryGateway;
+  bool get canManageRegistry =>
+      hasRegistryManagement &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      vaultState == AgentVaultState.ready;
+
+  Future<void> loadRegistry() => _registryOperation(null);
+
+  Future<void> configureRegistry(
+    AgentRegistryTarget target,
+    String id,
+    bool enabled,
+  ) async {
+    final current = registry;
+    if (current == null) return;
+    await _registryOperation(
+      () => (gateway as AgentRegistryGateway).configureRegistry(
+        current,
+        target: target,
+        id: id,
+        enabled: enabled,
+      ),
+    );
+  }
+
+  Future<void> _registryOperation(
+    Future<AgentRegistryView> Function()? change,
+  ) async {
+    if (!canManageRegistry) return;
+    final previous = registry;
+    _begin();
+    registryFailure = null;
+    _notify();
+    try {
+      final result = change == null
+          ? await (gateway as AgentRegistryGateway).readRegistry(personId)
+          : await change();
+      if (_sealed || _disposed) return;
+      if (result != null && result.personId != personId) {
+        throw const FormatException('Registry Person mismatch');
+      }
+      if (change != null &&
+          (result == null ||
+              previous == null ||
+              result.instanceId != previous.instanceId ||
+              result.revision != previous.revision + 1)) {
+        throw const FormatException('Registry configuration mismatch');
+      }
+      registry = result;
+      registryLoaded = true;
+    } on Object catch (error) {
+      if (_sealed || _disposed) return;
+      registry = null;
+      registryLoaded = false;
+      registryFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      if (registryFailure == 'vault_unavailable' ||
+          registryFailure == 'interrupted') {
+        _fail(registryFailure!);
+      }
+    } finally {
+      _end();
+      _notify();
+    }
+  }
 
   bool get usesVault => gateway is AgentVaultGateway;
 
@@ -48,6 +123,9 @@ final class AgentController extends ChangeNotifier {
         if (_sealed) return;
         vaultState = state;
         if (state != AgentVaultState.ready) {
+          registry = null;
+          registryLoaded = false;
+          registryFailure = null;
           session = null;
           messages = [];
           needsReload = false;
@@ -256,6 +334,9 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> _lock() async {
     _sealed = true;
+    registry = null;
+    registryFailure = null;
+    registryLoaded = false;
     session = null;
     messages = [];
     _lastPrompt = null;
@@ -293,6 +374,8 @@ final class AgentController extends ChangeNotifier {
     failure = reason;
     needsReload = true;
     if (usesVault) {
+      registry = null;
+      registryLoaded = false;
       session = null;
       messages = [];
       vaultState = AgentVaultState.unavailable;

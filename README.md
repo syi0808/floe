@@ -40,7 +40,9 @@ contract. The sample panel renders structured Expert evidence; the secure host n
 [persists registry/private state atomically with conversation results](docs/validation/s4-expert-persistence.md).
 A [Manager-to-S3 bridge](docs/validation/s4-manager-actions.md) now converts committed
 focus advice into the existing policy/review/action ledger with stable retry identity.
-Registry management, live sources and app-level proposal orchestration still remain.
+[Registry enablement management](docs/validation/s4-registry-management.md) is now
+available in the unlocked panel. New installations, assignments/source grants,
+live sources and app-level proposal orchestration still remain.
 A [bounded Calendar Timeline adapter](docs/validation/s4-calendar-timeline.md) now
 projects exact authorized mirror scopes through the common Expert port, with a
 native read-access boundary. [Core turn orchestration](docs/validation/s4-calendar-turn.md)

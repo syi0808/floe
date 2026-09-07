@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'agent_fixture_gateway.dart';
+import 'agent_registry.dart';
 
 enum AgentVaultState { missing, locked, ready, unavailable }
 
@@ -17,12 +18,56 @@ abstract interface class AgentVaultGateway
   Future<void> lockVault(String personId);
 }
 
-final class NativeAgentVaultGateway implements AgentVaultGateway {
+final class NativeAgentVaultGateway
+    implements AgentVaultGateway, AgentRegistryGateway {
   NativeAgentVaultGateway(this.request);
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   _VaultJob? _pending;
   AgentSession? _run;
+
+  @override
+  Future<AgentRegistryView?> readRegistry(String personId) async {
+    final result = await _perform(personId, {
+      'kind': 'registry',
+      'change': null,
+    });
+    final raw = result['registry'];
+    if (raw == null) return null;
+    final overview = AgentRegistryView.fromJson(
+      Map<String, dynamic>.from(raw as Map),
+    );
+    if (overview.personId != personId) {
+      throw const FormatException('Registry Person mismatch');
+    }
+    return overview;
+  }
+
+  @override
+  Future<AgentRegistryView> configureRegistry(
+    AgentRegistryView current, {
+    required AgentRegistryTarget target,
+    required String id,
+    required bool enabled,
+  }) async {
+    final result = await _perform(current.personId, {
+      'kind': 'registry',
+      'change': {
+        'instance_id': current.instanceId,
+        'expected_revision': current.revision,
+        'target': {'kind': target.name, 'id': id, 'enabled': enabled},
+      },
+    });
+    final overview = AgentRegistryView.fromJson(
+      Map<String, dynamic>.from(result['registry'] as Map),
+    );
+    if (overview.personId != current.personId ||
+        overview.instanceId != current.instanceId ||
+        overview.revision != current.revision + 1) {
+      throw const FormatException('Registry configuration mismatch');
+    }
+    return overview;
+  }
 
   @override
   Future<AgentVaultState> vaultStatus(String personId) =>

@@ -11,6 +11,7 @@ import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
 import 'agent_expert_result.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_registry_dialog.dart';
 import 'agent_vault_gateway.dart';
 
 class AgentPanel extends StatefulWidget {
@@ -32,6 +33,7 @@ class _AgentPanelState extends State<AgentPanel> {
   final _actionFocus = FocusNode();
   AgentFixturePrompt _prompt = AgentFixturePrompt.today;
   bool _wasBusy = false;
+  bool _registryOpen = false;
 
   @override
   void initState() {
@@ -59,7 +61,7 @@ class _AgentPanelState extends State<AgentPanel> {
       if (follow && _scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
-      if (restoreFocus) _actionFocus.requestFocus();
+      if (restoreFocus && !_registryOpen) _actionFocus.requestFocus();
     });
   }
 
@@ -146,6 +148,24 @@ class _AgentPanelState extends State<AgentPanel> {
                       color: FloePalette.neutral600,
                     ),
                   ),
+                  if (controller.hasRegistryManagement &&
+                      controller.vaultState == AgentVaultState.ready)
+                    FloeButton.text(
+                      onPressed: controller.canManageRegistry
+                          ? () async {
+                              _registryOpen = true;
+                              final loading = controller.loadRegistry();
+                              await showDialog<void>(
+                                context: context,
+                                builder: (_) =>
+                                    AgentRegistryDialog(controller: controller),
+                              );
+                              _registryOpen = false;
+                              await loading;
+                            }
+                          : null,
+                      child: Text(strings.agentRegistryTitle),
+                    ),
                 ],
               ),
             );

@@ -29,7 +29,12 @@ pub enum AgentVaultActionDto {
     Create {},
     Unlock {},
     Lock {},
-    Session { operation: AgentFixtureOperationDto },
+    Session {
+        operation: AgentFixtureOperationDto,
+    },
+    Registry {
+        change: Option<floe_agent::RegistryConfiguration>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -50,6 +55,8 @@ pub struct AgentVaultResultDto {
     pub done: bool,
     pub state: Option<AgentVaultStateDto>,
     pub session: Option<floe_agent::AgentSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<floe_agent::RegistryOverview>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 
