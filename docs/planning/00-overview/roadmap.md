@@ -6,13 +6,14 @@
 
 Phase는 장기 제품 범위 지도이며 순차 구현 gate가 아니다.
 [ADR 0006](../../decisions/0006-slice-driven-delivery.md)에 따라 실제 구현은
-[S1–S7 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
-S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 source-backed
-Memory lifecycle, S5에서 local Manager → Expert → 승인 action 루프를 검증한다.
-그 뒤 S6–S7에서 서버·기기·개입으로 확장한다. 이 순서는 Floe의 핵심 제품 가설인
-누적되는 개인 맥락과 domain judgment를 network topology보다 먼저 실패시켜 보기
-위한 것이다. Phase 0 PoC는 필요한 경계의 구현 전에 수행하며 보안·권한 검증을
-생략하지 않는다.
+[S1–S9 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
+S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 Chat 기반
+Manager Agent → Expert/Tool → 승인 action 루프를 먼저 검증한다. S5는 그 대화와
+결과를 source-backed Memory와 procedural Playbook으로 학습하는 통제된 self-improvement를
+추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용한 뒤,
+S8–S9에서 서버·기기·개입으로 확장한다. 이 순서는 Floe의 핵심 제품 가설을 network
+topology보다 먼저 실패시켜 보기 위한 것이다. Phase 0 PoC는 필요한 경계의 구현 전에
+수행하며 보안·권한 검증을 생략하지 않는다.
 
 Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것은 아니다.
 현재 상태와 검증 근거는 [PROGRESS.md](../../../PROGRESS.md)에서 관리한다.
@@ -81,8 +82,9 @@ Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것�
 
 > Floe를 오래 사용할수록 비서의 품질이 실제로 누적되는가?
 
-S4는 이 Phase 전체가 아니라 Note 기반 Preference/Commitment의 evidence,
-review, inspect/edit/delete lifecycle을 먼저 검증한다.
+S5는 이 Phase 전체가 아니라 conversation/outcome 기반 Preference/Commitment와
+procedural Playbook의 evidence, review, retrieval, edit/rollback/delete lifecycle을
+먼저 검증한다.
 
 ## Phase 3.5 — Expert Ecosystem
 
@@ -97,7 +99,7 @@ review, inspect/edit/delete lifecycle을 먼저 검증한다.
 
 Marketplace discovery/commerce itself can come later; the runtime contract should stabilize earlier.
 
-S5는 local Schedule Expert와 declarative fixture를 같은 계약으로 실행해 Manager,
+S4는 local Schedule Expert와 declarative fixture를 같은 계약으로 실행해 Manager,
 permission, assignment, structured output 경계를 먼저 검증한다. Wasm과 Marketplace는
 이 선행 slice의 완료 조건이 아니다.
 

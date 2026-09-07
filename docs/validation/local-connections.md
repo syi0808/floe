@@ -1,6 +1,6 @@
 # Local connection console validation
 
-Date: 2026-09-05, macOS arm64. Infrastructure validation, not S6 acceptance.
+Date: 2026-09-05, macOS arm64. Infrastructure validation, not S8 acceptance.
 
 ## Automated evidence
 

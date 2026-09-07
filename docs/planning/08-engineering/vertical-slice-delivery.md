@@ -5,7 +5,8 @@
 > Date: 2026-09-04
 >
 > Decision: [ADR 0006](../../decisions/0006-slice-driven-delivery.md), amended by
-> [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md)
+> [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md) and
+> [ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md)
 
 ## 목적과 문서 역할
 
@@ -19,16 +20,19 @@ Phase는 제품 범위 지도, slice는 구현·검증·인수 단위다. 모든
 
 ## 중심 시나리오
 
-> 오늘 일정을 읽고, Note에서 확정한 개인 맥락을 Schedule Expert가 참고해
-> Manager에게 조언한다. 사용자는 근거를 확인하고 외부 캘린더 작업을 승인한 뒤
-> Day Canvas에서 결과를 확인한다.
+> 사용자가 Floe와 대화한다. Manager가 Schedule Expert와 도구를 사용해 오늘
+> 일정을 이해하고 근거 있는 작업을 제안한다. 대화와 결과에서 검토 가능한 Memory와
+> Playbook 개선이 쌓이며, 같은 세션을 이후 voice와 wake-up으로 호출한다.
 
 ```text
 Calendar Connector → 정규화·출처·Person-scoped store
-                                      ┐
-Note Evidence → Memory Candidate → Review → Confirmed Memory
-                                      ┘
-→ bounded Views → Schedule Expert → Manager → Action Proposal
+                                      ↓
+Chat → Manager Agent Loop → bounded Views → Schedule Expert / Tools
+                                      ↓
+Session Evidence → Memory / Playbook Candidate → Review → Confirmed Knowledge
+                                      ↓
+Voice Session → Local Wake-up ────────┘
+→ Manager → Action Proposal
 → App 근거 표시·명시적 승인
 → Policy → Validation → Permission Check → Deterministic Executor
 → Calendar Connector → 재수집 → Day Canvas 갱신
@@ -36,14 +40,14 @@ Note Evidence → Memory Candidate → Review → Confirmed Memory
 
 첫 루프는 macOS, 한 Person, Calendar connector 하나의 전체 캘린더와
 일정 생성 action 하나로 제한한다. Flutter는 화면과 승인 입력을 담당하고
-canonical 변경은 Rust typed command를 거친다. S4는 여기에 source-backed
-Personal Memory를, S5는 같은 로컬 경계 안에 Manager와 Expert를 연결한다.
-Expert는 제한된 view와 capability를 사용하며 connector 자격증명이나 DB에
-직접 접근하지 않는다.
+canonical 변경은 Rust typed command를 거친다. S4는 먼저 chat, Agent loop와
+Expert host를 연결한다. S5는 그 대화와 결과를 source-backed Memory 및
+procedural Playbook 후보로 컴파일한다. Expert는 제한된 view와 capability를 사용하며
+connector 자격증명이나 DB에 직접 접근하지 않는다.
 
 사용자와 대화하고 Expert 결과를 취합하는 Manager agent와 OS lifecycle을 담당하는
-Device Agent를 구분한다. S5는 전자의 orchestration contract만 검증한다.
-S1–S5는 앱 실행 중 동작해도 되며, resident Device Agent 경계는 S7에서 검증한다.
+Device Agent를 구분한다. S4는 전자의 orchestration contract를, S7은 후자의
+local wake lifecycle을 검증한다. S1–S6는 앱 실행 중 동작해도 된다.
 
 ## S1 — Connected Calendar Read
 
@@ -105,99 +109,154 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 **제외:** 일정 이동·삭제, 메일 전송, 자동 승인, 범용 workflow 엔진.
 
-## S4 — Reviewable Personal Memory
+## S4 — Conversational Agent and Expert Foundation
 
-**사용자 결과:** 사용자가 Floe Note에 남긴 선호나 약속에서 만들어진 Memory
-candidate의 근거를 확인하고 저장한 뒤, Memory 화면에서 수정하거나 완전히 잊게
-할 수 있다.
+**사용자 결과:** 사용자가 Day Canvas의 assistant panel에서 Floe와 여러 turn을
+대화한다. Manager는 오늘 일정과 Schedule Expert를 사용해 답하거나 집중 시간
+작업을 제안하고, 사용자는 실행 과정을 확인·중단하며 나중에 같은 대화를 재개한다.
 
-**의존성:** S3 Accepted, Person-scoped local store, P0-F의 local vault/key boundary.
-모델 기반 추출은 P0-D의 고정 평가 세트를 먼저 통과해야 하며, 모델 없이도 fixture
-extractor로 전체 정책 경계를 재현할 수 있어야 한다.
+**의존성:** S3 Accepted, S1 calendar view, P0-I Agent/Expert contract harness,
+P0-F의 session store at-rest/key boundary.
+sync/account server나 resident Device Agent 없이 macOS 앱과 local Agent host에서
+먼저 검증한다. model runner가 기기 밖에 있으면 inference class와 전송 동의를 따른다.
 
-첫 범위는 한 Person, Floe가 소유한 Note evidence, Preference와 Commitment 두
-memory type으로 제한한다. 자동 수집이나 외부 이메일 ingestion보다 evidence →
-candidate → review → authoritative memory → projection → edit/delete의 수명주기를
-먼저 검증한다. 사용자 명시 입력과 모델 inference를 구분하며 candidate는 저장 전
-권한을 갖지 않는다.
-
-### Acceptance criteria
-
-- **S4-A1:** Note evidence와 immutable source reference에서 typed MemoryCandidate를
-  만들고 extraction version, observed time, confidence, fact/inference 구분을 보존한다.
-  재처리해도 같은 candidate나 authoritative memory가 중복되지 않는다.
-- **S4-A2:** inferred candidate는 공용 Review request에서 source excerpt와 변경될
-  structured fields를 확인한 뒤 저장·거절할 수 있다. 거절·보류 상태는 장기 Memory
-  view나 Manager context에 나타나지 않으며 민감도 정책 위반은 저장 전에 차단된다.
-- **S4-A3:** 저장된 Memory의 source, 현재 값, 시간 유효성, confidence를 앱에서
-  확인하고 수정·삭제할 수 있다. 수정은 provenance를 잃지 않는 새 revision으로
-  남고, 삭제는 projection, 검색 index, embedding, cache에서 전파 여부를 검증한다.
-- **S4-A4:** 앱/core 재시작과 extractor version 변경 후에도 evidence, decision,
-  revision, tombstone이 일관된다. 고정 corpus에서 false memory와 false merge를
-  기록하고 삭제된 Memory가 재컴파일로 되살아나지 않는다. 실제 개인 데이터는
-  local at-rest protection과 key-unavailable fail-closed 동작을 검증한 build에서만
-  dogfood한다.
-
-### 구현 increment
-
-1. fixture Note 하나를 evidence/candidate로 저장하고 재시작 후 같은 Review에 복구한다.
-2. Review 결정이 confirmed Memory projection에만 반영되고 거절 시 나타나지 않게 한다.
-3. Memory 화면에서 source 확인, revision edit, forget과 파생 데이터 정리를 연결한다.
-4. versioned extractor corpus, 재컴파일, key failure와 삭제 회귀를 자동·live 검증한다.
-
-**제외:** 이메일·transcript 자동 ingestion, 범용 knowledge graph, 관계 자동 병합,
-cross-device memory sync, 무검토 inferred memory 저장, vector database 선정 확정.
-
-## S5 — Manager and Expert Advice Loop
-
-**사용자 결과:** Manager가 오늘 일정과 사용자가 확정한 Memory를 바탕으로
-Schedule Expert의 조언을 받아 근거 있는 집중 시간 제안을 하나 보여준다. 사용자가
-실행을 선택하면 기존 S3 승인·실행 경계를 그대로 통과한다.
-
-**의존성:** S4 Accepted, S1 calendar view, S3 action gate. sync/account server나
-resident Device Agent 없이 macOS 앱 실행 중인 local Expert host에서 먼저 검증한다.
-실제 model runner가 기기 밖에 있으면 기존 inference class와 전송 동의 경계를 따른다.
-
-첫 범위는 manual `plan my day` trigger, built-in Schedule Expert 하나, 동작을 비교할
-deterministic declarative fixture Expert 하나로 제한한다. ExpertPackage,
-Installation, Person별 Assignment를 분리하고 두 구현이 동일한 invocation/result
-contract를 사용하게 한다. 실제 모델 평가는 고정 시나리오 세트로 별도 기록한다.
+첫 범위는 text chat, 한 Person, built-in Schedule Expert, deterministic declarative
+fixture Expert와 Calendar read/create capability로 제한한다. 자세한 runtime 계약은
+[Agent Runtime and Governed Learning](../03-intelligence/agent-runtime-and-learning.md)을
+따른다.
 
 ### Acceptance criteria
 
-- **S5-A1:** registry가 package/version, installation enablement, Person assignment,
-  trigger, granted permissions와 private state namespace를 보존한다. built-in과
-  declarative fixture Expert가 동일한 bounded invocation과 structured result
-  contract로 실행된다.
-- **S5-A2:** Expert는 허용된 Timeline/Memory projection만 읽고 DB, source evidence,
-  connector credential에는 접근하지 못한다. 미승인 view/capability 호출을 거부하고
-  assignment 간 state 격리와 disable/revoke의 즉시 적용을 검증한다.
-- **S5-A3:** Expert는 InsightCandidate 또는 ActionProposal만 반환한다. Manager가
-  근거, 충돌, freshness를 검토해 사용자에게 하나의 응답으로 합성하며 Expert가
-  직접 UI를 표시하거나 Calendar를 변경하지 못한다. 실행은 S3 policy, review,
-  validation, idempotent executor를 재사용한다.
-- **S5-A4:** trigger → granted views → Expert result → Manager decision → Review/Activity를
-  민감 원문 없이 추적·재현할 수 있다. timeout, malformed output, budget 초과,
-  Expert 하나의 실패가 다른 상태를 손상시키지 않으며 고정 시나리오에서 근거성,
-  유용성, 불필요한 제안 비율을 기록한다.
+- **S4-A1:** 새 chat을 시작하고 streaming 응답, stop, retry, 오류를 다룬다. 완결된
+  User/Assistant/Tool/Expert event만 Person-scoped session에 저장하며 앱/core 재시작
+  후 순서와 상태를 보존해 재개할 수 있다.
+- **S4-A2:** Flutter, fixture와 model adapter가 같은 versioned AgentCommand/Event
+  contract를 사용한다. stable/scoped/retrieved/recent/ephemeral context layer와
+  내부 message/tool-call representation은 provider나 UI 구현에 종속되지 않는다.
+- **S4-A3:** registry가 Tool과 Expert package/version, installation, Person assignment,
+  enablement와 private state를 관리한다. built-in Schedule Expert와 declarative
+  fixture가 동일한 bounded ExpertInvocation/ExpertResult contract로 실행된다.
+- **S4-A4:** Expert는 granted Timeline view와 capabilities만 사용하고 DB, credential,
+  raw source에 접근하지 않는다. structured insight/proposal만 Manager에게 반환하며
+  Calendar 변경은 반드시 S3 Review/Policy/Validation/Executor를 재사용한다.
+- **S4-A5:** 모든 model/tool/Expert call은 cancellation, deadline, iteration/token/cost,
+  output과 반복-call stall budget을 지킨다. 실패 격리, trace/replay, stale context,
+  prompt-injection fixture와 실제 모델 대화 세트를 통과한다. 실제 개인 대화는
+  session at-rest/key-unavailable gate를 통과한 build에서만 dogfood한다.
 
 ### 구현 increment
 
-1. fixture package를 install/assign하고 manual trigger 결과와 private state를 복구한다.
-2. Timeline/Memory view handle과 deny-by-default capability를 연결해 거부 사례를 통과한다.
-3. Schedule Expert 결과를 Manager의 한 응답과 S3 ActionProposal로 end-to-end 연결한다.
-4. real-model scenario, revoke, timeout, malformed output, budget와 trace 회귀를 검증한다.
+1. fixture model의 한 turn을 typed event stream으로 assistant panel에 표시·저장한다.
+2. multi-turn resume, streaming stop/retry와 session failure recovery를 연결한다.
+3. registry/assignment와 두 Expert 구현을 같은 host contract로 실행한다.
+4. Schedule Expert 결과를 Manager 답변과 S3 ActionProposal에 연결한다.
+5. live model, capability denial, injection, budget/stall/cancel 회귀를 검증한다.
 
-**제외:** Marketplace 배포·결제, arbitrary code/Wasm Expert, Health/Mail Expert,
-background trigger, multi-agent 대화 UI, Expert의 직접 action/memory mutation,
-동적 model router.
+**제외:** durable Personal Memory, 자가개선, arbitrary code/Wasm Expert, Marketplace,
+background execution, voice, multi-agent persona/chat, Expert 직접 mutation.
 
-## S6 — Same Loop Across Devices and Server
+## S5 — Governed Memory and Self-Improvement
+
+**사용자 결과:** Floe가 이전 대화의 확정된 선호·약속을 다음 대화에서 적절히
+기억한다. 사용자는 무엇을 왜 기억했는지와 Floe가 학습한 반복 절차를 검토하고,
+수정·되돌리기·고정·보관·완전 삭제할 수 있다.
+
+**의존성:** S4 Accepted, P0-D versioned corpus, P0-F local vault/key boundary.
+S4 session, tool/Expert outcome과 명시적 user correction만 첫 learning evidence로 쓴다.
+
+Personal Memory, searchable Session Archive, procedural Playbook을 별도 저장·retrieval
+정책으로 다룬다. Hermes의 background review와 Skills/Curator mechanism을 참고하되,
+Floe의 inferred durable write는 기본적으로 공용 Review에 staging한다. 자가개선은
+externalized knowledge 개선이며 model weights, identity, safety policy, permission을
+수정하지 않는다.
+
+### Acceptance criteria
+
+- **S5-A1:** immutable session/evidence/outcome에서 typed MemoryCandidate와
+  PlaybookChangeCandidate를 만들고 source, extractor/prompt version, confidence,
+  fact/inference, before/after diff와 actor를 보존한다. 재처리는 중복되지 않는다.
+- **S5-A2:** background Learner는 bounded digest와 read-only evidence/evaluation만
+  받고 candidate 외의 tool을 사용할 수 없다. foreground와 별도 budget/cancellation을
+  가지며 새 user turn이 local review를 defer/preempt해도 session을 손상시키지 않는다.
+- **S5-A3:** candidate는 기본적으로 Review를 거쳐야 활성화된다. rejected/pending
+  항목은 context에 들어가지 않고 Memory와 Playbook은 compact index + on-demand retrieval로
+  주입되며 external evidence를 instruction으로 승격하지 않는다.
+- **S5-A4:** Memory/Playbook의 source, revision, usage/outcome을 inspect/edit/delete할 수
+  있다. 모든 변경은 ledger와 rollback material을 남기고 pin을 존중한다. 자동 curator는
+  stale/archive만 하며 hard delete나 consolidation은 기본적으로 수행하지 않는다.
+- **S5-A5:** 재시작, context compaction, extractor/Playbook version 변경 뒤에도 decision과
+  tombstone이 일관되고 삭제 항목이 부활하지 않는다. replay set에서 false memory,
+  retrieval precision, task outcome과 regression을 비교하며 실제 데이터는 local
+  at-rest/key-unavailable gate 통과 후에만 dogfood한다.
+
+### 구현 increment
+
+1. session search/compaction과 recovery pointer를 구현해 S4 대화를 재개·검색한다.
+2. correction에서 MemoryCandidate를 만들고 Review/confirmed retrieval을 연결한다.
+3. 성공·실패 workflow에서 Playbook diff를 만들고 staged activation/rollback을 연결한다.
+4. isolated Learner, ledger, pin/stale/archive와 progressive disclosure를 구현한다.
+5. corpus/replay, 삭제, key failure와 실제 대화 dogfood를 검증한다.
+
+**제외:** 무검토 inferred write, model fine-tuning/weight update, safety/policy 자가수정,
+Wasm/code Playbook 자동 설치, autonomous consolidation, cross-device Memory sync.
+
+## S6 — Transcription and Voice Mode
+
+**사용자 결과:** 사용자가 assistant panel에서 press-to-talk로 Floe와 대화하고,
+명시적으로 시작한 짧은 전사 session의 transcript·요약·Task/Commitment candidate를
+시간 근거와 함께 검토한다. text, voice와 transcription이 같은 Review/Activity
+경계를 사용한다.
+
+**의존성:** S5 Accepted, streaming/recording STT, TTS와 audio-session PoC. wake
+word는 요구하지 않는다. 첫 전사는 foreground microphone 또는 test audio file로
+제한하고 system-wide meeting audio capture는 provider PoC 결과에 따라 결정한다.
+
+### Acceptance criteria
+
+- **S6-A1:** mic permission, device 선택, 시작/중지, partial/final transcript와 오류
+  복구가 가능하다. audio retention/전송 상태를 녹음 전에 표시한다.
+- **S6-A2:** final transcript가 S4의 동일 AgentCommand로 들어가며 text와 voice turn,
+  tool/Expert call, Review action이 하나의 session 순서로 유지된다.
+- **S6-A3:** TTS 중 user barge-in이 출력을 즉시 멈추고 새 turn을 시작한다. 취소된
+  partial transcript나 TTS가 Memory/Learning evidence로 확정되지 않는다.
+- **S6-A4:** 명시적으로 시작·종료한 TranscriptionSession이 audio source, timecoded
+  final segments와 retention state를 보존한다. Summary/Task/Commitment/Memory output은
+  source segment로 돌아갈 수 있는 candidate이며 자동 확정되지 않는다.
+- **S6-A5:** 고정 audio corpus와 live 환경에서 first-partial/final/first-audio latency,
+  WER/고유명사·날짜·금액 오류, echo/noise, CPU/battery와 민감 데이터 경계를 기록한다.
+
+**제외:** wake word, always-on mic, verified speaker identity, background recording,
+무제한 장시간 전사, cross-device handoff.
+
+## S7 — Local Wake-up and Ambient Invocation
+
+**사용자 결과:** macOS에서 UI가 닫혀 있어도 사용자가 명시한 wake phrase로 Floe
+voice session을 열고, 눈에 보이는 listening state에서 요청을 이어간다.
+
+**의존성:** S6 Accepted, on-device wake model과 resident Device Agent lifecycle PoC.
+
+### Acceptance criteria
+
+- **S7-A1:** wake detection과 제한된 pre-roll은 로컬에서 수행되며 opt-in, pause,
+  명확한 listening indicator와 즉시 disable/delete를 제공한다. pre-wake audio는
+  trigger 실패 시 외부 전송·영구 저장되지 않는다.
+- **S7-A2:** UI 종료와 Device Agent 재시작 후에도 설정에 맞게 동작하며 중복 Agent
+  session이나 동시에 두 microphone owner를 만들지 않는다.
+- **S7-A3:** wake 후 S6 session으로 handoff하고 timeout/cancel/lock-screen 상태를
+  안전하게 처리한다. speaker match는 편의 신호일 뿐 민감 작업의 승인 권한이 아니다.
+- **S7-A4:** 다양한 거리·소음·유사 발화에서 false accept/reject, wake latency,
+  CPU/battery를 측정하고 정한 threshold를 통과하지 못하면 hotkey/수동 voice로
+  fallback한다.
+
+**제외:** iOS always-on wake, 회의 상시 녹음, cross-device arbitration, proactive
+intervention, biometric authorization 대체.
+
+## S8 — Same Loop Across Devices and Server
 
 **사용자 결과:** 한 기기에서 확정한 Memory와 수행한 제안·실행 결과를 다른
 기기에서 확인한다.
 
-**의존성:** S5 Accepted, sync·identity·storage 보안 PoC.
+**의존성:** S7 Accepted, sync·identity·storage 보안 PoC.
 
 최소 Go 서버와 재현 가능한 self-host 실행 경로, 두 클라이언트만 다룬다.
 실제 기기/플랫폼 조합, provider 실행 위치, sync topology는 착수 전에 결정한다.
@@ -205,35 +264,36 @@ background trigger, multi-agent 대화 UI, Expert의 직접 action/memory mutati
 
 ### Acceptance criteria
 
-- **S6-A1:** clean environment에서 문서화된 절차로 최소 서버를 실행하고 실제
+- **S8-A1:** clean environment에서 문서화된 절차로 최소 서버를 실행하고 실제
   두 기기를 같은 Person에 인증·연결할 수 있다.
-- **S6-A2:** 일정, confirmed Memory revision/tombstone, active Expert assignment와
-  Review/실행 결과가 두 기기에 수렴한다. offline 재연결, 충돌, 중복 전달로 인한
+- **S8-A2:** 일정, Agent session lineage, confirmed Memory/Playbook revision/tombstone,
+  active Expert assignment와 Review/실행 결과가 두 기기에 수렴한다. offline
+  재연결, 충돌, 중복 전달로 인한
   Memory 부활이나 중복 실행이 없음을 검증한다.
-- **S6-A3:** 다른 Person의 접근과 철회된 기기의 신규 접근을 차단한다.
+- **S8-A3:** 다른 Person의 접근과 철회된 기기의 신규 접근을 차단한다.
   전송/저장 보호, credential 보관, 삭제 전파 정책을 명시하고 검증한다.
-- **S6-A4:** device-native Calendar의 실행 기기가 offline이면 실행을 보류하거나
+- **S8-A4:** device-native Calendar의 실행 기기가 offline이면 실행을 보류하거나
   명시적으로 실패시킨다. 서버가 로컬 OS capability를 가진 것으로 가정하지 않는다.
 
 **제외:** 전 플랫폼 parity, multi-user 관리 UI, OAuth broker, hosted 운영 완성.
 
-## S7 — Event-driven Intervention
+## S9 — Event-driven Intervention
 
 **사용자 결과:** 일정 변경으로 제안이 무효해지면 적절한 시점에 재제안을 받는다.
 
-**의존성:** S6 Accepted; local lifecycle PoC는 필요할 때 앞당길 수 있다.
+**의존성:** S8 Accepted; S7의 local lifecycle을 재사용한다.
 
 ### Acceptance criteria
 
-- **S7-A1:** macOS UI가 닫힌 동안에도 resident Device Agent가 일정 변경을
+- **S9-A1:** macOS UI가 닫힌 동안에도 resident Device Agent가 일정 변경을
   감지하고 재제안한다. 프로세스 재시작 후에도 동작한다.
-- **S7-A2:** quiet hours, opt-out, 중복 억제와 두 기기 사이 알림 중재를 검증한다.
-- **S7-A3:** 알림에서 앱의 근거·승인 화면으로 이어지며 외부 쓰기는 S3의
+- **S9-A2:** quiet hours, opt-out, 중복 억제와 두 기기 사이 알림 중재를 검증한다.
+- **S9-A3:** 알림에서 앱의 근거·승인 화면으로 이어지며 외부 쓰기는 S3의
   동일한 승인·검증 경계를 통과한다.
-- **S7-A4:** 구조화된 dogfood 기록으로 유용한 개입, 불필요한 개입, 누락을
+- **S9-A4:** 구조화된 dogfood 기록으로 유용한 개입, 불필요한 개입, 누락을
   평가한다. 일정/알림은 deterministic scheduler가 담당한다.
 
-**제외:** wake word, 상시 녹음, 회의 전사, speaker recognition, 음성 handoff.
+**제외:** 상시 녹음, advanced speaker recognition, 음성 handoff.
 
 ## 구현 운영과 완료 상태
 
@@ -289,13 +349,13 @@ Known limitations / blocker: 남은 제약과 해소 조건
 
 | Phase | 먼저 검증하는 slice 경계 | 여전히 별도 검증이 필요한 범위 |
 | --- | --- | --- |
-| 0 — PoCs | S1 connector, S3 executor, S4 memory compiler, S5 Expert contract, S6 sync/security | Health, 음성 및 나머지 PoC |
-| 1 — Personal Day | S1 Day Canvas, S3 승인 UI | 편집·folding·음성·MVP dogfood |
-| 2 — Connected | S1 Calendar, S3 생성, S5 Schedule Expert | Gmail, Contacts, Health, 추가 Expert |
-| 3 — Memory | S4 Note 기반 Preference/Commitment lifecycle | People/Relationship/Episode, 외부 source, identity resolution |
-| 3.5 — Experts | S5 local contract, assignment, permission, built-in/declarative 실행 | Wasm, SDK, marketplace, server placement |
-| 4 — Cross-device | S6 두 기기 sync, S7 resident lifecycle | iOS/Android/Windows 전체 경험 |
-| 5 — Ambient | S7 변경 감지와 개입 | wake word, 전사, speaker recognition, 음성 handoff |
-| 6 — Hosted/Self-host | S6 최소 Go 서버와 배포 | admin, 다중 사용자 운영, broker, hosted 완성 |
+| 0 — PoCs | S1 connector, S3 executor, S4 Agent/Expert contract, S5 memory/learning, S6 voice, S7 wake, S8 sync/security | Health 및 나머지 PoC |
+| 1 — Personal Day | S1 Day Canvas, S3 승인 UI, S4 chat, S6 voice capture | 편집·folding·MVP dogfood |
+| 2 — Connected | S1 Calendar, S3 생성, S4 Schedule Expert | Gmail, Contacts, Health, 추가 Expert |
+| 3 — Memory | S5 대화 기반 Memory/Playbook lifecycle | People/Relationship/Episode, 외부 source, identity resolution |
+| 3.5 — Experts | S4 local contract, assignment, permission, built-in/declarative 실행 | Wasm, SDK, marketplace, server placement |
+| 4 — Cross-device | S8 두 기기 sync, S7 local resident lifecycle | iOS/Android/Windows 전체 경험과 voice handoff |
+| 5 — Ambient | S6 voice, S7 wake-up, S9 변경 감지와 개입 | meeting transcription, advanced speaker recognition |
+| 6 — Hosted/Self-host | S8 최소 Go 서버와 배포 | admin, 다중 사용자 운영, broker, hosted 완성 |
 
 이 표는 계획된 coverage다. 실제 검증 여부는 `PROGRESS.md`에서만 갱신한다.

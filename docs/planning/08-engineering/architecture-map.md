@@ -28,8 +28,8 @@
 ┌─────────────────────┐  ┌──────────────────┐
 │ Intelligence Layer  │  │ Integration      │
 │                     │  │ Fabric           │
-│ Manager             │  │                  │
-│ Experts             │  │ Connectors       │
+│ Manager Agent Loop  │  │                  │
+│ Tool/Expert Registry│  │ Connectors       │
 │ Domain Models       │  │ Activepieces     │
 └──────────┬──────────┘  │ Native adapters  │
            │             └────────┬─────────┘
@@ -64,6 +64,16 @@ HealthKit/Health Connect 등 platform API는 Device Provider 뒤에 둔다.
 ### Intelligence → Action Proposal
 
 Intelligence가 connector mutation을 직접 실행하지 않는다.
+
+### Interface → AgentCommand/Event
+
+Chat, voice와 future server transport는 같은 versioned AgentCommand/Event를 사용한다.
+Flutter callback이나 provider response schema가 Agent core contract가 되어서는 안 된다.
+
+### Learning → Candidate
+
+Agent self-improvement는 Personal Memory 또는 procedural Playbook candidate를 만들 뿐,
+identity, safety policy, permission이나 model weights를 직접 변경하지 않는다.
 
 ### Memory → Evidence
 
@@ -125,4 +135,3 @@ Connectors: Native Rust / Go + ConnectorSpec
 Third-party Experts do not receive direct DB, credential, or unrestricted network access.
 
 The runtime boundary is designed around semantic capabilities and structured outputs.
-

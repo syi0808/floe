@@ -1,7 +1,7 @@
 {
   "project": "Floe",
   "version": "planning-v0.8",
-  "document_count": 52,
+  "document_count": 53,
   "structure": [
     "00-overview/product-boundaries.md",
     "00-overview/product-principles.md",
@@ -16,6 +16,7 @@
     "02-domain/personal-memory.md",
     "02-domain/personal-state.md",
     "02-domain/personal-timeline.md",
+    "03-intelligence/agent-runtime-and-learning.md",
     "03-intelligence/expert-extension-model.md",
     "03-intelligence/health-intelligence.md",
     "03-intelligence/manager-and-experts.md",
@@ -56,5 +57,5 @@
     "10-ecosystem/expert-package.md",
     "README.md"
   ],
-  "notes": "Added extensible Expert architecture, capability permissions, sandbox runtime, package format, marketplace, and Expert SDK direction."
+  "notes": "Prioritizes conversational Agent/Expert chat, governed Memory and self-improvement, voice, and wake-up before distribution; adds Hermes-informed runtime boundaries."
 }

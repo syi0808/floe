@@ -13,9 +13,9 @@ S1 has an EventKit read implementation and fixture end-to-end coverage; live
 permission/read validation is still pending. The Go model gateway and local connection
 console remain reusable infrastructure without a focus-time product feature;
 unfinished Personal Day work remains tracked separately in [progress](PROGRESS.md).
-After S3, delivery validates reviewable Personal Memory (S4) and the local
-Manager/Expert advice loop (S5) before cross-device/server (S6) and resident
-intervention (S7).
+After S3, delivery validates conversational Agent/Expert chat (S4), governed
+Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
+cross-device/server (S8) and intervention (S9).
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
@@ -27,6 +27,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [Delivery board and validation evidence](PROGRESS.md)
 - [Slice-driven delivery decision](docs/decisions/0006-slice-driven-delivery.md)
 - [Memory-and-Expert-first sequencing decision](docs/decisions/0012-memory-and-expert-first-slices.md)
+- [Conversational Agent, learning, and voice sequence](docs/decisions/0013-conversational-agent-learning-and-voice-sequence.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

@@ -1,8 +1,12 @@
 # ADR 0012: Validate memory and expert judgment before distribution
 
 - **Date:** 2026-09-07
-- **Status:** accepted
+- **Status:** accepted; slice order and numbering amended by [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md)
 - **Amends:** [ADR 0006](0006-slice-driven-delivery.md)
+
+> Historical sequence: ADR 0013 now places conversational Agent/Expert chat in S4,
+> governed Memory/learning in S5, voice in S6, wake-up in S7, cross-device in S8
+> and intervention in S9. The local-first rationale below remains accepted.
 
 ## Context
 

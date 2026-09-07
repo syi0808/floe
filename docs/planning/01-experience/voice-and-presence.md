@@ -12,6 +12,18 @@ Voice는 채팅 입력의 음성 버전이 아니라 Floe의 **Presence Layer**�
 2. Capture — 생각이나 요청을 빠르게 말한다.
 3. Transcription — 회의/대화를 기록하고 구조화한다.
 
+## Slice 순서
+
+- S4의 text AgentSession과 AgentCommand/Event contract가 먼저다.
+- S6는 press-to-talk, streaming transcript, TTS/barge-in과 명시적으로 시작하는
+  transcription session을 같은 Agent/Review boundary로 연결한다.
+- S7은 on-device wake detection과 resident Device Agent에서 S6 session을 연다.
+- S9 proactive intervention은 wake-up과 별도 정책이며, wake phrase는 Agent에게
+  먼저 말할 권한을 주지 않는다.
+
+Voice transport가 별도 Manager, Memory, Expert registry나 action authority를
+만들어서는 안 된다.
+
 ## macOS
 
 macOS를 초기 ambient voice의 대표 플랫폼으로 삼는다.

@@ -2,9 +2,9 @@
 
 > Status: Recommended architecture direction
 
-## S5 implementation baseline
+## S4 implementation baseline
 
-S5는 이 문서의 모든 execution class를 한 번에 구현하지 않는다. local host에서
+S4는 이 문서의 모든 execution class를 한 번에 구현하지 않는다. local host에서
 다음 최소 runtime을 먼저 제공한다.
 
 - package/version, installation, Person assignment와 enable/revoke registry
@@ -13,7 +13,7 @@ S5는 이 문서의 모든 execution class를 한 번에 구현하지 않는다.
 - native Schedule Expert와 deterministic declarative fixture adapter
 - timeout/output/budget validation, trace와 failure isolation
 
-Sandboxed Component와 server embedding topology는 S5 제외 범위다. 다만 S5의 host
+Sandboxed Component와 server embedding topology는 S4 제외 범위다. 다만 S4의 host
 contract에 direct database, credential, UI 또는 authoritative Memory write를 넣어
 미래 sandbox를 우회해서는 안 된다.
 

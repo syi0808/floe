@@ -2,24 +2,30 @@
 
 > Status: Recommended validation order
 
-## Near-term gates for S4 and S5
+## Near-term slice gates
 
-S3 acceptance 뒤 구현 순서는 P0-D Memory Compiler 평가와 P0-F local vault/key
-boundary → S4 Reviewable Memory → P0-I Expert Contract harness → S5 Manager/Expert
-Advice다. P0-F의 self-host key model과 아직 선택하지 않은 sync/server는 S4나
-S5의 실행 prerequisite로 만들지 않는다. P1-B Sync Chaos는 S6 착수 전에 수행한다.
+S3 acceptance 뒤 순서는 P0-I Agent/Expert Contract와 P0-F session vault/key →
+S4 Conversational Agent → P0-D Memory/Learning Compiler와 P0-F memory vault → S5 Governed Memory → P0-A
+Streaming Voice → S6 Voice Mode → P0-J Local Wake → S7 Wake-up이다. P0-F의
+self-host key model과 sync/server는 S5 prerequisite가 아니다. P1-B Sync Chaos는
+S8 착수 전에 수행한다.
 
-## P0-A — macOS Ambient Voice
+## P0-A — Streaming Voice Session
 
 검증:
 
-- wake word accuracy
-- CPU/battery cost
 - streaming STT latency
-- accidental activation
-- local-only pre-wake audio boundary
+- partial/final transcript correction
+- foreground recording/file transcription의 timecoded segment와 restart recovery
+- transcript → summary/Task/Commitment candidate provenance
+- TTS first-audio latency와 barge-in
+- text/voice turn ordering
+- microphone permission, audio retention과 remote transfer boundary
+- noise/echo, CPU/battery cost
 
-성공 기준은 제품 개발 전에 별도 정의.
+S6 착수 전에 short-conversation/meeting fixture를 포함한 versioned audio corpus와
+live 환경, latency/WER/resource threshold를 정의한다. 이 PoC는 wake word나
+resident background lifecycle을 포함하지 않는다.
 
 ## P0-B — Health Local Engine
 
@@ -60,7 +66,7 @@ Derived State
 
 입력:
 
-- S4의 Floe Note corpus
+- S4의 conversation, outcome, correction corpus
 - 이후 경계를 확인할 대화, transcript, 이메일의 adversarial fixture
 
 출력:
@@ -70,11 +76,11 @@ Derived State
 - source/provenance
 - confidence
 
-S4 착수 전에 corpus와 target threshold를 versioned fixture로 고정한다. 모든
+S5 착수 전에 corpus와 target threshold를 versioned fixture로 고정한다. 모든
 candidate의 typed schema/provenance 보존, 같은 evidence 재처리의 idempotency,
 rejected/tombstoned memory의 비부활은 100% 통과해야 한다. Candidate precision,
 recall, false memory와 false merge는 별도로 측정하며 threshold 변경은 평가 결과와
-함께 기록한다. S4가 다루지 않는 Person merge, Episode/Claim은 연구 결과만 남기고
+함께 기록한다. S5가 다루지 않는 Person merge, Episode/Claim은 연구 결과만 남기고
 slice 범위를 확장하지 않는다.
 
 ## P0-E — Action Gate
@@ -107,10 +113,11 @@ Calendar Mutation
 - deletion/provenance
 - self-host key model
 
-S4 gate는 local at-rest protection, OS-backed key access, key-unavailable
-fail-closed, 삭제 후 파생 데이터 잔존 여부까지다. 이 경계가 통과하기 전에는 synthetic
-fixture만 사용한다. self-host key ownership과 cross-device key delivery는 결과를
-기록하되 S6 전까지 미룰 수 있다.
+S4 gate는 session/message/tool result의 local at-rest protection, OS-backed key
+access와 key-unavailable fail-closed다. S5는 여기에 Memory/Playbook/evidence와 삭제
+후 파생 데이터 잔존 여부를 추가한다. 각 경계가 통과하기 전에는 synthetic fixture만
+사용한다. self-host key ownership과 cross-device key delivery는 결과를 기록하되
+S8 전까지 미룰 수 있다.
 
 ## P0-G — Turso Local / Sync
 
@@ -150,13 +157,12 @@ fixture만 사용한다. self-host key ownership과 cross-device key delivery는
 
 Node 없이도 핵심 connector 구현 비용을 충분히 낮출 수 있는지 확인한다.
 
-## P0-I — Local Expert Contract
+## P0-I — Conversational Agent and Expert Contract
 
 입력:
 
-- manual trigger
+- multi-turn chat commands
 - bounded TimelineView
-- confirmed MemoryView
 - Person assignment와 granted permissions
 
 출력:
@@ -164,20 +170,36 @@ Node 없이도 핵심 connector 구현 비용을 충분히 낮출 수 있는지 
 - InsightCandidate
 - ActionProposal
 - private state update
-- diagnostics
+- typed AgentEvent와 diagnostics
 
 검증:
 
-- native Schedule Expert와 declarative fixture의 동일 contract 실행
+- fixture/model adapter의 동일 internal message/tool-call contract
+- native Schedule Expert와 declarative fixture의 동일 Expert contract 실행
+- session persist/resume와 ordered streaming event
 - permission denial과 assignment state isolation
-- malformed output, timeout, budget 초과의 failure isolation
+- malformed output, timeout, cancel, budget/stall의 failure isolation
 - Expert의 DB/credential/direct mutation 접근 불가
 - Manager 합성과 S3 action gate까지의 trace/replay
 
 고정 scenario에서 grounding, stale-context rejection과 불필요한 제안 비율을
-기록한다. S5 착수 전에 scenario set, 허용할 stale/ungrounded output 0건과 유용성
+기록한다. S4 착수 전에 scenario set, 허용할 stale/ungrounded output 0건과 유용성
 target을 고정한다. 이 PoC는 arbitrary code/Wasm이나 server placement를 결정하지
 않는다.
+
+## P0-J — Local Wake Word and Resident Lifecycle
+
+검증:
+
+- macOS on-device wake phrase false accept/reject와 latency
+- local-only bounded pre-roll과 trigger 실패 시 즉시 폐기
+- UI 종료/재시작 뒤 resident Device Agent lifecycle
+- microphone single ownership과 S6 AgentSession handoff
+- opt-in/pause/disable, visible listening state와 lock-screen policy
+- idle CPU/battery와 hotkey/manual fallback threshold
+
+S7 착수 전에 다양한 거리, 소음과 유사 발화 corpus를 고정한다. speaker recognition은
+편의 신호로만 평가하며 action authorization을 대체하지 않는다.
 
 ## P1-A — Day Canvas Dogfood
 

@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-04
 - **Status:** accepted; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md)
+  and [ADR 0013](0013-conversational-agent-learning-and-voice-sequence.md)
 
 ## Context
 
@@ -15,8 +16,9 @@ mix implementation breadth with evidence that components work together.
 - Keep roadmap phases as a product capability map, not sequential delivery gates.
 - Use user-visible, end-to-end slices as the implementation and acceptance unit.
 - Deliver S1 Calendar read and S3 approved execution before expanding the same
-  scenario. ADR 0012 subsequently inserts S4 Memory and S5 Manager/Expert
-  validation before the renamed S6 cross-device/server and S7 intervention slices.
+  scenario. ADRs 0012 and 0013 subsequently put conversational Agent/Expert,
+  governed Memory/learning, voice and wake-up validation before the renamed S8
+  cross-device/server and S9 intervention slices.
 - Limit the first connected loop to macOS, one Person, one calendar connector,
   and one calendar-create action.
 - Use fixtures to establish contracts, then validate real integrations before
@@ -42,8 +44,9 @@ validation track; they do not silently redefine MVP acceptance.
 
 Flutter presentation, Rust-owned canonical mutations, native Rust/Go connectors,
 and intelligence proposing rather than directly executing actions remain intact.
-S6 must validate identity, authorization, and sync boundaries before using real
-multi-device personal data. S7 does not imply wake word or always-listening support.
+S8 must validate identity, authorization, and sync boundaries before using real
+multi-device personal data. S7 wake-up remains local and consented; S9 does not
+imply always-listening recording.
 
 ## Consequences
 

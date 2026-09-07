@@ -4,11 +4,11 @@
 
 ## 첫 구현 검증 범위
 
-[S5 Manager and Expert Advice Loop](../08-engineering/vertical-slice-delivery.md)는
+[S4 Conversational Agent and Expert Foundation](../08-engineering/vertical-slice-delivery.md)는
 server와 background lifecycle보다 먼저 local foreground에서 이 구조를 검증한다.
 
 ```text
-manual plan-my-day trigger
+multi-turn text chat
 → bounded Timeline + confirmed Memory views
 → Schedule Expert
 → structured advice / action proposal
@@ -17,9 +17,12 @@ manual plan-my-day trigger
 ```
 
 built-in Schedule Expert와 deterministic declarative fixture가 동일한 semantic
-contract를 사용해야 한다. 이는 Manager/Expert/Memory permission 경계의 검증이며,
+contract를 사용해야 한다. 이는 Manager/Expert/Tool permission 경계의 검증이며,
 Wasm sandbox, Marketplace, 여러 Expert의 동시 orchestration이나 proactive
 intervention 완료를 의미하지 않는다.
+
+Agent loop, session, registry, budget와 learning port의 구현 계약은
+[Agent Runtime and Governed Learning](agent-runtime-and-learning.md)을 따른다.
 
 ## One Assistant
 

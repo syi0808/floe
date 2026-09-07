@@ -138,3 +138,33 @@ self-host 사용자가 provider별 OAuth app을 직접 만드는 경험은 어�
 ### 완화
 
 intervention budget, confidence threshold, feedback personalization.
+
+## R13 — Self-improvement Drift
+
+### 위험
+
+한 번의 성공/실패나 악성 대화에서 만든 Playbook/Memory가 이후 context를 오염시키고,
+background curator가 그 변화를 반복 강화할 수 있다.
+
+### 완화
+
+- immutable evidence와 outcome-linked candidate
+- inferred write 기본 Review
+- before/after diff, version ledger와 rollback
+- pin, stale, recoverable archive; autonomous consolidation off
+- activation 전 replay evaluation과 이후 comparable-outcome 관찰
+- identity/safety/permission/model weight는 learnable target에서 제외
+
+## R14 — Agent Loop Runaway
+
+### 위험
+
+모델이 같은 Tool/Expert를 반복 호출하거나 취소 후 mutation을 계속해 비용, 데이터
+중복과 사용자가 제어할 수 없는 실행을 만들 수 있다.
+
+### 완화
+
+- cancellation/deadline과 iteration/token/cost/tool-call budget
+- repeated failure와 no-progress stall hard stop
+- mutation sequential execution과 idempotent executor
+- observable progress, stop/retry와 trace/replay

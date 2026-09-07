@@ -56,7 +56,7 @@ Migration and live acceptance of the all-calendar scope remain pending.
 See [S1 validation](../validation/s1-calendar.md). In particular, EventKit identifiers
 may change when calendars/accounts are rebuilt or an event changes calendars.
 Recurring exception identity needs live testing. Existing day queries use one fixed
-offset per day; DST-transition-day correctness is not yet verified. S6 cannot reuse
+offset per day; DST-transition-day correctness is not yet verified. S8 cannot reuse
 these local identifiers as a cross-device identity scheme.
 
 The embedded store remains unencrypted as in the Personal Day baseline. The adapter

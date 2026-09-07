@@ -30,6 +30,19 @@ Suggestions do not mutate data. Accepting one may open a shared review request.
 
 Open an assistant panel when the user invokes Floe or accepts a suggestion. Use a sheet on narrow layouts and a contextual panel on wide layouts. Conversation history is subordinate to the task at hand; the product does not become a full-screen chat by default.
 
+S4 chat uses this same panel. It provides:
+
+- a persistent composer with send, stop and retry states;
+- ordered streaming without treating partial output as a completed message;
+- compact human-readable Expert/tool progress with details on demand;
+- inline evidence and links to Review/Activity rather than hidden action authority;
+- session resume/search without forcing the full archive into the current context;
+- accessible status announcements and keyboard focus recovery after stop/error.
+
+Do not render private chain-of-thought. Show observable calls, sources, decisions and
+errors. A model disconnect preserves completed turns and offers retry without
+duplicating tool execution.
+
 ### Confirmation
 
 Before an external or consequential mutation, state the proposed action, target, time, and relevant side effects. The primary button names the action. `Cancel` or `Keep current` must remain available.

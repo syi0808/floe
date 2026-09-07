@@ -40,6 +40,12 @@ Domain candidates
 Timeline / Memory / Action
 ```
 
+S6 Voice Mode의 final transcript는 S4 text chat과 같은 AgentCommand다. Partial이나
+취소된 transcript는 대화 기록, Memory 또는 self-improvement evidence로 확정하지
+않는다. 별도 TranscriptionSession은 timecoded final segment와 audio retention
+상태를 source로 보존하고, 추출 output은 Review 가능한 candidate로만 만든다.
+S7 wake-up은 capture 시작 조건일 뿐 semantic pipeline을 바꾸지 않는다.
+
 ## Transcription의 목적
 
 Transcript 자체가 최종 제품이 아니다.

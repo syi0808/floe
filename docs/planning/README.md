@@ -46,6 +46,7 @@ floe-planning/
 │   └── people-and-relationships.md
 │
 ├── 03-intelligence/
+│   ├── agent-runtime-and-learning.md
 │   ├── manager-and-experts.md
 │   ├── skills-and-actions.md
 │   ├── model-layer.md
@@ -129,6 +130,15 @@ Phase 순서는 구현 gate가 아니며 필요한 PoC를 해당 slice 착수 �
 4. `07-server/account-person-membership.md`
 5. `03-intelligence/model-layer.md`
 6. `08-engineering/technical-risks.md`
+
+Agent, Memory와 voice slice를 구현하는 경우:
+
+1. `03-intelligence/agent-runtime-and-learning.md`
+2. `03-intelligence/manager-and-experts.md`
+3. `03-intelligence/expert-extension-model.md`
+4. `02-domain/personal-memory.md`
+5. `01-experience/voice-and-presence.md`
+6. `08-engineering/poc-plan.md`
 
 ## Runtime Note
 

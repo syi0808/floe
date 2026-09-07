@@ -350,23 +350,41 @@ Floe renders structured settings, insight, intervention, and action-confirmation
 
 Roadmap phases remain capability scopes, not sequential implementation gates.
 Deliver the connected Calendar read → approved action
-loop first, validate source-backed Memory and the local Manager/Expert judgment
-loop, then extend it across devices/server and event-driven interventions.
+loop first, validate conversational Agent/Experts → governed Memory/learning →
+voice → wake-up, then extend it across devices/server and interventions.
 Track evidence-backed slice states rather than subjective phase percentages.
 Existing Personal Day acceptance and MVP boundaries remain separate.
 
 See [ADR 0006](../../decisions/0006-slice-driven-delivery.md) and
 [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md), then
+[ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md) and
 [vertical slice delivery](vertical-slice-delivery.md).
 
 ---
 
 ## D-037 — Memory and Expert judgment precede distribution
 
+**Status:** Accepted — 2026-09-07; ordering amended by D-038
+
+Conversational Agent/Expert and governed Memory/learning both precede distribution.
+D-038 places Agent/Expert chat in S4 and Memory/learning in S5 because sessions,
+outcomes and corrections are the first learning evidence. Cross-device/server and
+intervention are now S8/S9.
+
+---
+
+## D-038 — Chat is the first Agent integration surface
+
 **Status:** Accepted — 2026-09-07
 
-S4 validates an inspectable, editable, deletable and source-backed Memory lifecycle.
-S5 validates one local Manager → Schedule Expert → action-proposal loop with
-least-privilege views. The former cross-device/server and intervention slices move
-to S6 and S7. Distribution must preserve these accepted contracts rather than
-becoming their prerequisite.
+S4 validates a transport-neutral, interruptible and budgeted Manager Agent loop,
+durable chat sessions, extensible Tool/Expert registries and one Schedule Expert
+path into S3. S5 adds source-backed Personal Memory and governed Playbook
+self-improvement. S6 voice and S7 local wake-up adapt to the same AgentSession;
+they do not create separate assistant cores.
+
+Hermes Agent is an implementation reference for registries, session recall,
+progressive procedural knowledge, isolated learning review, approval gates and recoverable
+curation. Floe keeps typed domain Memory and defaults inferred durable changes to
+human Review; Agent identity, safety, permissions and model weights are immutable
+to the learning loop.
