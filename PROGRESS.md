@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; preparatory panel integrated | User-invoked sample panel, incremental C ABI events, stop/retry/resume; fixture evidence only | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F session vault | Encrypted session vault/key-unavailable gate before personal chat and real models |
+| S4 — Connected Agent/Experts | Planned; preparatory panel integrated | Sample panel/transport; encrypted vault component and keyring adapter tested with synthetic keys | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F signed-host key access and vault integration | Connect and validate the vault in the signed host before personal chat |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,25 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 encrypted session-store component — 2026-09-07
+
+- Added a separate Person-scoped Turso AES-256-GCM session vault, encrypted
+  identity binding, bounded session CAS and a lifetime exclusive file lock.
+- Adopted the keyring-rs ecosystem (`keyring-core` + explicit Apple protected
+  store) instead of directly implementing Security.framework calls. Keys stay
+  native; the backend requests device-local, when-unlocked access.
+- Key loss/change, failed provisioning, wrong keys, tampering and missing/empty
+  databases fail closed without silent key replacement or plaintext fallback.
+- Synthetic tests cover DB/WAL content, reopen, identity/revision isolation,
+  competing processes and interrupted runtime recovery after key loss.
+- Validation: 91 Rust and 117 Flutter tests pass; Flutter analyzer, native
+  library/macOS Debug app builds, signature verification, formatting and Clippy
+  with the two existing Calendar exclusions pass.
+- This component is not connected to the sample panel/C ABI. No live Keychain
+  access or personal data was used; signed-host key access and lifecycle gates
+  remain open. S4 stays 0/14 and S1/S3 acceptance is unchanged.
+- [Evidence, library choice and remaining gates](docs/validation/s4-agent-vault.md).
 
 ### S4 sample assistant panel — 2026-09-07
 

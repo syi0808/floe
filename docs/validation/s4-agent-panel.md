@@ -2,6 +2,10 @@
 
 Date: 2026-09-07. Evidence: synthetic fixtures, macOS arm64.
 
+Follow-up: the [encrypted vault component](s4-agent-vault.md) now validates
+storage/key-failure and file-lock mechanics separately. This panel still uses
+the synthetic store described here; its production-host gates remain open.
+
 ## User-facing increment
 
 Today exposes one quiet `Floe is here to help` entry when its gateway supports

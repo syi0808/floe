@@ -22,7 +22,10 @@ cross-device/server (S8) and intervention (S9).
 S4 preparatory work now includes a bounded Rust Agent runtime, durable synthetic
 sessions and a user-invoked sample conversation panel with progress, stop and
 resume through the C ABI/Dart gateway. Personal chat and live model/source
-integration remain gated; see the [panel validation record](docs/validation/s4-agent-panel.md).
+integration remain gated. A separate encrypted session-store component now uses
+the keyring-rs ecosystem for OS key access; it is not yet connected to the panel.
+See the [panel](docs/validation/s4-agent-panel.md) and
+[vault validation records](docs/validation/s4-agent-vault.md).
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
