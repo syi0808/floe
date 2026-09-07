@@ -404,3 +404,17 @@ entitlements only, and their device/region limitations must be reported rather t
 bypassed.
 
 See [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md).
+
+---
+
+## D-040 — S4 validates local/remote inference privacy boundaries
+
+**Status:** Accepted — 2026-09-07
+
+S4 uses one bounded model contract across a fixture, one device-local Foundation
+Model/sLLM and one supported remote adapter. Codex browser authentication is a
+feasibility gate rather than an assumed public third-party OAuth contract. Domain
+code emits an explicit inference policy decision before selection, and local-only
+work never silently falls back to remote inference.
+
+See [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md).

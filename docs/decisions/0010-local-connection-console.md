@@ -1,6 +1,7 @@
 # ADR 0010 — Local model connection console
 
-- Status: Accepted direction; local implementation, live provider evaluation pending
+- Status: Accepted direction; Codex route remains experimental under
+  [ADR 0015](0015-s4-privacy-aware-inference.md)
 - Date: 2026-09-05
 - Related: ADR 0011
 
@@ -78,6 +79,7 @@ cross-platform secret stores are deferred.
 
 ## References
 
+- [Official OpenAI Codex authentication](https://developers.openai.com/codex/auth)
 - [CLIProxyAPI Codex OAuth reference implementation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/openai_auth.go)
 - [CLIProxyAPI Codex token storage model](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/auth/codex/token.go)
 - [Native OAuth browser/PKCE guidance](https://www.rfc-editor.org/rfc/rfc8252.html)

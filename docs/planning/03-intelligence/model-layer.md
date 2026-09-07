@@ -17,6 +17,11 @@ API/Ollama와 Codex 모두 bounded structured-output 호출이며 도구는 전�
 실제 Codex consent/refresh·native adapter·일반 streaming·사용량 집계는 검증된
 것으로 보지 않는다.
 
+S4는 이 미검증 경계를 제품 flow에서 앞당겨 검증한다. fixture, 하나의 device-local
+Foundation Model/sLLM과 하나의 supported remote adapter가 같은 bounded contract를
+사용해야 한다. Codex browser authentication은 별도 feasibility gate이며, 공개적으로
+supportable한 Floe integration을 확립하지 못하면 API-key route로 대체한다.
+
 ## 핵심 원칙
 
 Floe는 하나의 AI provider에 종속되지 않는다.
@@ -126,8 +131,15 @@ performance class의 model과 reasoning effort를 바꿀 수 있다.
 
 Privacy/업무 의미 판단은 상위 도메인에서 끝나 있어야 한다.
 
+모든 remote 가능 호출은 domain이 만든 `InferencePolicyDecision`을 요구한다. 여기에는
+purpose, data classes, allowed placements, performance class, projection version과
+external-transfer consent state가 포함된다. local-only 실패를 remote fallback으로
+바꾸는 것은 retry가 아니라 새로운 전송 결정이다.
+
 ## Subscription Credential
 
-Codex 등 공식 구독 인증 경로가 있는 provider는 사용자 기존 구독을 inference resource로 활용할 수 있다.
+Codex 등 구독 인증형 provider는 Floe 같은 third-party client에 공식적으로 허용된
+integration 경계가 확인된 경우에만 사용자 기존 구독을 inference resource로 활용한다.
+Codex client용 browser sign-in wire compatibility만으로 이를 가정하지 않는다.
 
 가능하면 subscription credential/token은 Device Agent의 secure credential vault에 두고 서버가 직접 소유하지 않는다.

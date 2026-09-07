@@ -9,7 +9,8 @@ Phase는 장기 제품 범위 지도이며 순차 구현 gate가 아니다.
 [S1–S9 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
 S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 Calendar/Gmail과
 device-local Screen Time/Apple Health context를 사용하는 Chat 기반 Manager Agent →
-Expert/Tool → 승인 action 루프를 먼저 검증한다. S5는 그 대화와
+Expert/Tool → 승인 action 루프, Codex authentication gate와 local Foundation
+Model/sLLM 기반 sensitive routing을 먼저 검증한다. S5는 그 대화와
 결과를 source-backed Memory와 procedural Playbook으로 학습하는 통제된 self-improvement를
 추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용한 뒤,
 S8–S9에서 서버·기기·개입으로 확장한다. 이 순서는 Floe의 핵심 제품 가설을 network

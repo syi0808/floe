@@ -1,7 +1,9 @@
 # ADR 0013: Prove the conversational agent before memory and voice
 
 - **Date:** 2026-09-07
-- **Status:** accepted; S4 connector scope amended by [ADR 0014](0014-s4-connected-agent-sources.md)
+- **Status:** accepted; S4 scope amended by
+  [ADR 0014](0014-s4-connected-agent-sources.md) and
+  [ADR 0015](0015-s4-privacy-aware-inference.md)
 - **Amends:** [ADR 0012](0012-memory-and-expert-first-slices.md)
 
 ## Context

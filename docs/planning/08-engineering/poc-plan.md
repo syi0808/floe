@@ -5,7 +5,7 @@
 ## Near-term slice gates
 
 S3 acceptance 뒤 순서는 P0-I Agent/Expert Contract, P0-C Gmail subset, P0-K Apple
-context와 P0-F session vault/key → S4 Connected Agent → P0-D Memory/Learning
+context, P0-L privacy-aware inference와 P0-F session vault/key → S4 Connected Agent → P0-D Memory/Learning
 Compiler와 P0-F memory vault → S5 Governed Memory → P0-A
 Streaming Voice → S6 Voice Mode → P0-J Local Wake → S7 Wake-up이다. P0-F의
 self-host key model과 sync/server는 S5 prerequisite가 아니다. P1-B Sync Chaos는
@@ -226,6 +226,25 @@ Screen Time public API가 필요한 signal을 합법적으로 제공하지 않�
 capability와 대체 가능한 coarse signal을 ADR로 결정한다. private database, undocumented
 API, entitlement 우회는 성공 조건이 아니다. HealthKit은 macOS에서 data access가
 불가능하므로 macOS fixture와 iOS live evidence를 명확히 구분한다.
+
+## P0-L — Privacy-aware Inference Routes
+
+동일한 bounded `LanguageModel` contract로 검증:
+
+- deterministic fixture adapter
+- supported Apple device의 Foundation Models on-device profile 또는 native packaged
+  sLLM 하나; Private Cloud Compute/server profile은 local gate에서 제외
+- API key 등 공식 지원 remote adapter 하나
+- Codex browser consent/refresh/revoke/logout와 subscription inference feasibility
+- purpose, data class, allowed placement, performance class, projection version,
+  external-transfer consent를 포함한 `InferencePolicyDecision`
+- local-only unavailable, remote denied, credential expiry, quota, cancel과 retry 상태
+- outbound capture를 통한 raw Health/Screen Time/location/credential/mail 경계 확인
+
+Codex CLI/App credential은 복사하지 않는다. Codex OAuth wire compatibility만으로
+Floe의 third-party integration이 공식 지원된다고 가정하지 않으며, supportable한 경계를
+확립하지 못하면 unsupported 결과와 API-key route를 유지한다. local-only 요청은 절대
+remote로 silent fallback하지 않는다.
 
 ## P1-A — Day Canvas Dogfood
 

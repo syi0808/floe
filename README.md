@@ -14,7 +14,8 @@ permission/read validation is still pending. The Go model gateway and local conn
 console remain reusable infrastructure without a focus-time product feature;
 unfinished Personal Day work remains tracked separately in [progress](PROGRESS.md).
 After S3, delivery validates conversational Agent/Expert chat with bounded
-Calendar, Gmail, Contacts, travel/weather, Screen Time, and Apple Health sources (S4), governed
+Calendar, Gmail, Contacts, travel/weather, Screen Time, and Apple Health sources plus
+privacy-aware local/remote model routing (S4), governed
 Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
 cross-device/server (S8) and intervention (S9).
 
@@ -30,6 +31,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [Memory-and-Expert-first sequencing decision](docs/decisions/0012-memory-and-expert-first-slices.md)
 - [Conversational Agent, learning, and voice sequence](docs/decisions/0013-conversational-agent-learning-and-voice-sequence.md)
 - [S4 connected Agent sources](docs/decisions/0014-s4-connected-agent-sources.md)
+- [S4 privacy-aware inference](docs/decisions/0015-s4-privacy-aware-inference.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

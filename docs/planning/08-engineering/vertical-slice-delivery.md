@@ -8,6 +8,7 @@
 > [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md) and
 > [ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md),
 > with S4 scope amended by [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md)
+> and [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md)
 
 ## 목적과 문서 역할
 
@@ -119,7 +120,8 @@ Contacts, 다음 일정의 위치·ETA·날씨와 함께 전문 Expert를 통해
 확인·중단하며 나중에 같은 대화를 재개한다.
 
 **의존성:** S3 Accepted, S1 calendar view, P0-I Agent/Expert contract harness,
-P0-F의 session store at-rest/key boundary, P0-C Gmail과 P0-K Apple context gate.
+P0-F의 session store at-rest/key boundary, P0-C Gmail, P0-K Apple context와
+P0-L privacy-aware inference gate.
 sync/account server나 resident Device Agent 없이 macOS 앱과 local Agent host에서
 먼저 검증한다. model runner가 기기 밖에 있으면 inference class와 전송 동의를 따른다.
 
@@ -149,6 +151,25 @@ read capability로 제한한다. source 선정 근거는
   output과 반복-call stall budget을 지킨다. 실패 격리, trace/replay, stale context,
   prompt-injection fixture와 실제 모델 대화 세트를 통과한다. 실제 개인 대화는
   session at-rest/key-unavailable gate를 통과한 build에서만 dogfood한다.
+
+### Model and privacy acceptance
+
+- **S4-M1 — Common model contract:** deterministic fixture, 하나의 실제 device-local
+  generative adapter와 하나의 supported remote adapter가 같은 bounded structured
+  request/result/error contract를 사용한다. local adapter는 지원 기기의 Apple
+  Foundation Models on-device profile을 우선하되 native packaged sLLM으로 대체할 수
+  있다. Private Cloud Compute/server profile은 local acceptance로 세지 않는다.
+- **S4-M2 — Codex authentication gate:** 기존 Codex credential을 복사하지 않고
+  별도 browser consent, Keychain token 저장, refresh, revoke/logout, account/workspace
+  mismatch와 structured inference를 live 검증한다. 공식적으로 supportable한 third-party
+  integration 경계를 확립하지 못하면 unsupported로 기록하며 API-key 또는 다른 supported
+  remote adapter를 유지한다.
+- **S4-M3 — Sensitive routing:** domain이 purpose, data class, allowed placement,
+  performance class, projection version과 external-transfer consent를 포함한
+  `InferencePolicyDecision`을 model 선택 전에 만든다. Device-only raw data는 remote로
+  보내지 않고 local-only route는 remote로 silent fallback하지 않는다. outbound capture
+  fixture로 raw Health, Screen Time, precise location, credential과 비승인 mail body가
+  process/device boundary를 넘지 않음을 검증한다.
 
 ### Connector acceptance
 
@@ -185,19 +206,23 @@ read capability로 제한한다. source 선정 근거는
 
 1. fixture model의 한 turn을 typed event stream으로 assistant panel에 표시·저장한다.
 2. multi-turn resume, streaming stop/retry와 session failure recovery를 연결한다.
-3. registry/assignment와 Expert 구현을 같은 host contract로 실행한다.
-4. common ConnectorConnection/View fixture를 Communication/Health/Schedule Expert에 연결한다.
-5. live Gmail read/search와 on-demand body를 local Go connector로 검증한다.
-6. Contacts identity와 location/ETA/weather 기반 next-event feasibility를 연결한다.
-7. physical Apple device에서 Screen Time gate와 Health derived-only connector를 검증한다.
-8. source cohort로 today briefing을 만들고 Expert 결과를 S3 ActionProposal에 연결한다.
-9. live model, capability denial, injection, budget/stall/cancel 회귀를 검증한다.
+3. fixture/local/remote model adapter와 명시적 inference policy decision을 연결한다.
+4. Codex authentication feasibility와 supported remote fallback을 live 검증한다.
+5. registry/assignment와 Expert 구현을 같은 host contract로 실행한다.
+6. common ConnectorConnection/View fixture를 Communication/Health/Schedule Expert에 연결한다.
+7. live Gmail read/search와 on-demand body를 local Go connector로 검증한다.
+8. Contacts identity와 location/ETA/weather 기반 next-event feasibility를 연결한다.
+9. physical Apple device에서 Screen Time gate와 Health derived-only connector를 검증한다.
+10. source cohort로 today briefing을 만들고 Expert 결과를 S3 ActionProposal에 연결한다.
+11. live model, placement/consent denial, injection, budget/stall/cancel 회귀를 검증한다.
 
 **제외:** Gmail send/archive, Contacts write/note import, Always location/history,
 Screen Time restriction/shield, raw Health sync/diagnosis,
 Apple source의 macOS 직접 접근이나 cross-device delivery, durable Personal Memory,
 자가개선, arbitrary code/Wasm Expert, Marketplace, background execution, voice,
-multi-agent persona/chat, Expert 직접 mutation.
+multi-agent persona/chat, Expert 직접 mutation, model training/fine-tuning, 중앙
+semantic smart router, local-only 요청의 자동 remote fallback, 실험적 Codex OAuth의
+production 지원 보장.
 
 ## S5 — Governed Memory and Self-Improvement
 
