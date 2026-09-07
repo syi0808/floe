@@ -7,7 +7,7 @@ mod macos {
         time::Duration,
     };
 
-    use apple_native_keyring_store::protected::{AccessPolicy, Cred};
+    use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
     use floe_agent::{AgentFailure, AgentOutcome, Cancellation, SessionStore};
     use floe_core::{AgentFixturePrompt, AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys};
     use floe_domain::PersonId;
@@ -27,11 +27,9 @@ mod macos {
 
     fn entry(person: PersonId, vault: Uuid) -> Result<Entry, String> {
         Cred::build(
+            MacKeychainDomain::User,
             "com.floe.agent-vault.v1",
             &format!("{person}/{vault}"),
-            AccessPolicy::WhenUnlockedThisDeviceOnly,
-            None,
-            false,
         )
         .map_err(|_| "entry_configuration_failed".into())
     }
@@ -196,7 +194,7 @@ mod macos {
         if arguments == ["--probe"] {
             println!(
                 "{}",
-                json!({"schema_version":1,"status":"read_probe_passed","evidence":"read_only_random_slot","write_access_verified":false,"backend":"apple_protected","personal_data":false})
+                json!({"schema_version":1,"status":"read_probe_passed","evidence":"read_only_random_slot","write_access_verified":false,"backend":"macos_login_keychain","personal_data":false})
             );
             return Ok(());
         }

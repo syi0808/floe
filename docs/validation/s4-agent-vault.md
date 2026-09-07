@@ -61,14 +61,15 @@ than linking the all-in-one CLI. See the
 [keyring-rs README](https://github.com/open-source-cooperative/keyring-rs).
 
 The adapter uses `keyring-core` 1.0.0 and macOS
-`apple-native-keyring-store` 1.0.2 with only `protected` enabled. It constructs
-entries directly, never relying on a process-global default store or falling back
-to a mock, plaintext file or legacy Keychain. The service is
+`apple-native-keyring-store` 1.0.2 with only `keychain` enabled. It constructs
+entries directly in the user's login Keychain, never relying on a process-global
+default store or falling back to a mock or plaintext file. The service is
 `com.floe.agent-vault.v1`; account names combine Person and random vault UUIDs.
-The selected policy is `WhenUnlockedThisDeviceOnly`, with cloud synchronization
-disabled. Other OS backends are not enabled and return `VaultUnavailable`.
-See the [Apple backend documentation](https://docs.rs/apple-native-keyring-store/latest/apple_native_keyring_store/)
-and [Apple accessibility policy](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly).
+This backend works without an Apple Developer Program provisioning profile. Other
+OS backends are not enabled and return `VaultUnavailable`. A future move to the
+provisioned Apple Protected Data store requires an explicit key migration and
+rollback design; changing the Cargo feature alone would make existing vault keys
+unreachable. See the [Apple backend documentation](https://docs.rs/apple-native-keyring-store/latest/apple_native_keyring_store/).
 
 The generic keyring setter is an upsert, not an atomic create-only operation.
 The adapter only calls it after an explicit `NoEntry` result, while vault creation
@@ -88,9 +89,10 @@ commit cannot emit a successful final answer. Already-returned messages and an
 in-flight model call are not erased/cancelled by this storage-only check. Native
 lock/background notifications and presentation clearing remain integration work.
 
-The protected backend requires suitable signed-host configuration. There is no
-direct authentication-UI override in Floe; no claim of bounded, noninteractive
-Keychain latency or real locked-device behavior is made from mock tests.
+The login Keychain can display OS access prompts and is governed by the current
+user's Keychain lock state and item access control. There is no direct
+authentication-UI override in Floe; no claim of bounded, noninteractive Keychain
+latency or physical-device-lock behavior is made from mock tests.
 
 ## Ownership and recovery
 
@@ -115,7 +117,7 @@ signature verification, formatting and whitespace checks pass. The app was not
 launched. Clippy passes with only the two existing Calendar exclusions below.
 
 - Keyring binary roundtrip, malformed length, existing-key preservation and
-  inaccessible-store errors using its mock store; explicit Apple backend policy
+  inaccessible-store errors using its mock store; explicit login-Keychain domain
   and Person/vault scope inspected without contacting the OS store.
 - Distinct keys per Person; wrong-Person reads/writes, stale/skipped revisions,
   unsupported versions, prohibited data classes and oversized payloads rejected.
@@ -148,9 +150,10 @@ no unrelated Calendar changes or source suppressions are introduced.
 
 ## Next gate
 
-Connect an explicitly provisioned vault to the signed host and expose only typed
+Connect the login-Keychain vault to the app host and expose only typed
 availability/session operations to Dart. Demonstrate real key creation/reopen,
 locked/denied/missing-key behavior, bounded worker access, shutdown/crash recovery
 and precise disposable cleanup. Define repair/deletion and key-orphan handling
-before enabling personal free text. Multi-platform backend, self-host key ownership
-and cross-device key delivery remain separate gates.
+before enabling personal free text. A provisioned Protected Data migration,
+multi-platform backend, self-host key ownership and cross-device key delivery
+remain separate gates.

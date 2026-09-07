@@ -25,13 +25,11 @@ impl VaultKeyProvider for KeyringVaultKeys {
 
 #[cfg(target_os = "macos")]
 fn entry(person_id: PersonId, vault_id: Uuid) -> Result<Entry, AgentFailure> {
-    use apple_native_keyring_store::protected::{AccessPolicy, Cred};
+    use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
     Cred::build(
+        MacKeychainDomain::User,
         SERVICE,
         &format!("{person_id}/{vault_id}"),
-        AccessPolicy::WhenUnlockedThisDeviceOnly,
-        None,
-        false,
     )
     .map_err(|_| AgentFailure::VaultUnavailable)
 }
@@ -114,18 +112,14 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn apple_backend_is_explicit_person_scoped_and_device_local() {
-        use apple_native_keyring_store::protected::{AccessPolicy, Cred};
+    fn apple_backend_is_explicit_person_scoped_and_uses_login_keychain() {
+        use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
         let person = PersonId::new();
         let vault = Uuid::new_v4();
         let entry = entry(person, vault).unwrap();
         let credential = entry.as_any().downcast_ref::<Cred>().unwrap();
+        assert_eq!(credential.domain, MacKeychainDomain::User);
         assert_eq!(credential.service, SERVICE);
         assert_eq!(credential.account, format!("{person}/{vault}"));
-        assert_eq!(
-            credential.access_policy,
-            AccessPolicy::WhenUnlockedThisDeviceOnly
-        );
-        assert!(!credential.cloud_synchronize);
     }
 }

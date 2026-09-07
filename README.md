@@ -29,8 +29,11 @@ back to the legacy plaintext sample store.
 See the [panel](docs/validation/s4-agent-panel.md) and
 [vault component](docs/validation/s4-agent-vault.md) and
 [app integration validation records](docs/validation/s4-agent-vault-host.md).
-The [signed-key smoke](docs/validation/s4-keyring-live-smoke.md) currently exposes
-a provisioning/entitlement failure. A bounded
+The vault currently keeps only its random database key in the user's macOS login
+Keychain, so local development does not require an Apple Developer Program
+provisioning profile. A future signed release may migrate keys to Apple Protected
+Data after an explicit compatibility and recovery design. See the
+[keyring smoke](docs/validation/s4-keyring-live-smoke.md). A bounded
 [native Foundation Models adapter](docs/validation/s4-local-model.md) now implements
 the common model contract, but the real probe reports Apple Intelligence disabled;
 live generation and personal-chat integration remain unverified.
