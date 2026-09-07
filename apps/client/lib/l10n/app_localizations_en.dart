@@ -1038,6 +1038,41 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get agentProposalTitle => 'Suggested focus time';
+
+  @override
+  String agentProposalInterval(String start, String end) {
+    return '$start – $end (local time)';
+  }
+
+  @override
+  String get agentProposalUnchecked =>
+      'Recorded suggestion. Calendar action status has not been checked.';
+
+  @override
+  String get agentProposalUnprepared =>
+      'No Calendar action is linked to this suggestion. Nothing was created.';
+
+  @override
+  String get agentProposalFailed =>
+      'Could not confirm the linked action. This does not mean it is absent.';
+
+  @override
+  String agentProposalRecorded(String status) {
+    return 'Recorded action status: $status';
+  }
+
+  @override
+  String get agentProposalReadOnly =>
+      'Checking only reads the saved action. It does not create, approve, or retry a Calendar write. Status may change; review the current action before acting.';
+
+  @override
+  String get agentProposalCheck => 'Check saved action';
+
+  @override
+  String get agentProposalOpen => 'Open Calendar action';
+
+  @override
   String connectedServicesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);

@@ -14,7 +14,8 @@ use std::{
 
 use floe_agent::{AgentEvent, AgentFailure, AgentSession, Cancellation, SessionStore};
 use floe_core::{
-    AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys, VaultKeyProvider, recover_agent_sample,
+    AgentFixtureTurn, CalendarActionState, EncryptedAgentVault, ExpertCalendarInspection,
+    ExpertProposalReference, FloeCore, KeyringVaultKeys, VaultKeyProvider, recover_agent_sample,
 };
 use floe_domain::PersonId;
 use floe_protocol::*;
@@ -24,13 +25,15 @@ use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 
 pub(crate) struct VaultBridge {
     root: PathBuf,
+    core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
 }
 
 impl VaultBridge {
-    pub(crate) fn new(database_path: &str) -> Self {
+    pub(crate) fn new(database_path: &str, core: Arc<FloeCore>) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
+            core,
             worker: RefCell::new(None),
         }
     }
@@ -44,8 +47,10 @@ impl VaultBridge {
         let id = parse_id(&request.request_id, "request_id", |id| id)?;
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
-            *worker =
-                Some(Worker::new(self.root.clone(), KeyringVaultKeys).map_err(agent_failure)?);
+            *worker = Some(
+                Worker::with_core(self.root.clone(), KeyringVaultKeys, self.core.clone())
+                    .map_err(agent_failure)?,
+            );
         }
         worker
             .as_ref()
@@ -77,13 +82,15 @@ struct Progress {
     session: Option<AgentSession>,
     registry: Option<floe_agent::RegistryOverview>,
     calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    proposal: Option<AgentProposalInspectionDto>,
     failure: Option<AgentFailure>,
 }
 
 impl Worker {
-    fn new<Keys: VaultKeyProvider + Clone + 'static>(
+    fn with_core<Keys: VaultKeyProvider + Clone + 'static>(
         root: PathBuf,
         keys: Keys,
+        core: Arc<FloeCore>,
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
         let closing = Arc::new(AtomicBool::new(false));
@@ -100,7 +107,9 @@ impl Worker {
                         break;
                     }
                     let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
-                        Ok(runtime) => runtime.block_on(execute(&root, &keys, &mut vault, &job)),
+                        Ok(runtime) => {
+                            runtime.block_on(execute(&root, &keys, &core, &mut vault, &job))
+                        }
                         Err(_) => Err(AgentFailure::VaultUnavailable),
                     }))
                     .unwrap_or(Err(AgentFailure::Interrupted));
@@ -112,11 +121,12 @@ impl Worker {
                     }
                     if let Ok(mut progress) = job.progress.lock() {
                         match result {
-                            Ok((state, session, registry, calendar_experts)) => {
+                            Ok((state, session, registry, calendar_experts, proposal)) => {
                                 progress.state = Some(state);
                                 progress.session = session;
                                 progress.registry = registry;
                                 progress.calendar_experts = calendar_experts;
+                                progress.proposal = proposal;
                             }
                             Err(failure) => {
                                 progress.state = Some(AgentVaultStateDto::Unavailable);
@@ -188,6 +198,7 @@ impl Worker {
             session: progress.session.clone(),
             registry: progress.registry.clone(),
             calendar_experts: progress.calendar_experts.clone(),
+            proposal: progress.proposal.clone(),
             failure: progress.failure,
         };
         drop(progress);
@@ -215,6 +226,7 @@ impl Drop for Worker {
 async fn execute<Keys: VaultKeyProvider + Clone>(
     root: &std::path::Path,
     keys: &Keys,
+    core: &FloeCore,
     current: &mut Option<(PersonId, EncryptedAgentVault<Keys>)>,
     job: &Job,
 ) -> Result<
@@ -223,6 +235,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         Option<AgentSession>,
         Option<floe_agent::RegistryOverview>,
         Option<floe_agent::CalendarExpertOverview>,
+        Option<AgentProposalInspectionDto>,
     ),
     AgentFailure,
 > {
@@ -239,7 +252,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::Status {} => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
-                return Ok((AgentVaultStateDto::Ready, None, None, None));
+                return Ok((AgentVaultStateDto::Ready, None, None, None, None));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
                 Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
@@ -248,7 +261,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None, None, None))
+            Ok((state, None, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -261,7 +274,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None, None))
         }
         AgentVaultActionDto::Unlock {} => {
             if current.is_some() {
@@ -269,11 +282,11 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None, None))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
-            Ok((AgentVaultStateDto::Locked, None, None, None))
+            Ok((AgentVaultStateDto::Locked, None, None, None, None))
         }
         AgentVaultActionDto::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -326,7 +339,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         .await?
                 }
             };
-            Ok((AgentVaultStateDto::Ready, Some(session), None, None))
+            Ok((AgentVaultStateDto::Ready, Some(session), None, None, None))
         }
         AgentVaultActionDto::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -341,7 +354,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, registry, None))
+            Ok((AgentVaultStateDto::Ready, None, registry, None, None))
         }
         AgentVaultActionDto::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -354,7 +367,49 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, None, Some(overview)))
+            Ok((AgentVaultStateDto::Ready, None, None, Some(overview), None))
+        }
+        AgentVaultActionDto::InspectProposal {
+            session_id,
+            invocation_id,
+        } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let reference = ExpertProposalReference {
+                person_id: job.person,
+                session_id: session_uuid(session_id)?,
+                invocation_id: session_uuid(invocation_id)?,
+            };
+            let action = core
+                .inspect_expert_calendar_action(
+                    vault,
+                    ExpertCalendarInspection {
+                        reference: reference.clone(),
+                        cancellation: job.cancellation.clone(),
+                        deadline: tokio::time::Instant::now() + Duration::from_secs(30),
+                    },
+                )
+                .await?;
+            let proposal = AgentProposalInspectionDto {
+                schema_version: PROTOCOL_VERSION,
+                person_id: job.person.to_string(),
+                session_id: reference.session_id.to_string(),
+                invocation_id: reference.invocation_id.to_string(),
+                action: action.map(|action| AgentProposalActionDto {
+                    action_id: action.id.to_string(),
+                    execution_id: action.execution_id.to_string(),
+                    expires_at: action.expires_at,
+                    status: match action.state {
+                        CalendarActionState::Pending => AgentProposalStatusDto::Pending,
+                        CalendarActionState::Approved => AgentProposalStatusDto::Approved,
+                        CalendarActionState::Rejected => AgentProposalStatusDto::Rejected,
+                        CalendarActionState::Executing => AgentProposalStatusDto::Executing,
+                        CalendarActionState::Blocked { .. } => AgentProposalStatusDto::Blocked,
+                        CalendarActionState::Unknown { .. } => AgentProposalStatusDto::Unknown,
+                        CalendarActionState::Succeeded { .. } => AgentProposalStatusDto::Succeeded,
+                    },
+                }),
+            };
+            Ok((AgentVaultStateDto::Ready, None, None, None, Some(proposal)))
         }
     }
 }
@@ -382,6 +437,18 @@ mod tests {
     use std::{collections::HashMap, sync::Condvar, time::Instant};
 
     mod calendar_experts;
+    mod proposals;
+
+    impl Worker {
+        fn new(root: PathBuf, keys: Keys) -> Result<Self, AgentFailure> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let core = runtime.block_on(FloeCore::open(":memory:")).unwrap();
+            Self::with_core(root, keys, Arc::new(core))
+        }
+    }
 
     #[derive(Clone, Default)]
     struct Keys(Arc<KeyState>);

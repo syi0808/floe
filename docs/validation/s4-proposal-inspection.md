@@ -101,9 +101,10 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 
 ## Remaining integration
 
-This is a Core inspection API, not yet a native vault job or a conversation-card
-recovery control. Native connected-turn dispatch, session/proposal presentation and
-explicit S3 recovery routing remain. No automatic retry or plaintext recovery journal
-is added. The app still runs encrypted samples, and live key/model/source/privacy/auth
-gates, other S4 connectors and S1/S3 acceptance remain unverified. These tests do not
-promote a complete S4 acceptance criterion or enable personal-data dogfood.
+The follow-up [saved proposal presentation increment](s4-proposal-presentation.md)
+connects this API to an owned native vault job, a conversation card and the existing
+S3 review dialog. Native connected-turn dispatch and Personal session loading remain.
+No automatic retry or plaintext recovery journal is added. The app still runs
+encrypted samples, and live key/model/source/privacy/auth gates, other S4 connectors
+and S1/S3 acceptance remain unverified. These tests do not promote a complete S4
+acceptance criterion or enable personal-data dogfood.

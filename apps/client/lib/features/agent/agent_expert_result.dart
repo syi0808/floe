@@ -52,17 +52,20 @@ final class AgentExpertResult {
     this.version,
     this.source,
     this.insights,
+    this.proposal,
   );
 
   final String expert;
   final String version;
   final String source;
   final List<AgentExpertInsight> insights;
+  final AgentExpertInsight? proposal;
 
   static AgentExpertResult? tryParse(
     String? output, {
     required String callId,
     required String personId,
+    List<String> allowedDataClasses = const ['synthetic'],
   }) {
     if (output == null || output.length > 16384) return null;
     try {
@@ -87,11 +90,11 @@ final class AgentExpertResult {
       if (json['schema_version'] != 1 ||
           json['invocation_id'] != callId ||
           json['person_id'] != personId ||
-          json['data_class'] != 'synthetic' ||
+          !['synthetic', 'personal'].contains(json['data_class']) ||
+          !allowedDataClasses.contains(json['data_class']) ||
           json['view_calls'] != 1 ||
           (json['state_revision']! as int) < 1 ||
-          (json['expires_at_unix_ms']! as num) < 0 ||
-          (json['action_proposals']! as List).isNotEmpty) {
+          (json['expires_at_unix_ms']! as num) < 0) {
         return null;
       }
       for (final key in ['instance_id', 'assignment_id', 'view_handle']) {
@@ -102,11 +105,36 @@ final class AgentExpertResult {
       if (package['kind'] != 'expert') return null;
       final insights = json['insights']! as List;
       if (insights.isEmpty || insights.length > 8) return null;
+      final parsed = List<AgentExpertInsight>.unmodifiable(
+        insights.map(AgentExpertInsight.parse),
+      );
+      final proposals = json['action_proposals']! as List;
+      if (proposals.length > 1) return null;
+      AgentExpertInsight? proposal;
+      if (proposals.isNotEmpty) {
+        final raw = proposals.single as Map<String, dynamic>;
+        _keys(raw, {'starts_at_unix_ms', 'ends_at_unix_ms', 'view_handle'});
+        if (raw['view_handle'] != json['view_handle']) return null;
+        proposal = AgentExpertInsight.parse({
+          'kind': 'focus_window',
+          'starts_at_unix_ms': raw['starts_at_unix_ms'],
+          'ends_at_unix_ms': raw['ends_at_unix_ms'],
+        });
+        if (!parsed.any(
+          (insight) =>
+              insight.kind == 'focus_window' &&
+              proposal!.start == insight.start &&
+              proposal.end == insight.end,
+        )) {
+          return null;
+        }
+      }
       return AgentExpertResult(
         _text(package['id'], 128),
         _text(package['version'], 128),
         _text(json['source_handle'], 128),
-        List.unmodifiable(insights.map(AgentExpertInsight.parse)),
+        parsed,
+        proposal,
       );
     } on FormatException {
       return null;

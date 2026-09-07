@@ -1,5 +1,6 @@
 import 'agent_calendar_experts.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
 
@@ -22,12 +23,36 @@ final class NativeAgentVaultGateway
     implements
         AgentVaultGateway,
         AgentRegistryGateway,
+        AgentProposalGateway,
         AgentCalendarExpertGateway {
   NativeAgentVaultGateway(this.request);
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   _VaultJob? _pending;
   AgentSession? _run;
+
+  @override
+  Future<AgentProposalInspection> inspectProposal({
+    required String personId,
+    required String sessionId,
+    required String invocationId,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'inspect_proposal',
+      'session_id': sessionId,
+      'invocation_id': invocationId,
+    });
+    final inspection = AgentProposalInspection.fromJson(
+      Map<String, dynamic>.from(result['proposal'] as Map),
+    );
+    if (result['state'] != 'ready' ||
+        inspection.personId != personId ||
+        inspection.sessionId != sessionId ||
+        inspection.invocationId != invocationId) {
+      throw const FormatException('Proposal inspection scope mismatch');
+    }
+    return inspection;
+  }
 
   @override
   Future<AgentCalendarExperts> readCalendarExperts(String personId) async {

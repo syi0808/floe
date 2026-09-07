@@ -73,6 +73,30 @@ fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operati
 use serde_json::json;
 use uuid::Uuid;
 
+#[test]
+fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
+    let action = json!({
+        "kind": "inspect_proposal",
+        "session_id": Uuid::new_v4(),
+        "invocation_id": Uuid::new_v4(),
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in [
+        "person_id",
+        "destination",
+        "approve",
+        "execute",
+        "retry",
+        "output",
+        "key",
+    ] {
+        let mut forged = action.clone();
+        forged[field] = json!(true);
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}
+
 fn id(value: &str) -> Uuid {
     Uuid::parse_str(value).unwrap()
 }

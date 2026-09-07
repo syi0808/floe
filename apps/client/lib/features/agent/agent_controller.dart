@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import 'agent_calendar_experts.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_expert_result.dart';
+import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
 import 'agent_vault_gateway.dart';
@@ -35,6 +37,88 @@ final class AgentController extends ChangeNotifier {
   AgentCalendarExperts? calendarExperts;
   String? calendarExpertFailure;
   AgentCalendarSetup? _pendingCalendarSetup;
+  final Map<String, AgentProposalInspection> _proposals = {};
+  final Map<String, String> _proposalFailures = {};
+
+  AgentProposalInspection? proposalFor(String callId) => _proposals[callId];
+  String? proposalFailureFor(String callId) => _proposalFailures[callId];
+
+  AgentExpertResult? expertResult(AgentCapabilityMessage message) {
+    final classes = session?.dataClasses ?? const <String>[];
+    if (classes.length != 1 ||
+        classes.single == 'personal' &&
+            (!usesVault || vaultState != AgentVaultState.ready || _sealed)) {
+      return null;
+    }
+    return AgentExpertResult.tryParse(
+      message.output,
+      callId: message.callId,
+      personId: personId,
+      allowedDataClasses: classes,
+    );
+  }
+
+  bool canInspectProposal(AgentCapabilityMessage message) =>
+      usesVault &&
+      gateway is AgentProposalGateway &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      !needsReload &&
+      !needsRecovery &&
+      vaultState == AgentVaultState.ready &&
+      session?.personId == personId &&
+      session!.messages
+              .whereType<AgentCapabilityMessage>()
+              .where(
+                (saved) =>
+                    saved.callId == message.callId &&
+                    saved.output == message.output,
+              )
+              .length ==
+          1 &&
+      expertResult(message)?.proposal != null;
+
+  Future<void> inspectProposal(AgentCapabilityMessage message) async {
+    if (!canInspectProposal(message)) return;
+    final original = session!;
+    _begin();
+    _proposals.remove(message.callId);
+    _proposalFailures.remove(message.callId);
+    _notify();
+    try {
+      final result = await (gateway as AgentProposalGateway).inspectProposal(
+        personId: personId,
+        sessionId: original.id,
+        invocationId: message.callId,
+      );
+      if (_sealed || _disposed || session?.id != original.id) return;
+      if (result.personId != personId ||
+          result.sessionId != original.id ||
+          result.invocationId != message.callId) {
+        throw const FormatException('Proposal inspection scope mismatch');
+      }
+      _proposals[message.callId] = result;
+    } on Object catch (error) {
+      if (_sealed || _disposed) return;
+      final reason = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      _proposalFailures[message.callId] = reason;
+      if (reason == 'vault_unavailable' || reason == 'interrupted') {
+        _fail(reason);
+      }
+    } finally {
+      _end();
+      _notify();
+    }
+  }
+
+  void _clearProposals() {
+    _proposals.clear();
+    _proposalFailures.clear();
+  }
 
   AgentCalendarSetup? get pendingCalendarSetup => _pendingCalendarSetup;
   bool get hasCalendarExpertManagement =>
@@ -268,6 +352,7 @@ final class AgentController extends ChangeNotifier {
         if (_sealed) return;
         vaultState = state;
         if (state != AgentVaultState.ready) {
+          _clearProposals();
           registry = null;
           registryLoaded = false;
           registryFailure = null;
@@ -412,6 +497,7 @@ final class AgentController extends ChangeNotifier {
     if (saved.personId != personId) {
       throw const FormatException('Agent Person mismatch.');
     }
+    _clearProposals();
     session = saved;
     messages = List.of(saved.messages);
     failure = saved.lastOutcome?.failure;
@@ -482,6 +568,7 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> _lock() async {
     _sealed = true;
+    _clearProposals();
     registry = null;
     registryFailure = null;
     registryLoaded = false;
@@ -522,6 +609,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   void _fail(String reason) {
+    _clearProposals();
     failure = reason;
     needsReload = true;
     if (usesVault) {

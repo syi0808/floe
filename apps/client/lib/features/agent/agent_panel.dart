@@ -10,8 +10,8 @@ import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
 import 'agent_calendar_sources.dart';
-import 'agent_expert_result.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_proposal_card.dart';
 import 'agent_registry_dialog.dart';
 import 'agent_vault_gateway.dart';
 
@@ -22,12 +22,14 @@ class AgentPanel extends StatefulWidget {
     required this.onClose,
     this.calendarSources,
     this.calendarSourceChanges,
+    this.onOpenAction,
   });
 
   final AgentController controller;
   final VoidCallback onClose;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+  final Future<void> Function(String actionId)? onOpenAction;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -282,16 +284,20 @@ class _AgentPanelState extends State<AgentPanel> {
             style: const TextStyle(fontSize: 13, color: FloePalette.neutral600),
           ),
         ),
+        if (widget.controller.expertResult(message)?.proposal != null) ...[
+          const SizedBox(height: FloeSpace.md),
+          AgentProposalCard(
+            controller: widget.controller,
+            message: message,
+            onOpenAction: widget.onOpenAction,
+          ),
+        ],
       ],
     ),
   };
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
-    final result = AgentExpertResult.tryParse(
-      message.output,
-      callId: message.callId,
-      personId: widget.controller.personId,
-    );
+    final result = widget.controller.expertResult(message);
     if (result == null) {
       final output = message.output;
       return output == null || output.trimLeft().startsWith('{')

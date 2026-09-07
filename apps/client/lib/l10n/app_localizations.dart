@@ -1864,6 +1864,60 @@ abstract class AppLocalizations {
   /// **'State revision {revision} · {count} completed invocations'**
   String agentRegistryState(int revision, int count);
 
+  /// No description provided for @agentProposalTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggested focus time'**
+  String get agentProposalTitle;
+
+  /// No description provided for @agentProposalInterval.
+  ///
+  /// In en, this message translates to:
+  /// **'{start} – {end} (local time)'**
+  String agentProposalInterval(String start, String end);
+
+  /// No description provided for @agentProposalUnchecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded suggestion. Calendar action status has not been checked.'**
+  String get agentProposalUnchecked;
+
+  /// No description provided for @agentProposalUnprepared.
+  ///
+  /// In en, this message translates to:
+  /// **'No Calendar action is linked to this suggestion. Nothing was created.'**
+  String get agentProposalUnprepared;
+
+  /// No description provided for @agentProposalFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not confirm the linked action. This does not mean it is absent.'**
+  String get agentProposalFailed;
+
+  /// No description provided for @agentProposalRecorded.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded action status: {status}'**
+  String agentProposalRecorded(String status);
+
+  /// No description provided for @agentProposalReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking only reads the saved action. It does not create, approve, or retry a Calendar write. Status may change; review the current action before acting.'**
+  String get agentProposalReadOnly;
+
+  /// No description provided for @agentProposalCheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check saved action'**
+  String get agentProposalCheck;
+
+  /// No description provided for @agentProposalOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Calendar action'**
+  String get agentProposalOpen;
+
   /// No description provided for @connectedServicesCount.
   ///
   /// In en, this message translates to:

@@ -417,6 +417,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               controller: agentController!,
               calendarSources: _agentCalendarSources,
               calendarSourceChanges: controller,
+              onOpenAction: actionController == null ? null : _openAgentAction,
               onClose: _closeAssistant,
             );
           }
@@ -444,6 +445,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                       controller: agentController!,
                       calendarSources: _agentCalendarSources,
                       calendarSourceChanges: controller,
+                      onOpenAction: actionController == null
+                          ? null
+                          : _openAgentAction,
                       onClose: _closeAssistant,
                     )
                   : SingleChildScrollView(child: rail),
@@ -482,11 +486,33 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           controller: agent,
           calendarSources: _agentCalendarSources,
           calendarSourceChanges: controller,
+          onOpenAction: actionController == null ? null : _openAgentAction,
           onClose: () => Navigator.pop(context),
         ),
       ),
     );
     unawaited(agent.closeView());
+  }
+
+  Future<void> _openAgentAction(String actionId) async {
+    final actions = actionController;
+    final agent = agentController;
+    if (actions == null ||
+        agent == null ||
+        actions.personId != agent.personId) {
+      return;
+    }
+    unawaited(actions.load());
+    await showFloeDialog<void>(
+      context,
+      (_) => ActionReviewDialog(
+        controller: actions,
+        actionId: actionId,
+        connection: () => controller.loadState == DayLoadState.ready
+            ? controller.snapshot?.calendar
+            : null,
+      ),
+    );
   }
 
   AgentCalendarSources? _agentCalendarSources() {

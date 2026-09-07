@@ -392,6 +392,17 @@
   "@agentRegistryGrants": {"placeholders": {"views": {"type": "int"}, "tools": {"type": "int"}}},
   "agentRegistryState": "State revision {revision} · {count} completed invocations",
   "@agentRegistryState": {"placeholders": {"revision": {"type": "int"}, "count": {"type": "int"}}},
+  "agentProposalTitle": "Suggested focus time",
+  "agentProposalInterval": "{start} – {end} (local time)",
+  "@agentProposalInterval": {"placeholders": {"start": {"type": "String"}, "end": {"type": "String"}}},
+  "agentProposalUnchecked": "Recorded suggestion. Calendar action status has not been checked.",
+  "agentProposalUnprepared": "No Calendar action is linked to this suggestion. Nothing was created.",
+  "agentProposalFailed": "Could not confirm the linked action. This does not mean it is absent.",
+  "agentProposalRecorded": "Recorded action status: {status}",
+  "@agentProposalRecorded": {"placeholders": {"status": {"type": "String"}}},
+  "agentProposalReadOnly": "Checking only reads the saved action. It does not create, approve, or retry a Calendar write. Status may change; review the current action before acting.",
+  "agentProposalCheck": "Check saved action",
+  "agentProposalOpen": "Open Calendar action",
   "connectedServicesCount": "Connected services · {count}",
   "@connectedServicesCount": {
     "placeholders": {

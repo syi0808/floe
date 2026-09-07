@@ -38,6 +38,41 @@ pub enum AgentVaultActionDto {
     CalendarExperts {
         setup: Option<floe_agent::CalendarExpertSetup>,
     },
+    InspectProposal {
+        session_id: String,
+        invocation_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProposalInspectionDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub session_id: String,
+    pub invocation_id: String,
+    pub action: Option<AgentProposalActionDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProposalActionDto {
+    pub action_id: String,
+    pub execution_id: String,
+    pub status: AgentProposalStatusDto,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProposalStatusDto {
+    Pending,
+    Approved,
+    Rejected,
+    Executing,
+    Blocked,
+    Unknown,
+    Succeeded,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -62,6 +97,8 @@ pub struct AgentVaultResultDto {
     pub registry: Option<floe_agent::RegistryOverview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<AgentProposalInspectionDto>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 

@@ -851,13 +851,13 @@ pub unsafe extern "C" fn floe_core_open(
             .enable_all()
             .build()
             .map_err(|value| error(ErrorCodeDto::Internal, value.to_string()))?;
-        let core = runtime.block_on(FloeCore::open(path)).map_err(core_error)?;
+        let core = Arc::new(runtime.block_on(FloeCore::open(path)).map_err(core_error)?);
         Ok(Box::into_raw(Box::new(FloeHandle {
             runtime,
-            core: Arc::new(core),
+            core: core.clone(),
             agent_runs: Default::default(),
             #[cfg(unix)]
-            agent_vault: vault_host::VaultBridge::new(path),
+            agent_vault: vault_host::VaultBridge::new(path, core),
         })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
