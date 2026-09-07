@@ -78,6 +78,14 @@ void main() {
 
     final decorator = tester.widget<InputDecorator>(select);
     expect(decorator.isFocused, isTrue);
+    expect(
+      tester
+          .widget<Material>(
+            find.byKey(const ValueKey('floe-selection-trigger-material')),
+          )
+          .clipBehavior,
+      Clip.none,
+    );
     expect(tester.getTopLeft(label).dy, lessThan(restingTop));
     expect(find.text('Choose an option'), findsOneWidget);
   });

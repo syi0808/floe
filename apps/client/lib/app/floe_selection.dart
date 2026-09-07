@@ -693,9 +693,10 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
                     ),
                   ),
             child: Material(
+              key: const ValueKey('floe-selection-trigger-material'),
               color: Colors.transparent,
               shape: floeSquircleBorder(FloeSquircleSize.md),
-              clipBehavior: Clip.antiAlias,
+              clipBehavior: widget.field ? Clip.none : Clip.antiAlias,
               child: InkWell(
                 onTap: widget.enabled ? widget.onPressed : null,
                 overlayColor: const WidgetStatePropertyAll(Colors.transparent),
