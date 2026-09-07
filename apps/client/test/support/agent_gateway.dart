@@ -1,6 +1,6 @@
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 
-final class TestAgentGateway implements AgentFixtureStreamingGateway {
+class TestAgentGateway implements AgentFixtureStreamingGateway {
   TestAgentGateway({this.personId = 'test'});
 
   final String personId;

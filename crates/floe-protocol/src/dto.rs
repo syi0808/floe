@@ -6,6 +6,55 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentVaultRequestDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub request_id: String,
+    pub operation: AgentVaultOperationDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentVaultOperationDto {
+    Submit { action: AgentVaultActionDto },
+    Poll { after_sequence: usize },
+    Stop {},
+    Release {},
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentVaultActionDto {
+    Status {},
+    Create {},
+    Unlock {},
+    Lock {},
+    Session { operation: AgentFixtureOperationDto },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentVaultStateDto {
+    Missing,
+    Locked,
+    Ready,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentVaultResultDto {
+    pub request_id: String,
+    pub events: Vec<floe_agent::AgentEvent>,
+    pub next_sequence: usize,
+    pub done: bool,
+    pub state: Option<AgentVaultStateDto>,
+    pub session: Option<floe_agent::AgentSession>,
+    pub failure: Option<floe_agent::AgentFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentFixtureRequestDto {
     pub schema_version: u32,
     pub person_id: String,

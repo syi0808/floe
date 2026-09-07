@@ -1,5 +1,7 @@
 mod agent_run;
 mod native_calendar;
+#[cfg(unix)]
+mod vault_host;
 
 use std::{
     ffi::{CStr, CString, c_char},
@@ -21,6 +23,8 @@ pub struct FloeHandle {
     runtime: Runtime,
     core: Arc<FloeCore>,
     agent_runs: agent_run::AgentRuns,
+    #[cfg(unix)]
+    agent_vault: vault_host::VaultBridge,
 }
 
 impl Drop for FloeHandle {
@@ -249,7 +253,7 @@ fn agent_failure(failure: floe_agent::AgentFailure) -> ErrorDto {
         AgentFailure::UnsupportedVersion => ErrorCodeDto::UnsupportedVersion,
         _ => ErrorCodeDto::Validation,
     };
-    let mut result = error(code, "Agent fixture request could not complete");
+    let mut result = error(code, "Agent request could not complete");
     if let Ok(Value::String(reason)) = serde_json::to_value(failure) {
         result.metadata.insert("agent_failure".into(), reason);
     }
@@ -851,6 +855,8 @@ pub unsafe extern "C" fn floe_core_open(
             runtime,
             core: Arc::new(core),
             agent_runs: Default::default(),
+            #[cfg(unix)]
+            agent_vault: vault_host::VaultBridge::new(path),
         })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
@@ -943,6 +949,29 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
         let request = serde_json::from_str(c_input(request_json, "request_json")?)
             .map_err(|value| invalid("request_json", value.to_string()))?;
         agent_run::run(handle, request)
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_agent_vault(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request: AgentVaultRequestDto =
+            serde_json::from_str(c_input(request_json, "request_json")?)
+                .map_err(|_| invalid("request_json", "invalid Agent vault request"))?;
+        #[cfg(unix)]
+        {
+            handle.agent_vault.request(request)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (handle, request);
+            Err::<AgentVaultResultDto, _>(agent_failure(floe_agent::AgentFailure::VaultUnavailable))
+        }
     })
 }
 

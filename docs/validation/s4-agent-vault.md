@@ -2,6 +2,11 @@
 
 Date: 2026-09-07. Evidence: synthetic records and in-memory test keys, macOS arm64.
 
+Historical component checkpoint. The subsequent
+[vault host/panel integration](s4-agent-vault-host.md) connects this component to
+the default app route; statements below about missing integration describe this
+earlier checkpoint. Live key/lifecycle acceptance is still open.
+
 ## Scope
 
 `EncryptedAgentVault` implements the existing `floe-agent::SessionStore` port in

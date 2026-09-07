@@ -5,6 +5,7 @@ use super::{AgentFailure, PersonId, Uuid, VaultKey, VaultKeyProvider};
 
 const SERVICE: &str = "com.floe.agent-vault.v1";
 
+#[derive(Clone, Copy)]
 pub struct KeyringVaultKeys;
 
 impl VaultKeyProvider for KeyringVaultKeys {

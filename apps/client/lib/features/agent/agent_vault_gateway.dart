@@ -1,0 +1,238 @@
+import 'dart:math';
+
+import 'agent_fixture_gateway.dart';
+
+enum AgentVaultState { missing, locked, ready, unavailable }
+
+class AgentVaultException implements Exception {
+  const AgentVaultException(this.failure);
+  final String failure;
+}
+
+abstract interface class AgentVaultGateway
+    implements AgentFixtureStreamingGateway {
+  Future<AgentVaultState> vaultStatus(String personId);
+  Future<AgentVaultState> createVault(String personId);
+  Future<AgentVaultState> unlockVault(String personId);
+  Future<void> lockVault(String personId);
+}
+
+final class NativeAgentVaultGateway implements AgentVaultGateway {
+  NativeAgentVaultGateway(this.request);
+
+  final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
+  _VaultJob? _pending;
+  AgentSession? _run;
+
+  @override
+  Future<AgentVaultState> vaultStatus(String personId) =>
+      _access(personId, 'status');
+  @override
+  Future<AgentVaultState> createVault(String personId) =>
+      _access(personId, 'create');
+  @override
+  Future<AgentVaultState> unlockVault(String personId) =>
+      _access(personId, 'unlock');
+  @override
+  Future<void> lockVault(String personId) async {
+    await _access(personId, 'lock');
+  }
+
+  Future<AgentVaultState> _access(String personId, String kind) async {
+    final result = await _perform(personId, {'kind': kind});
+    return AgentVaultState.values.byName(result['state'] as String);
+  }
+
+  @override
+  Future<AgentFixtureResult> startAgentFixture(String personId) =>
+      _session(personId, {'kind': 'start'});
+  @override
+  Future<AgentFixtureResult> resumeAgentFixture(String personId) =>
+      _session(personId, {'kind': 'resume'});
+  @override
+  Future<AgentFixtureResult> loadAgentFixture(
+    String personId,
+    String sessionId,
+  ) => _session(personId, {'kind': 'get', 'session_id': sessionId});
+  @override
+  Future<AgentFixtureResult> recoverAgentFixture(AgentSession session) =>
+      _session(session.personId, {
+        'kind': 'recover',
+        'session_id': session.id,
+        'expected_revision': session.revision,
+      });
+  @override
+  Future<AgentFixtureResult> runAgentFixture(
+    AgentSession session,
+    AgentFixturePrompt prompt,
+  ) => _session(session.personId, _turn(session, prompt));
+
+  Future<AgentFixtureResult> _session(
+    String personId,
+    Map<String, Object?> operation,
+  ) async {
+    final result = await _perform(personId, {
+      'kind': 'session',
+      'operation': operation,
+    });
+    return AgentFixtureResult.fromJson({
+      'session': result['session'],
+      'events': result['events'],
+    });
+  }
+
+  Future<Map<String, dynamic>> _perform(
+    String personId,
+    Map<String, Object?> action,
+  ) async {
+    if (_pending != null && _pending!.personId != personId) {
+      throw const AgentVaultException('conflict');
+    }
+    if (_pending != null) await _drain();
+    final job = _VaultJob(personId, _requestId());
+    _pending = job;
+    final result = await _finish(
+      await _call(job, {'kind': 'submit', 'action': action}),
+    );
+    await _release(job);
+    if (result['failure'] case final String failure) {
+      throw AgentVaultException(failure);
+    }
+    return result;
+  }
+
+  Future<void> _drain() async {
+    final job = _pending!;
+    try {
+      if (_run != null) await _call(job, {'kind': 'stop'});
+      await _finish(await _call(job, {'kind': 'poll', 'after_sequence': 0}));
+      await _release(job);
+    } on AgentVaultException catch (error) {
+      if (error.failure != 'not_found') rethrow;
+      _pending = null;
+      _run = null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _finish(Map<String, dynamic> result) async {
+    final elapsed = Stopwatch()..start();
+    while (result['done'] != true) {
+      if (elapsed.elapsed > const Duration(seconds: 35)) {
+        throw const AgentVaultException('deadline_exceeded');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      result = await _call(_pending!, {'kind': 'poll', 'after_sequence': 0});
+    }
+    return result;
+  }
+
+  @override
+  Future<AgentRunUpdate> beginAgentFixtureRun(
+    AgentSession session,
+    AgentFixturePrompt prompt,
+  ) async {
+    if (_run != null &&
+        (_run!.id != session.id ||
+            _run!.revision != session.revision ||
+            _run!.personId != session.personId)) {
+      throw const AgentVaultException('conflict');
+    }
+    if (_run == null) {
+      if (_pending != null) await _drain();
+      _pending = _VaultJob(session.personId, _requestId());
+      _run = session;
+    }
+    return _update(
+      session,
+      await _call(_pending!, {
+        'kind': 'submit',
+        'action': {'kind': 'session', 'operation': _turn(session, prompt)},
+      }),
+    );
+  }
+
+  @override
+  Future<AgentRunUpdate> pollAgentFixtureRun(
+    AgentSession session,
+    int afterSequence,
+  ) => _runCall(session, {'kind': 'poll', 'after_sequence': afterSequence});
+  @override
+  Future<AgentRunUpdate> stopAgentFixtureRun(AgentSession session) =>
+      _runCall(session, {'kind': 'stop'});
+  @override
+  Future<AgentRunUpdate> releaseAgentFixtureRun(AgentSession session) async {
+    final result = await _runCall(session, {'kind': 'release'});
+    _pending = null;
+    _run = null;
+    return result;
+  }
+
+  Future<AgentRunUpdate> _runCall(
+    AgentSession session,
+    Map<String, Object?> operation,
+  ) async {
+    if (_run?.id != session.id ||
+        _run?.revision != session.revision ||
+        _run?.personId != session.personId) {
+      throw const AgentVaultException('conflict');
+    }
+    return _update(session, await _call(_pending!, operation));
+  }
+
+  AgentRunUpdate _update(AgentSession session, Map<String, dynamic> result) =>
+      AgentRunUpdate.fromJson({
+        ...result,
+        'session_id': session.id,
+        'expected_revision': session.revision,
+      });
+
+  Future<Map<String, dynamic>> _call(
+    _VaultJob job,
+    Map<String, Object?> operation,
+  ) async {
+    final result = await request({
+      'schema_version': agentSchemaVersion,
+      'person_id': job.personId,
+      'request_id': job.id,
+      'operation': operation,
+    });
+    if (result['request_id'] != job.id ||
+        result['done'] is! bool ||
+        result['events'] is! List ||
+        result['next_sequence'] is! int) {
+      throw const FormatException('Invalid vault response');
+    }
+    return result;
+  }
+
+  Future<void> _release(_VaultJob job) async {
+    await _call(job, {'kind': 'release'});
+    _pending = null;
+    _run = null;
+  }
+
+  Map<String, Object?> _turn(AgentSession session, AgentFixturePrompt prompt) =>
+      {
+        'kind': 'turn',
+        'session_id': session.id,
+        'expected_revision': session.revision,
+        'prompt': prompt.wireName,
+      };
+}
+
+final class _VaultJob {
+  _VaultJob(this.personId, this.id);
+  final String personId;
+  final String id;
+}
+
+String _requestId() {
+  final random = Random.secure();
+  final bytes = List.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  final hex = bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}

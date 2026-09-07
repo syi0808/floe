@@ -83,6 +83,54 @@ fn day() -> Value {
     })
 }
 
+#[cfg(unix)]
+#[test]
+fn vault_bridge_reports_status_without_keys_and_rejects_untrusted_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vault-boundary.db");
+    let core = Core::open(path.to_str().unwrap());
+    let person = Uuid::new_v4().to_string();
+    let id = Uuid::new_v4().to_string();
+    let request = |operation: Value| {
+        let request = CString::new(
+            json!({"schema_version":1,"person_id":person,"request_id":id,"operation":operation})
+                .to_string(),
+        )
+        .unwrap();
+        take_json(unsafe { floe_core_agent_vault(core.0, request.as_ptr()) })
+    };
+    let mut response = request(json!({"kind":"submit","action":{"kind":"status"}}));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while data(&response)["done"] != true {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        response = request(json!({"kind":"poll","after_sequence":0}));
+    }
+    assert_eq!(data(&response)["state"], "missing");
+    assert!(
+        !directory
+            .path()
+            .join("vault-boundary.db.agent-vaults")
+            .exists()
+    );
+    assert_eq!(request(json!({"kind":"poll","after_sequence":0})), response);
+    assert_eq!(
+        request(json!({"kind":"poll","after_sequence":1}))["status"],
+        "error"
+    );
+    request(json!({"kind":"release"}));
+    let malformed = request(
+        json!({"kind":"submit","action":{"kind":"session","operation":{"kind":"turn","session_id":Uuid::new_v4().to_string(),"expected_revision":0,"prompt":"today","text":"secret-marker-do-not-echo"}}}),
+    );
+    assert_eq!(malformed["status"], "error");
+    assert!(!malformed.to_string().contains("secret-marker"));
+    let wrong_version = CString::new(json!({"schema_version":99,"person_id":person,"request_id":id,"operation":{"kind":"submit","action":{"kind":"status"}}}).to_string()).unwrap();
+    assert_eq!(
+        take_json(unsafe { floe_core_agent_vault(core.0, wrong_version.as_ptr()) })["error"]["code"],
+        "unsupported_version"
+    );
+}
+
 #[test]
 fn async_agent_progress_is_replayable_bounded_and_cancellable_without_blocking_calendar() {
     let directory = tempfile::tempdir().unwrap();

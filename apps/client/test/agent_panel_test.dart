@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/agent_gateway.dart';
+import 'support/agent_vault_gateway.dart';
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,
@@ -39,6 +40,65 @@ void main() {
     final material = FontLoader('MaterialIcons')
       ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
     await material.load();
+  });
+  for (final width in [320.0, 390.0]) {
+    testWidgets(
+      'secure storage setup and lock at width $width and 200 percent text',
+      (tester) async {
+        tester.view.physicalSize = Size(width, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final gateway = TestVaultGateway();
+        final controller = AgentController(gateway: gateway, personId: 'test');
+        addTearDown(controller.dispose);
+        await controller.load();
+        await tester.pumpWidget(
+          app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
+        );
+        expect(gateway.creates, 0);
+        expect(find.byType(TextField), findsNothing);
+        final setup = find.text('Set up secure storage');
+        await tester.ensureVisible(setup);
+        await tester.tap(setup);
+        await tester.pumpAndSettle();
+        expect(gateway.creates, 1);
+        expect(controller.canSend, isTrue);
+        final lock = find.byTooltip('Lock conversation storage');
+        await tester.ensureVisible(lock);
+        await tester.tap(lock);
+        await tester.pumpAndSettle();
+        expect(find.text('Unlock conversation storage'), findsOneWidget);
+        expect(controller.messages, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('secure storage setup visual reference', (tester) async {
+    tester.view.physicalSize = const Size(420, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = AgentController(
+      gateway: TestVaultGateway(),
+      personId: 'test',
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      app(
+        RepaintBoundary(
+          key: const Key('vault-golden'),
+          child: AgentPanel(controller: controller, onClose: () {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byKey(const Key('vault-golden')),
+      matchesGoldenFile('goldens/agent_vault_setup.png'),
+    );
   });
   testWidgets(
     'sample panel shows live progress, stops with keyboard and restores composer focus',
@@ -177,6 +237,47 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'Today seals secure conversations when the app becomes inactive',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final gateway = TestVaultGateway();
+      await gateway.createVault('test');
+      final date = DateTime(2026, 9, 7, 9);
+      await tester.pumpWidget(
+        app(
+          PersonalDayScreen(
+            gateway: FakeDayGateway(),
+            agentGateway: gateway,
+            query: DayQuery(
+              personId: 'test',
+              date: date,
+              now: date,
+              timezoneOffsetSeconds: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Floe is here to help'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Send sample'));
+      await tester.pumpAndSettle();
+      expect(find.text(AgentFixturePrompt.today.sampleText), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pumpAndSettle();
+      expect(find.text(AgentFixturePrompt.today.sampleText), findsNothing);
+      expect(find.text('Unlock conversation storage'), findsOneWidget);
+      expect(gateway.locks, 1);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(gateway.unlocks, 0);
+    },
+  );
 
   testWidgets('sample assistant panel visual reference', (tester) async {
     tester.view.physicalSize = const Size(420, 900);

@@ -340,6 +340,13 @@
   "actionApprovalUnavailable": "This action can’t be approved right now. Refresh its status or reconnect Calendar.",
   "actionDecline": "Decline",
   "actionSaveApproval": "Save approval only",
+  "agentCreateStorage": "Set up secure storage",
+  "agentUnlockStorage": "Unlock conversation storage",
+  "agentLockStorage": "Lock conversation storage",
+  "agentStorageMissing": "Set up encrypted storage on this device before trying a sample conversation. Your device key stays in its secure key store.",
+  "agentStorageLocked": "Conversation storage is locked. Unlock it to resume your saved sample conversation.",
+  "agentStorageUnavailable": "Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.",
+  "agentSecureSampleBoundary": "Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.",
   "connectedServicesCount": "Connected services · {count}",
   "@connectedServicesCount": {
     "placeholders": {

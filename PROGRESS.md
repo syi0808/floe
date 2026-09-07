@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; preparatory panel integrated | Sample panel/transport; encrypted vault component and keyring adapter tested with synthetic keys | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F signed-host key access and vault integration | Connect and validate the vault in the signed host before personal chat |
+| S4 — Connected Agent/Experts | Planned; preparatory secure panel integrated | Encrypted sample gateway, dedicated vault worker, explicit unlock/lock and lifecycle clearing; synthetic key tests | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F live signed-host key/lifecycle gate | Validate real key access and recovery, then connect supported models |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,28 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 vault host and panel integration — 2026-09-07
+
+- Connected the default Today assistant to the encrypted vault through a new
+  versioned submit/poll/stop/release C ABI and typed Dart gateway. The old sample
+  route remains preset-only test infrastructure, not a fallback or migration.
+- Moved key/DB operations and sample turns to a dedicated native worker. Blocked
+  OS key calls do not block polling, Stop or native-handle shutdown; the original
+  worker retains ownership until it actually finishes and releases the vault.
+- Added explicit storage setup, unlock and lock controls. Close/navigation/app
+  inactivity clears presented messages immediately, cancels/drains work and
+  requests lock; late completion cannot repopulate a sealed controller.
+- Added response-loss reconciliation without duplicate provisioning, worker
+  ownership/cancellation tests, native read-only status tests and secure-panel
+  checks at 320/390 widths and 200% text.
+- Validation: 96 Rust and 129 Flutter tests pass; Flutter analyzer, native build,
+  macOS Debug build/signature verification, formatting and Clippy with the
+  existing Calendar exclusions pass.
+- No personal text or real model is enabled. A signing identity is available,
+  but live key creation/reopen, physical lock/denial and repair/cleanup still
+  require validation. S4 remains 0/14; S1/S3 acceptance is unchanged.
+- [Evidence and remaining work](docs/validation/s4-agent-vault-host.md).
 
 ### S4 encrypted session-store component — 2026-09-07
 

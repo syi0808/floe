@@ -16,6 +16,7 @@ import 'calendar_gateway.dart';
 import 'calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
 import '../../agent/agent_fixture_gateway.dart';
+import '../../agent/agent_vault_gateway.dart';
 
 const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
@@ -57,6 +58,19 @@ final class FfiDayGateway
   final CalendarAdapter _calendarAdapter;
   final LocalServerClient serverClient;
   bool _closed = false;
+  late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
+    _vaultRequest,
+  );
+
+  Future<Map<String, dynamic>> _vaultRequest(
+    Map<String, Object?> request,
+  ) async {
+    try {
+      return await _request('agent_vault', request);
+    } on FfiDayGatewayException catch (error) {
+      throw AgentVaultException(error.code);
+    }
+  }
 
   static Future<FfiDayGateway> openDefault() async {
     final supportDirectory = await getApplicationSupportDirectory();
@@ -845,6 +859,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
           'calendar_actions' => bindings.calendarActions(handle, input),
           'agent_fixture' => bindings.agentFixture(handle, input),
           'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
+          'agent_vault' => bindings.agentVault(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };
         if (output == nullptr) {

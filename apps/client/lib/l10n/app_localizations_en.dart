@@ -869,6 +869,31 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionSaveApproval => 'Save approval only';
 
   @override
+  String get agentCreateStorage => 'Set up secure storage';
+
+  @override
+  String get agentUnlockStorage => 'Unlock conversation storage';
+
+  @override
+  String get agentLockStorage => 'Lock conversation storage';
+
+  @override
+  String get agentStorageMissing =>
+      'Set up encrypted storage on this device before trying a sample conversation. Your device key stays in its secure key store.';
+
+  @override
+  String get agentStorageLocked =>
+      'Conversation storage is locked. Unlock it to resume your saved sample conversation.';
+
+  @override
+  String get agentStorageUnavailable =>
+      'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.';
+
+  @override
+  String get agentSecureSampleBoundary =>
+      'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.';
+
+  @override
   String connectedServicesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);

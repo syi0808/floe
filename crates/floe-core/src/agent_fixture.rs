@@ -120,34 +120,8 @@ impl FloeCore {
         latency: Duration,
         emit: impl FnMut(AgentEvent) + Send,
     ) -> Result<AgentSession, AgentFailure> {
-        let policy = fixture_policy();
         let store = FixtureStore(&self.store);
-        let model = FixtureModel { latency };
-        let capabilities = FixtureCapabilities;
-        let runtime = AgentRuntime {
-            store: &store,
-            model: &model,
-            capabilities: &capabilities,
-            policy: &policy,
-            budget: AgentBudget::default(),
-        };
-        runtime
-            .run_turn(
-                AgentCommand {
-                    schema_version: AGENT_VERSION,
-                    person_id: turn.person_id,
-                    session_id: turn.session_id,
-                    expected_revision: turn.expected_revision,
-                    text: turn.prompt.text().into(),
-                },
-                AgentContext {
-                    projection_version: 1,
-                    evidence: vec![],
-                },
-                cancellation,
-                emit,
-            )
-            .await
+        run_agent_sample(&store, turn, cancellation, latency, emit).await
     }
 
     pub async fn recover_agent_fixture(
@@ -156,21 +130,71 @@ impl FloeCore {
         session_id: Uuid,
         expected_revision: u64,
     ) -> Result<AgentSession, AgentFailure> {
-        let policy = fixture_policy();
-        AgentRuntime {
-            store: &FixtureStore(&self.store),
-            model: &FixtureModel {
-                latency: Duration::ZERO,
-            },
-            capabilities: &FixtureCapabilities,
-            policy: &policy,
-            budget: AgentBudget::default(),
-        }
-        .recover_interrupted(person_id, session_id, expected_revision)
+        recover_agent_sample(
+            &FixtureStore(&self.store),
+            person_id,
+            session_id,
+            expected_revision,
+        )
         .await
     }
 }
 
+pub async fn run_agent_sample(
+    store: &impl SessionStore,
+    turn: AgentFixtureTurn,
+    cancellation: Cancellation,
+    latency: Duration,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<AgentSession, AgentFailure> {
+    let policy = fixture_policy();
+    let model = FixtureModel { latency };
+    let capabilities = FixtureCapabilities;
+    let runtime = AgentRuntime {
+        store,
+        model: &model,
+        capabilities: &capabilities,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    runtime
+        .run_turn(
+            AgentCommand {
+                schema_version: AGENT_VERSION,
+                person_id: turn.person_id,
+                session_id: turn.session_id,
+                expected_revision: turn.expected_revision,
+                text: turn.prompt.text().into(),
+            },
+            AgentContext {
+                projection_version: 1,
+                evidence: vec![],
+            },
+            cancellation,
+            emit,
+        )
+        .await
+}
+
+pub async fn recover_agent_sample(
+    store: &impl SessionStore,
+    person_id: PersonId,
+    session_id: Uuid,
+    expected_revision: u64,
+) -> Result<AgentSession, AgentFailure> {
+    let policy = fixture_policy();
+    AgentRuntime {
+        store,
+        model: &FixtureModel {
+            latency: Duration::ZERO,
+        },
+        capabilities: &FixtureCapabilities,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    }
+    .recover_interrupted(person_id, session_id, expected_revision)
+    .await
+}
 struct FixtureStore<'store>(&'store TursoStore);
 
 impl SessionStore for FixtureStore<'_> {

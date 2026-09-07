@@ -2,9 +2,10 @@
 
 Date: 2026-09-07. Evidence: synthetic fixtures, macOS arm64.
 
-Follow-up: the [encrypted vault component](s4-agent-vault.md) now validates
-storage/key-failure and file-lock mechanics separately. This panel still uses
-the synthetic store described here; its production-host gates remain open.
+Historical panel checkpoint. Follow-ups added the
+[encrypted vault component](s4-agent-vault.md) and
+[default app integration](s4-agent-vault-host.md). The plaintext sample route
+described below is now test infrastructure, not the default panel route.
 
 ## User-facing increment
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'agent_fixture_gateway.dart';
+import 'agent_vault_gateway.dart';
 
 enum AgentProgress { idle, loading, model, capability, stopping }
 
@@ -21,6 +22,12 @@ final class AgentController extends ChangeNotifier {
   bool _stopRequested = false;
   AgentSession? _runSession;
   AgentFixturePrompt? _lastPrompt;
+  AgentVaultState? vaultState;
+  bool _sealed = false;
+  Completer<void>? _operationDone;
+  Future<void>? _locking;
+
+  bool get usesVault => gateway is AgentVaultGateway;
 
   bool get busy => _busy;
   bool get running => _runSession != null;
@@ -30,21 +37,35 @@ final class AgentController extends ChangeNotifier {
   bool get canRetry => canSend && failure != null && _lastPrompt != null;
 
   Future<void> load({bool newSession = false}) async {
-    if (_busy || _disposed) return;
-    _busy = true;
+    if (_busy || _disposed || _locking != null) return;
+    _sealed = false;
+    _begin();
     progress = AgentProgress.loading;
     _notify();
     try {
+      if (gateway case final AgentVaultGateway vault) {
+        final state = await vault.vaultStatus(personId);
+        if (_sealed) return;
+        vaultState = state;
+        if (state != AgentVaultState.ready) {
+          session = null;
+          messages = [];
+          needsReload = false;
+          failure = null;
+          return;
+        }
+      }
       final result = newSession
           ? await gateway.startAgentFixture(personId)
           : await gateway.resumeAgentFixture(personId);
       _acceptSession(result.session);
       needsReload = false;
-    } on Object {
-      failure = 'storage_unavailable';
-      needsReload = true;
+    } on Object catch (error) {
+      _fail(
+        error is AgentVaultException ? error.failure : 'storage_unavailable',
+      );
     } finally {
-      _busy = false;
+      _end();
       progress = AgentProgress.idle;
       _notify();
     }
@@ -52,18 +73,19 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> recover() async {
     if (_busy || _disposed || !needsRecovery) return;
-    _busy = true;
+    _begin();
     progress = AgentProgress.loading;
     _notify();
     try {
       final result = await gateway.recoverAgentFixture(session!);
       _acceptSession(result.session);
       needsReload = false;
-    } on Object {
-      failure = 'storage_unavailable';
-      needsReload = true;
+    } on Object catch (error) {
+      _fail(
+        error is AgentVaultException ? error.failure : 'storage_unavailable',
+      );
     } finally {
-      _busy = false;
+      _end();
       progress = AgentProgress.idle;
       _notify();
     }
@@ -78,7 +100,7 @@ final class AgentController extends ChangeNotifier {
     final original = session!;
     _runSession = original;
     _lastPrompt = prompt;
-    _busy = true;
+    _begin();
     _stopRequested = false;
     failure = null;
     progress = AgentProgress.model;
@@ -89,7 +111,7 @@ final class AgentController extends ChangeNotifier {
       var sequence = 0;
       while (true) {
         _validateUpdate(original, update, sequence);
-        for (final event in update.events) {
+        for (final event in _sealed ? <AgentEvent>[] : update.events) {
           switch (event.event) {
             case AgentMessageCommitted(:final message):
               messages = [...messages, message];
@@ -111,17 +133,17 @@ final class AgentController extends ChangeNotifier {
             _acceptSession(saved);
             needsReload = false;
           } else {
-            failure = update.failure;
-            needsReload = true;
+            _fail(update.failure ?? 'storage_unavailable');
           }
           break;
         }
         await Future<void>.delayed(const Duration(milliseconds: 80));
         update = await gateway.pollAgentFixtureRun(original, sequence);
       }
-    } on Object {
-      failure = 'transport_unavailable';
-      needsReload = true;
+    } on Object catch (error) {
+      _fail(
+        error is AgentVaultException ? error.failure : 'transport_unavailable',
+      );
     } finally {
       try {
         if (!done) {
@@ -138,7 +160,7 @@ final class AgentController extends ChangeNotifier {
         failure ??= 'transport_unavailable';
       }
       _runSession = null;
-      _busy = false;
+      _end();
       progress = AgentProgress.idle;
       _notify();
     }
@@ -160,6 +182,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   void _acceptSession(AgentSession saved) {
+    if (_sealed) return;
     if (saved.personId != personId) {
       throw const FormatException('Agent Person mismatch.');
     }
@@ -193,10 +216,93 @@ final class AgentController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  Future<void> unlock({bool create = false}) async {
+    if (_busy ||
+        _disposed ||
+        _locking != null ||
+        gateway is! AgentVaultGateway) {
+      return;
+    }
+    final vault = gateway as AgentVaultGateway;
+    _sealed = false;
+    _begin();
+    progress = AgentProgress.loading;
+    failure = null;
+    _notify();
+    try {
+      final state = create
+          ? await vault.createVault(personId)
+          : await vault.unlockVault(personId);
+      if (_sealed) return;
+      vaultState = state;
+      if (state != AgentVaultState.ready) {
+        throw const AgentVaultException('vault_unavailable');
+      }
+      _acceptSession((await vault.resumeAgentFixture(personId)).session);
+      needsReload = false;
+    } on Object catch (error) {
+      _fail(error is AgentVaultException ? error.failure : 'vault_unavailable');
+    } finally {
+      _end();
+      progress = AgentProgress.idle;
+      _notify();
+    }
+  }
+
+  Future<void> closeView() {
+    if (gateway is! AgentVaultGateway) return stop();
+    return _locking ??= _lock().whenComplete(() => _locking = null);
+  }
+
+  Future<void> _lock() async {
+    _sealed = true;
+    session = null;
+    messages = [];
+    _lastPrompt = null;
+    vaultState = AgentVaultState.locked;
+    _notify();
+    await stop();
+    await _operationDone?.future;
+    _begin();
+    try {
+      await (gateway as AgentVaultGateway).lockVault(personId);
+      vaultState = AgentVaultState.locked;
+      failure = null;
+      needsReload = false;
+    } on Object {
+      _fail('vault_unavailable');
+    } finally {
+      _end();
+      progress = AgentProgress.idle;
+      _notify();
+    }
+  }
+
+  void _begin() {
+    _busy = true;
+    _operationDone = Completer<void>();
+  }
+
+  void _end() {
+    _busy = false;
+    _operationDone?.complete();
+    _operationDone = null;
+  }
+
+  void _fail(String reason) {
+    failure = reason;
+    needsReload = true;
+    if (usesVault) {
+      session = null;
+      messages = [];
+      vaultState = AgentVaultState.unavailable;
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
-    unawaited(stop());
+    unawaited(closeView());
     super.dispose();
   }
 }

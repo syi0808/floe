@@ -1588,6 +1588,48 @@ abstract class AppLocalizations {
   /// **'Save approval only'**
   String get actionSaveApproval;
 
+  /// No description provided for @agentCreateStorage.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up secure storage'**
+  String get agentCreateStorage;
+
+  /// No description provided for @agentUnlockStorage.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock conversation storage'**
+  String get agentUnlockStorage;
+
+  /// No description provided for @agentLockStorage.
+  ///
+  /// In en, this message translates to:
+  /// **'Lock conversation storage'**
+  String get agentLockStorage;
+
+  /// No description provided for @agentStorageMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up encrypted storage on this device before trying a sample conversation. Your device key stays in its secure key store.'**
+  String get agentStorageMissing;
+
+  /// No description provided for @agentStorageLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation storage is locked. Unlock it to resume your saved sample conversation.'**
+  String get agentStorageLocked;
+
+  /// No description provided for @agentStorageUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.'**
+  String get agentStorageUnavailable;
+
+  /// No description provided for @agentSecureSampleBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.'**
+  String get agentSecureSampleBoundary;
+
   /// No description provided for @connectedServicesCount.
   ///
   /// In en, this message translates to:

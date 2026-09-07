@@ -23,9 +23,12 @@ S4 preparatory work now includes a bounded Rust Agent runtime, durable synthetic
 sessions and a user-invoked sample conversation panel with progress, stop and
 resume through the C ABI/Dart gateway. Personal chat and live model/source
 integration remain gated. A separate encrypted session-store component now uses
-the keyring-rs ecosystem for OS key access; it is not yet connected to the panel.
+the keyring-rs ecosystem for OS key access. The default panel now requires explicit
+secure-storage setup/unlock through a nonblocking native worker; it never falls
+back to the legacy plaintext sample store.
 See the [panel](docs/validation/s4-agent-panel.md) and
-[vault validation records](docs/validation/s4-agent-vault.md).
+[vault component](docs/validation/s4-agent-vault.md) and
+[app integration validation records](docs/validation/s4-agent-vault-host.md).
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

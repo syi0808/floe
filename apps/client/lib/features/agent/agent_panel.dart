@@ -10,6 +10,7 @@ import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_vault_gateway.dart';
 
 class AgentPanel extends StatefulWidget {
   const AgentPanel({
@@ -103,13 +104,25 @@ class _AgentPanelState extends State<AgentPanel> {
                       FloeButton.icon(
                         tooltip: strings.agentNewConversation,
                         onPressed:
-                            controller.busy ||
+                            !controller.canSend ||
                                 controller.needsReload ||
                                 controller.needsRecovery
                             ? null
                             : () => controller.load(newSession: true),
                         icon: const Icon(LucideIcons.squarePen, size: 18),
                       ),
+                      if (controller.usesVault)
+                        FloeButton.icon(
+                          tooltip: strings.agentLockStorage,
+                          onPressed:
+                              controller.usesVault &&
+                                  controller.vaultState ==
+                                      AgentVaultState.ready &&
+                                  !controller.busy
+                              ? () => controller.closeView()
+                              : null,
+                          icon: const Icon(LucideIcons.lockKeyhole, size: 18),
+                        ),
                       FloeButton.icon(
                         tooltip: strings.close,
                         onPressed: widget.onClose,
@@ -124,7 +137,9 @@ class _AgentPanelState extends State<AgentPanel> {
                   ),
                   const SizedBox(height: FloeSpace.xs),
                   Text(
-                    strings.agentSampleBoundary,
+                    controller.usesVault
+                        ? strings.agentSecureSampleBoundary
+                        : strings.agentSampleBoundary,
                     style: const TextStyle(
                       fontSize: 12,
                       color: FloePalette.neutral600,
@@ -243,14 +258,32 @@ class _AgentPanelState extends State<AgentPanel> {
 
   Widget _composer(AppLocalizations strings, AgentController controller) {
     final status = _status(strings, controller);
-    final label = controller.running
+    final storageLocked =
+        controller.usesVault && controller.vaultState != AgentVaultState.ready;
+    final label = storageLocked
+        ? switch (controller.vaultState) {
+            AgentVaultState.missing => strings.agentCreateStorage,
+            AgentVaultState.locked => strings.agentUnlockStorage,
+            _ => strings.agentReload,
+          }
+        : controller.running
         ? strings.agentStop
         : controller.needsReload
         ? strings.agentReload
         : controller.needsRecovery
         ? strings.agentRecover
         : strings.agentSend;
-    final VoidCallback? action = controller.running
+    final VoidCallback? action = storageLocked
+        ? controller.busy
+              ? null
+              : switch (controller.vaultState) {
+                  AgentVaultState.missing => () => controller.unlock(
+                    create: true,
+                  ),
+                  AgentVaultState.locked => () => controller.unlock(),
+                  _ => () => controller.load(),
+                }
+        : controller.running
         ? controller.progress == AgentProgress.stopping
               ? null
               : () => controller.stop()
@@ -281,24 +314,25 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          FloeSelect<AgentFixturePrompt>(
-            label: strings.agentPrompt,
-            value: _prompt,
-            enabled: controller.canSend,
-            options: [
-              FloeSelectOption(
-                value: AgentFixturePrompt.today,
-                label: strings.agentBriefing,
-              ),
-              FloeSelectOption(
-                value: AgentFixturePrompt.followUp,
-                label: strings.agentFollowUp,
-              ),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _prompt = value);
-            },
-          ),
+          if (!storageLocked)
+            FloeSelect<AgentFixturePrompt>(
+              label: strings.agentPrompt,
+              value: _prompt,
+              enabled: controller.canSend,
+              options: [
+                FloeSelectOption(
+                  value: AgentFixturePrompt.today,
+                  label: strings.agentBriefing,
+                ),
+                FloeSelectOption(
+                  value: AgentFixturePrompt.followUp,
+                  label: strings.agentFollowUp,
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _prompt = value);
+              },
+            ),
           const SizedBox(height: FloeSpace.md),
           FloeButton.filled(
             onPressed: action,
@@ -324,6 +358,14 @@ class _AgentPanelState extends State<AgentPanel> {
         AgentProgress.capability => strings.agentReading,
         AgentProgress.stopping => strings.agentStopping,
         _ => strings.agentPreparing,
+      };
+    }
+    if (controller.usesVault &&
+        controller.vaultState != AgentVaultState.ready) {
+      return switch (controller.vaultState) {
+        AgentVaultState.missing => strings.agentStorageMissing,
+        AgentVaultState.locked => strings.agentStorageLocked,
+        _ => strings.agentStorageUnavailable,
       };
     }
     if (controller.needsReload) return strings.agentReloadNeeded;

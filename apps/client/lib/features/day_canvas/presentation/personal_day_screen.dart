@@ -60,7 +60,8 @@ class PersonalDayScreen extends StatefulWidget {
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
 
-class _PersonalDayScreenState extends State<PersonalDayScreen> {
+class _PersonalDayScreenState extends State<PersonalDayScreen>
+    with WidgetsBindingObserver {
   late final PersonalDayController controller;
   CalendarActionController? actionController;
   AgentController? agentController;
@@ -74,6 +75,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     controller = PersonalDayController(
       gateway: widget.gateway,
       query: widget.query,
@@ -90,6 +92,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
     final agentGateway =
         widget.agentGateway ??
         switch (widget.gateway) {
+          final FfiDayGateway gateway => gateway.secureAgent,
           final AgentFixtureStreamingGateway gateway => gateway,
           _ => null,
         };
@@ -103,11 +106,19 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     controller.dispose();
     actionController?.dispose();
     agentController?.dispose();
     assistantEntryFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      unawaited(agentController?.closeView());
+    }
   }
 
   Future<void> _loadCalendar() async {
@@ -439,7 +450,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 
   void _selectDestination(_DestinationView value) {
-    unawaited(agentController?.stop());
+    unawaited(agentController?.closeView());
     setState(() {
       assistantOpen = false;
       destination = value;
@@ -468,11 +479,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         ),
       ),
     );
-    unawaited(agent.stop());
+    unawaited(agent.closeView());
   }
 
   void _closeAssistant() {
-    unawaited(agentController?.stop());
+    unawaited(agentController?.closeView());
     setState(() => assistantOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && destination == _DestinationView.today) {

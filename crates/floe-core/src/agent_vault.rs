@@ -206,7 +206,41 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     pub async fn create_session(&self) -> Result<AgentSession, AgentFailure> {
-        let session = AgentSession::new(self.person_id);
+        self.insert_session(AgentSession::new(self.person_id)).await
+    }
+
+    pub async fn create_sample_session(&self) -> Result<AgentSession, AgentFailure> {
+        let mut session = AgentSession::new(self.person_id);
+        session.data_classes = vec![DataClass::Synthetic];
+        self.insert_session(session).await
+    }
+
+    pub async fn resume_sample_session(&self) -> Result<AgentSession, AgentFailure> {
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT id FROM agent_sessions ORDER BY rowid DESC LIMIT 1",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        if let Some(row) = rows.next().await.map_err(storage)? {
+            let id =
+                Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
+            let session = self.load(self.person_id, id).await?;
+            if session.data_classes != [DataClass::Synthetic] {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            return Ok(session);
+        }
+        self.create_sample_session().await
+    }
+
+    pub fn check_access(&self) -> Result<(), AgentFailure> {
+        self.connection().map(|_| ())
+    }
+
+    async fn insert_session(&self, session: AgentSession) -> Result<AgentSession, AgentFailure> {
         let payload = self.payload(&session)?;
         self.connection()?
             .execute(
