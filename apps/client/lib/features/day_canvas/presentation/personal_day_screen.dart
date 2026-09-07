@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_selection.dart';
 import '../../../app/floe_button.dart';
+import '../../../app/floe_input.dart';
 import '../../../app/floe_mascot.dart';
 import '../../../app/floe_loading.dart';
 import '../../../app/floe_motion.dart';
@@ -1112,21 +1113,18 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
       title: Text(AppLocalizations.of(context).newNote),
       content: SizedBox(
         width: 420,
-        child: TextField(
+        child: FloeInput(
           key: Key('new-note-content'),
+          label: AppLocalizations.of(context).writeAThoughtDecisionOrDetailTo,
           controller: content,
           autofocus: true,
           enabled: !pending,
           minLines: 3,
           maxLines: 8,
           onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(
-            hintText: AppLocalizations.of(context)
-                .writeAThoughtDecisionOrDetailTo,
-            errorText: failed
-                ? AppLocalizations.of(context).couldNotSavePleaseTryAgain
-                : null,
-          ),
+          errorText: failed
+              ? AppLocalizations.of(context).couldNotSavePleaseTryAgain
+              : null,
         ),
       ),
       actions: [

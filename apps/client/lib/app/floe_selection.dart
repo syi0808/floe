@@ -458,6 +458,10 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
         open: open,
         focusNode: focusNode,
         icon: widget.icon,
+        description: widget.description,
+        errorText: widget.errorText,
+        field: !widget.menu,
+        empty: selected == null,
         onPressed: toggle,
         onDirectionalOpen: (last) => show(last: last),
       );
@@ -465,43 +469,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
           ? widget.icon == null
                 ? trigger
                 : Tooltip(message: widget.label, child: trigger)
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  widget.label,
-                  style: const TextStyle(
-                    color: FloePalette.neutral950,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                trigger,
-                if (widget.description != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.description!,
-                    style: const TextStyle(
-                      color: FloePalette.neutral600,
-                      fontSize: 12,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
-                if (widget.errorText != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.errorText!,
-                    style: const TextStyle(
-                      color: FloePalette.error600,
-                      fontSize: 12,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
-              ],
-            );
+          : trigger;
     },
   );
 }
@@ -606,8 +574,12 @@ class _FloeSelectionTrigger extends StatefulWidget {
     required this.focusNode,
     required this.onPressed,
     required this.onDirectionalOpen,
+    required this.field,
+    required this.empty,
     this.label,
     this.icon,
+    this.description,
+    this.errorText,
     super.key,
   });
 
@@ -619,6 +591,10 @@ class _FloeSelectionTrigger extends StatefulWidget {
   final VoidCallback onPressed;
   final ValueChanged<bool> onDirectionalOpen;
   final Widget? icon;
+  final bool field;
+  final bool empty;
+  final String? description;
+  final String? errorText;
 
   @override
   State<_FloeSelectionTrigger> createState() => _FloeSelectionTriggerState();
@@ -631,8 +607,34 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
   @override
   Widget build(BuildContext context) {
     final reduced = FloeMotion.reduceMotion(context);
-    final highlighted = widget.open || (widget.enabled && hovered);
+    final active = widget.open || focused;
+    final highlighted = active || (widget.enabled && hovered);
     final iconOnly = widget.icon != null;
+    final fieldTextStyle = Theme.of(context).textTheme.bodyLarge;
+    final value = Row(
+      children: [
+        Expanded(
+          child: Text(
+            widget.empty && !active ? '' : widget.value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: fieldTextStyle?.copyWith(
+              color: widget.enabled
+                  ? widget.empty
+                        ? FloePalette.neutral500
+                        : FloePalette.neutral950
+                  : FloePalette.neutral500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 16),
+        const Icon(
+          LucideIcons.chevronDown,
+          size: 16,
+          color: FloePalette.neutral600,
+        ),
+      ],
+    );
     return Semantics(
       button: true,
       enabled: widget.enabled,
@@ -668,23 +670,28 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
             return KeyEventResult.ignored;
           },
           child: AnimatedContainer(
+            key: const ValueKey('floe-selection-trigger'),
             duration: reduced ? Duration.zero : FloeMotion.hoverDuration,
-            constraints: BoxConstraints(
-              minWidth: iconOnly ? 44 : 0,
-              minHeight: 44,
-            ),
-            decoration: ShapeDecoration(
-              color: highlighted ? FloePalette.neutral50 : FloePalette.neutral0,
-              shape: floeSquircleBorder(
-                FloeSquircleSize.md,
-                borderColor: focused
-                    ? FloePalette.primary600
-                    : highlighted
-                    ? FloePalette.primary500
-                    : FloePalette.neutral300,
-                borderWidth: focused ? 2 : 1,
-              ),
-            ),
+            constraints: BoxConstraints(minWidth: iconOnly ? 44 : 0),
+            decoration: widget.field
+                ? ShapeDecoration(
+                    color: Colors.transparent,
+                    shape: floeSquircleBorder(FloeSquircleSize.md),
+                  )
+                : ShapeDecoration(
+                    color: highlighted
+                        ? FloePalette.neutral50
+                        : FloePalette.neutral0,
+                    shape: floeSquircleBorder(
+                      FloeSquircleSize.md,
+                      borderColor: focused
+                          ? FloePalette.primary600
+                          : highlighted
+                          ? FloePalette.primary500
+                          : FloePalette.neutral300,
+                      borderWidth: focused ? 2 : 1,
+                    ),
+                  ),
             child: Material(
               color: Colors.transparent,
               shape: floeSquircleBorder(FloeSquircleSize.md),
@@ -692,39 +699,32 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
               child: InkWell(
                 onTap: widget.enabled ? widget.onPressed : null,
                 overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-                child: Padding(
-                  padding: iconOnly
-                      ? const EdgeInsets.all(11)
-                      : const EdgeInsets.symmetric(
+                child: iconOnly
+                    ? Padding(
+                        padding: const EdgeInsets.all(11),
+                        child: widget.icon,
+                      )
+                    : widget.field
+                    ? InputDecorator(
+                        key: const ValueKey('floe-selection-input-decorator'),
+                        isFocused: active,
+                        isHovering: widget.enabled && hovered,
+                        isEmpty: widget.empty,
+                        decoration: InputDecoration(
+                          labelText: widget.label,
+                          helperText: widget.description,
+                          errorText: widget.errorText,
+                          enabled: widget.enabled,
+                        ),
+                        child: value,
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.symmetric(
                           horizontal: 14,
                           vertical: 10,
                         ),
-                  child: iconOnly
-                      ? widget.icon
-                      : Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                widget.value,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: widget.enabled
-                                      ? FloePalette.neutral950
-                                      : FloePalette.neutral500,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            const Icon(
-                              LucideIcons.chevronDown,
-                              size: 16,
-                              color: FloePalette.neutral600,
-                            ),
-                          ],
-                        ),
-                ),
+                        child: value,
+                      ),
               ),
             ),
           ),

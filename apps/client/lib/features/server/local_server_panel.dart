@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
+import '../../app/floe_input.dart';
 import '../../app/floe_loading.dart';
 import '../../app/floe_squircle.dart';
 import 'local_server_client.dart';
@@ -190,13 +191,13 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
             'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
           ),
           const SizedBox(height: 20),
-          TextField(
+          FloeInput(
             key: const Key('server-address'),
+            label: 'Server address',
             controller: address,
             enabled: !busy && proof == null && connection == null,
             autocorrect: false,
             enableSuggestions: false,
-            decoration: const InputDecoration(labelText: 'Server address'),
           ),
           const SizedBox(height: 16),
           Semantics(liveRegion: true, child: Text(status)),

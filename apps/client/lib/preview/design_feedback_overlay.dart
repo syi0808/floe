@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
+import '../app/floe_input.dart';
+
 class DesignFeedbackOverlay extends StatefulWidget {
   const DesignFeedbackOverlay({
     super.key,
@@ -766,17 +768,14 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
               ),
             ],
             const SizedBox(height: 12),
-            TextField(
+            FloeInput(
               key: const Key('design-feedback-comment'),
+              label: 'Comment',
               controller: _commentController,
               autofocus: true,
               minLines: 3,
               maxLines: 6,
-              decoration: const InputDecoration(
-                labelText: 'Comment',
-                hintText: 'Describe the visual or interaction change…',
-                border: OutlineInputBorder(),
-              ),
+              placeholder: 'Describe the visual or interaction change…',
               onSubmitted: (_) => _saveDraft(),
             ),
             const SizedBox(height: 12),

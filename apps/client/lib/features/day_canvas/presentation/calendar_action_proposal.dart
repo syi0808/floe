@@ -3,6 +3,7 @@ import 'package:floe_client/l10n/app_localizations.dart';
 
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_input.dart';
 import '../../../app/floe_selection.dart';
 import '../../../app/floe_toast.dart';
 import '../application/calendar_action_controller.dart';
@@ -130,10 +131,10 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                     value == null ? strings.actionFormInvalid : null,
               ),
               const SizedBox(height: 12),
-              TextFormField(
+              FloeInput(
+                label: strings.actionTitle,
                 controller: title,
                 enabled: !saving,
-                decoration: InputDecoration(labelText: strings.actionTitle),
                 validator: (value) => value == null || value.trim().isEmpty
                     ? strings.actionFormInvalid
                     : null,
