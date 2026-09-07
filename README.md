@@ -58,8 +58,15 @@ now expose explicit setup/reconciliation and scope enablement.
 exact existing connection scope without automatically expanding grants. Connected
 chat dispatch and live key/model/source verification remain open.
 Core [read-only proposal inspection](docs/validation/s4-proposal-inspection.md) now
-recovers existing S3 action links after restart or scope revocation without re-execution;
-native transport and conversation-card recovery controls remain open.
+recovers existing S3 action links after restart or scope revocation without re-execution.
+[Native inspection and conversation cards](docs/validation/s4-proposal-presentation.md)
+now show saved action status and open existing S3 review.
+[Isolated Calendar sessions](docs/validation/s4-calendar-sessions.md) now support
+encrypted start/resume/get/recover through native and Dart storage APIs.
+Implementation is paused at the user's request. Native connected-turn dispatch is
+a local uncommitted draft, not shipped UI; see the
+[S4 handoff and remaining work](docs/validation/s4-handoff.md) for the committed
+baseline, validation limits and restart checklist. S4 acceptance remains 0/14.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

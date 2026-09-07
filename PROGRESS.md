@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel/registry UI; Calendar scope consent/setup; Core connected turns/S3 preparation; native model availability | 0/14 | S3 Accepted; connected chat; live key/model/source and privacy gates | Native connected-turn dispatch and proposal recovery; models and connectors |
+| S4 — Connected Agent/Experts | Implementing; paused at user request | Encrypted sample panel/registry UI; Calendar scope consent and isolated sessions; Core connected turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; connected chat; live key/model/source and privacy gates | Validate native Calendar turn draft, then connect Dart/controller/UI |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,24 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 paused handoff — 2026-09-07
+
+- Implementation baseline: `e57c342`. Goal is paused at the user's request; this
+  documentation checkpoint does not resume implementation or accept S4.
+- `2e00e1c` adds native saved-proposal inspection, conversation status cards and
+  navigation to existing S3 review. `e57c342` adds encrypted Calendar-scoped
+  start/resume/get/recover and native/Dart storage transport, isolated from samples.
+- Baseline validation: 216 workspace Rust tests, three keyring example tests,
+  25 native assertions, 189 Flutter tests, analysis, formatting/Clippy with existing
+  exclusions, Rust/macOS builds and deep strict signature verification pass.
+- Three local files contain an uncommitted native Calendar turn draft. Only its
+  compilation and existing 18 FFI tests passed; new lifecycle tests and Dart/UI
+  execution wiring remain. This documentation commit excludes that code.
+- [Handoff, exact local files, validation limits and ordered remaining work](docs/validation/s4-handoff.md).
+  Actual key/model/source/privacy gates remain open. S4 stays 0/14; S1/S3 is unchanged.
+- Earlier dated entries below are historical checkpoints; their then-remaining
+  work may have been completed by the increments summarized here.
 
 ### S4 read-only proposal inspection — 2026-09-07
 
