@@ -29,6 +29,11 @@ back to the legacy plaintext sample store.
 See the [panel](docs/validation/s4-agent-panel.md) and
 [vault component](docs/validation/s4-agent-vault.md) and
 [app integration validation records](docs/validation/s4-agent-vault-host.md).
+The [signed-key smoke](docs/validation/s4-keyring-live-smoke.md) currently exposes
+a provisioning/entitlement failure. A bounded
+[native Foundation Models adapter](docs/validation/s4-local-model.md) now implements
+the common model contract, but the real probe reports Apple Intelligence disabled;
+live generation and personal-chat integration remain unverified.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

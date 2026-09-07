@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; preparatory secure panel integrated | Encrypted sample gateway, dedicated vault worker, explicit unlock/lock and lifecycle clearing; synthetic key tests | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F live signed-host key/lifecycle gate | Validate real key access and recovery, then connect supported models |
+| S4 — Connected Agent/Experts | Planned; secure panel and native model preparation | Encrypted sample panel; bounded Foundation Models adapter; real availability probe, no live generation | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; provisioned key/lifecycle gate; Apple Intelligence disabled | Provisioned key smoke; live local model and supported remote adapter |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,23 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 signed-key probe and native model adapter — 2026-09-07
+
+- Added a disposable signed Core/keyring smoke harness with exact-slot cleanup
+  and retained markers on uncertainty. Read-only NoEntry succeeds, but production
+  vault creation fails and cleanup reports a missing entitlement. Signing alone
+  did not pass the gate; no personal database or existing key was accessed.
+- Added a macOS Foundation Models adapter behind the common Rust ModelRunner.
+  Bounded structured output, policy checks, one native job, cancellation/deadline
+  ownership and conservative full-context token reservations are implemented.
+- The actual bundled availability probe reports AppleIntelligenceNotEnabled.
+  Live generation is not verified; the default app remains on encrypted samples.
+- Validation: 101 workspace Rust tests, three keyring example tests and native
+  Swift fixture checks pass; macOS Debug build, formatting and Clippy with existing
+  exclusions pass. No acceptance criterion is promoted.
+- [Signed-key result and cleanup](docs/validation/s4-keyring-live-smoke.md);
+  [native model evidence and remaining gates](docs/validation/s4-local-model.md).
 
 ### S4 vault host and panel integration — 2026-09-07
 

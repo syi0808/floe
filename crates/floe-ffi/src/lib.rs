@@ -1,4 +1,5 @@
 mod agent_run;
+pub mod local_model;
 mod native_calendar;
 #[cfg(unix)]
 mod vault_host;

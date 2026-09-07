@@ -35,3 +35,11 @@ xcrun swiftc -emit-library -warnings-as-errors \
   -o "${NATIVE_LIBRARY}"
 install_name_tool -id "@rpath/libfloe_eventkit.dylib" "${NATIVE_LIBRARY}"
 codesign --force --sign "${SIGNING_IDENTITY}" "${NATIVE_LIBRARY}"
+
+MODEL_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib"
+xcrun swiftc -emit-library -swift-version 6 -warnings-as-errors \
+  -target "$(uname -m)-apple-macosx${MACOSX_DEPLOYMENT_TARGET}" \
+  "${SRCROOT}/LocalModel/LocalModel.swift" \
+  -o "${MODEL_LIBRARY}"
+install_name_tool -id "@rpath/libfloe_local_model.dylib" "${MODEL_LIBRARY}"
+codesign --force --sign "${SIGNING_IDENTITY}" "${MODEL_LIBRARY}"
