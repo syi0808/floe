@@ -112,10 +112,11 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 ## Remaining integration and live gates
 
 The default sample panel is unchanged and still does not read connected sources.
-The new lease/access port is not yet orchestrated by a production Agent turn or
-automatically revalidated by its session store. The host must integrate live package
-installation/assignment and View binding, refresh/scope selection, per-turn lease
-validation, model calls and Manager proposal publication before enabling that path.
+The [Core Calendar turn host](s4-calendar-turn.md) now orchestrates the lease/access
+port and revalidates it before model calls, result/answer commits and Manager
+publication. The app must still integrate live package installation/assignment and
+durable View binding, refresh/scope selection, model choice and native worker/UI
+dispatch before enabling connected personal chat.
 This checkpoint does not claim a live native access-stamp round trip or full C1/A4
 acceptance merely because the production adapter builds and injected checks pass.
 

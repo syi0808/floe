@@ -592,6 +592,7 @@ impl CapabilityHost for FixtureCapabilities {
             version: "1.0.0".into(),
             read_only: true,
             output_data_class: DataClass::Synthetic,
+            input_schema: None,
         }]
     }
 

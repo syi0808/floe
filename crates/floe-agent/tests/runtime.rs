@@ -154,6 +154,7 @@ impl CapabilityHost for Host {
             version: "1.0.0".into(),
             read_only: self.read_only,
             output_data_class: self.data_class,
+            input_schema: None,
         }]
     }
 

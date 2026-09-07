@@ -43,7 +43,9 @@ focus advice into the existing policy/review/action ledger with stable retry ide
 Registry management, live sources and app-level proposal orchestration still remain.
 A [bounded Calendar Timeline adapter](docs/validation/s4-calendar-timeline.md) now
 projects exact authorized mirror scopes through the common Expert port, with a
-native read-access boundary. Its production Agent orchestration is not enabled yet.
+native read-access boundary. [Core turn orchestration](docs/validation/s4-calendar-turn.md)
+now connects ordinary model calls, leased Views, atomic Expert results and governed
+proposal preparation. The app's connected personal-chat route is not enabled yet.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

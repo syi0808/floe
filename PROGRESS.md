@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; bounded Calendar View/Experts; Core Manager-to-S3 bridge; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Per-turn Calendar lease and Manager orchestration; local/remote models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel; Core model/Calendar/Expert turn with atomic results and S3 preparation; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Explicit scope/registry management and native turn dispatch; local/remote models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,25 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 Core Calendar Agent turns — 2026-09-07
+
+- Connected ordinary AgentCommand/model calls to an explicitly assigned Calendar
+  Expert, leased Core View, encrypted atomic receipts/private state and S3 proposal
+  preparation. The model receives a resolved descriptor with a bounded input schema.
+- Revalidated the lease inside result/answer transactions and before/after inference;
+  prior-turn tool outputs are marked stale only in model requests, preserving history.
+- Added child cancellation/drop ownership, synchronous Stop race protection, bounded
+  deadlines and publication outcomes that preserve committed sessions and stable IDs.
+- Fifteen Core fixtures and one registry case cover successful preparation, restart,
+  permission/expiry/registry/key changes, transaction rollback, malformed model input,
+  cancellation/deadline/drop and Personal-class fixture projection. No live OS access.
+- Validation: 167 workspace Rust and 135 Flutter tests, three keyring example tests,
+  25 native assertions, analysis, formatting and Clippy with existing exclusions pass.
+  The Rust library/macOS Debug build and deep strict app signature verification pass.
+- [Evidence and limits](docs/validation/s4-calendar-turn.md). The app still uses samples;
+  registry/scope configuration, native dispatch, live models and proposal recovery UI
+  remain. S4 stays 0/14, with S1/S3 and live key/model gates unchanged.
 
 ### S4 bounded Calendar Timeline View — 2026-09-07
 

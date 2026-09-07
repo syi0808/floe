@@ -401,6 +401,7 @@ mod tests {
                 version: "1".into(),
                 read_only: true,
                 output_data_class: DataClass::Synthetic,
+                input_schema: None,
             }],
             remaining_tokens: 8192,
             remaining_cost_micros: 0,
@@ -417,7 +418,10 @@ mod tests {
     #[tokio::test]
     async fn common_answer_reserves_full_context_and_separates_untrusted_input() {
         let transport = Mock::new(answer());
-        let result = generate(&transport, request()).await.unwrap();
+        let mut request = request();
+        request.capabilities[0].input_schema =
+            Some(json!({"type": "object", "additionalProperties": false}));
+        let result = generate(&transport, request).await.unwrap();
         assert_eq!(result.used_tokens, 4096);
         assert_eq!(result.cost_micros, 0);
         assert_eq!(
@@ -439,6 +443,10 @@ mod tests {
         );
         assert!(prompt.get("scoped").is_some());
         assert!(prompt.get("recent_messages").is_some());
+        assert_eq!(
+            prompt["allowed_capabilities"][0]["input_schema"]["type"],
+            "object"
+        );
         assert_eq!(input["maxResponseTokens"], 1024);
     }
 

@@ -22,6 +22,46 @@ struct Fixture {
     view: ExpertTimelineView,
 }
 
+#[test]
+fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
+    let fixture = Fixture::new();
+    let mut registry = fixture.registry.lock().unwrap();
+    let descriptor = registry
+        .expert_descriptor(
+            fixture.person,
+            fixture.schedule,
+            registry.revision(),
+            fixture.view.handle,
+        )
+        .unwrap();
+    assert_eq!(descriptor.id, "expert.schedule");
+    assert_eq!(descriptor.output_data_class, DataClass::Synthetic);
+    let schema = descriptor.input_schema.as_ref().unwrap();
+    assert_eq!(schema["properties"]["focus_minutes"]["maximum"], 240);
+    assert_eq!(schema["additionalProperties"], false);
+    let mut legacy = serde_json::to_value(&descriptor).unwrap();
+    legacy.as_object_mut().unwrap().remove("input_schema");
+    assert_eq!(
+        serde_json::from_value::<CapabilityDescriptor>(legacy)
+            .unwrap()
+            .input_schema,
+        None
+    );
+    let revision = registry.revision();
+    registry
+        .set_assignment_enabled(revision, fixture.person, fixture.tool, false)
+        .unwrap();
+    assert_eq!(
+        registry.expert_descriptor(
+            fixture.person,
+            fixture.schedule,
+            registry.revision(),
+            fixture.view.handle
+        ),
+        Err(AgentFailure::CapabilityDenied)
+    );
+}
+
 fn install(
     registry: &mut AgentRegistry,
     person: PersonId,

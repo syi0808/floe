@@ -125,7 +125,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
-    async fn commit_expert_session_with_hook(
+    pub(crate) async fn commit_expert_session_with_hook(
         &self,
         session: &AgentSession,
         previous_revision: u64,

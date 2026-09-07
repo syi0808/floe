@@ -117,8 +117,9 @@ flutter build macos --debug
 ## Still required
 
 The default encrypted sample panel still produces briefing-only synthetic results;
-it does not create real Calendar actions. The new Core entry point still needs native
-Manager orchestration, live authorized Timeline evidence, model/chat proposal flow,
+it does not create real Calendar actions. A [Core Calendar turn host](s4-calendar-turn.md)
+now orchestrates model/Expert results and this bridge. App integration still needs native
+worker dispatch, live authorized Timeline evidence, model/chat proposal flow,
 destination selection and response-loss reconciliation in the app. Stored origin IDs
 are disclosed, not yet navigable links back to a conversation.
 
