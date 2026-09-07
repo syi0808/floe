@@ -11,8 +11,10 @@ abstract final class FloeMotion {
   static const hoverDuration = Duration(milliseconds: 140);
   static const popoverDuration = Duration(milliseconds: 160);
   static const selectionDuration = Duration(milliseconds: 180);
+  static const notificationDuration = Duration(milliseconds: 220);
   static const dialogDuration = Duration(milliseconds: 240);
   static const reducedMotionDuration = Duration(milliseconds: 160);
+  static const revealDuration = Duration(milliseconds: 80);
 
   static bool reduceMotion(BuildContext context) =>
       MediaQuery.maybeOf(context)?.disableAnimations ?? false;

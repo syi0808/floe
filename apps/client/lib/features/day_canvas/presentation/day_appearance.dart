@@ -5,9 +5,9 @@ import '../../../app/design_tokens.dart';
 enum ItemTone {
   violet(FloePalette.primary50, FloePalette.primary100, FloePalette.primary500),
   blue(FloePalette.blue50, FloePalette.blue100, FloePalette.blue500),
-  mint(FloePalette.mint50, FloePalette.mint100, Color(0xFF43B590)),
-  amber(FloePalette.amber50, FloePalette.amber100, Color(0xFFE99B20)),
-  coral(FloePalette.coral50, FloePalette.coral100, Color(0xFFE7675D));
+  mint(FloePalette.mint50, FloePalette.mint100, FloePalette.mint500),
+  amber(FloePalette.amber50, FloePalette.amber100, FloePalette.amber500),
+  coral(FloePalette.coral50, FloePalette.coral100, FloePalette.coral500);
 
   const ItemTone(this.fill, this.border, this.accent);
   final Color fill;

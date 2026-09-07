@@ -33,7 +33,7 @@ class _ConnectedCalendars extends StatelessWidget {
           strings.connectedCalendarCount(calendars.length),
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
-        SizedBox(height: 24),
+        SizedBox(height: FloeSpace.lg),
         LayoutBuilder(
           builder: (context, constraints) {
             final columns = ((constraints.maxWidth + 24) / 284).floor().clamp(
@@ -60,10 +60,12 @@ class _ConnectedCalendars extends StatelessWidget {
                             color: FloePalette.neutral600,
                           ),
                         ),
-                        SizedBox(height: 8),
+                        SizedBox(height: FloeSpace.sm),
                         for (final calendar in account.value)
                           Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
+                            padding: EdgeInsets.symmetric(
+                              vertical: FloeSpace.sm,
+                            ),
                             child: FloeIconText(
                               icon: Icon(
                                 LucideIcons.calendar,
@@ -302,7 +304,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
               ),
     };
     return FloeSquircle(
-      padding: EdgeInsets.all(24),
+      padding: EdgeInsets.all(FloeSpace.lg),
       child: FloeLoadingOverlay(
         loading: busy,
         child: Column(
@@ -321,7 +323,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                     color: FloePalette.primary600,
                   ),
                 ),
-                SizedBox(width: 16),
+                SizedBox(width: FloeSpace.base),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -347,7 +349,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                 FloeReadOnlyPill(),
               ],
             ),
-            SizedBox(height: 24),
+            SizedBox(height: FloeSpace.lg),
             Text(
               AppLocalizations.of(context).bringYourCalendarIntoOneDayFloe,
               style: TextStyle(
@@ -367,7 +369,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                 color: FloePalette.neutral600,
               ),
             ),
-            SizedBox(height: 12),
+            SizedBox(height: FloeSpace.md),
             if (connection == null)
               Text(
                 AppLocalizations.of(context).makeRoomForYourDay,
@@ -375,7 +377,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
               )
             else
               _ConnectedCalendars(calendars: connection.connectedCalendars),
-            SizedBox(height: 12),
+            SizedBox(height: FloeSpace.md),
             Text(
               connection == null
                   ? AppLocalizations.of(context)
@@ -416,7 +418,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                     AppLocalizations.of(context).notCollectedYet,
               }.entries)
                 Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
+                  padding: EdgeInsets.symmetric(vertical: FloeSpace.md),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -447,7 +449,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                   style: TextStyle(color: FloePalette.coral700),
                 ),
               ),
-            SizedBox(height: 24),
+            SizedBox(height: FloeSpace.lg),
             Wrap(
               spacing: 12,
               runSpacing: 12,

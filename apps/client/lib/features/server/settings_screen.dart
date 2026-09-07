@@ -47,18 +47,18 @@ class SettingsScreen extends StatelessWidget {
             children: [
               if (actionController case final controller?) ...[
                 _ActionPermissions(controller: controller),
-                const SizedBox(height: 24),
+                const SizedBox(height: FloeSpace.lg),
               ],
               if (client case final serverClient?)
                 LocalServerPanel(client: serverClient)
               else
                 const FloeSquircle(
-                  padding: EdgeInsets.all(24),
+                  padding: EdgeInsets.all(FloeSpace.lg),
                   child: Text(
                     'Remote server connection is available in the native Floe app.',
                   ),
                 ),
-              const SizedBox(height: 24),
+              const SizedBox(height: FloeSpace.lg),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 4),
                 child: Column(
@@ -151,7 +151,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) => FloeSquircle(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(FloeSpace.lg),
       child: FloeLoadingOverlay(
         loading: controller.busy,
         child: Column(
@@ -161,7 +161,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
               'Action permissions',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: FloeSpace.sm),
             const Text(
               'Choose when Floe must ask before changing an external service. OS and connector permissions still apply.',
               style: TextStyle(color: FloePalette.neutral600, height: 1.5),
@@ -186,7 +186,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: FloeSpace.base),
             FloeSelect<ActionAuthorityMode>(
               label: 'Create Calendar events',
               value: controller.authority.calendarCreate,
@@ -213,12 +213,12 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
                 }
               },
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: FloeSpace.sm),
             const Text(
               'Currently this preset covers Calendar event creation only. It never bypasses macOS permission or safety checks.',
               style: TextStyle(color: FloePalette.neutral600, height: 1.4),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: FloeSpace.md),
             Text(
               controller.writesEnabled
                   ? 'Calendar writing is available in this build.'
@@ -226,7 +226,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
               style: const TextStyle(color: FloePalette.neutral600),
             ),
             if (controller.failed) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: FloeSpace.sm),
               const Text('The permission could not be saved. Try again.'),
             ],
           ],

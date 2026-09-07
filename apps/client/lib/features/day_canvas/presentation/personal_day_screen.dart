@@ -261,7 +261,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                       padding: EdgeInsets.only(bottom: 16),
                       child: FloeSquircle(
                         fill: FloePalette.amber50,
-                        padding: EdgeInsets.all(16),
+                        padding: EdgeInsets.all(FloeSpace.base),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -343,7 +343,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                 ? controller.snapshot?.calendar
                 : null,
           ),
-          SizedBox(height: 24),
+          SizedBox(height: FloeSpace.lg),
         ],
         CalendarContextRail(
           snapshot: snapshot,
@@ -370,7 +370,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(flex: 7, child: primary),
-            SizedBox(width: 24),
+            SizedBox(width: FloeSpace.lg),
             SizedBox(
               width: ((constraints.maxWidth - 24) * 0.3).clamp(
                 288,
@@ -441,7 +441,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           Text(
             '“${event.title}” will be removed from ${event.calendarName ?? 'your calendar'}.',
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: FloeSpace.base),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
@@ -449,7 +449,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                 onPressed: () => Navigator.of(dialogContext).pop(false),
                 child: const Text('Cancel'),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: FloeSpace.md),
               FloeButton.filled(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
                 child: const Text('Delete event'),
@@ -567,9 +567,9 @@ class _AdaptiveNavigation extends StatelessWidget {
       width: 64,
       child: Column(
         children: [
-          SizedBox(height: 4),
+          SizedBox(height: FloeSpace.xs),
           FloeMascot(size: 40),
-          SizedBox(height: 32),
+          SizedBox(height: FloeSpace.xl),
           for (final view in _primaryDestinations) ...[
             _DestinationButton(
               view: view,
@@ -692,16 +692,6 @@ class _DayToolbar extends StatelessWidget {
               tooltip: direction == -1
                   ? AppLocalizations.of(context).previousDay
                   : AppLocalizations.of(context).nextDay,
-              constraints: BoxConstraints.tightFor(
-                width: compact ? 40 : 44,
-                height: compact ? 40 : 44,
-              ),
-              style: IconButton.styleFrom(
-                fixedSize: Size.square(compact ? 40 : 44),
-                minimumSize: Size.square(compact ? 40 : 44),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              padding: EdgeInsets.zero,
               onPressed: () => controller.moveDay(direction),
               icon: Icon(
                 direction == -1
@@ -754,7 +744,7 @@ class _DayToolbar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(child: leading),
-          IconButton(
+          FloeButton.icon(
             tooltip: AppLocalizations.of(context).createEvent,
             onPressed: onCreateEvent,
             icon: const Icon(LucideIcons.plus, size: 18),
@@ -927,7 +917,7 @@ class _NotesScreenState extends State<_NotesScreen> {
       style: TextStyle(fontSize: 18, height: 1.2, fontWeight: FontWeight.w600),
     );
     final searchField = FloeSquircle(
-      size: FloeSquircleSize.field,
+      size: FloeSquircleSize.md,
       padding: EdgeInsets.symmetric(horizontal: 14),
       child: SizedBox(
         height: 50,
@@ -956,7 +946,6 @@ class _NotesScreenState extends State<_NotesScreen> {
     );
     final filter = FloeButton.outlined(
       style: OutlinedButton.styleFrom(
-        shape: floeSquircleBorder(FloeSquircleSize.md),
         backgroundColor: personalOnly
             ? FloePalette.primary100
             : FloePalette.neutral0,
@@ -967,9 +956,6 @@ class _NotesScreenState extends State<_NotesScreen> {
       child: Text(AppLocalizations.of(context).filter),
     );
     final create = FloeButton.filled(
-      style: FilledButton.styleFrom(
-        shape: floeSquircleBorder(FloeSquircleSize.md),
-      ),
       onPressed: widget.pending ? null : _create,
       loading: widget.pending,
       icon: Icon(LucideIcons.plus, size: 18),
@@ -985,7 +971,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     heading,
-                    SizedBox(height: 12),
+                    SizedBox(height: FloeSpace.md),
                     searchField,
                     SizedBox(height: 10),
                     Row(
@@ -1016,12 +1002,12 @@ class _NotesScreenState extends State<_NotesScreen> {
               child: Column(
                 children: [
                   Icon(LucideIcons.search, size: 24),
-                  SizedBox(height: 12),
+                  SizedBox(height: FloeSpace.md),
                   Text(
                     AppLocalizations.of(context).noNotesFound,
                     style: FloeType.headline,
                   ),
-                  SizedBox(height: 8),
+                  SizedBox(height: FloeSpace.sm),
                   Text(
                     AppLocalizations.of(context).tryADifferentSearchOrClearThe,
                     textAlign: TextAlign.center,
@@ -1196,7 +1182,7 @@ class _NotePreviewCard extends StatelessWidget {
                     style: FloeType.body.copyWith(height: 1.65),
                   ),
                   Spacer(),
-                  SizedBox(height: 24),
+                  SizedBox(height: FloeSpace.lg),
                   Text(
                     appearance?.timestamp ?? _date(context, note.createdAt),
                     style: TextStyle(
@@ -1252,7 +1238,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
             Row(
               children: [
                 _ToneDot(color: FloePalette.blue500),
-                SizedBox(width: 12),
+                SizedBox(width: FloeSpace.md),
                 Text(
                   AppLocalizations.of(context).task,
                   style: FloeType.body.copyWith(height: 1.15),
@@ -1270,7 +1256,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                 color: FloePalette.neutral950,
               ),
             ),
-            SizedBox(height: 24),
+            SizedBox(height: FloeSpace.lg),
             Text(
               appearance?.description ??
                   AppLocalizations.of(context).noDescriptionYet,
@@ -1284,21 +1270,21 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   : AppLocalizations.of(context).today,
               color: FloePalette.primary600,
             ),
-            SizedBox(height: 16),
+            SizedBox(height: FloeSpace.base),
             _LabeledValue(
               label: AppLocalizations.of(context).timeContext,
               value:
                   appearance?.timeContext ??
                   AppLocalizations.of(context).notScheduled,
             ),
-            SizedBox(height: 16),
+            SizedBox(height: FloeSpace.base),
             _LabeledValue(
               label: AppLocalizations.of(context).calendar,
               value:
                   appearance?.project ?? AppLocalizations.of(context).personal,
               color: FloePalette.mint700,
             ),
-            SizedBox(height: 32),
+            SizedBox(height: FloeSpace.xl),
             Divider(height: 1, color: FloePalette.neutral200),
             SizedBox(height: 26),
             Text(
@@ -1354,7 +1340,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                         ),
                       ),
                     ),
-                    SizedBox(width: 8),
+                    SizedBox(width: FloeSpace.sm),
                     Text(
                       subtask.duration,
                       style: TextStyle(
@@ -1365,7 +1351,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   ],
                 ),
               ),
-            SizedBox(height: 8),
+            SizedBox(height: FloeSpace.sm),
             Align(
               alignment: Alignment.centerLeft,
               child: FloeButton.text(
@@ -1409,11 +1395,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                       size: FloeSquircleSize.md,
                       child: FloeButton.icon(
                         tooltip: AppLocalizations.of(context).dismissSuggestion,
-                        style: IconButton.styleFrom(
-                          fixedSize: Size.square(36),
-                          minimumSize: Size.square(36),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
+                        size: FloeButtonSize.compact,
                         onPressed: () =>
                             setState(() => suggestionVisible = false),
                         icon: Icon(LucideIcons.x, size: 18),
@@ -1441,7 +1423,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     FloeButton.text(
                       style: TextButton.styleFrom(
                         minimumSize: Size(0, 40),
-                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        padding: EdgeInsets.symmetric(horizontal: FloeSpace.md),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         textStyle: TextStyle(
                           fontFamily: 'Pretendard',
@@ -1493,7 +1475,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: EdgeInsets.symmetric(vertical: 12),
+          padding: EdgeInsets.symmetric(vertical: FloeSpace.md),
           child: Row(
             children: [
               Spacer(),
@@ -1530,7 +1512,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(child: primary),
-                SizedBox(width: 24),
+                SizedBox(width: FloeSpace.lg),
                 SizedBox(
                   width: ((constraints.maxWidth - 24) * .3).clamp(
                     288,
@@ -1782,14 +1764,14 @@ class _FailureDay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.error_outline, color: FloePalette.error600),
-          SizedBox(height: 12),
+          SizedBox(height: FloeSpace.md),
           Text(AppLocalizations.of(context).couldNotLoadYourDay),
-          SizedBox(height: 8),
+          SizedBox(height: FloeSpace.sm),
           SelectableText(
             message ?? AppLocalizations.of(context).anUnknownErrorOccurred,
             textAlign: TextAlign.center,
           ),
-          SizedBox(height: 16),
+          SizedBox(height: FloeSpace.base),
           FloeButton.filled(
             onPressed: retry,
             icon: Icon(Icons.refresh),

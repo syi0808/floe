@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'design_tokens.dart';
 import 'floe_motion.dart';
 import 'floe_squircle.dart';
+import 'floe_states.dart';
 
 abstract final class FloeTheme {
   static final destructiveButtonStyle = ButtonStyle(
@@ -35,7 +36,7 @@ abstract final class FloeTheme {
       hoverColor: Colors.transparent,
       focusColor: FloePalette.primary50,
       colorScheme: colorScheme,
-      scaffoldBackgroundColor: FloePalette.neutral25,
+      scaffoldBackgroundColor: FloeColor.canvas,
       tooltipTheme: const TooltipThemeData(waitDuration: Duration(seconds: 2)),
       scrollbarTheme: ScrollbarThemeData(
         thickness: const WidgetStatePropertyAll(4),
@@ -82,15 +83,13 @@ abstract final class FloeTheme {
           ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: FloePalette.neutral0,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: FloeSpace.base,
-          vertical: FloeSpace.md,
-        ),
-        border: _inputBorder(FloePalette.neutral200),
-        enabledBorder: _inputBorder(FloePalette.neutral200),
-        hoverColor: FloePalette.neutral50,
-        focusedBorder: _inputBorder(FloePalette.primary600, width: 2),
+        fillColor: FloeColor.surface,
+        constraints: const BoxConstraints(minHeight: FloeControlSize.field),
+        contentPadding: FloeControlInsets.field,
+        border: _inputBorder(FloeColor.border),
+        enabledBorder: _inputBorder(FloeColor.border),
+        hoverColor: FloeColor.neutralHover,
+        focusedBorder: _inputBorder(FloeColor.focus, width: 2),
         errorBorder: _inputBorder(FloePalette.error600),
         focusedErrorBorder: _inputBorder(FloePalette.error600, width: 2),
       ),
@@ -106,12 +105,19 @@ abstract final class FloeTheme {
             ),
           ),
           animationDuration: FloeMotion.hoverDuration,
-          backgroundColor: WidgetStateProperty.resolveWith(_filledBackground),
-          foregroundColor: WidgetStateProperty.resolveWith(_filledForeground),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.filledBackground,
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.filledForeground,
+          ),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
+          padding: const WidgetStatePropertyAll(FloeControlInsets.button),
+          minimumSize: const WidgetStatePropertyAll(
+            Size(FloeControlSize.standard, FloeControlSize.standard),
+          ),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
+            floeSquircleBorder(FloeSquircleSize.sm),
           ),
         ),
       ),
@@ -126,12 +132,19 @@ abstract final class FloeTheme {
             ),
           ),
           animationDuration: FloeMotion.hoverDuration,
-          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
-          backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.quietForeground,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.quietBackground,
+          ),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
+          padding: const WidgetStatePropertyAll(FloeControlInsets.button),
+          minimumSize: const WidgetStatePropertyAll(
+            Size(FloeControlSize.standard, FloeControlSize.standard),
+          ),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
+            floeSquircleBorder(FloeSquircleSize.sm),
           ),
         ),
       ),
@@ -139,12 +152,18 @@ abstract final class FloeTheme {
         style: ButtonStyle(
           mouseCursor: WidgetStateMouseCursor.clickable,
           animationDuration: FloeMotion.hoverDuration,
-          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
-          backgroundColor: WidgetStateProperty.resolveWith(_quietBackground),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.quietForeground,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.quietBackground,
+          ),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          minimumSize: const WidgetStatePropertyAll(Size.square(44)),
+          minimumSize: const WidgetStatePropertyAll(
+            Size.square(FloeControlSize.standard),
+          ),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
+            floeSquircleBorder(FloeSquircleSize.sm),
           ),
         ),
       ),
@@ -160,13 +179,20 @@ abstract final class FloeTheme {
             ),
           ),
           animationDuration: FloeMotion.hoverDuration,
-          foregroundColor: WidgetStateProperty.resolveWith(_quietForeground),
-          backgroundColor: WidgetStateProperty.resolveWith(_outlinedBackground),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.quietForeground,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.outlinedBackground,
+          ),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          side: WidgetStateProperty.resolveWith(_outlinedSide),
-          minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
+          padding: const WidgetStatePropertyAll(FloeControlInsets.button),
+          side: WidgetStateProperty.resolveWith(FloeStates.outlinedSide),
+          minimumSize: const WidgetStatePropertyAll(
+            Size(FloeControlSize.standard, FloeControlSize.standard),
+          ),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
+            floeSquircleBorder(FloeSquircleSize.sm),
           ),
         ),
       ),
@@ -174,13 +200,19 @@ abstract final class FloeTheme {
         style: ButtonStyle(
           mouseCursor: WidgetStateMouseCursor.clickable,
           animationDuration: FloeMotion.hoverDuration,
-          foregroundColor: WidgetStateProperty.resolveWith(_segmentForeground),
-          backgroundColor: WidgetStateProperty.resolveWith(_segmentBackground),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.segmentForeground,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            FloeStates.segmentBackground,
+          ),
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          side: WidgetStateProperty.resolveWith(_segmentSide),
-          minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
+          side: WidgetStateProperty.resolveWith(FloeStates.segmentSide),
+          minimumSize: const WidgetStatePropertyAll(
+            Size(FloeControlSize.standard, FloeControlSize.standard),
+          ),
           shape: WidgetStatePropertyAll(
-            floeSquircleBorder(FloeSquircleSize.md),
+            floeSquircleBorder(FloeSquircleSize.sm),
           ),
         ),
       ),
@@ -209,71 +241,4 @@ abstract final class FloeTheme {
         borderRadius: BorderRadius.circular(FloeRadius.md),
         borderSide: BorderSide(color: color, width: width),
       );
-
-  static Color _filledBackground(Set<WidgetState> states) {
-    if (states.contains(WidgetState.disabled)) return FloePalette.primary200;
-    if (states.contains(WidgetState.pressed)) return FloePalette.primary800;
-    if (states.contains(WidgetState.hovered) ||
-        states.contains(WidgetState.focused)) {
-      return FloePalette.primary700;
-    }
-    return FloePalette.primary600;
-  }
-
-  static Color _filledForeground(Set<WidgetState> states) =>
-      states.contains(WidgetState.disabled)
-      ? FloePalette.neutral600
-      : FloePalette.neutral0;
-
-  static Color _quietForeground(Set<WidgetState> states) {
-    if (states.contains(WidgetState.disabled)) return FloePalette.neutral400;
-    if (states.contains(WidgetState.hovered) ||
-        states.contains(WidgetState.pressed) ||
-        states.contains(WidgetState.focused)) {
-      return FloePalette.neutral950;
-    }
-    return FloePalette.neutral600;
-  }
-
-  static Color _quietBackground(Set<WidgetState> states) {
-    if (states.contains(WidgetState.pressed)) return FloePalette.neutral200;
-    if (states.contains(WidgetState.hovered)) return FloePalette.neutral100;
-    if (states.contains(WidgetState.focused)) return FloePalette.primary50;
-    return Colors.transparent;
-  }
-
-  static Color _outlinedBackground(Set<WidgetState> states) {
-    if (states.contains(WidgetState.pressed)) return FloePalette.neutral100;
-    if (states.contains(WidgetState.hovered)) return FloePalette.neutral50;
-    if (states.contains(WidgetState.focused)) return FloePalette.primary50;
-    return FloePalette.neutral0;
-  }
-
-  static BorderSide _outlinedSide(Set<WidgetState> states) => BorderSide(
-    color: states.contains(WidgetState.focused)
-        ? FloePalette.primary600
-        : states.contains(WidgetState.hovered)
-        ? FloePalette.neutral400
-        : FloePalette.neutral300,
-  );
-
-  static Color _segmentForeground(Set<WidgetState> states) =>
-      states.contains(WidgetState.selected)
-      ? FloePalette.primary800
-      : _quietForeground(states);
-
-  static Color _segmentBackground(Set<WidgetState> states) {
-    if (states.contains(WidgetState.selected)) {
-      return states.contains(WidgetState.pressed)
-          ? FloePalette.primary200
-          : FloePalette.primary100;
-    }
-    return _quietBackground(states);
-  }
-
-  static BorderSide _segmentSide(Set<WidgetState> states) => BorderSide(
-    color: states.contains(WidgetState.focused)
-        ? FloePalette.primary600
-        : FloePalette.neutral300,
-  );
 }

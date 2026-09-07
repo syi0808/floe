@@ -41,16 +41,16 @@ class CalendarEventDetails extends StatelessWidget {
           if (event.externalId != null && !event.canModify) FloeReadOnlyPill(),
         ],
       ),
-      SizedBox(height: 24),
+      SizedBox(height: FloeSpace.lg),
       FloeSquircle(
-        size: FloeSquircleSize.field,
+        size: FloeSquircleSize.md,
         fill: FloePalette.primary50,
         borderWidth: 0,
         padding: EdgeInsets.all(20),
         child: Row(
           children: [
             Icon(LucideIcons.clock, color: FloePalette.primary600, size: 20),
-            SizedBox(width: 16),
+            SizedBox(width: FloeSpace.base),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -83,7 +83,7 @@ class CalendarEventDetails extends StatelessWidget {
           ],
         ),
       ),
-      SizedBox(height: 24),
+      SizedBox(height: FloeSpace.lg),
       for (final entry in <String, String>{
         if (snapshot.calendar?.lastSuccessAt != null)
           AppLocalizations.of(context).lastCollected: formatTimestamp(
@@ -115,13 +115,13 @@ class CalendarEventDetails extends StatelessWidget {
           ),
         ),
       if (event.externalId != null && !event.canModify) ...[
-        SizedBox(height: 24),
+        SizedBox(height: FloeSpace.lg),
         FloeInfoNote(
           icon: LucideIcons.lockKeyhole,
           text: AppLocalizations.of(context)
               .manageThisEventInItsOriginalCalendar,
         ),
-        SizedBox(height: 16),
+        SizedBox(height: FloeSpace.base),
         Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
@@ -132,10 +132,10 @@ class CalendarEventDetails extends StatelessWidget {
             ),
             children: [
               FloeSquircle(
-                size: FloeSquircleSize.field,
+                size: FloeSquircleSize.md,
                 fill: FloePalette.neutral50,
                 borderWidth: 0,
-                padding: EdgeInsets.all(16),
+                padding: EdgeInsets.all(FloeSpace.base),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [

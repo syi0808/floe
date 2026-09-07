@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
 
 import '../../../app/floe_context_menu.dart';
+import '../../../app/floe_button.dart';
 import '../../../app/floe_popover.dart';
 
 import '../domain/day_models.dart';
@@ -93,17 +94,11 @@ class CalendarEventActions extends StatelessWidget {
                 right: 0,
                 bottom: 0,
                 child: Center(
-                  child: IconButton(
+                  child: FloeButton.icon(
                     tooltip: 'Event actions',
-                    visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints(
-                      minWidth: 24,
-                      minHeight: 24,
-                    ),
-                    padding: const EdgeInsets.all(3),
-                    iconSize: 16,
+                    size: FloeButtonSize.compact,
                     onPressed: () => menu(context),
-                    icon: const Icon(Icons.more_horiz),
+                    icon: const Icon(Icons.more_horiz, size: 16),
                   ),
                 ),
               ),

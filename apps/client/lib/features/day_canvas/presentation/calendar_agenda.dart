@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_loading.dart';
 import '../../../app/floe_squircle.dart';
@@ -359,10 +360,10 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 16),
+                            const SizedBox(width: FloeSpace.base),
                           ] else
                             const Spacer(),
-                          IconButton(
+                          FloeButton.icon(
                             tooltip: AppLocalizations.of(context).zoomOut,
                             onPressed: zoom <= 1
                                 ? null
@@ -383,7 +384,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                 onChanged: setZoom,
                               ),
                             ),
-                          IconButton(
+                          FloeButton.icon(
                             tooltip: AppLocalizations.of(context).zoomIn,
                             onPressed: zoom >= 12
                                 ? null
@@ -701,7 +702,7 @@ class _EmptyDayStatus extends StatelessWidget {
                     strings.yourDayIsStillEmpty,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: FloeSpace.xxs),
                   Text(
                     strings.emptyDayConnectHint,
                     style: const TextStyle(

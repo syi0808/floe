@@ -6,6 +6,7 @@ import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_date_picker.dart';
 import 'package:floe_client/app/floe_context_menu.dart';
+import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_date_time_field.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -63,7 +64,7 @@ void main() {
       for (final title in ['Open', 'Edit', 'Delete', 'Disabled']) {
         final row = find.ancestor(
           of: find.text(title),
-          matching: find.byType(AnimatedScale),
+          matching: find.byType(PressableScale),
         );
         final surface = tester.widget<DecoratedBox>(
           find.descendant(of: row, matching: find.byType(DecoratedBox)),

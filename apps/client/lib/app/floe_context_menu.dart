@@ -50,7 +50,6 @@ class FloeContextMenu<T> extends StatefulWidget {
 
 class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
   int active = -1;
-  int pressed = -1;
   late final keys = List.generate(widget.entries.length, (_) => GlobalKey());
 
   void move(int step) {
@@ -136,31 +135,23 @@ class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
                     onExit: (_) {
                       if (active == index) setState(() => active = -1);
                     },
-                    child: GestureDetector(
-                      excludeFromSemantics: true,
-                      behavior: HitTestBehavior.opaque,
-                      onTap: entry.enabled ? choose : null,
-                      onTapDown: entry.enabled
-                          ? (_) => setState(() => pressed = index)
-                          : null,
-                      onTapCancel: () => setState(() => pressed = -1),
-                      onTapUp: (_) => setState(() => pressed = -1),
-                      child: AnimatedScale(
-                        scale:
-                            pressed == index &&
-                                !FloeMotion.reduceMotion(context)
-                            ? .98
-                            : 1,
-                        duration: FloeMotion.pressDuration,
-                        curve: FloeMotion.easeOut,
+                    child: PressableScale(
+                      key: const ValueKey('floe-context-menu-row'),
+                      builder: (states) => InkWell(
+                        statesController: states,
+                        excludeFromSemantics: true,
+                        onTap: entry.enabled ? choose : null,
+                        overlayColor: const WidgetStatePropertyAll(
+                          Colors.transparent,
+                        ),
                         child: Container(
-                          height: 36,
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          height: FloeControlSize.compact,
+                          padding: FloeControlInsets.menu,
                           decoration: BoxDecoration(
                             color: highlighted
-                                ? FloePalette.primary50
+                                ? FloeColor.selectionHover
                                 : Colors.transparent,
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(FloeRadius.xs),
                           ),
                           child: Row(
                             children: [

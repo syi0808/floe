@@ -88,7 +88,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
     final leading = (month.weekday % 7 - firstWeekday + 7) % 7;
     return SingleChildScrollView(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(FloeSpace.md),
         child: Column(
           children: [
             Row(
@@ -111,10 +111,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                       ? null
                       : () => stepMonth(-1),
                   icon: const Icon(Icons.chevron_left, size: 18),
-                  constraints: const BoxConstraints.tightFor(
-                    width: 30,
-                    height: 30,
-                  ),
+                  size: FloeButtonSize.compact,
                 ),
                 FloeButton.icon(
                   tooltip: 'Next month',
@@ -122,14 +119,11 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                       ? null
                       : () => stepMonth(1),
                   icon: const Icon(Icons.chevron_right, size: 18),
-                  constraints: const BoxConstraints.tightFor(
-                    width: 30,
-                    height: 30,
-                  ),
+                  size: FloeButtonSize.compact,
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: FloeSpace.sm),
             Row(
               children: [
                 for (var weekday = 0; weekday < 7; weekday++)
@@ -210,7 +204,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                 ),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: FloeSpace.sm),
             const Divider(height: 1, color: FloePalette.neutral100),
             const SizedBox(height: 6),
             Row(
@@ -260,7 +254,6 @@ class _DateCell extends StatefulWidget {
 
 class _DateCellState extends State<_DateCell> {
   bool hovered = false;
-  bool pressed = false;
   @override
   Widget build(BuildContext context) => Semantics(
     excludeSemantics: true,
@@ -275,31 +268,25 @@ class _DateCellState extends State<_DateCell> {
           : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => hovered = true),
       onExit: (_) => setState(() => hovered = false),
-      child: GestureDetector(
-        excludeFromSemantics: true,
-        onTapDown: widget.enabled
-            ? (_) => setState(() => pressed = true)
-            : null,
-        onTapCancel: () => setState(() => pressed = false),
-        onTapUp: (_) => setState(() => pressed = false),
-        onTap: widget.enabled ? widget.onSelected : null,
-        child: AnimatedScale(
-          scale: pressed && !FloeMotion.reduceMotion(context) ? .93 : 1,
-          duration: FloeMotion.pressDuration,
-          curve: FloeMotion.easeOut,
+      child: PressableScale(
+        builder: (states) => InkWell(
+          statesController: states,
+          excludeFromSemantics: true,
+          onTap: widget.enabled ? widget.onSelected : null,
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
           child: AnimatedContainer(
             duration: FloeMotion.reduceMotion(context)
                 ? Duration.zero
                 : FloeMotion.hoverDuration,
             curve: FloeMotion.easeOut,
-            height: 34,
-            margin: const EdgeInsets.all(2),
+            height: FloeControlSize.compact,
+            margin: const EdgeInsets.all(FloeSpace.xxs),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(FloeRadius.xs),
               color: widget.active
                   ? FloePalette.primary500
                   : hovered && widget.enabled
-                  ? FloePalette.primary50
+                  ? FloeColor.selectionHover
                   : Colors.transparent,
               border: widget.today
                   ? Border.all(color: FloePalette.primary400)

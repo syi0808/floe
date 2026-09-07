@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'design_tokens.dart';
 import 'floe_motion.dart';
 import 'floe_loading.dart';
+import 'floe_squircle.dart';
 
 enum _ButtonKind { filled, outlined, text, icon }
+
+enum FloeButtonSize { compact, standard }
 
 final class FloeButton extends StatelessWidget {
   const FloeButton.filled({
@@ -17,7 +21,8 @@ final class FloeButton extends StatelessWidget {
   }) : _kind = _ButtonKind.filled,
        tooltip = null,
        constraints = null,
-       padding = null;
+       padding = null,
+       size = FloeButtonSize.standard;
 
   const FloeButton.outlined({
     required this.onPressed,
@@ -30,7 +35,8 @@ final class FloeButton extends StatelessWidget {
   }) : _kind = _ButtonKind.outlined,
        tooltip = null,
        constraints = null,
-       padding = null;
+       padding = null,
+       size = FloeButtonSize.standard;
 
   const FloeButton.text({
     required this.onPressed,
@@ -43,7 +49,8 @@ final class FloeButton extends StatelessWidget {
   }) : _kind = _ButtonKind.text,
        tooltip = null,
        constraints = null,
-       padding = null;
+       padding = null,
+       size = FloeButtonSize.standard;
 
   const FloeButton.icon({
     required this.onPressed,
@@ -53,6 +60,7 @@ final class FloeButton extends StatelessWidget {
     this.tooltip,
     this.constraints,
     this.padding,
+    this.size = FloeButtonSize.standard,
     this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.icon,
@@ -68,6 +76,7 @@ final class FloeButton extends StatelessWidget {
   final String? tooltip;
   final BoxConstraints? constraints;
   final EdgeInsetsGeometry? padding;
+  final FloeButtonSize size;
   final bool loading;
 
   Widget get _content => Stack(
@@ -80,6 +89,26 @@ final class FloeButton extends StatelessWidget {
       if (loading) const FloeSpinner(size: 18),
     ],
   );
+
+  BoxConstraints? get _iconConstraints =>
+      constraints ??
+      (size == FloeButtonSize.compact
+          ? const BoxConstraints.tightFor(
+              width: FloeControlSize.compact,
+              height: FloeControlSize.compact,
+            )
+          : null);
+
+  EdgeInsetsGeometry? get _iconPadding =>
+      padding ?? (size == FloeButtonSize.compact ? EdgeInsets.zero : null);
+
+  ButtonStyle? get _iconStyle {
+    if (size == FloeButtonSize.standard) return style;
+    return IconButton.styleFrom(
+      shape: floeSquircleBorder(FloeSquircleSize.xs),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ).merge(style);
+  }
 
   @override
   Widget build(BuildContext context) => PressableScale(
@@ -137,12 +166,12 @@ final class FloeButton extends StatelessWidget {
               ),
       _ButtonKind.icon => IconButton(
         onPressed: loading ? null : onPressed,
-        style: style,
+        style: _iconStyle,
         focusNode: focusNode,
         statesController: states,
         tooltip: tooltip,
-        constraints: constraints,
-        padding: padding,
+        constraints: _iconConstraints,
+        padding: _iconPadding,
         icon: _content,
       ),
     },

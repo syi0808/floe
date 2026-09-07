@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'floe_field.dart';
+
 class FloeInput extends StatelessWidget {
   const FloeInput({
     required this.label,
@@ -74,11 +76,13 @@ class FloeInput extends StatelessWidget {
     onFieldSubmitted: onSubmitted,
     validator: validator,
     autovalidateMode: autovalidateMode,
-    decoration: InputDecoration(
-      labelText: label,
-      hintText: placeholder,
-      helperText: description,
+    style: FloeField.textStyle(context),
+    decoration: FloeField.decoration(
+      label: label,
+      placeholder: placeholder,
+      description: description,
       errorText: errorText,
+      enabled: enabled,
     ),
   );
 }

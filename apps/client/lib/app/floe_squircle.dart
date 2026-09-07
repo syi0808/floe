@@ -3,17 +3,15 @@ import 'package:figma_squircle/figma_squircle.dart';
 
 import 'design_tokens.dart';
 
-enum FloeSquircleSize { xs, sm, md, field, lg, xl, floating, frame }
+enum FloeSquircleSize { xs, sm, md, lg, xl, frame }
 
 extension on FloeSquircleSize {
   double get extent => switch (this) {
     FloeSquircleSize.xs => FloeRadius.xs,
     FloeSquircleSize.sm => FloeRadius.sm,
     FloeSquircleSize.md => FloeRadius.md,
-    FloeSquircleSize.field => 22,
     FloeSquircleSize.lg => FloeRadius.lg,
     FloeSquircleSize.xl => FloeRadius.xl,
-    FloeSquircleSize.floating => 25,
     FloeSquircleSize.frame => FloeRadius.frame,
   };
 }

@@ -28,15 +28,26 @@ abstract final class FloePalette {
 
   static const blue50 = Color(0xFFF1F6FF);
   static const blue100 = Color(0xFFE4EEFF);
+  static const blue300 = Color(0xFFA9C8FA);
   static const blue500 = Color(0xFF3D86EC);
+  static const blue700 = Color(0xFF225EBC);
+  static const blue900 = Color(0xFF173B71);
   static const mint50 = Color(0xFFF0FAF7);
   static const mint100 = Color(0xFFDDF5ED);
+  static const mint300 = Color(0xFF8DDCC2);
+  static const mint500 = Color(0xFF43B590);
   static const mint700 = Color(0xFF267B62);
+  static const mint900 = Color(0xFF194D3F);
   static const amber50 = Color(0xFFFFF8ED);
   static const amber100 = Color(0xFFFFEBCB);
+  static const amber300 = Color(0xFFF8C66B);
+  static const amber500 = Color(0xFFE99B20);
   static const amber700 = Color(0xFFA55E0D);
+  static const amber900 = Color(0xFF663909);
   static const coral50 = Color(0xFFFFF4F2);
   static const coral100 = Color(0xFFFFE2DD);
+  static const coral300 = Color(0xFFF6A69C);
+  static const coral500 = Color(0xFFE7675D);
   static const coral700 = Color(0xFFA63D37);
   static const coral900 = Color(0xFF652A27);
 
@@ -56,6 +67,26 @@ abstract final class FloePalette {
   );
 }
 
+abstract final class FloeColor {
+  static const canvas = FloePalette.neutral25;
+  static const surface = FloePalette.neutral0;
+  static const surfaceSubtle = FloePalette.neutral50;
+  static const textPrimary = FloePalette.neutral950;
+  static const textSecondary = FloePalette.neutral600;
+  static const textTertiary = FloePalette.neutral500;
+  static const border = FloePalette.neutral200;
+  static const borderStrong = FloePalette.neutral300;
+  static const focus = FloePalette.primary600;
+
+  static const neutralHover = FloePalette.neutral50;
+  static const quietHover = FloePalette.neutral100;
+  static const neutralPressed = FloePalette.neutral200;
+  static const selectionHover = FloePalette.primary50;
+  static const selectionPressed = FloePalette.primary100;
+  static const disabledSurface = FloePalette.neutral50;
+  static const disabledContent = FloePalette.neutral400;
+}
+
 abstract final class FloeSpace {
   static const xxs = 2.0;
   static const xs = 4.0;
@@ -66,15 +97,39 @@ abstract final class FloeSpace {
   static const xl = 32.0;
   static const xxl = 48.0;
   static const xxxl = 64.0;
+  static const xxxxl = 96.0;
 }
 
 abstract final class FloeRadius {
-  static const xs = 6.0;
-  static const sm = 8.0;
+  static const xs = 8.0;
+  static const sm = 12.0;
   static const md = 16.0;
-  static const lg = 28.0;
-  static const xl = 34.0;
-  static const frame = 40.0;
+  static const lg = 20.0;
+  static const xl = 28.0;
+  static const frame = 32.0;
+}
+
+abstract final class FloeControlSize {
+  static const compact = 36.0;
+  static const standard = 44.0;
+  static const field = 48.0;
+}
+
+abstract final class FloeControlInsets {
+  static const button = EdgeInsets.symmetric(
+    horizontal: FloeSpace.base,
+    vertical: FloeSpace.md,
+  );
+  static const field = EdgeInsets.symmetric(
+    horizontal: FloeSpace.base,
+    vertical: FloeSpace.md,
+  );
+  static const menu = EdgeInsets.symmetric(
+    horizontal: FloeSpace.md,
+    vertical: FloeSpace.sm,
+  );
+  static const card = EdgeInsets.all(20);
+  static const dialog = EdgeInsets.all(28);
 }
 
 abstract final class FloeType {

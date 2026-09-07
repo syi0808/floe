@@ -135,7 +135,7 @@ class FloeToastHostState extends State<FloeToastHost>
     final narrow = media.size.width <= 780;
     final duration = FloeMotion.reduceMotion(context)
         ? Duration.zero
-        : const Duration(milliseconds: 220);
+        : FloeMotion.notificationDuration;
     return Stack(
       children: [
         Positioned.fill(child: widget.child),
@@ -343,7 +343,7 @@ class _ToastCard extends StatelessWidget {
       ignoring: entry.leaving,
       child: TweenAnimationBuilder<double>(
         tween: Tween(begin: 0, end: entry.leaving ? 0 : 1),
-        duration: reduced ? Duration.zero : const Duration(milliseconds: 180),
+        duration: reduced ? Duration.zero : FloeMotion.selectionDuration,
         curve: FloeMotion.easeOut,
         builder: (context, progress, child) => Opacity(
           opacity: progress,
@@ -386,7 +386,7 @@ class _ToastCard extends StatelessWidget {
                           : FloePalette.primary600,
                     ),
                   ),
-                  SizedBox(width: 12),
+                  SizedBox(width: FloeSpace.md),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -424,7 +424,7 @@ class _ToastCard extends StatelessWidget {
                     ),
                   ),
                   if (entry.onAction != null) ...[
-                    SizedBox(width: 12),
+                    SizedBox(width: FloeSpace.md),
                     TextButton(
                       style: TextButton.styleFrom(
                         backgroundColor: FloePalette.primary50,
@@ -451,7 +451,7 @@ class _ToastCard extends StatelessWidget {
                       },
                       child: Text(entry.actionLabel!),
                     ),
-                    SizedBox(width: 4),
+                    SizedBox(width: FloeSpace.xs),
                   ],
                   IconButton(
                     tooltip: AppLocalizations.of(context).close,

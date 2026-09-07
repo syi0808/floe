@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'design_tokens.dart';
+import 'floe_field.dart';
 import 'floe_motion.dart';
 import 'floe_squircle.dart';
+import 'floe_states.dart';
 
 @immutable
 class FloeSelectOption<T> {
@@ -156,7 +158,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
     super.initState();
     popupAnimation = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 160),
+      duration: FloeMotion.popoverDuration,
     );
   }
 
@@ -241,7 +243,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
     overlay.insert(popupEntry!);
     popupAnimation.duration = FloeMotion.reduceMotion(context)
         ? Duration.zero
-        : const Duration(milliseconds: 160);
+        : FloeMotion.popoverDuration;
     popupAnimation.forward(from: 0);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && open) popupFocusNode.requestFocus();
@@ -298,7 +300,7 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
           alignment: .5,
           duration: FloeMotion.reduceMotion(context)
               ? Duration.zero
-              : const Duration(milliseconds: 80),
+              : FloeMotion.revealDuration,
         );
       }
     });
@@ -509,15 +511,13 @@ class _FloeSelectionOptionRow<T> extends StatelessWidget {
         onTap: option.enabled ? onPressed : null,
         child: Container(
           key: const ValueKey('floe-selection-option'),
-          constraints: const BoxConstraints(minHeight: 44),
-          padding: const EdgeInsets.all(10),
+          constraints: const BoxConstraints(
+            minHeight: FloeControlSize.standard,
+          ),
+          padding: FloeControlInsets.menu,
           decoration: ShapeDecoration(
-            color: active ? FloePalette.primary50 : Colors.transparent,
-            shape: floeSquircleBorder(
-              FloeSquircleSize.sm,
-              borderColor: active ? FloePalette.primary600 : Colors.transparent,
-              borderWidth: 2,
-            ),
+            color: active ? FloeColor.selectionHover : Colors.transparent,
+            shape: floeSquircleBorder(FloeSquircleSize.sm),
           ),
           child: Row(
             children: [
@@ -551,7 +551,7 @@ class _FloeSelectionOptionRow<T> extends StatelessWidget {
                 ),
               ),
               if (selected) ...[
-                const SizedBox(width: 16),
+                const SizedBox(width: FloeSpace.base),
                 const Icon(
                   LucideIcons.check,
                   size: 16,
@@ -608,9 +608,13 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
   Widget build(BuildContext context) {
     final reduced = FloeMotion.reduceMotion(context);
     final active = widget.open || focused;
-    final highlighted = active || (widget.enabled && hovered);
     final iconOnly = widget.icon != null;
-    final fieldTextStyle = Theme.of(context).textTheme.bodyLarge;
+    final states = <WidgetState>{
+      if (!widget.enabled) WidgetState.disabled,
+      if (widget.enabled && hovered) WidgetState.hovered,
+      if (active) WidgetState.focused,
+    };
+    final fieldTextStyle = FloeField.textStyle(context);
     final value = Row(
       children: [
         Expanded(
@@ -618,16 +622,16 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
             widget.empty && !active ? '' : widget.value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: fieldTextStyle?.copyWith(
+            style: fieldTextStyle.copyWith(
               color: widget.enabled
                   ? widget.empty
-                        ? FloePalette.neutral500
-                        : FloePalette.neutral950
-                  : FloePalette.neutral500,
+                        ? FloeColor.textTertiary
+                        : FloeColor.textPrimary
+                  : FloeColor.textTertiary,
             ),
           ),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: FloeSpace.base),
         const Icon(
           LucideIcons.chevronDown,
           size: 16,
@@ -672,23 +676,22 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
           child: AnimatedContainer(
             key: const ValueKey('floe-selection-trigger'),
             duration: reduced ? Duration.zero : FloeMotion.hoverDuration,
-            constraints: BoxConstraints(minWidth: iconOnly ? 44 : 0),
+            constraints: BoxConstraints(
+              minWidth: iconOnly ? FloeControlSize.standard : 0,
+              minHeight: widget.field
+                  ? FloeControlSize.field
+                  : FloeControlSize.standard,
+            ),
             decoration: widget.field
                 ? ShapeDecoration(
                     color: Colors.transparent,
                     shape: floeSquircleBorder(FloeSquircleSize.md),
                   )
                 : ShapeDecoration(
-                    color: highlighted
-                        ? FloePalette.neutral50
-                        : FloePalette.neutral0,
+                    color: FloeStates.outlinedBackground(states),
                     shape: floeSquircleBorder(
                       FloeSquircleSize.md,
-                      borderColor: focused
-                          ? FloePalette.primary600
-                          : highlighted
-                          ? FloePalette.primary500
-                          : FloePalette.neutral300,
+                      borderColor: FloeStates.outlinedSide(states).color,
                       borderWidth: focused ? 2 : 1,
                     ),
                   ),
@@ -701,9 +704,9 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
                 onTap: widget.enabled ? widget.onPressed : null,
                 overlayColor: const WidgetStatePropertyAll(Colors.transparent),
                 child: iconOnly
-                    ? Padding(
-                        padding: const EdgeInsets.all(11),
-                        child: widget.icon,
+                    ? SizedBox.square(
+                        dimension: FloeControlSize.standard,
+                        child: Center(child: widget.icon),
                       )
                     : widget.field
                     ? InputDecorator(
@@ -711,21 +714,15 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
                         isFocused: active,
                         isHovering: widget.enabled && hovered,
                         isEmpty: widget.empty,
-                        decoration: InputDecoration(
-                          labelText: widget.label,
-                          helperText: widget.description,
+                        decoration: FloeField.decoration(
+                          label: widget.label ?? '',
+                          description: widget.description,
                           errorText: widget.errorText,
                           enabled: widget.enabled,
                         ),
                         child: value,
                       )
-                    : Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        child: value,
-                      ),
+                    : Padding(padding: FloeControlInsets.menu, child: value),
               ),
             ),
           ),
@@ -915,7 +912,10 @@ class _FloeChoiceState extends State<_FloeChoice> {
       radio: widget.radio,
     );
     final content = widget.title == null
-        ? SizedBox.square(dimension: 44, child: Center(child: visual))
+        ? SizedBox.square(
+            dimension: FloeControlSize.standard,
+            child: Center(child: visual),
+          )
         : ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 48),
             child: Padding(
@@ -923,7 +923,7 @@ class _FloeChoiceState extends State<_FloeChoice> {
               child: Row(
                 children: [
                   visual,
-                  const SizedBox(width: 12),
+                  const SizedBox(width: FloeSpace.md),
                   Expanded(
                     child: DefaultTextStyle.merge(
                       style: TextStyle(
@@ -982,9 +982,9 @@ class _FloeChoiceState extends State<_FloeChoice> {
               key: const ValueKey('floe-choice-hover-surface'),
               decoration: BoxDecoration(
                 color: hovered && widget.enabled
-                    ? FloePalette.primary50
+                    ? FloeColor.selectionHover
                     : Colors.transparent,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(FloeRadius.sm),
               ),
               child: content,
             ),
@@ -1015,13 +1015,13 @@ class _FloeChoiceVisual extends StatelessWidget {
     final reduced = FloeMotion.reduceMotion(context);
     final selectedColor = enabled
         ? FloePalette.primary600
-        : FloePalette.neutral50;
+        : FloeColor.disabledSurface;
     final borderColor = !enabled
-        ? FloePalette.neutral200
+        ? FloeColor.border
         : selected || hovered
         ? FloePalette.primary600
         : FloePalette.neutral500;
-    final markColor = enabled ? FloePalette.neutral0 : FloePalette.neutral300;
+    final markColor = enabled ? FloeColor.surface : FloeColor.disabledContent;
     final duration = reduced ? Duration.zero : FloeMotion.hoverDuration;
     return SizedBox.square(
       dimension: 20,
@@ -1088,9 +1088,7 @@ class _FloeChoiceVisual extends StatelessWidget {
             ),
             child: AnimatedOpacity(
               opacity: selected ? 1 : 0,
-              duration: reduced
-                  ? Duration.zero
-                  : const Duration(milliseconds: 120),
+              duration: reduced ? Duration.zero : FloeMotion.pressDuration,
               child: Center(
                 child: radio
                     ? Container(

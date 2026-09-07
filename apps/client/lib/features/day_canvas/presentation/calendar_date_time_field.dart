@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_button.dart';
 import '../../../app/floe_squircle.dart';
 import '../../../app/floe_date_picker.dart';
 import '../../../app/floe_popover.dart';
@@ -46,7 +47,7 @@ class CalendarDateTimeField extends StatelessWidget {
             children: [
               Expanded(
                 child: Builder(
-                  builder: (anchorContext) => TextButton.icon(
+                  builder: (anchorContext) => FloeButton.text(
                     onPressed: !enabled
                         ? null
                         : () async {
@@ -70,7 +71,7 @@ class CalendarDateTimeField extends StatelessWidget {
                             }
                           },
                     icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                    label: Text(DateFormat.yMMMd().format(value)),
+                    child: Text(DateFormat.yMMMd().format(value)),
                   ),
                 ),
               ),
@@ -204,7 +205,9 @@ class _TimeSegmentState extends State<_TimeSegment> {
                 decoration: InputDecoration(
                   isDense: true,
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(
+                    vertical: FloeSpace.md,
+                  ),
                   hintText: '00',
                 ),
                 validator: (text) {
@@ -229,7 +232,7 @@ class _TimeSegmentState extends State<_TimeSegment> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                IconButton(
+                FloeButton.icon(
                   tooltip: 'Increase ${widget.label}',
                   onPressed: widget.enabled ? () => step(1) : null,
                   padding: EdgeInsets.zero,
@@ -239,7 +242,7 @@ class _TimeSegmentState extends State<_TimeSegment> {
                   ),
                   icon: const Icon(Icons.keyboard_arrow_up, size: 16),
                 ),
-                IconButton(
+                FloeButton.icon(
                   tooltip: 'Decrease ${widget.label}',
                   onPressed: widget.enabled ? () => step(-1) : null,
                   padding: EdgeInsets.zero,

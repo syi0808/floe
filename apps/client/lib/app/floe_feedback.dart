@@ -50,8 +50,11 @@ class FloeTextLink extends StatelessWidget {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (leading != null) ...[leading!, SizedBox(width: 8)],
-        if (icon != null) ...[Icon(icon, size: 16), SizedBox(width: 8)],
+        if (leading != null) ...[leading!, SizedBox(width: FloeSpace.sm)],
+        if (icon != null) ...[
+          Icon(icon, size: 16),
+          SizedBox(width: FloeSpace.sm),
+        ],
         Flexible(child: Text(label)),
       ],
     ),
@@ -70,10 +73,10 @@ Future<T?> showFloeDialog<T>(
       barrierDismissible: barrierDismissible,
       barrierLabel: AppLocalizations.of(context).dismissDialog,
       barrierColor: FloePalette.neutral950.withValues(alpha: .28),
-      transitionDuration: reduced ? Duration.zero : Duration(milliseconds: 240),
+      transitionDuration: reduced ? Duration.zero : FloeMotion.dialogDuration,
       reverseTransitionDuration: reduced
           ? Duration.zero
-          : Duration(milliseconds: 120),
+          : FloeMotion.pressDuration,
       pageBuilder: (context, animation, secondaryAnimation) => builder(context),
       transitionsBuilder: (context, animation, secondaryAnimation, child) =>
           AnimatedBuilder(
@@ -117,9 +120,9 @@ class FloeDetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Dialog(
     constraints: BoxConstraints(maxWidth: 540),
-    insetPadding: EdgeInsets.all(24),
+    insetPadding: EdgeInsets.all(FloeSpace.lg),
     child: SingleChildScrollView(
-      padding: EdgeInsets.all(32),
+      padding: EdgeInsets.all(FloeSpace.xl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -143,7 +146,7 @@ class FloeDetailDialog extends StatelessWidget {
               ),
             ],
           ),
-          SizedBox(height: 24),
+          SizedBox(height: FloeSpace.lg),
           FloeLoadingOverlay(
             loading: loading,
             label: loadingLabel,
@@ -235,7 +238,7 @@ class FloeReadOnlyPill extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(LucideIcons.lockKeyhole, size: 12),
-        SizedBox(width: 4),
+        SizedBox(width: FloeSpace.xs),
         Text(
           AppLocalizations.of(context).readOnly,
           style: TextStyle(fontSize: 10),

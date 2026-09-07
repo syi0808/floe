@@ -41,7 +41,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
               onPressed: () => setState(() => detail = false),
             ),
           ),
-          SizedBox(height: 24),
+          SizedBox(height: FloeSpace.lg),
           if (widget.gateway != null)
             CalendarPanel(
               gateway: widget.gateway!,
@@ -51,13 +51,13 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             )
           else
             FloeSquircle(
-              padding: EdgeInsets.all(24),
+              padding: EdgeInsets.all(FloeSpace.lg),
               child: Text(
                 AppLocalizations.of(context)
                     .calendarIntegrationIsUnavailableInThisPreview,
               ),
             ),
-          SizedBox(height: 24),
+          SizedBox(height: FloeSpace.lg),
           LayoutBuilder(
             builder: (context, constraints) {
               final cards = [
@@ -102,7 +102,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             letterSpacing: -1,
           ),
         ),
-        SizedBox(height: 12),
+        SizedBox(height: FloeSpace.md),
         Text(
           AppLocalizations.of(context).manageTheServicesThatBringContextTo,
           style: TextStyle(color: FloePalette.neutral600),
@@ -114,7 +114,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
               : AppLocalizations.of(context).connectedServicesCount(1),
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
-        SizedBox(height: 16),
+        SizedBox(height: FloeSpace.base),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 280),
           child: Material(
@@ -131,7 +131,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
               onTap: () => setState(() => detail = true),
               hoverColor: FloePalette.primary50,
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: EdgeInsets.all(FloeSpace.lg),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -154,7 +154,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    SizedBox(height: 12),
+                    SizedBox(height: FloeSpace.md),
                     Text(
                       AppLocalizations.of(context)
                           .bringEventsFromYourMacIntoYour,
@@ -188,7 +188,7 @@ class _InfoCard extends StatelessWidget {
   final String? note;
   @override
   Widget build(BuildContext context) => FloeSquircle(
-    padding: EdgeInsets.all(24),
+    padding: EdgeInsets.all(FloeSpace.lg),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -198,7 +198,7 @@ class _InfoCard extends StatelessWidget {
           title,
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
-        SizedBox(height: 16),
+        SizedBox(height: FloeSpace.base),
         Text(
           text,
           style: TextStyle(
