@@ -14,8 +14,7 @@ use std::{
 
 use floe_agent::{AgentEvent, AgentFailure, AgentSession, Cancellation, SessionStore};
 use floe_core::{
-    AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys, VaultKeyProvider,
-    recover_agent_sample, run_agent_sample,
+    AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys, VaultKeyProvider, recover_agent_sample,
 };
 use floe_domain::PersonId;
 use floe_protocol::*;
@@ -288,29 +287,29 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                     expected_revision,
                     prompt,
                 } => {
-                    run_agent_sample(
-                        vault,
-                        AgentFixtureTurn {
-                            person_id: job.person,
-                            session_id: session_uuid(session_id)?,
-                            expected_revision: *expected_revision,
-                            prompt: super::agent_run::fixture_prompt(*prompt),
-                        },
-                        job.cancellation.clone(),
-                        Duration::from_millis(500),
-                        |event| {
-                            if let Ok(mut progress) = job.progress.lock() {
-                                if progress.events.len() < 64 {
-                                    progress.events.push(event);
+                    vault
+                        .run_persisted_agent_sample(
+                            AgentFixtureTurn {
+                                person_id: job.person,
+                                session_id: session_uuid(session_id)?,
+                                expected_revision: *expected_revision,
+                                prompt: super::agent_run::fixture_prompt(*prompt),
+                            },
+                            job.cancellation.clone(),
+                            Duration::from_millis(500),
+                            |event| {
+                                if let Ok(mut progress) = job.progress.lock() {
+                                    if progress.events.len() < 64 {
+                                        progress.events.push(event);
+                                    } else {
+                                        job.cancellation.cancel();
+                                    }
                                 } else {
                                     job.cancellation.cancel();
                                 }
-                            } else {
-                                job.cancellation.cancel();
-                            }
-                        },
-                    )
-                    .await?
+                            },
+                        )
+                        .await?
                 }
             };
             Ok((AgentVaultStateDto::Ready, Some(session)))
@@ -459,6 +458,75 @@ mod tests {
             assert!(result.session.is_none());
             assert!(result.events.is_empty());
         }
+    }
+
+    #[test]
+    fn worker_keeps_expert_assignment_and_state_across_host_restart_and_new_chat() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("vaults");
+        let keys = Keys::default();
+        let person = PersonId::new();
+        let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+        assert_eq!(
+            perform(&worker, person, AgentVaultActionDto::Create {}).state,
+            Some(AgentVaultStateDto::Ready)
+        );
+        fn run(worker: &Worker, person: PersonId) -> floe_agent::ExpertResult {
+            let session = perform(
+                worker,
+                person,
+                AgentVaultActionDto::Session {
+                    operation: AgentFixtureOperationDto::Start {},
+                },
+            )
+            .session
+            .unwrap();
+            let completed = perform(
+                worker,
+                person,
+                AgentVaultActionDto::Session {
+                    operation: AgentFixtureOperationDto::Turn {
+                        session_id: session.id.to_string(),
+                        expected_revision: 0,
+                        prompt: AgentFixturePromptDto::Today,
+                    },
+                },
+            )
+            .session
+            .unwrap();
+            assert_eq!(
+                completed.last_outcome,
+                Some(floe_agent::AgentOutcome::Completed)
+            );
+            let floe_agent::AgentMessage::Capability {
+                result: Ok(output), ..
+            } = &completed.messages[1]
+            else {
+                panic!("expected Expert result");
+            };
+            serde_json::from_str(output).unwrap()
+        }
+        let first = run(&worker, person);
+        assert_eq!(first.state_revision, 1);
+        assert_eq!(
+            perform(&worker, person, AgentVaultActionDto::Lock {}).state,
+            Some(AgentVaultStateDto::Locked)
+        );
+        drop(worker);
+        let worker = Worker::new(root, keys).unwrap();
+        assert_eq!(
+            perform(&worker, person, AgentVaultActionDto::Unlock {}).state,
+            Some(AgentVaultStateDto::Ready)
+        );
+        let second = run(&worker, person);
+        assert_eq!(second.state_revision, 2);
+        assert_eq!(second.assignment_id, first.assignment_id);
+        assert_eq!(second.instance_id, first.instance_id);
+        assert_eq!(second.view_handle, first.view_handle);
+        assert_eq!(
+            perform(&worker, person, AgentVaultActionDto::Lock {}).state,
+            Some(AgentVaultStateDto::Locked)
+        );
     }
 
     #[test]

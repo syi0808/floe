@@ -1,6 +1,8 @@
 use floe_agent::*;
 use floe_domain::PersonId;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{sync::Mutex, time::Duration};
 use uuid::Uuid;
 
@@ -140,8 +142,20 @@ impl FloeCore {
     }
 }
 
-pub async fn run_agent_sample(
+async fn run_agent_sample(
     store: &impl SessionStore,
+    turn: AgentFixtureTurn,
+    cancellation: Cancellation,
+    latency: Duration,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<AgentSession, AgentFailure> {
+    let capabilities = FixtureCapabilities::new(turn.person_id)?;
+    run_sample_with_capabilities(store, &capabilities, turn, cancellation, latency, emit).await
+}
+
+async fn run_sample_with_capabilities(
+    store: &impl SessionStore,
+    capabilities: &impl CapabilityHost,
     turn: AgentFixtureTurn,
     cancellation: Cancellation,
     latency: Duration,
@@ -149,11 +163,10 @@ pub async fn run_agent_sample(
 ) -> Result<AgentSession, AgentFailure> {
     let policy = fixture_policy();
     let model = FixtureModel { latency };
-    let capabilities = FixtureCapabilities::new(turn.person_id)?;
     let runtime = AgentRuntime {
         store,
         model: &model,
-        capabilities: &capabilities,
+        capabilities,
         policy: &policy,
         budget: AgentBudget::default(),
     };
@@ -174,6 +187,133 @@ pub async fn run_agent_sample(
             emit,
         )
         .await
+}
+
+#[cfg(unix)]
+impl<Keys: crate::VaultKeyProvider> crate::EncryptedAgentVault<Keys> {
+    pub async fn run_persisted_agent_sample(
+        &self,
+        turn: AgentFixtureTurn,
+        cancellation: Cancellation,
+        latency: Duration,
+        emit: impl FnMut(AgentEvent) + Send,
+    ) -> Result<AgentSession, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let session = self.load(turn.person_id, turn.session_id).await?;
+        if session.data_classes != [DataClass::Synthetic] {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if session.revision != turn.expected_revision || session.active_turn.is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        let snapshot = match self.expert_registry().await? {
+            Some(snapshot) => snapshot,
+            None => {
+                let capabilities = FixtureCapabilities::new_with_instance(
+                    turn.person_id,
+                    self.registry_instance_id(),
+                )?;
+                let snapshot = capabilities.snapshot()?;
+                if cancellation.is_cancelled() {
+                    return Err(AgentFailure::Cancelled);
+                }
+                self.initialize_expert_registry(&snapshot).await?;
+                snapshot
+            }
+        };
+        let revision = snapshot.revision;
+        let capabilities = FixtureCapabilities::from_snapshot(turn.person_id, snapshot)?;
+        let store = ExpertSessionStore {
+            vault: self,
+            registry: &capabilities.registry,
+            persisted_revision: AtomicU64::new(revision),
+        };
+        let authorized = PersistedFixtureCapabilities {
+            vault: self,
+            capabilities: &capabilities,
+            persisted_revision: &store.persisted_revision,
+        };
+        run_sample_with_capabilities(&store, &authorized, turn, cancellation, latency, emit).await
+    }
+}
+
+#[cfg(unix)]
+struct PersistedFixtureCapabilities<'host, Keys> {
+    vault: &'host crate::EncryptedAgentVault<Keys>,
+    capabilities: &'host FixtureCapabilities,
+    persisted_revision: &'host AtomicU64,
+}
+
+#[cfg(unix)]
+impl<Keys: crate::VaultKeyProvider> CapabilityHost for PersistedFixtureCapabilities<'_, Keys> {
+    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+        self.capabilities.descriptors(person_id)
+    }
+
+    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
+        let current = self
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        if current.revision != self.persisted_revision.load(Ordering::Acquire) {
+            return Err(AgentFailure::Conflict);
+        }
+        self.capabilities.invoke(invocation).await
+    }
+}
+
+#[cfg(unix)]
+struct ExpertSessionStore<'store, Keys> {
+    vault: &'store crate::EncryptedAgentVault<Keys>,
+    registry: &'store Mutex<AgentRegistry>,
+    persisted_revision: AtomicU64,
+}
+
+#[cfg(unix)]
+impl<Keys: crate::VaultKeyProvider> SessionStore for ExpertSessionStore<'_, Keys> {
+    fn protection(&self) -> SessionProtection {
+        self.vault.protection()
+    }
+
+    async fn load(
+        &self,
+        person_id: PersonId,
+        session_id: Uuid,
+    ) -> Result<AgentSession, AgentFailure> {
+        self.vault.load(person_id, session_id).await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+    ) -> Result<(), AgentFailure> {
+        let snapshot = self
+            .registry
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .snapshot();
+        let committed = self
+            .vault
+            .commit_expert_session(
+                session,
+                previous_revision,
+                self.persisted_revision.load(Ordering::Acquire),
+                &snapshot,
+            )
+            .await?;
+        let revision = committed.revision;
+        *self
+            .registry
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)? =
+            AgentRegistry::restore(committed, self.vault.registry_instance_id())?;
+        self.persisted_revision.store(revision, Ordering::Release);
+        Ok(())
+    }
 }
 
 pub async fn recover_agent_sample(
@@ -297,7 +437,7 @@ impl ModelRunner for FixtureModel {
     }
 }
 
-struct FixtureCapabilities {
+pub(crate) struct FixtureCapabilities {
     person_id: PersonId,
     instance_id: Uuid,
     assignment_id: Uuid,
@@ -307,7 +447,22 @@ struct FixtureCapabilities {
 
 impl FixtureCapabilities {
     fn new(person_id: PersonId) -> Result<Self, AgentFailure> {
-        let instance_id = Uuid::new_v4();
+        Self::new_with_instance(person_id, Uuid::new_v4())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn snapshot(&self) -> Result<RegistrySnapshot, AgentFailure> {
+        Ok(self
+            .registry
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .snapshot())
+    }
+
+    pub(crate) fn new_with_instance(
+        person_id: PersonId,
+        instance_id: Uuid,
+    ) -> Result<Self, AgentFailure> {
         let handle = Uuid::new_v4();
         let mut registry = AgentRegistry::new(instance_id);
         let tool = PackageRef {
@@ -366,6 +521,41 @@ impl FixtureCapabilities {
         for assignment in [tool_assignment, assignment_id] {
             registry.set_assignment_enabled(registry.revision(), person_id, assignment, true)?;
         }
+        Self::from_snapshot(person_id, registry.snapshot())
+    }
+
+    pub(crate) fn from_snapshot(
+        person_id: PersonId,
+        snapshot: RegistrySnapshot,
+    ) -> Result<Self, AgentFailure> {
+        let instance_id = snapshot.instance_id;
+        let registry = AgentRegistry::restore(snapshot, instance_id)?;
+        let snapshot = registry.snapshot();
+        let installations: Vec<_> = snapshot
+            .installations
+            .iter()
+            .filter(|entry| {
+                entry.package.kind == PackageKind::Expert
+                    && entry.package.id == "floe.schedule"
+                    && entry.package.version == "1.0.0"
+            })
+            .map(|entry| entry.id)
+            .collect();
+        let assignments: Vec<_> = snapshot
+            .assignments
+            .iter()
+            .filter(|entry| {
+                entry.person_id == person_id && installations.contains(&entry.installation_id)
+            })
+            .collect();
+        let [assignment] = assignments.as_slice() else {
+            return Err(AgentFailure::Conflict);
+        };
+        let [handle] = assignment.granted_view_handles.as_slice() else {
+            return Err(AgentFailure::CapabilityDenied);
+        };
+        let assignment_id = assignment.id;
+        let handle = *handle;
         Ok(Self {
             person_id,
             instance_id,
@@ -381,7 +571,7 @@ impl FixtureCapabilities {
                 range_end_unix_ms: 43_200_000,
                 expires_at_unix_ms: u64::MAX,
                 items: vec![TimelineViewItem {
-                    evidence_handle: Uuid::new_v4(),
+                    evidence_handle: Uuid::from_u128(handle.as_u128() ^ 1),
                     untrusted_title: "Design review".into(),
                     starts_at_unix_ms: 36_000_000,
                     ends_at_unix_ms: 39_600_000,

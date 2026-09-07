@@ -3,6 +3,10 @@
 Date: 2026-09-07. All source data in this checkpoint is synthetic.
 S4 remains **0/14**; this is preparatory runtime and sample-path integration.
 
+Historical checkpoint: the later [encrypted persistence work](s4-expert-persistence.md)
+supersedes the per-turn registry and latest-invocation-only limitations below for
+the secure sample host. The legacy plaintext fixture remains ephemeral.
+
 ## Registry contract
 
 `floe-agent` now provides versioned package, installation and Person-assignment

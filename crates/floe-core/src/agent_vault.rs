@@ -17,6 +17,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 mod keyring;
+mod registry;
 pub use keyring::KeyringVaultKeys;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
@@ -189,7 +190,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?
             .ok_or(AgentFailure::VaultUnavailable)?;
-        if identity.get::<i64>(0).map_err(unavailable)? != 1
+        if ![1, 2].contains(&identity.get::<i64>(0).map_err(unavailable)?)
             || identity.get::<String>(1).map_err(unavailable)? != person_id.to_string()
             || identity.get::<String>(2).map_err(unavailable)? != vault_id.to_string()
         {
@@ -202,6 +203,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(unavailable)?;
+        vault.expert_registry().await?;
         Ok(vault)
     }
 

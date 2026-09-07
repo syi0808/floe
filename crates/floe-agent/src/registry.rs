@@ -135,7 +135,7 @@ impl Default for ExpertPrivateState {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegistrySnapshot {
     pub schema_version: u32,
@@ -355,6 +355,68 @@ impl AgentRegistry {
             .clone())
     }
 
+    pub fn record_result(
+        &mut self,
+        expected_revision: u64,
+        result: &crate::ExpertResult,
+    ) -> Result<(), AgentFailure> {
+        if result.schema_version != AGENT_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        let resolved = self.resolve(
+            result.instance_id,
+            result.person_id,
+            result.assignment_id,
+            expected_revision,
+            &[result.view_handle],
+        )?;
+        if result.package != resolved.package.reference
+            || result.data_class != resolved.data_class
+            || result.view_calls != 1
+            || result.insights.is_empty()
+            || result.insights.len() > 8
+            || result.action_proposals.len() > 1
+            || result.source_handle.trim().is_empty()
+            || result.source_handle.len() > 128
+            || result.insights.iter().any(|insight| match insight {
+                crate::ExpertInsight::Commitment {
+                    untrusted_title,
+                    starts_at_unix_ms,
+                    ends_at_unix_ms,
+                    ..
+                } => {
+                    untrusted_title.len() > 256
+                        || !valid_interval(*starts_at_unix_ms, *ends_at_unix_ms)
+                }
+                crate::ExpertInsight::FocusWindow {
+                    starts_at_unix_ms,
+                    ends_at_unix_ms,
+                } => !valid_interval(*starts_at_unix_ms, *ends_at_unix_ms),
+                crate::ExpertInsight::NoFocusWindow => false,
+            })
+            || result.action_proposals.iter().any(|proposal| {
+                proposal.view_handle != result.view_handle
+                    || !result
+                        .insights
+                        .contains(&crate::ExpertInsight::FocusWindow {
+                            starts_at_unix_ms: proposal.starts_at_unix_ms,
+                            ends_at_unix_ms: proposal.ends_at_unix_ms,
+                        })
+            })
+            || result.state_revision
+                != resolved
+                    .assignment
+                    .private_state
+                    .revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::BudgetExceeded)?
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.complete(&resolved, result.invocation_id)?;
+        Ok(())
+    }
+
     pub(crate) fn resolve(
         &self,
         instance_id: Uuid,
@@ -517,4 +579,8 @@ fn valid_name(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+}
+
+fn valid_interval(start: u64, end: u64) -> bool {
+    end > start && end - start <= 86_400_000
 }

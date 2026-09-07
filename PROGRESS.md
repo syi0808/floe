@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel; native model availability; bounded Schedule/declarative Expert contract and source rendering | 0/14 | S3 Accepted; durable registry; live key/model/source and privacy gates | Durable Expert assignments/state; live local/remote model and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; native model availability; bounded Schedule/declarative Expert contract and source rendering | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Manager-to-S3 proposals; live local/remote model and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,25 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 encrypted Expert persistence — 2026-09-07
+
+- Persisted packages, installations, Person assignments, grants and private state
+  in the same encrypted vault as Agent sessions. Explicit first sample Send seeds
+  a recognized old vault transactionally; open/unlock never recreates missing state.
+- Paired Expert results, private-state updates and durable invocation receipts
+  commit atomically. Abandoned drafts, failed writes, older invocation replay,
+  configuration races and key loss cannot publish partial successful state.
+- The secure native worker retains assignments/state across host restart and new
+  chats. Configuration CAS cannot rewrite private counters or existing namespaces.
+  The legacy plaintext fixture remains ephemeral and is not a fallback.
+- Validation: 121 workspace Rust and 133 Flutter tests, three keyring example tests,
+  analyzer, formatting, native/macOS Debug builds and signature verification pass;
+  Clippy passes with the existing Calendar exclusions. Eleven encrypted-store cases
+  include pre/post-commit key loss. These use synthetic data and injected keys,
+  not live OS-key provisioning or a process-crash matrix.
+- [Evidence and remaining gates](docs/validation/s4-expert-persistence.md).
+  S4 remains 0/14; live key/model/source and S1/S3 acceptance are unchanged.
 
 ### S4 bounded Expert and registry foundation — 2026-09-07
 

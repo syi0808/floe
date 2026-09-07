@@ -9,10 +9,7 @@ mod macos {
 
     use apple_native_keyring_store::protected::{AccessPolicy, Cred};
     use floe_agent::{AgentFailure, AgentOutcome, Cancellation, SessionStore};
-    use floe_core::{
-        AgentFixturePrompt, AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys,
-        run_agent_sample,
-    };
+    use floe_core::{AgentFixturePrompt, AgentFixtureTurn, EncryptedAgentVault, KeyringVaultKeys};
     use floe_domain::PersonId;
     use keyring_core::{Entry, Error};
     use serde_json::json;
@@ -125,27 +122,34 @@ mod macos {
     async fn exercise(root: &Path, person: PersonId) -> Result<(), AgentFailure> {
         let vault = EncryptedAgentVault::create(root, person, KeyringVaultKeys).await?;
         let initial = vault.create_sample_session().await?;
-        let completed = run_agent_sample(
-            &vault,
-            AgentFixtureTurn {
-                person_id: person,
-                session_id: initial.id,
-                expected_revision: 0,
-                prompt: AgentFixturePrompt::Today,
-            },
-            Cancellation::default(),
-            Duration::ZERO,
-            |_| {},
-        )
-        .await?;
+        let completed = vault
+            .run_persisted_agent_sample(
+                AgentFixtureTurn {
+                    person_id: person,
+                    session_id: initial.id,
+                    expected_revision: 0,
+                    prompt: AgentFixturePrompt::Today,
+                },
+                Cancellation::default(),
+                Duration::ZERO,
+                |_| {},
+            )
+            .await?;
         if completed.last_outcome != Some(AgentOutcome::Completed) || completed.messages.len() != 3
         {
             return Err(AgentFailure::InvalidModelOutput);
         }
+        let registry = vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
         vault.checkpoint().await?;
         drop(vault);
         let reopened = EncryptedAgentVault::open(root, person, KeyringVaultKeys).await?;
         if reopened.load(person, initial.id).await? != completed {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        if reopened.expert_registry().await? != Some(registry) {
             return Err(AgentFailure::StorageUnavailable);
         }
         let key = owned_entry(root, person)
@@ -221,7 +225,7 @@ mod macos {
         result.map_err(|failure| format!("vault_exercise_failed: {failure:?}"))?;
         println!(
             "{}",
-            json!({"schema_version":1,"status":"passed","evidence":"signed_native_core","checks":["real_key_create","encrypted_sample_turn","reopen","key_loss_fail_closed","exact_key_cleanup","temporary_file_cleanup"],"personal_data":false})
+            json!({"schema_version":1,"status":"passed","evidence":"signed_native_core","checks":["real_key_create","encrypted_sample_turn","reopen","registry_reopen","key_loss_fail_closed","exact_key_cleanup","temporary_file_cleanup"],"personal_data":false})
         );
         Ok(())
     }

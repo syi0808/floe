@@ -179,6 +179,47 @@ impl ExpertViews for Views {
 }
 
 #[tokio::test]
+async fn recorded_result_reconstructs_only_the_validated_private_state_transition() {
+    let fixture = Fixture::new();
+    let baseline = fixture.registry.lock().unwrap().snapshot();
+    let views = Views {
+        view: fixture.view.clone(),
+        reads: AtomicUsize::new(0),
+    };
+    let result = ExpertHost {
+        registry: &fixture.registry,
+        views: &views,
+    }
+    .invoke(fixture.invocation(fixture.schedule))
+    .await
+    .unwrap();
+    let mut restored = AgentRegistry::restore(baseline.clone(), fixture.instance).unwrap();
+    restored.record_result(baseline.revision, &result).unwrap();
+    assert_eq!(
+        restored.snapshot(),
+        fixture.registry.lock().unwrap().snapshot()
+    );
+    for mode in ["source", "state", "proposal"] {
+        let mut registry = AgentRegistry::restore(baseline.clone(), fixture.instance).unwrap();
+        let mut malformed = result.clone();
+        match mode {
+            "source" => malformed.source_handle.clear(),
+            "state" => malformed.state_revision += 1,
+            _ => malformed.action_proposals.push(ExpertFocusProposal {
+                starts_at_unix_ms: 0,
+                ends_at_unix_ms: 60_000,
+                view_handle: malformed.view_handle,
+            }),
+        }
+        assert_eq!(
+            registry.record_result(baseline.revision, &malformed),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(registry.snapshot(), baseline);
+    }
+}
+
+#[tokio::test]
 async fn native_and_declarative_share_contract_but_not_private_state() {
     let fixture = Fixture::new();
     let views = Views {

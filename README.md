@@ -36,8 +36,9 @@ the common model contract, but the real probe reports Apple Intelligence disable
 live generation and personal-chat integration remain unverified.
 A [bounded Expert foundation](docs/validation/s4-expert-foundation.md) now supplies
 versioned Tool/Expert registration, Person grants and a shared Schedule/declarative
-contract. The sample panel renders structured Expert evidence; durable registry
-state, live sources and S3 proposal integration still remain.
+contract. The sample panel renders structured Expert evidence; the secure host now
+[persists registry/private state atomically with conversation results](docs/validation/s4-expert-persistence.md).
+Registry management, live sources and S3 proposal integration still remain.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

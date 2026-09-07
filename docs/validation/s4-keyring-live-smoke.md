@@ -41,7 +41,8 @@ The OS may ask the user to authorize use of the signing private key.
 
 `--exercise` creates a unique private temporary root and new Person/vault IDs,
 uses the production keyring-backed Core store for a synthetic turn, reopens and
-compares that session, deletes only its own key, then checks fail-closed access
+compares that session and its persisted Expert registry, deletes only its own key,
+then checks fail-closed access
 and reopen. Successful cleanup verifies exact-slot absence and removes the root.
 If cleanup is uncertain, the root is retained and its path reported. Retry that
 cleanup with the same identity and matching provisioning before creating another

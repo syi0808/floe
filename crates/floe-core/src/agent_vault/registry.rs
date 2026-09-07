@@ -1,0 +1,312 @@
+use floe_agent::{AgentMessage, AgentRegistry, ExpertResult, RegistrySnapshot};
+use turso::transaction::TransactionBehavior;
+
+use super::*;
+
+const MAX_REGISTRY_BYTES: usize = 262_144;
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub fn registry_instance_id(&self) -> Uuid {
+        self.vault_id
+    }
+
+    pub async fn expert_registry(&self) -> Result<Option<RegistrySnapshot>, AgentFailure> {
+        self.registry_on(&self.connection()?).await
+    }
+
+    pub async fn initialize_expert_registry(
+        &self,
+        snapshot: &RegistrySnapshot,
+    ) -> Result<(), AgentFailure> {
+        let payload = self.registry_payload(snapshot)?;
+        if snapshot
+            .assignments
+            .iter()
+            .any(|assignment| assignment.private_state.revision != 0)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            if self.registry_on(&transaction).await?.is_some() { return Err(AgentFailure::Conflict); }
+            transaction.execute("CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
+            transaction.execute("CREATE TABLE agent_expert_receipts (invocation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, registry_revision INTEGER NOT NULL)", ()).await.map_err(storage)?;
+            transaction.execute("INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
+                (integer(snapshot.revision)?, payload)).await.map_err(storage)?;
+            let changed = transaction.execute("UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1", ()).await.map_err(storage)?;
+            if changed != 1 { return Err(AgentFailure::Conflict); }
+            self.check_access()?;
+            Ok(())
+        }.await;
+        self.finish_registry_transaction(transaction, result).await
+    }
+
+    pub async fn save_expert_registry(
+        &self,
+        expected_revision: u64,
+        snapshot: &RegistrySnapshot,
+    ) -> Result<(), AgentFailure> {
+        let payload = self.registry_payload(snapshot)?;
+        if expected_revision.checked_add(1) != Some(snapshot.revision) {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let previous = self
+                .registry_on(&transaction)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if previous.revision != expected_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            for assignment in &snapshot.assignments {
+                match previous
+                    .assignments
+                    .iter()
+                    .find(|entry| entry.id == assignment.id)
+                {
+                    Some(entry)
+                        if entry.private_state == assignment.private_state
+                            && entry.person_id == assignment.person_id
+                            && entry.installation_id == assignment.installation_id => {}
+                    None if assignment.private_state
+                        == floe_agent::ExpertPrivateState::default() => {}
+                    _ => return Err(AgentFailure::Conflict),
+                }
+            }
+            if previous
+                .assignments
+                .iter()
+                .any(|entry| !snapshot.assignments.iter().any(|next| next.id == entry.id))
+                || previous
+                    .packages
+                    .iter()
+                    .any(|entry| !snapshot.packages.contains(entry))
+                || previous.installations.iter().any(|entry| {
+                    !snapshot
+                        .installations
+                        .iter()
+                        .any(|next| next.id == entry.id && next.package == entry.package)
+                })
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            self.update_registry(&transaction, expected_revision, snapshot.revision, payload)
+                .await?;
+            self.check_access()?;
+            Ok(())
+        }
+        .await;
+        self.finish_registry_transaction(transaction, result).await
+    }
+
+    pub(crate) async fn commit_expert_session(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        expected_registry_revision: u64,
+        staged: &RegistrySnapshot,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
+        self.commit_expert_session_with_hook(
+            session,
+            previous_revision,
+            expected_registry_revision,
+            staged,
+            std::future::ready(Ok(())),
+        )
+        .await
+    }
+
+    async fn commit_expert_session_with_hook(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        expected_registry_revision: u64,
+        staged: &RegistrySnapshot,
+        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
+        let payload = self.payload(session)?;
+        if previous_revision.checked_add(1) != Some(session.revision) {
+            return Err(AgentFailure::Conflict);
+        }
+        self.registry_payload(staged)?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let previous = self.session_on(&transaction, session.id).await?;
+            let stored = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
+            if previous.data_classes.iter().any(|class| !session.data_classes.contains(class)) {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            if previous.revision != previous_revision || stored.revision != expected_registry_revision
+                || session.messages.len() < previous.messages.len()
+                || session.messages.len() > previous.messages.len() + 1
+                || session.messages[..previous.messages.len()] != previous.messages {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut next = stored.clone();
+            if let Some(AgentMessage::Capability { turn_id, call_id, result: Ok(output), .. }) = session.messages.get(previous.messages.len()) {
+                if let Ok(receipt) = serde_json::from_str::<ExpertResult>(output) {
+                    if previous.active_turn != Some(*turn_id) || session.active_turn != previous.active_turn
+                        || receipt.invocation_id != *call_id || receipt.person_id != self.person_id
+                        || !session.data_classes.contains(&receipt.data_class) {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    let mut duplicate = transaction.query("SELECT 1 FROM agent_expert_receipts WHERE invocation_id = ?", [call_id.to_string()]).await.map_err(storage)?;
+                    if duplicate.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
+                    drop(duplicate);
+                    let mut registry = AgentRegistry::restore(stored, self.vault_id)?;
+                    registry.record_result(expected_registry_revision, &receipt)?;
+                    next = registry.snapshot();
+                    if &next != staged { return Err(AgentFailure::Conflict); }
+                    self.update_registry(&transaction, expected_registry_revision, next.revision, self.registry_payload(&next)?).await?;
+                    transaction.execute("INSERT INTO agent_expert_receipts VALUES (?, ?, ?, ?)",
+                        (call_id.to_string(), session.id.to_string(), receipt.assignment_id.to_string(), integer(next.revision)?)).await.map_err(storage)?;
+                } else if staged.revision != expected_registry_revision {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
+            after_registry_write.await?;
+            let changed = transaction.execute("UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                (integer(session.revision)?, payload, session.id.to_string(), integer(previous_revision)?)).await.map_err(storage)?;
+            if changed != 1 { return Err(AgentFailure::Conflict); }
+            self.check_access()?;
+            Ok(next)
+        }.await;
+        self.finish_registry_transaction(transaction, result).await
+    }
+
+    async fn finish_registry_transaction<T>(
+        &self,
+        transaction: turso::transaction::Transaction<'_>,
+        result: Result<T, AgentFailure>,
+    ) -> Result<T, AgentFailure> {
+        match result {
+            Ok(value) => {
+                transaction.commit().await.map_err(storage)?;
+                self.check_access()?;
+                Ok(value)
+            }
+            Err(failure) => {
+                if transaction.rollback().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    async fn update_registry(
+        &self,
+        connection: &turso::Connection,
+        previous: u64,
+        revision: u64,
+        payload: String,
+    ) -> Result<(), AgentFailure> {
+        let changed = connection.execute("UPDATE agent_expert_registry SET revision = ?, payload = ? WHERE id = 1 AND revision = ?",
+            (integer(revision)?, payload, integer(previous)?)).await.map_err(storage)?;
+        if changed != 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
+    fn registry_payload(&self, snapshot: &RegistrySnapshot) -> Result<String, AgentFailure> {
+        if snapshot
+            .assignments
+            .iter()
+            .any(|assignment| assignment.person_id != self.person_id)
+        {
+            return Err(AgentFailure::NotFound);
+        }
+        AgentRegistry::restore(snapshot.clone(), self.vault_id)?;
+        integer(snapshot.revision)?;
+        let payload = serde_json::to_string(snapshot).map_err(storage)?;
+        if payload.len() > MAX_REGISTRY_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(payload)
+    }
+
+    async fn registry_on(
+        &self,
+        connection: &turso::Connection,
+    ) -> Result<Option<RegistrySnapshot>, AgentFailure> {
+        let mut identity = connection
+            .query("SELECT version FROM vault_identity WHERE id = 1", ())
+            .await
+            .map_err(unavailable)?;
+        let version = identity
+            .next()
+            .await
+            .map_err(unavailable)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(unavailable)?;
+        drop(identity);
+        if version == 1 {
+            let mut existing = connection.query("SELECT name FROM sqlite_schema WHERE name IN ('agent_expert_registry', 'agent_expert_receipts')", ()).await.map_err(unavailable)?;
+            if existing.next().await.map_err(unavailable)?.is_some() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            return Ok(None);
+        }
+        if version != 2 {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        let mut rows = connection.query("SELECT revision, payload FROM agent_expert_registry WHERE id = 1 AND length(CAST(payload AS BLOB)) <= 262144", ()).await.map_err(unavailable)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(unavailable)?
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        let snapshot: RegistrySnapshot =
+            serde_json::from_str(&row.get::<String>(1).map_err(unavailable)?)
+                .map_err(unavailable)?;
+        self.registry_payload(&snapshot).map_err(unavailable)?;
+        if integer(snapshot.revision)? != row.get::<i64>(0).map_err(unavailable)? {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        connection.query("SELECT invocation_id, session_id, assignment_id, registry_revision FROM agent_expert_receipts LIMIT 0", ()).await.map_err(unavailable)?;
+        Ok(Some(snapshot))
+    }
+
+    pub(super) async fn session_on(
+        &self,
+        connection: &turso::Connection,
+        id: Uuid,
+    ) -> Result<AgentSession, AgentFailure> {
+        let mut rows = connection.query("SELECT revision, payload FROM agent_sessions WHERE id = ? AND length(CAST(payload AS BLOB)) <= 262144", [id.to_string()]).await.map_err(storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::NotFound)?;
+        let session: AgentSession =
+            serde_json::from_str(&row.get::<String>(1).map_err(storage)?).map_err(unavailable)?;
+        self.payload(&session)?;
+        if session.id != id || integer(session.revision)? != row.get::<i64>(0).map_err(storage)? {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(session)
+    }
+}
+
+fn integer(value: u64) -> Result<i64, AgentFailure> {
+    i64::try_from(value).map_err(|_| AgentFailure::BudgetExceeded)
+}
+
+#[cfg(test)]
+mod tests;
