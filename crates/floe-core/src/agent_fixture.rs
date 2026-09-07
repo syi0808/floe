@@ -202,7 +202,7 @@ impl<Keys: crate::VaultKeyProvider> crate::EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Cancelled);
         }
         let session = self.load(turn.person_id, turn.session_id).await?;
-        if session.data_classes != [DataClass::Synthetic] {
+        if session.scope.is_some() || session.data_classes != [DataClass::Synthetic] {
             return Err(AgentFailure::PolicyDenied);
         }
         if session.revision != turn.expected_revision || session.active_turn.is_some() {
@@ -335,6 +335,9 @@ pub async fn recover_agent_sample(
     session_id: Uuid,
     expected_revision: u64,
 ) -> Result<AgentSession, AgentFailure> {
+    if store.load(person_id, session_id).await?.scope.is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let policy = fixture_policy();
     let capabilities = FixtureCapabilities::new(person_id)?;
     AgentRuntime {

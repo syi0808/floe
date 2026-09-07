@@ -494,7 +494,7 @@ final class AgentController extends ChangeNotifier {
 
   void _acceptSession(AgentSession saved) {
     if (_sealed) return;
-    if (saved.personId != personId) {
+    if (saved.personId != personId || saved.scope != null) {
       throw const FormatException('Agent Person mismatch.');
     }
     _clearProposals();

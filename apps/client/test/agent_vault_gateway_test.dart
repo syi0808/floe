@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_proposal.dart';
+import 'package:floe_client/features/agent/agent_calendar_session_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -25,6 +26,21 @@ void main() {
       expect(
         await gateway.secureAgent.vaultStatus(localPersonId),
         AgentVaultState.missing,
+      );
+      expect(await Directory('$path.agent-vaults').exists(), isFalse);
+      await expectLater(
+        (gateway.secureAgent as AgentCalendarSessionGateway)
+            .resumeCalendarSession(
+              localPersonId,
+              '00000000-0000-4000-8000-000000000005',
+            ),
+        throwsA(
+          isA<AgentVaultException>().having(
+            (error) => error.failure,
+            'failure',
+            'vault_unavailable',
+          ),
+        ),
       );
       expect(await Directory('$path.agent-vaults').exists(), isFalse);
       await expectLater(

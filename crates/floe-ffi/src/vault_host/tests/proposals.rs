@@ -150,7 +150,10 @@ async fn seed(
         .unwrap()
         .unwrap()
         .revision;
-    let initial = vault.create_sample_session().await.unwrap();
+    let initial = vault
+        .create_calendar_session(setup.setup_id, Cancellation::default())
+        .await
+        .unwrap();
     let result = core
         .run_calendar_agent_turn(
             &vault,
@@ -344,8 +347,8 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     let saved = perform(
         &worker,
         person,
-        AgentVaultActionDto::Session {
-            operation: AgentFixtureOperationDto::Get {
+        AgentVaultActionDto::CalendarSession {
+            operation: AgentCalendarSessionOperationDto::Get {
                 session_id: session.id.to_string(),
             },
         },

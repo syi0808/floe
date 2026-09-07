@@ -16,6 +16,7 @@ use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod calendar_sessions;
 mod expert_actions;
 mod keyring;
 mod registry;
@@ -222,7 +223,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT id FROM agent_sessions ORDER BY rowid DESC LIMIT 1",
+                "SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL ORDER BY rowid DESC LIMIT 1",
                 (),
             )
             .await
@@ -231,7 +232,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let id =
                 Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
             let session = self.load(self.person_id, id).await?;
-            if session.data_classes != [DataClass::Synthetic] {
+            if session.scope.is_some() || session.data_classes != [DataClass::Synthetic] {
                 return Err(AgentFailure::PolicyDenied);
             }
             return Ok(session);
@@ -285,6 +286,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::UnsupportedVersion);
         }
         if session.data_classes.is_empty()
+            || session
+                .scope
+                .is_some_and(|scope| session.data_classes != [scope.data_class()])
             || session
                 .data_classes
                 .iter()
@@ -357,6 +361,7 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
         let payload = self.payload(session)?;
         let stored = self.load(session.person_id, session.id).await?;
         if stored.revision != previous_revision
+            || stored.scope != session.scope
             || session.messages.len() < stored.messages.len()
             || session.messages[..stored.messages.len()] != stored.messages
         {

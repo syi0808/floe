@@ -361,7 +361,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if previous.data_classes.iter().any(|class| !session.data_classes.contains(class)) {
                 return Err(AgentFailure::PolicyDenied);
             }
-            if previous.revision != previous_revision || stored.revision != expected_registry_revision
+            if previous.scope != session.scope || previous.revision != previous_revision || stored.revision != expected_registry_revision
                 || session.messages.len() < previous.messages.len()
                 || session.messages.len() > previous.messages.len() + 1
                 || session.messages[..previous.messages.len()] != previous.messages {

@@ -1,4 +1,5 @@
 import 'agent_calendar_experts.dart';
+import 'agent_calendar_session_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
@@ -24,12 +25,80 @@ final class NativeAgentVaultGateway
         AgentVaultGateway,
         AgentRegistryGateway,
         AgentProposalGateway,
+        AgentCalendarSessionGateway,
         AgentCalendarExpertGateway {
   NativeAgentVaultGateway(this.request);
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   _VaultJob? _pending;
   AgentSession? _run;
+
+  @override
+  Future<AgentSession> startCalendarSession(String personId, String setupId) =>
+      _calendarSession(personId, {
+        'kind': 'start',
+        'setup_id': setupId,
+      }, setupId: setupId);
+
+  @override
+  Future<AgentSession> resumeCalendarSession(String personId, String setupId) =>
+      _calendarSession(personId, {
+        'kind': 'resume',
+        'setup_id': setupId,
+      }, setupId: setupId);
+
+  @override
+  Future<AgentSession> loadCalendarSession(String personId, String sessionId) =>
+      _calendarSession(personId, {
+        'kind': 'get',
+        'session_id': sessionId,
+      }, sessionId: sessionId);
+
+  @override
+  Future<AgentSession> recoverCalendarSession(AgentSession session) async {
+    final scope = session.scope;
+    if (scope == null) throw const FormatException('Not a Calendar session');
+    final saved = await _calendarSession(
+      session.personId,
+      {
+        'kind': 'recover',
+        'session_id': session.id,
+        'expected_revision': session.revision,
+      },
+      sessionId: session.id,
+      setupId: scope.setupId,
+    );
+    if (saved.scope!.provider != scope.provider ||
+        saved.activeTurn != null ||
+        saved.revision !=
+            session.revision + (session.activeTurn == null ? 0 : 1)) {
+      throw const FormatException('Calendar recovery mismatch');
+    }
+    return saved;
+  }
+
+  Future<AgentSession> _calendarSession(
+    String personId,
+    Map<String, Object?> operation, {
+    String? sessionId,
+    String? setupId,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'calendar_session',
+      'operation': operation,
+    });
+    final session = AgentSession.fromJson(
+      Map<String, Object?>.from(result['session'] as Map),
+    );
+    if (result['state'] != 'ready' ||
+        session.personId != personId ||
+        session.scope == null ||
+        sessionId != null && session.id != sessionId ||
+        setupId != null && session.scope!.setupId != setupId) {
+      throw const FormatException('Calendar session scope mismatch');
+    }
+    return session;
+  }
 
   @override
   Future<AgentProposalInspection> inspectProposal({
@@ -185,10 +254,14 @@ final class NativeAgentVaultGateway
       'kind': 'session',
       'operation': operation,
     });
-    return AgentFixtureResult.fromJson({
+    final parsed = AgentFixtureResult.fromJson({
       'session': result['session'],
       'events': result['events'],
     });
+    if (parsed.session.scope != null) {
+      throw const FormatException('Calendar session is not a sample');
+    }
+    return parsed;
   }
 
   Future<Map<String, dynamic>> _perform(

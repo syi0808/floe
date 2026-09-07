@@ -25,11 +25,37 @@ pub struct AgentSession {
     pub schema_version: u32,
     pub id: Uuid,
     pub person_id: PersonId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<AgentSessionScope>,
     pub revision: u64,
     pub data_classes: Vec<crate::DataClass>,
     pub messages: Vec<AgentMessage>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentSessionScope {
+    Calendar {
+        setup_id: Uuid,
+        provider: floe_domain::CalendarProvider,
+    },
+}
+
+impl AgentSessionScope {
+    pub fn data_class(self) -> crate::DataClass {
+        match self {
+            Self::Calendar {
+                provider: floe_domain::CalendarProvider::Fixture,
+                ..
+            } => crate::DataClass::Synthetic,
+            Self::Calendar {
+                provider: floe_domain::CalendarProvider::EventKit,
+                ..
+            } => crate::DataClass::Personal,
+        }
+    }
 }
 
 impl AgentSession {
@@ -38,6 +64,7 @@ impl AgentSession {
             schema_version: AGENT_VERSION,
             id: Uuid::new_v4(),
             person_id,
+            scope: None,
             revision: 0,
             data_classes: vec![crate::DataClass::Personal],
             messages: vec![],

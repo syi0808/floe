@@ -92,8 +92,10 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 
 ## Remaining S4 work
 
-Native connected Calendar turn dispatch and actual Personal session loading remain
-unconnected. The normal app still offers encrypted sample conversations; those
+The follow-up [isolated Calendar sessions increment](s4-calendar-sessions.md)
+adds scoped Start/Resume/Get/Recover operations to the native vault and Dart gateway.
+Native connected Calendar turn dispatch and connected-session UI remain unconnected.
+The normal app still offers encrypted sample conversations; those
 sample prompts do not produce Calendar proposals. Card interaction is demonstrated
 with test-injected recorded proposals, not a newly enabled live chat feature.
 Live key/model/source/privacy/auth gates, other S4 connectors and S1/S3 acceptance

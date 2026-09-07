@@ -52,6 +52,56 @@ struct Access {
     deny_at: AtomicUsize,
 }
 
+#[tokio::test]
+async fn scoped_calendar_conversation_cannot_switch_to_another_expert_before_dispatch() {
+    let fixture = Fixture::new().await;
+    let setup_id = Uuid::new_v4();
+    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+    fixture
+        .vault
+        .install_calendar_expert(
+            CalendarExpertSetup {
+                instance_id: snapshot.instance_id,
+                expected_revision: snapshot.revision,
+                setup_id,
+                provider: CalendarProvider::Fixture,
+                calendar_ids: vec!["private-calendar-id".into()],
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let scoped = fixture
+        .vault
+        .create_calendar_session(setup_id, Cancellation::default())
+        .await
+        .unwrap();
+    let mut request = fixture.request();
+    request.command.session_id = scoped.id;
+    request.command.expected_revision = scoped.revision;
+    let model = Model::default();
+    let access = Access::default();
+    assert!(matches!(
+        fixture
+            .core
+            .run_calendar_agent_turn(&fixture.vault, &access, &model, request, now, |_| panic!(
+                "No dispatch event expected"
+            ))
+            .await,
+        Err(AgentFailure::CapabilityDenied)
+    ));
+    assert!(model.requests.lock().unwrap().is_empty());
+    assert_eq!(access.calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        fixture
+            .vault
+            .load(scoped.person_id, scoped.id)
+            .await
+            .unwrap(),
+        scoped
+    );
+}
+
 impl CalendarReadAccess for Access {
     async fn check(
         &self,

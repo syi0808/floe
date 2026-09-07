@@ -42,6 +42,27 @@ pub enum AgentVaultActionDto {
         session_id: String,
         invocation_id: String,
     },
+    CalendarSession {
+        operation: AgentCalendarSessionOperationDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentCalendarSessionOperationDto {
+    Start {
+        setup_id: String,
+    },
+    Resume {
+        setup_id: String,
+    },
+    Get {
+        session_id: String,
+    },
+    Recover {
+        session_id: String,
+        expected_revision: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

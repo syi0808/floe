@@ -369,6 +369,40 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             Ok((AgentVaultStateDto::Ready, None, None, Some(overview), None))
         }
+        AgentVaultActionDto::CalendarSession { operation } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let session = match operation {
+                AgentCalendarSessionOperationDto::Start { setup_id } => {
+                    vault
+                        .create_calendar_session(session_uuid(setup_id)?, job.cancellation.clone())
+                        .await?
+                }
+                AgentCalendarSessionOperationDto::Resume { setup_id } => {
+                    vault
+                        .resume_calendar_session(session_uuid(setup_id)?, job.cancellation.clone())
+                        .await?
+                }
+                AgentCalendarSessionOperationDto::Get { session_id } => {
+                    vault.calendar_session(session_uuid(session_id)?).await?
+                }
+                AgentCalendarSessionOperationDto::Recover {
+                    session_id,
+                    expected_revision,
+                } => {
+                    vault
+                        .recover_calendar_session(
+                            session_uuid(session_id)?,
+                            *expected_revision,
+                            job.cancellation.clone(),
+                        )
+                        .await?
+                }
+            };
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            Ok((AgentVaultStateDto::Ready, Some(session), None, None, None))
+        }
         AgentVaultActionDto::InspectProposal {
             session_id,
             invocation_id,
@@ -424,7 +458,7 @@ async fn sample_session(
     id: Uuid,
 ) -> Result<AgentSession, AgentFailure> {
     let session = store.load(person, id).await?;
-    if session.data_classes != [floe_agent::DataClass::Synthetic] {
+    if session.scope.is_some() || session.data_classes != [floe_agent::DataClass::Synthetic] {
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(session)
@@ -437,6 +471,7 @@ mod tests {
     use std::{collections::HashMap, sync::Condvar, time::Instant};
 
     mod calendar_experts;
+    mod calendar_sessions;
     mod proposals;
 
     impl Worker {

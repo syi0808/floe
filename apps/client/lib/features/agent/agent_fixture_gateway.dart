@@ -93,6 +93,9 @@ final class AgentSession {
   AgentSession.fromJson(Map<String, Object?> json)
     : id = json['id']! as String,
       personId = json['person_id']! as String,
+      scope = json['scope'] == null
+          ? null
+          : AgentSessionScope.fromJson(_object(json['scope'])),
       revision = json['revision']! as int,
       activeTurn = json['active_turn'] as String?,
       lastOutcome = json['last_outcome'] == null
@@ -107,15 +110,39 @@ final class AgentSession {
         ),
       ) {
     _checkVersion(json);
+    if (scope != null &&
+        (dataClasses.length != 1 || dataClasses.single != scope!.dataClass)) {
+      throw const FormatException('Calendar session classification mismatch');
+    }
   }
 
   final String id;
   final String personId;
+  final AgentSessionScope? scope;
   final int revision;
   final String? activeTurn;
   final AgentOutcome? lastOutcome;
   final List<String> dataClasses;
   final List<AgentMessage> messages;
+}
+
+final class AgentSessionScope {
+  AgentSessionScope.fromJson(Map<String, Object?> json)
+    : setupId = json['setup_id']! as String,
+      provider = json['provider']! as String {
+    if (json.length != 3 ||
+        json['kind'] != 'calendar' ||
+        !['fixture', 'event_kit'].contains(provider) ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        ).hasMatch(setupId)) {
+      throw const FormatException('Invalid Calendar session scope');
+    }
+  }
+
+  final String setupId;
+  final String provider;
+  String get dataClass => provider == 'fixture' ? 'synthetic' : 'personal';
 }
 
 enum AgentMessageKind { user, assistant, capability }

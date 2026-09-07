@@ -74,6 +74,35 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[test]
+fn calendar_session_transport_cannot_supply_classification_grants_or_model_input() {
+    let action = json!({"kind": "calendar_session", "operation": {
+        "kind": "start", "setup_id": Uuid::new_v4(),
+    }});
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in [
+        "person_id",
+        "provider",
+        "data_classes",
+        "calendar_ids",
+        "view_handle",
+        "prompt",
+        "model",
+    ] {
+        let mut forged = action.clone();
+        forged["operation"][field] = json!("untrusted");
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+    let legacy = floe_agent::AgentSession::new(floe_domain::PersonId::new());
+    let wire = serde_json::to_value(&legacy).unwrap();
+    assert!(wire.get("scope").is_none());
+    assert_eq!(
+        serde_json::from_value::<floe_agent::AgentSession>(wire).unwrap(),
+        legacy
+    );
+}
+
+#[test]
 fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     let action = json!({
         "kind": "inspect_proposal",

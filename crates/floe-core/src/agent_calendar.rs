@@ -62,6 +62,18 @@ impl FloeCore {
             if request.command.person_id != request.grant.person_id {
                 return Err(AgentFailure::CapabilityDenied);
             }
+            let saved = vault
+                .load(request.command.person_id, request.command.session_id)
+                .await?;
+            if let Some(scope) = saved.scope {
+                let setup = vault.calendar_session_setup(&saved).await?;
+                if setup.expert_assignment_id != request.assignment_id
+                    || setup.view_handle != request.grant.handle
+                    || scope.data_class() != request.grant.data_class()
+                {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+            }
             let views = CalendarTimelineViews::new(self, access, request.grant, clock)?;
             vault.check_access()?;
             let snapshot = tokio::select! {
