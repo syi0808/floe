@@ -1,5 +1,7 @@
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/features/agent/agent_registry_dialog.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
@@ -10,8 +12,34 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'calendar_action_execution_test.dart' show Executor;
 import 'support/server_credentials.dart';
+import 'support/agent_registry.dart';
 
 void main() {
+  testWidgets('assistant permission management lives in Settings', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SettingsScreen(client: null, agentController: controller),
+        ),
+      ),
+    );
+    expect(find.text('Assistant permissions'), findsOneWidget);
+    await tester.tap(find.text('Manage assistant access'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AgentRegistryDialog), findsOneWidget);
+  });
+
   for (final width in [390.0, 1200.0]) {
     testWidgets('remote server lives under Settings at $width', (tester) async {
       await tester.binding.setSurfaceSize(Size(width, 900));

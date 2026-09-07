@@ -341,7 +341,11 @@ final class AgentController extends ChangeNotifier {
   bool get canRetry => canSend && failure != null && _lastPrompt != null;
 
   Future<void> load({bool newSession = false}) async {
-    if (_busy || _disposed || _locking != null) return;
+    if (_disposed) return;
+    if (_locking case final locking?) {
+      await locking;
+    }
+    if (_busy || _disposed) return;
     _sealed = false;
     _begin();
     progress = AgentProgress.loading;
@@ -350,20 +354,14 @@ final class AgentController extends ChangeNotifier {
       if (gateway case final AgentVaultGateway vault) {
         final state = await vault.vaultStatus(personId);
         if (_sealed) return;
-        vaultState = state;
-        if (state != AgentVaultState.ready) {
-          _clearProposals();
-          registry = null;
-          registryLoaded = false;
-          registryFailure = null;
-          calendarExperts = null;
-          calendarExpertFailure = null;
-          _pendingCalendarSetup = null;
-          session = null;
-          messages = [];
-          needsReload = false;
-          failure = null;
-          return;
+        vaultState = switch (state) {
+          AgentVaultState.missing => await vault.createVault(personId),
+          AgentVaultState.locked => await vault.unlockVault(personId),
+          _ => state,
+        };
+        if (_sealed) return;
+        if (vaultState != AgentVaultState.ready) {
+          throw const AgentVaultException('vault_unavailable');
         }
       }
       final result = newSession

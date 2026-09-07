@@ -8,34 +8,43 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/agent_vault_gateway.dart';
 
 void main() {
-  test(
-    'secure storage setup and unlock are explicit, never automatic',
-    () async {
-      final gateway = TestVaultGateway();
-      final controller = AgentController(gateway: gateway, personId: 'test');
-      addTearDown(controller.dispose);
-      await controller.load();
-      expect(controller.vaultState, AgentVaultState.missing);
-      expect(controller.canSend, isFalse);
-      expect(gateway.creates, 0);
-      await controller.unlock(create: true);
-      final sessionId = controller.session!.id;
-      expect(gateway.creates, 1);
-      expect(controller.canSend, isTrue);
-      await controller.send(AgentFixturePrompt.today);
-      expect(controller.messages, isNotEmpty);
-      await controller.closeView();
-      expect(controller.messages, isEmpty);
-      expect(controller.session, isNull);
-      await controller.load();
-      expect(controller.vaultState, AgentVaultState.locked);
-      expect(gateway.unlocks, 0);
-      await controller.unlock();
-      expect(controller.session!.id, sessionId);
-      expect(controller.messages, isNotEmpty);
-      expect(gateway.creates, 1);
-    },
-  );
+  test('secure storage setup and unlock happen automatically', () async {
+    final gateway = TestVaultGateway();
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    expect(controller.vaultState, AgentVaultState.ready);
+    expect(controller.canSend, isTrue);
+    expect(gateway.creates, 1);
+    final sessionId = controller.session!.id;
+    expect(gateway.creates, 1);
+    expect(controller.canSend, isTrue);
+    await controller.send(AgentFixturePrompt.today);
+    expect(controller.messages, isNotEmpty);
+    await controller.closeView();
+    expect(controller.messages, isEmpty);
+    expect(controller.session, isNull);
+    await controller.load();
+    expect(controller.vaultState, AgentVaultState.ready);
+    expect(gateway.unlocks, 1);
+    expect(controller.session!.id, sessionId);
+    expect(controller.messages, isNotEmpty);
+    expect(gateway.creates, 1);
+  });
+
+  test('automatic reload waits for an in-flight vault lock', () async {
+    final gateway = TestVaultGateway();
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    final closing = controller.closeView();
+    final loading = controller.load();
+    await Future.wait([closing, loading]);
+    expect(controller.vaultState, AgentVaultState.ready);
+    expect(controller.session, isNotNull);
+    expect(gateway.locks, 1);
+    expect(gateway.unlocks, 1);
+  });
 
   test(
     'closing during a turn clears immediately and never republishes completion',

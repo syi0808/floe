@@ -4,6 +4,7 @@ import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_squircle.dart';
+import '../../app/floe_switch.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_calendar_sources.dart';
 import 'agent_controller.dart';
@@ -288,10 +289,9 @@ class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
                           ) ??
                           false))
                         Text(strings.agentCalendarScopeUnavailable),
-                      SwitchListTile.adaptive(
+                      FloeSwitch(
                         key: ValueKey('calendar-scope-${view.handle}'),
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(strings.agentCalendarScopeEnabled),
+                        label: Text(strings.agentCalendarScopeEnabled),
                         value: view.enabled,
                         onChanged:
                             canManage &&

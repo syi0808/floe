@@ -1,7 +1,7 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
-import 'package:floe_client/features/agent/agent_panel.dart';
 import 'package:floe_client/features/agent/agent_registry_dialog.dart';
+import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -20,7 +20,9 @@ Widget app(AgentController controller, double scale) => MaterialApp(
     child: child!,
   ),
   home: Scaffold(
-    body: AgentPanel(controller: controller, onClose: () {}),
+    body: SingleChildScrollView(
+      child: SettingsScreen(client: null, agentController: controller),
+    ),
   ),
 );
 
@@ -55,8 +57,8 @@ void main() {
         addTearDown(controller.dispose);
         await controller.load();
         await tester.pumpWidget(app(controller, width == 320 ? 2 : 1));
-        await tester.ensureVisible(find.text('Tools & Experts'));
-        await tester.tap(find.text('Tools & Experts'));
+        await tester.ensureVisible(find.text('Manage assistant access'));
+        await tester.tap(find.text('Manage assistant access'));
         await tester.pumpAndSettle();
         expect(find.byType(AgentRegistryDialog), findsOneWidget);
         final toggle = find.byKey(
@@ -97,7 +99,7 @@ void main() {
       addTearDown(controller.dispose);
       await controller.load();
       await tester.pumpWidget(app(controller, 1));
-      await tester.tap(find.text('Tools & Experts'));
+      await tester.tap(find.text('Manage assistant access'));
       await tester.pumpAndSettle();
       expect(
         find.textContaining('No packages are installed yet.'),

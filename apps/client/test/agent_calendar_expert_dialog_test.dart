@@ -1,11 +1,12 @@
 import 'dart:async';
 
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_switch.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_calendar_sources.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
-import 'package:floe_client/features/agent/agent_panel.dart';
+import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/application/day_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
@@ -54,11 +55,13 @@ Widget app(
     child: child!,
   ),
   home: Scaffold(
-    body: AgentPanel(
-      controller: controller,
-      onClose: () {},
-      calendarSources: () => source.value,
-      calendarSourceChanges: source,
+    body: SingleChildScrollView(
+      child: SettingsScreen(
+        client: null,
+        agentController: controller,
+        calendarSources: () => source.value,
+        calendarSourceChanges: source,
+      ),
     ),
   ),
 );
@@ -88,8 +91,8 @@ open(WidgetTester tester, {double scale = 1}) async {
   addTearDown(source.dispose);
   await controller.load();
   await tester.pumpWidget(app(controller, source, scale));
-  await tester.ensureVisible(find.text('Tools & Experts'));
-  await tester.tap(find.text('Tools & Experts'));
+  await tester.ensureVisible(find.text('Manage assistant access'));
+  await tester.tap(find.text('Manage assistant access'));
   await tester.pumpAndSettle();
   await tester.tap(find.text('Calendar access'));
   await tester.pumpAndSettle();
@@ -238,11 +241,11 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.ensureVisible(find.text('Floe is here to help'));
-        await tester.tap(find.text('Floe is here to help'));
+        await tester.ensureVisible(find.byTooltip('Settings'));
+        await tester.tap(find.byTooltip('Settings'));
         await tester.pumpAndSettle();
-        await tester.ensureVisible(find.text('Tools & Experts'));
-        await tester.tap(find.text('Tools & Experts'));
+        await tester.ensureVisible(find.text('Manage assistant access'));
+        await tester.tap(find.text('Manage assistant access'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Calendar access'));
         await tester.pumpAndSettle();
@@ -323,7 +326,7 @@ void main() {
       expect(controller.calendarExperts!.views.single.enabled, false);
       expect(
         tester
-            .widget<SwitchListTile>(
+            .widget<FloeSwitch>(
               find.byKey(const ValueKey('calendar-scope-$calendarViewId')),
             )
             .onChanged,

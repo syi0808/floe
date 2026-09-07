@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
+import '../../app/floe_button.dart';
 import '../../app/floe_loading.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
+import '../agent/agent_calendar_sources.dart';
+import '../agent/agent_controller.dart';
+import '../agent/agent_registry_dialog.dart';
+import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
@@ -15,10 +20,16 @@ class SettingsScreen extends StatelessWidget {
     super.key,
     required this.client,
     this.actionController,
+    this.agentController,
+    this.calendarSources,
+    this.calendarSourceChanges,
   });
 
   final LocalServerClient? client;
   final CalendarActionController? actionController;
+  final AgentController? agentController;
+  final AgentCalendarSources? Function()? calendarSources;
+  final Listenable? calendarSourceChanges;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -47,6 +58,14 @@ class SettingsScreen extends StatelessWidget {
             children: [
               if (actionController case final controller?) ...[
                 _ActionPermissions(controller: controller),
+                const SizedBox(height: FloeSpace.lg),
+              ],
+              if (agentController case final controller?) ...[
+                _AgentPermissions(
+                  controller: controller,
+                  calendarSources: calendarSources,
+                  calendarSourceChanges: calendarSourceChanges,
+                ),
                 const SizedBox(height: FloeSpace.lg),
               ],
               if (client case final serverClient?)
@@ -98,6 +117,68 @@ class SettingsScreen extends StatelessWidget {
         },
       ),
     ],
+  );
+}
+
+class _AgentPermissions extends StatelessWidget {
+  const _AgentPermissions({
+    required this.controller,
+    this.calendarSources,
+    this.calendarSourceChanges,
+  });
+
+  final AgentController controller;
+  final AgentCalendarSources? Function()? calendarSources;
+  final Listenable? calendarSourceChanges;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) => FloeSquircle(
+      padding: const EdgeInsets.all(FloeSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Assistant permissions',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          const Text(
+            'Manage which Experts and connected Calendar scopes Floe may use in conversations.',
+            style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+          ),
+          const SizedBox(height: FloeSpace.base),
+          FloeButton.outlined(
+            onPressed:
+                controller.vaultState == AgentVaultState.ready &&
+                    controller.hasRegistryManagement &&
+                    !controller.busy
+                ? () async {
+                    final loading = controller.loadRegistry();
+                    await showDialog<void>(
+                      context: context,
+                      builder: (_) => AgentRegistryDialog(
+                        controller: controller,
+                        calendarSources: calendarSources,
+                        calendarSourceChanges: calendarSourceChanges,
+                      ),
+                    );
+                    await loading;
+                  }
+                : null,
+            child: const Text('Manage assistant access'),
+          ),
+          if (controller.vaultState != AgentVaultState.ready) ...[
+            const SizedBox(height: FloeSpace.sm),
+            const Text(
+              'Assistant access becomes available automatically when the local conversation store is ready.',
+              style: TextStyle(color: FloePalette.neutral600, height: 1.4),
+            ),
+          ],
+        ],
+      ),
+    ),
   );
 }
 

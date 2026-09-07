@@ -77,6 +77,16 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
   FFI library tests pass 20/20, focused Flutter tests 2/2 and analysis pass. S4 remains
   0/14 and S1/S3 is unchanged.
 
+### S4 assistant access experience feedback — 2026-09-08
+
+- Removed user-facing conversation setup/unlock/lock actions. Vault creation and unlock
+  are automatic on assistant load/resume while close/background still seal the session.
+- Moved Expert, assignment and Calendar scope management from the assistant panel to
+  Settings > Assistant permissions.
+- Added and applied the animated, accessible `FloeSwitch` design-system component.
+- [Evidence and validation limits](docs/validation/s4-agent-experience-feedback.md).
+  S4 remains 0/14 and live key/model/source/privacy gates remain unchanged.
+
 ### S4 read-only proposal inspection — 2026-09-07
 
 - Added Core inspection of a committed Expert proposal's existing S3 action. It

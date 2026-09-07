@@ -117,7 +117,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed) {
+      if (assistantOpen || destination == _DestinationView.settings) {
+        unawaited(agentController?.load());
+      }
+    } else {
       unawaited(agentController?.closeView());
     }
   }
@@ -236,6 +240,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             ? (widget.gateway as FfiDayGateway).serverClient
             : null,
         actionController: actionController,
+        agentController: agentController,
+        calendarSources: _agentCalendarSources,
+        calendarSourceChanges: controller,
       );
     }
     if (destination == _DestinationView.activity) {
@@ -415,8 +422,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           if (assistantOpen && agentController != null) {
             return AgentPanel(
               controller: agentController!,
-              calendarSources: _agentCalendarSources,
-              calendarSourceChanges: controller,
               onOpenAction: actionController == null ? null : _openAgentAction,
               onClose: _closeAssistant,
             );
@@ -443,8 +448,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               child: assistantOpen && agentController != null
                   ? AgentPanel(
                       controller: agentController!,
-                      calendarSources: _agentCalendarSources,
-                      calendarSourceChanges: controller,
                       onOpenAction: actionController == null
                           ? null
                           : _openAgentAction,
@@ -459,7 +462,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   void _selectDestination(_DestinationView value) {
-    unawaited(agentController?.closeView());
+    if (value == _DestinationView.settings) {
+      if (agentController?.session == null && agentController?.busy == false) {
+        unawaited(agentController?.load());
+      }
+    } else {
+      unawaited(agentController?.closeView());
+    }
     setState(() {
       assistantOpen = false;
       destination = value;
@@ -484,8 +493,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         height: MediaQuery.sizeOf(context).height * .88,
         child: AgentPanel(
           controller: agent,
-          calendarSources: _agentCalendarSources,
-          calendarSourceChanges: controller,
           onOpenAction: actionController == null ? null : _openAgentAction,
           onClose: () => Navigator.pop(context),
         ),

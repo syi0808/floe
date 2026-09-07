@@ -4,6 +4,7 @@ import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_squircle.dart';
+import '../../app/floe_switch.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
 import 'agent_calendar_expert_dialog.dart';
@@ -82,10 +83,9 @@ class AgentRegistryDialog extends StatelessWidget {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       Text('${installation.kind} · ${installation.version}'),
-                      SwitchListTile.adaptive(
+                      FloeSwitch(
                         key: ValueKey('installation-${installation.id}'),
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
+                        label: Text(
                           strings.agentRegistryInstallation,
                           semanticsLabel:
                               '${installation.packageId}: ${strings.agentRegistryInstallation}',
@@ -107,10 +107,9 @@ class AgentRegistryDialog extends StatelessWidget {
                         (entry) => entry.installationId == installation.id,
                       )) ...[
                         const Divider(),
-                        SwitchListTile.adaptive(
+                        FloeSwitch(
                           key: ValueKey('assignment-${assignment.id}'),
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
+                          label: Text(
                             strings.agentRegistryAssignment,
                             semanticsLabel:
                                 '${installation.packageId}: ${strings.agentRegistryAssignment}',

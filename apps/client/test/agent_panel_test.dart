@@ -86,7 +86,7 @@ void main() {
   });
   for (final width in [320.0, 390.0]) {
     testWidgets(
-      'secure storage setup and lock at width $width and 200 percent text',
+      'secure storage opens automatically at width $width and 200 percent text',
       (tester) async {
         tester.view.physicalSize = Size(width, 900);
         tester.view.devicePixelRatio = 1;
@@ -99,50 +99,17 @@ void main() {
         await tester.pumpWidget(
           app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
         );
-        expect(gateway.creates, 0);
-        expect(find.byType(TextField), findsNothing);
-        final setup = find.text('Set up secure storage');
-        await tester.ensureVisible(setup);
-        await tester.tap(setup);
-        await tester.pumpAndSettle();
         expect(gateway.creates, 1);
+        expect(find.byType(TextField), findsNothing);
         expect(controller.canSend, isTrue);
-        final lock = find.byTooltip('Lock conversation storage');
-        await tester.ensureVisible(lock);
-        await tester.tap(lock);
-        await tester.pumpAndSettle();
-        expect(find.text('Unlock conversation storage'), findsOneWidget);
-        expect(controller.messages, isEmpty);
+        expect(find.text('Set up secure storage'), findsNothing);
+        expect(find.text('Unlock conversation storage'), findsNothing);
+        expect(find.byTooltip('Lock conversation storage'), findsNothing);
         expect(tester.takeException(), isNull);
       },
     );
   }
 
-  testWidgets('secure storage setup visual reference', (tester) async {
-    tester.view.physicalSize = const Size(420, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final controller = AgentController(
-      gateway: TestVaultGateway(),
-      personId: 'test',
-    );
-    addTearDown(controller.dispose);
-    await controller.load();
-    await tester.pumpWidget(
-      app(
-        RepaintBoundary(
-          key: const Key('vault-golden'),
-          child: AgentPanel(controller: controller, onClose: () {}),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await expectLater(
-      find.byKey(const Key('vault-golden')),
-      matchesGoldenFile('goldens/agent_vault_setup.png'),
-    );
-  });
   testWidgets(
     'sample panel shows live progress, stops with keyboard and restores composer focus',
     (tester) async {
@@ -314,11 +281,13 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await tester.pumpAndSettle();
       expect(find.text(AgentFixturePrompt.today.sampleText), findsNothing);
-      expect(find.text('Unlock conversation storage'), findsOneWidget);
+      expect(find.text('Unlock conversation storage'), findsNothing);
+      expect(find.text('Reload conversation'), findsOneWidget);
       expect(gateway.locks, 1);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
-      expect(gateway.unlocks, 0);
+      expect(gateway.unlocks, 1);
+      expect(find.text(AgentFixturePrompt.today.sampleText), findsOneWidget);
     },
   );
 

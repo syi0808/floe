@@ -69,7 +69,10 @@ encrypted start/resume/get/recover through native and Dart storage APIs.
 [Native Calendar turn dispatch](docs/validation/s4-calendar-native-turn.md) now binds
 those sessions to the current durable scope, streams Core events and waits for Manager
 proposal preparation. Its typed Dart transport validates completed job identity without
-enabling Personal model input. See the
+enabling Personal model input. The
+[assistant access experience update](docs/validation/s4-agent-experience-feedback.md)
+for automatic conversation-store access, Settings-owned permissions and the custom
+Floe switch component. See the
 [S4 handoff and remaining work](docs/validation/s4-handoff.md) for the committed
 baseline, validation limits and restart checklist. S4 acceptance remains 0/14.
 

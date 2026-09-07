@@ -6,6 +6,7 @@ import '../app/floe_button.dart';
 import '../app/floe_input.dart';
 import '../app/floe_selection.dart';
 import '../app/floe_squircle.dart';
+import '../app/floe_switch.dart';
 import '../app/floe_time_picker.dart';
 
 class DesignSystemCatalog extends StatefulWidget {
@@ -148,6 +149,16 @@ class _DesignSystemCatalogState extends State<DesignSystemCatalog> {
                     const FloeCheckboxTile(
                       value: false,
                       title: Text('Unavailable option'),
+                      onChanged: null,
+                    ),
+                    FloeSwitch(
+                      value: checked,
+                      label: const Text('Use connected calendar context'),
+                      onChanged: (value) => setState(() => checked = value),
+                    ),
+                    const FloeSwitch(
+                      value: false,
+                      label: Text('Unavailable integration'),
                       onChanged: null,
                     ),
                   ],
