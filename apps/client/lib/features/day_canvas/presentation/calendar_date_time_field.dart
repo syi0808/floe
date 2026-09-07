@@ -182,80 +182,49 @@ class _TimeSegmentState extends State<_TimeSegment> {
         const SingleActivator(LogicalKeyboardKey.arrowUp): () => step(1),
         const SingleActivator(LogicalKeyboardKey.arrowDown): () => step(-1),
       },
-      child: Row(
-        children: [
-          Expanded(
-            child: Semantics(
-              label: widget.label,
-              child: TextFormField(
-                controller: controller,
-                focusNode: focus,
-                enabled: widget.enabled,
-                textAlign: TextAlign.center,
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(2),
-                ],
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-                decoration: InputDecoration(
-                  isDense: true,
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                    vertical: FloeSpace.md,
-                  ),
-                  hintText: '00',
-                ),
-                validator: (text) {
-                  final number = int.tryParse(text ?? '');
-                  return number == null ||
-                          number >= widget.limit ||
-                          number != widget.value
-                      ? '—'
-                      : null;
-                },
-                onChanged: (text) {
-                  final number = int.tryParse(text);
-                  if (number != null && number < widget.limit) {
-                    widget.onChanged(number);
-                  }
-                },
-              ),
-            ),
+      child: Semantics(
+        label: widget.label,
+        increasedValue: ((widget.value + 1) % widget.limit).toString(),
+        decreasedValue: ((widget.value - 1 + widget.limit) % widget.limit)
+            .toString(),
+        onIncrease: widget.enabled ? () => step(1) : null,
+        onDecrease: widget.enabled ? () => step(-1) : null,
+        child: TextFormField(
+          controller: controller,
+          focusNode: focus,
+          enabled: widget.enabled,
+          textAlign: TextAlign.center,
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(2),
+          ],
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            fontFeatures: [FontFeature.tabularFigures()],
           ),
-          SizedBox(
-            width: 18,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloeButton.icon(
-                  tooltip: 'Increase ${widget.label}',
-                  onPressed: widget.enabled ? () => step(1) : null,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 18,
-                    height: 18,
-                  ),
-                  icon: const Icon(Icons.keyboard_arrow_up, size: 16),
-                ),
-                FloeButton.icon(
-                  tooltip: 'Decrease ${widget.label}',
-                  onPressed: widget.enabled ? () => step(-1) : null,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 18,
-                    height: 18,
-                  ),
-                  icon: const Icon(Icons.keyboard_arrow_down, size: 16),
-                ),
-              ],
-            ),
+          decoration: const InputDecoration(
+            isDense: true,
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.symmetric(vertical: FloeSpace.md),
+            hintText: '00',
           ),
-        ],
+          validator: (text) {
+            final number = int.tryParse(text ?? '');
+            return number == null ||
+                    number >= widget.limit ||
+                    number != widget.value
+                ? '—'
+                : null;
+          },
+          onChanged: (text) {
+            final number = int.tryParse(text);
+            if (number != null && number < widget.limit) {
+              widget.onChanged(number);
+            }
+          },
+        ),
       ),
     ),
   );
