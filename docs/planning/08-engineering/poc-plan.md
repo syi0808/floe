@@ -2,6 +2,13 @@
 
 > Status: Recommended validation order
 
+## Near-term gates for S4 and S5
+
+S3 acceptance 뒤 구현 순서는 P0-D Memory Compiler 평가와 P0-F local vault/key
+boundary → S4 Reviewable Memory → P0-I Expert Contract harness → S5 Manager/Expert
+Advice다. P0-F의 self-host key model과 아직 선택하지 않은 sync/server는 S4나
+S5의 실행 prerequisite로 만들지 않는다. P1-B Sync Chaos는 S6 착수 전에 수행한다.
+
 ## P0-A — macOS Ambient Voice
 
 검증:
@@ -53,20 +60,22 @@ Derived State
 
 입력:
 
-- 대화
-- transcript
-- 이메일
+- S4의 Floe Note corpus
+- 이후 경계를 확인할 대화, transcript, 이메일의 adversarial fixture
 
 출력:
 
-- Person identity candidate
-- Episode
-- Claim
+- Preference
 - Commitment
 - source/provenance
 - confidence
 
-특히 false merge와 false memory를 측정한다.
+S4 착수 전에 corpus와 target threshold를 versioned fixture로 고정한다. 모든
+candidate의 typed schema/provenance 보존, 같은 evidence 재처리의 idempotency,
+rejected/tombstoned memory의 비부활은 100% 통과해야 한다. Candidate precision,
+recall, false memory와 false merge는 별도로 측정하며 threshold 변경은 평가 결과와
+함께 기록한다. S4가 다루지 않는 Person merge, Episode/Claim은 연구 결과만 남기고
+slice 범위를 확장하지 않는다.
 
 ## P0-E — Action Gate
 
@@ -98,40 +107,10 @@ Calendar Mutation
 - deletion/provenance
 - self-host key model
 
-## P1-A — Day Canvas Dogfood
-
-macOS에서 실제 사용하며:
-
-- 산만함
-- Now/Next 효용
-- Unified Capture
-- Event/Task/Note projection
-
-검증.
-
-## P1-B — Sync Chaos
-
-3개 device 또는 simulator에서:
-
-- offline edit
-- delete
-- concurrent update
-- provider update
-
-를 고의로 충돌시킨다.
-
-## P1-C — Intervention Dogfood
-
-2주 이상 실제 사용하면서:
-
-- 제안 발생 횟수
-- accept
-- ignore
-- dismiss
-- false positive
-
-를 기록한다.
-
+S4 gate는 local at-rest protection, OS-backed key access, key-unavailable
+fail-closed, 삭제 후 파생 데이터 잔존 여부까지다. 이 경계가 통과하기 전에는 synthetic
+fixture만 사용한다. self-host key ownership과 cross-device key delivery는 결과를
+기록하되 S6 전까지 미룰 수 있다.
 
 ## P0-G — Turso Local / Sync
 
@@ -170,3 +149,66 @@ macOS에서 실제 사용하며:
 목표:
 
 Node 없이도 핵심 connector 구현 비용을 충분히 낮출 수 있는지 확인한다.
+
+## P0-I — Local Expert Contract
+
+입력:
+
+- manual trigger
+- bounded TimelineView
+- confirmed MemoryView
+- Person assignment와 granted permissions
+
+출력:
+
+- InsightCandidate
+- ActionProposal
+- private state update
+- diagnostics
+
+검증:
+
+- native Schedule Expert와 declarative fixture의 동일 contract 실행
+- permission denial과 assignment state isolation
+- malformed output, timeout, budget 초과의 failure isolation
+- Expert의 DB/credential/direct mutation 접근 불가
+- Manager 합성과 S3 action gate까지의 trace/replay
+
+고정 scenario에서 grounding, stale-context rejection과 불필요한 제안 비율을
+기록한다. S5 착수 전에 scenario set, 허용할 stale/ungrounded output 0건과 유용성
+target을 고정한다. 이 PoC는 arbitrary code/Wasm이나 server placement를 결정하지
+않는다.
+
+## P1-A — Day Canvas Dogfood
+
+macOS에서 실제 사용하며:
+
+- 산만함
+- Now/Next 효용
+- Unified Capture
+- Event/Task/Note projection
+
+검증.
+
+## P1-B — Sync Chaos
+
+3개 device 또는 simulator에서:
+
+- offline edit
+- delete
+- concurrent update
+- provider update
+
+를 고의로 충돌시킨다.
+
+## P1-C — Intervention Dogfood
+
+2주 이상 실제 사용하면서:
+
+- 제안 발생 횟수
+- accept
+- ignore
+- dismiss
+- false positive
+
+를 기록한다.

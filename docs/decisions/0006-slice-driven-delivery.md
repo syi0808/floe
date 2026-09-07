@@ -1,7 +1,7 @@
 # ADR 0006: Deliver through connected vertical slices
 
 - **Date:** 2026-09-04
-- **Status:** accepted
+- **Status:** accepted; delivery sequence amended by [ADR 0012](0012-memory-and-expert-first-slices.md)
 
 ## Context
 
@@ -15,7 +15,8 @@ mix implementation breadth with evidence that components work together.
 - Keep roadmap phases as a product capability map, not sequential delivery gates.
 - Use user-visible, end-to-end slices as the implementation and acceptance unit.
 - Deliver S1 Calendar read and S3 approved execution before expanding the same
-  scenario to S4 cross-device/server and S5 interventions.
+  scenario. ADR 0012 subsequently inserts S4 Memory and S5 Manager/Expert
+  validation before the renamed S6 cross-device/server and S7 intervention slices.
 - Limit the first connected loop to macOS, one Person, one calendar connector,
   and one calendar-create action.
 - Use fixtures to establish contracts, then validate real integrations before
@@ -41,8 +42,8 @@ validation track; they do not silently redefine MVP acceptance.
 
 Flutter presentation, Rust-owned canonical mutations, native Rust/Go connectors,
 and intelligence proposing rather than directly executing actions remain intact.
-S4 must validate identity, authorization, and sync boundaries before using real
-multi-device personal data. S5 does not imply wake word or always-listening support.
+S6 must validate identity, authorization, and sync boundaries before using real
+multi-device personal data. S7 does not imply wake word or always-listening support.
 
 ## Consequences
 

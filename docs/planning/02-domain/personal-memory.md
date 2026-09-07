@@ -2,6 +2,24 @@
 
 > Status: Core domain, high-risk
 
+## 첫 구현 검증 범위
+
+[S4 Reviewable Personal Memory](../08-engineering/vertical-slice-delivery.md)는
+전체 Memory graph 전에 다음 한 경로를 end-to-end로 검증한다.
+
+```text
+Floe Note evidence
+→ Preference / Commitment candidate
+→ Review
+→ authoritative Memory
+→ inspect / edit / forget
+```
+
+한 Person과 Floe-owned Note source로 제한하지만 임시 저장소로 우회하지 않는다.
+source reference, extraction version, decision, revision과 tombstone은 이후 source와
+memory type이 늘어도 유지할 domain contract다. 이메일/transcript ingestion,
+People merge, vector store 확정과 cross-device sync는 이 slice 이후로 둔다.
+
 ## 정의
 
 Floe Memory는 단순 preference store가 아니다.

@@ -6,7 +6,7 @@
 
 ## Decision
 
-Bring forward a small connection-management console, not S4 accounts, hosted
+Bring forward a small connection-management console, not S6 accounts, hosted
 administration or synchronization. Go serves embedded HTML/CSS/JS with no frontend
 dependency/install step. Network inference remains in the existing gateway;
 product features retain context minimization, consent and domain validation.

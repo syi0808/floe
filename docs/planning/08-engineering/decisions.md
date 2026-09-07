@@ -346,13 +346,27 @@ Floe renders structured settings, insight, intervention, and action-confirmation
 
 ## D-036 — Vertical slices are the delivery unit
 
-**Status:** Accepted — 2026-09-04
+**Status:** Accepted — 2026-09-04; sequence amended 2026-09-07
 
 Roadmap phases remain capability scopes, not sequential implementation gates.
 Deliver the connected Calendar read → approved action
-loop first, then extend it across devices/server and event-driven interventions.
+loop first, validate source-backed Memory and the local Manager/Expert judgment
+loop, then extend it across devices/server and event-driven interventions.
 Track evidence-backed slice states rather than subjective phase percentages.
 Existing Personal Day acceptance and MVP boundaries remain separate.
 
 See [ADR 0006](../../decisions/0006-slice-driven-delivery.md) and
+[ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md), then
 [vertical slice delivery](vertical-slice-delivery.md).
+
+---
+
+## D-037 — Memory and Expert judgment precede distribution
+
+**Status:** Accepted — 2026-09-07
+
+S4 validates an inspectable, editable, deletable and source-backed Memory lifecycle.
+S5 validates one local Manager → Schedule Expert → action-proposal loop with
+least-privilege views. The former cross-device/server and intervention slices move
+to S6 and S7. Distribution must preserve these accepted contracts rather than
+becoming their prerequisite.

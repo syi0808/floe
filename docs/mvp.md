@@ -6,7 +6,7 @@
 ## Delivery relationship
 
 [ADR 0006](decisions/0006-slice-driven-delivery.md) adds a connected integration
-track alongside this Personal Day product scope. Its S1–S5 slices do not expand
+track alongside this Personal Day product scope. Its S1–S7 slices do not expand
 the MVP exclusions below or replace the two-week acceptance signals. Implementation
 priority follows the [slice plan](planning/08-engineering/vertical-slice-delivery.md);
 existing MVP work remains incomplete until its own criteria are met.

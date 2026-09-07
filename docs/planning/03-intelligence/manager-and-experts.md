@@ -2,6 +2,25 @@
 
 > Status: Core intelligence model
 
+## 첫 구현 검증 범위
+
+[S5 Manager and Expert Advice Loop](../08-engineering/vertical-slice-delivery.md)는
+server와 background lifecycle보다 먼저 local foreground에서 이 구조를 검증한다.
+
+```text
+manual plan-my-day trigger
+→ bounded Timeline + confirmed Memory views
+→ Schedule Expert
+→ structured advice / action proposal
+→ Manager synthesis
+→ S3 review and action gate
+```
+
+built-in Schedule Expert와 deterministic declarative fixture가 동일한 semantic
+contract를 사용해야 한다. 이는 Manager/Expert/Memory permission 경계의 검증이며,
+Wasm sandbox, Marketplace, 여러 Expert의 동시 orchestration이나 proactive
+intervention 완료를 의미하지 않는다.
+
 ## One Assistant
 
 사용자가 대화하는 주체는 하나다.
@@ -108,4 +127,3 @@ Built-in and third-party Experts should share the same semantic concepts:
 Third-party Experts receive more restrictive execution and data-access policy.
 
 See `expert-extension-model.md`.
-

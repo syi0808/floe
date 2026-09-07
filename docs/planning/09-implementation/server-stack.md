@@ -7,7 +7,7 @@
 [ADR 0011](../../decisions/0011-inference-performance-classes.md) defines the thin
 Go inference module under `server/`. The first process is a manually
 launched, authenticated loopback gateway for one local operator. It does not
-implement accounts, sync, hosted authorization or the full S4 server. Network
+implement accounts, sync, hosted authorization or the full S6 server. Network
 provider execution is centralized; the client requests a product-owned performance
 class and the server owns its model/reasoning mapping. Device-only inference is not
 moved into a mandatory remote routing path.

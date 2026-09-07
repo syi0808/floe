@@ -1,6 +1,6 @@
 # Floe Progress
 
-> Last updated: 2026-09-06
+> Last updated: 2026-09-07
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
@@ -34,8 +34,10 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Cross-device/server | Planned | None | 0/4 | S3 Accepted; sync/security PoCs | Same result on two devices |
-| S5 — Intervention | Planned | None | 0/4 | S4 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
+| S4 — Reviewable memory | Planned | None | 0/4 | S3 Accepted; P0-D corpus; P0-F local vault/key | Review, retain, edit and forget one source-backed memory |
+| S5 — Manager/Expert advice | Planned | None | 0/4 | S4 Accepted; local Expert contract | Schedule Expert advice reaches the S3 action gate |
+| S6 — Cross-device/server | Planned | None | 0/4 | S5 Accepted; sync/security PoCs | Same result on two devices |
+| S7 — Intervention | Planned | None | 0/4 | S6 Accepted; resident lifecycle | Calendar change triggers controlled suggestion |
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
@@ -125,7 +127,7 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
 The reusable [performance-class routing](docs/decisions/0011-inference-performance-classes.md)
 and local Go model gateway remain implemented. No current product feature invokes
-the gateway after removal of the focus-time experiment. This does not advance S4
+the gateway after removal of the focus-time experiment. This does not advance S6
 server/sync acceptance.
 
 ### Local connection console checkpoint
@@ -305,7 +307,12 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 2. Complete signed-app S3 approval/create/collection and provider-failure validation.
    Prototype review, Flutter UI and native Rust binding are implemented; runtime
    authority and fresh safety checks remain mandatory.
-3. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
+3. Start S4 with the Note → MemoryCandidate → Review → Memory lifecycle, fixed
+   false-memory/false-merge corpus and local vault/key gate; do not begin S6
+   server/sync as a shortcut.
+4. Follow with the S5 local Manager/Schedule Expert loop before cross-device or
+   resident intervention work.
+5. Evaluate an officially supported OAuth adapter and Apple native availability separately; do not assume CLIProxyAPI adoption.
 
 Deferred, not completed: Event/Task/Note editing UI, general conflict recovery UI,
 dense-day folding, and the separate two-week Personal Day dogfood. If one blocks
