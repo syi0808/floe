@@ -99,9 +99,14 @@ Clippy exclusions remain the two pre-existing Calendar warnings.
 
 ## Remaining S4 work
 
+The subsequent [signed keyring smoke](s4-keyring-live-smoke.md) attempted real
+provisioning: the read-only probe completes but creation fails, and exact cleanup
+reports a missing entitlement. Its retained disposable markers need cleanup with
+a correctly provisioned host. It does not establish key-store acceptance.
+
 This is integration evidence, not P0-F or S4 acceptance. A development signing
 identity was confirmed available; no real protected-store item was created or
-read by the automated checks. Next, validate real key access/reopen from the
+read by the automated checks at this earlier checkpoint. Next, validate real key access/reopen from the
 signed host, OS lock/denial/key-loss behavior, crash recovery and precise
 disposable cleanup. Failed provisioning/repair/deletion and key-orphan handling
 still need an explicit product path before personal dogfood.
