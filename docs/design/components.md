@@ -25,6 +25,11 @@ Acceptance criteria:
 
 All standard buttons are 44px high. Pointer-only compact targets may be 36px, but their touch presentation remains 44px. Disabled state changes fill, border, and text token; it does not rely on opacity alone.
 
+Flutter implements these contracts through `FloeButton` and `FloeControlSize`.
+Feature code does not instantiate Material button classes directly. Compact icon
+buttons use `FloeButtonSize.compact`; arbitrary per-screen constraints are reserved
+for controls embedded inside a larger accessible target.
+
 ## Segmented controls
 
 Use for mutually exclusive local views such as `Day / Week / Month`. The group uses `sq-md`; items use `sq-sm`. Selection receives a subtle primary tint and primary text, not a pill sliding across unrelated screens.
@@ -34,6 +39,26 @@ Segmented controls are local tools. They must not substitute for global navigati
 ## Inputs and capture
 
 Inputs use `sq-md`, a 1px border, 48px minimum height, and an external 2px focus ring. Labels remain visible when content is present. Errors stay near the field and preserve the draft.
+
+`FloeInput` and `FloeSelect` share `FloeField` decoration, typography, content
+insets, and the 48px control metric. Helper and error copy may increase the total
+layout height, but never changes the field body's minimum height.
+
+## Interaction states
+
+Reusable controls resolve state through semantic roles rather than choosing palette
+steps locally:
+
+| Role | Rest | Hover | Pressed | Focus |
+| --- | --- | --- | --- | --- |
+| Quiet command | transparent | `quietHover` | `neutralPressed` | `selectionHover` |
+| Bordered control | surface | `neutralHover` | `quietHover` | `selectionHover` + focus border |
+| Selection row | transparent | `selectionHover` | `selectionPressed` | `selectionHover` + focus semantics |
+
+Color and border transitions use `FloeMotion.hoverDuration`. Press transforms use
+`PressableScale`; popovers, selection changes, notifications, and dialogs use their
+named `FloeMotion` durations. Reduced motion removes transforms without removing
+state color feedback.
 
 Universal Capture is a dedicated productivity control, not a chat composer. It accepts typed or voiced material, preserves the original, and asks for Event/Task/Note classification when required by policy.
 

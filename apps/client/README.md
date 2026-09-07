@@ -52,6 +52,14 @@ Use `FloeButton.filled`, `.outlined`, `.text`, or `.icon` for app buttons. Text 
 
 Use `FloeLoading.run` for asynchronous UI operations so loading feedback remains visible for at least 500 ms. Set `loading` on `FloeButton` for a size-preserving button spinner, or wrap an existing section in `FloeLoadingOverlay` to block interaction and place feedback over the current layout without inserting or removing content. Set `blockInteraction: false` only when the underlying controls must remain available during background work.
 
+### Design-system catalog
+
+Run `flutter run -d macos -t lib/main_design_system.dart` to inspect shared colors,
+button sizes and states, field alignment, and selection controls. Reusable controls use
+semantic state colors from `FloeColor`/`FloeStates`, spacing from `FloeSpace`, and
+36px compact, 44px standard, or 48px field metrics from `FloeControlSize`. Add new
+reusable states to the catalog and its golden before using them in a feature screen.
+
 For custom controls, use `PressableScale(builder: (states) => InkWell(statesController: states, ...))`. The navigation and Floe anchor use this path with a 0.98 scale. Always connect the supplied state controller to the interactive child so disabled states, keyboard activation, and gesture cancellation follow Flutter's native behavior rather than raw pointer events. Reduced motion suppresses scaling. Checkbox, switch, popup-menu, and platform picker interactions retain their native behavior.
 
 This uses Flutter's paint-transform rendering path, not a separate GPU-acceleration switch. No blanket `RepaintBoundary` or raster-cache hints are added; verify raster performance with a profile build on the target device before adding them.
