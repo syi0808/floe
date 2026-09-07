@@ -1,4 +1,4 @@
-use floe_agent::{AgentFailure, AgentMessage, AgentOutcome};
+use floe_agent::{AgentFailure, AgentMessage, AgentOutcome, ExpertResult, PackageKind};
 use floe_core::{AgentFixturePrompt, FloeCore};
 use floe_domain::PersonId;
 
@@ -25,6 +25,22 @@ async fn fixture_conversation_survives_reopen_and_keeps_person_and_revision_boun
         AgentMessage::Capability { .. }
     ));
     assert!(!result.events.is_empty());
+    let AgentMessage::Capability {
+        call_id,
+        result: Ok(payload),
+        ..
+    } = &result.session.messages[1]
+    else {
+        panic!("expected a committed Expert result");
+    };
+    let expert: ExpertResult = serde_json::from_str(payload).unwrap();
+    assert_eq!(expert.invocation_id, *call_id);
+    assert_eq!(expert.person_id, person);
+    assert_eq!(expert.package.kind, PackageKind::Expert);
+    assert_eq!(expert.package.id, "floe.schedule");
+    assert_eq!(expert.state_revision, 1);
+    assert_eq!(expert.insights.len(), 2);
+    assert!(expert.action_proposals.is_empty());
     assert_eq!(
         core.agent_fixture_session(PersonId::new(), initial.id)
             .await,

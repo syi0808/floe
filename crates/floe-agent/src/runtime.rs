@@ -26,7 +26,7 @@ impl Cancellation {
         *self.0.borrow()
     }
 
-    async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         let mut receiver = self.0.subscribe();
         while !*receiver.borrow_and_update() {
             if receiver.changed().await.is_err() {

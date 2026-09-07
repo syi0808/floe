@@ -9,6 +9,7 @@ import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
+import 'agent_expert_result.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_vault_gateway.dart';
 
@@ -233,7 +234,7 @@ class _AgentPanelState extends State<AgentPanel> {
         ],
       ),
     ),
-    AgentCapabilityMessage(:final output) => ExpansionTile(
+    AgentCapabilityMessage() => ExpansionTile(
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
       title: Text(
@@ -248,13 +249,45 @@ class _AgentPanelState extends State<AgentPanel> {
         Align(
           alignment: Alignment.centerLeft,
           child: SelectableText(
-            output ?? strings.agentSourceUnavailable,
+            _sourceText(strings, message),
             style: const TextStyle(fontSize: 13, color: FloePalette.neutral600),
           ),
         ),
       ],
     ),
   };
+
+  String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
+    final result = AgentExpertResult.tryParse(
+      message.output,
+      callId: message.callId,
+      personId: widget.controller.personId,
+    );
+    if (result == null) {
+      final output = message.output;
+      return output == null || output.trimLeft().startsWith('{')
+          ? strings.agentSourceUnavailable
+          : output;
+    }
+    String clock(DateTime time) =>
+        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return [
+      strings.agentExpertSource(result.expert, result.version, result.source),
+      for (final insight in result.insights)
+        switch (insight.kind) {
+          'commitment' => strings.agentExpertCommitment(
+            insight.title!,
+            clock(insight.start!),
+            clock(insight.end!),
+          ),
+          'focus_window' => strings.agentExpertFocus(
+            clock(insight.start!),
+            clock(insight.end!),
+          ),
+          _ => strings.agentExpertNoFocus,
+        },
+    ].join('\n');
+  }
 
   Widget _composer(AppLocalizations strings, AgentController controller) {
     final status = _status(strings, controller);

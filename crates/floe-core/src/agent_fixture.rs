@@ -1,7 +1,7 @@
 use floe_agent::*;
 use floe_domain::PersonId;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 use uuid::Uuid;
 
 use crate::{CoreError, ErrorCode, FloeCore, TursoStore};
@@ -149,7 +149,7 @@ pub async fn run_agent_sample(
 ) -> Result<AgentSession, AgentFailure> {
     let policy = fixture_policy();
     let model = FixtureModel { latency };
-    let capabilities = FixtureCapabilities;
+    let capabilities = FixtureCapabilities::new(turn.person_id)?;
     let runtime = AgentRuntime {
         store,
         model: &model,
@@ -183,12 +183,13 @@ pub async fn recover_agent_sample(
     expected_revision: u64,
 ) -> Result<AgentSession, AgentFailure> {
     let policy = fixture_policy();
+    let capabilities = FixtureCapabilities::new(person_id)?;
     AgentRuntime {
         store,
         model: &FixtureModel {
             latency: Duration::ZERO,
         },
-        capabilities: &FixtureCapabilities,
+        capabilities: &capabilities,
         policy: &policy,
         budget: AgentBudget::default(),
     }
@@ -267,6 +268,24 @@ impl ModelRunner for FixtureModel {
                 input: "sample-day".into(),
             }
         } else {
+            let Some(AgentMessage::Capability {
+                result: Ok(result), ..
+            }) = request.messages.last()
+            else {
+                return Ok(ModelResponse { schema_version: AGENT_VERSION,
+                    step: ModelStep::Answer { text: "The sample Schedule Expert is unavailable. No connected sources were read or changed.".into() },
+                    used_tokens: 32, cost_micros: 0 });
+            };
+            let result: ExpertResult =
+                serde_json::from_str(result).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            if result.data_class != DataClass::Synthetic
+                || !result
+                    .insights
+                    .iter()
+                    .any(|insight| matches!(insight, ExpertInsight::FocusWindow { .. }))
+            {
+                return Err(AgentFailure::InvalidModelOutput);
+            }
             ModelStep::Answer { text: "Sample briefing: Design review is at 10:00. There is a free hour afterward. No connected Calendar, mail, health or location data was read.".into() }
         };
         Ok(ModelResponse {
@@ -278,10 +297,105 @@ impl ModelRunner for FixtureModel {
     }
 }
 
-struct FixtureCapabilities;
+struct FixtureCapabilities {
+    person_id: PersonId,
+    instance_id: Uuid,
+    assignment_id: Uuid,
+    registry: Mutex<AgentRegistry>,
+    view: ExpertTimelineView,
+}
+
+impl FixtureCapabilities {
+    fn new(person_id: PersonId) -> Result<Self, AgentFailure> {
+        let instance_id = Uuid::new_v4();
+        let handle = Uuid::new_v4();
+        let mut registry = AgentRegistry::new(instance_id);
+        let tool = PackageRef {
+            kind: PackageKind::Tool,
+            id: "floe.timeline.read".into(),
+            version: "1.0.0".into(),
+        };
+        let expert = PackageRef {
+            kind: PackageKind::Expert,
+            id: "floe.schedule".into(),
+            version: "1.0.0".into(),
+        };
+        registry.register(
+            registry.revision(),
+            AgentPackage {
+                schema_version: 1,
+                reference: tool.clone(),
+                publisher: "floe".into(),
+                implementation: PackageImplementation::TimelineRead {
+                    data_class: DataClass::Synthetic,
+                },
+                required_tools: vec![],
+                state_schema_version: 1,
+            },
+        )?;
+        registry.register(
+            registry.revision(),
+            AgentPackage {
+                schema_version: 1,
+                reference: expert.clone(),
+                publisher: "floe".into(),
+                implementation: PackageImplementation::Schedule,
+                required_tools: vec![tool.clone()],
+                state_schema_version: 1,
+            },
+        )?;
+        let tool_installation = registry.install(registry.revision(), &tool)?;
+        let expert_installation = registry.install(registry.revision(), &expert)?;
+        let tool_assignment = registry.assign(
+            registry.revision(),
+            person_id,
+            tool_installation,
+            vec![],
+            vec![handle],
+        )?;
+        let assignment_id = registry.assign(
+            registry.revision(),
+            person_id,
+            expert_installation,
+            vec![tool_assignment],
+            vec![handle],
+        )?;
+        for installation in [tool_installation, expert_installation] {
+            registry.set_installation_enabled(registry.revision(), installation, true)?;
+        }
+        for assignment in [tool_assignment, assignment_id] {
+            registry.set_assignment_enabled(registry.revision(), person_id, assignment, true)?;
+        }
+        Ok(Self {
+            person_id,
+            instance_id,
+            assignment_id,
+            registry: Mutex::new(registry),
+            view: ExpertTimelineView {
+                schema_version: 1,
+                handle,
+                person_id,
+                data_class: DataClass::Synthetic,
+                source_handle: "fixture.synthetic.timeline".into(),
+                range_start_unix_ms: 36_000_000,
+                range_end_unix_ms: 43_200_000,
+                expires_at_unix_ms: u64::MAX,
+                items: vec![TimelineViewItem {
+                    evidence_handle: Uuid::new_v4(),
+                    untrusted_title: "Design review".into(),
+                    starts_at_unix_ms: 36_000_000,
+                    ends_at_unix_ms: 39_600_000,
+                }],
+            },
+        })
+    }
+}
 
 impl CapabilityHost for FixtureCapabilities {
-    fn descriptors(&self, _person_id: PersonId) -> Vec<CapabilityDescriptor> {
+    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+        if person_id != self.person_id {
+            return vec![];
+        }
         vec![CapabilityDescriptor {
             schema_version: AGENT_VERSION,
             id: "fixture.schedule.read".into(),
@@ -292,10 +406,60 @@ impl CapabilityHost for FixtureCapabilities {
     }
 
     async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
-        if invocation.capability_id != "fixture.schedule.read" || invocation.input != "sample-day" {
+        if invocation.person_id != self.person_id
+            || invocation.capability_id != "fixture.schedule.read"
+            || invocation.input != "sample-day"
+        {
             return Err(AgentFailure::CapabilityDenied);
         }
-        Ok("Synthetic timeline: Design review 10:00–11:00; free 11:00–12:00.".into())
+        let expected_registry_revision = self
+            .registry
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .revision();
+        let result = ExpertHost {
+            registry: &self.registry,
+            views: self,
+        }
+        .invoke(ExpertInvocation {
+            schema_version: invocation.schema_version,
+            invocation_id: invocation.call_id,
+            instance_id: self.instance_id,
+            person_id: invocation.person_id,
+            assignment_id: self.assignment_id,
+            expected_registry_revision,
+            granted_view_handles: vec![self.view.handle],
+            allowed_data_classes: vec![DataClass::Synthetic],
+            input: ExpertInput::Briefing { focus_minutes: 60 },
+            budget: ExpertBudget {
+                max_output_bytes: invocation.max_output_bytes,
+                ..ExpertBudget::default()
+            },
+            deadline: invocation.deadline,
+            cancellation: invocation.cancellation,
+        })
+        .await?;
+        serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)
+    }
+}
+
+impl ExpertViews for FixtureCapabilities {
+    async fn timeline(
+        &self,
+        request: TimelineViewRead,
+    ) -> Result<ExpertTimelineView, AgentFailure> {
+        if request.person_id != self.person_id || request.handle != self.view.handle {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        if self.view.items.len() > request.max_items
+            || serde_json::to_vec(&self.view)
+                .map_err(|_| AgentFailure::InvalidInput)?
+                .len()
+                > request.max_bytes
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(self.view.clone())
     }
 }
 

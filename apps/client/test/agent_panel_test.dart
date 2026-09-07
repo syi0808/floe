@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
@@ -12,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/agent_gateway.dart';
 import 'support/agent_vault_gateway.dart';
+import 'support/expert_result.dart';
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,
@@ -27,6 +30,46 @@ Widget app(Widget child, {double scale = 1}) => MaterialApp(
 );
 
 void main() {
+  testWidgets(
+    'structured Expert source is readable at 320 pixels and 200 percent text',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 780);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final gateway = TestAgentGateway()
+        ..capabilityOutput = jsonEncode(expertResultFixture());
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      await tester.pumpWidget(
+        app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
+      );
+      await tester.ensureVisible(find.text('Send sample'));
+      await tester.tap(find.text('Send sample'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('View sample source'));
+      await tester.tap(find.text('View sample source'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Expert: floe.schedule 1.0.0'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Possible focus time: 11:00–12:00'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('"schema_version"'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await expectLater(
+        find.byType(AgentPanel),
+        matchesGoldenFile('goldens/agent_expert_source.png'),
+      );
+    },
+  );
+
   setUpAll(() async {
     final font = FontLoader('Pretendard')
       ..addFont(rootBundle.load('assets/fonts/Pretendard-Regular.otf'))

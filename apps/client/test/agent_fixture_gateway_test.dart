@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
+import 'package:floe_client/features/agent/agent_expert_result.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,6 +86,16 @@ void main() {
       expect(first.session.lastOutcome!.completed, isTrue);
       expect(first.session.messages, hasLength(3));
       expect(first.session.messages[1], isA<AgentCapabilityMessage>());
+      final capability = first.session.messages[1] as AgentCapabilityMessage;
+      final expert = AgentExpertResult.tryParse(
+        capability.output,
+        callId: capability.callId,
+        personId: localPersonId,
+      );
+      expect(expert, isNotNull);
+      expect(expert!.expert, 'floe.schedule');
+      expect(expert.insights.first.title, 'Design review');
+      expect(expert.insights.last.start!.hour, 11);
       expect(first.events.first.event, isA<AgentStarted>());
       expect(first.events.last.event, isA<AgentFinished>());
       expect(
@@ -126,6 +137,10 @@ void main() {
       );
       expect(restored.session.revision, first.session.revision);
       expect(restored.session.messages, hasLength(3));
+      expect(
+        (restored.session.messages[1] as AgentCapabilityMessage).output,
+        capability.output,
+      );
       expect(restored.events, isEmpty);
       final next = await gateway.runAgentFixture(
         restored.session,

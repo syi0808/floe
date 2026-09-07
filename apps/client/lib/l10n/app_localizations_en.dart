@@ -66,6 +66,25 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentSourceUnavailable => 'This sample source is unavailable.';
 
   @override
+  String agentExpertSource(String expert, String version, String source) {
+    return 'Expert: $expert $version\nSource: $source';
+  }
+
+  @override
+  String agentExpertCommitment(String title, String start, String end) {
+    return '$title: $start–$end (sample time)';
+  }
+
+  @override
+  String agentExpertFocus(String start, String end) {
+    return 'Possible focus time: $start–$end (sample time)';
+  }
+
+  @override
+  String get agentExpertNoFocus =>
+      'No free interval meets the requested duration.';
+
+  @override
   String get agentLoading => 'Loading saved conversation…';
 
   @override

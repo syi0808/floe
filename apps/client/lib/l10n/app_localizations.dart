@@ -202,6 +202,30 @@ abstract class AppLocalizations {
   /// **'This sample source is unavailable.'**
   String get agentSourceUnavailable;
 
+  /// No description provided for @agentExpertSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Expert: {expert} {version}\nSource: {source}'**
+  String agentExpertSource(String expert, String version, String source);
+
+  /// No description provided for @agentExpertCommitment.
+  ///
+  /// In en, this message translates to:
+  /// **'{title}: {start}–{end} (sample time)'**
+  String agentExpertCommitment(String title, String start, String end);
+
+  /// No description provided for @agentExpertFocus.
+  ///
+  /// In en, this message translates to:
+  /// **'Possible focus time: {start}–{end} (sample time)'**
+  String agentExpertFocus(String start, String end);
+
+  /// No description provided for @agentExpertNoFocus.
+  ///
+  /// In en, this message translates to:
+  /// **'No free interval meets the requested duration.'**
+  String get agentExpertNoFocus;
+
   /// No description provided for @agentLoading.
   ///
   /// In en, this message translates to:

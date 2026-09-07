@@ -9,6 +9,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   bool failLoad = false;
   bool failPoll = false;
   String? responseFailure;
+  String? capabilityOutput;
   int begins = 0;
   int stops = 0;
   int releases = 0;
@@ -137,7 +138,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
         'capability_id': 'fixture.schedule.read',
         'input': 'sample-day',
         'result': {
-          'Ok': 'Synthetic timeline: Design review 10:00–11:00; free 11:00–12:00.',
+          'Ok': capabilityOutput ?? 'Synthetic timeline: Design review 10:00–11:00; free 11:00–12:00.',
         },
       });
       _message({

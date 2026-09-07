@@ -34,6 +34,10 @@ a provisioning/entitlement failure. A bounded
 [native Foundation Models adapter](docs/validation/s4-local-model.md) now implements
 the common model contract, but the real probe reports Apple Intelligence disabled;
 live generation and personal-chat integration remain unverified.
+A [bounded Expert foundation](docs/validation/s4-expert-foundation.md) now supplies
+versioned Tool/Expert registration, Person grants and a shared Schedule/declarative
+contract. The sample panel renders structured Expert evidence; durable registry
+state, live sources and S3 proposal integration still remain.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
