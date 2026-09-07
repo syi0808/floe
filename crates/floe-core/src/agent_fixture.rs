@@ -208,18 +208,31 @@ impl<Keys: crate::VaultKeyProvider> crate::EncryptedAgentVault<Keys> {
         if session.revision != turn.expected_revision || session.active_turn.is_some() {
             return Err(AgentFailure::Conflict);
         }
+        let check = || {
+            if cancellation.is_cancelled() {
+                Err(AgentFailure::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
         let snapshot = match self.expert_registry().await? {
-            Some(snapshot) => snapshot,
+            Some(previous) => {
+                let revision = previous.revision;
+                let snapshot = FixtureCapabilities::ensure_snapshot(turn.person_id, previous)?;
+                if snapshot.revision != revision {
+                    self.save_expert_registry_checked(revision, &snapshot, &check)
+                        .await?;
+                }
+                snapshot
+            }
             None => {
                 let capabilities = FixtureCapabilities::new_with_instance(
                     turn.person_id,
                     self.registry_instance_id(),
                 )?;
                 let snapshot = capabilities.snapshot()?;
-                if cancellation.is_cancelled() {
-                    return Err(AgentFailure::Cancelled);
-                }
-                self.initialize_expert_registry(&snapshot).await?;
+                self.initialize_expert_registry_checked(&snapshot, &check)
+                    .await?;
                 snapshot
             }
         };
@@ -578,6 +591,31 @@ impl FixtureCapabilities {
                 }],
             },
         })
+    }
+
+    #[cfg(unix)]
+    fn ensure_snapshot(
+        person_id: PersonId,
+        mut snapshot: RegistrySnapshot,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
+        if snapshot.packages.iter().any(|package| {
+            matches!(
+                package.reference.id.as_str(),
+                "floe.timeline.read" | "floe.schedule"
+            )
+        }) {
+            return Ok(snapshot);
+        }
+        let sample = Self::new_with_instance(person_id, snapshot.instance_id)?.snapshot()?;
+        snapshot.packages.extend(sample.packages);
+        snapshot.installations.extend(sample.installations);
+        snapshot.assignments.extend(sample.assignments);
+        snapshot.revision = snapshot
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        let instance_id = snapshot.instance_id;
+        Ok(AgentRegistry::restore(snapshot, instance_id)?.snapshot())
     }
 }
 

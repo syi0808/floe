@@ -14,6 +14,8 @@ use crate::{
     AgentFixturePrompt, AgentFixtureTurn, agent_fixture::FixtureCapabilities, recover_agent_sample,
 };
 
+mod calendar_setup;
+
 #[derive(Clone, Default)]
 struct Keys(Arc<KeyState>);
 

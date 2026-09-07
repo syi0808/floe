@@ -347,6 +347,133 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_governed_turn_path() {
+    for class in [DataClass::Synthetic, DataClass::Personal] {
+        let mut fixture = Fixture::with_class(class).await;
+        let request = CalendarExpertSetup {
+            instance_id: fixture.vault.registry_instance_id(),
+            expected_revision: fixture.revision,
+            setup_id: Uuid::new_v4(),
+            provider: fixture.grant.provider,
+            calendar_ids: fixture.grant.calendar_ids.clone(),
+        };
+        let installed = fixture
+            .vault
+            .install_calendar_expert(request.clone(), Cancellation::default())
+            .await
+            .unwrap();
+        fixture.assignment = installed.setup.expert_assignment_id;
+        fixture.grant.handle = installed.setup.view_handle;
+        let model = Model::default();
+        let access = Access::default();
+        assert!(matches!(
+            fixture
+                .core
+                .run_calendar_agent_turn(
+                    &fixture.vault,
+                    &access,
+                    &model,
+                    fixture.request(),
+                    now,
+                    |_| {}
+                )
+                .await,
+            Err(AgentFailure::CapabilityDenied)
+        ));
+        assert_eq!(access.calls.load(Ordering::Acquire), 0);
+        assert!(model.requests.lock().unwrap().is_empty());
+        let setup = &installed.setup;
+        let mut revision = installed.registry.revision;
+        for target in [
+            RegistryConfigurationTarget::Installation {
+                id: setup.tool_installation_id,
+                enabled: true,
+            },
+            RegistryConfigurationTarget::Installation {
+                id: setup.expert_installation_id,
+                enabled: true,
+            },
+            RegistryConfigurationTarget::Assignment {
+                id: setup.tool_assignment_id,
+                enabled: true,
+            },
+            RegistryConfigurationTarget::Assignment {
+                id: setup.expert_assignment_id,
+                enabled: true,
+            },
+        ] {
+            revision = fixture
+                .vault
+                .configure_registry(
+                    RegistryConfiguration {
+                        instance_id: request.instance_id,
+                        expected_revision: revision,
+                        target,
+                    },
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap()
+                .revision;
+        }
+        let mut registry =
+            AgentRegistry::restore(fixture.state().await, request.instance_id).unwrap();
+        registry
+            .set_calendar_view_enabled(revision, fixture.session.person_id, setup.view_handle, true)
+            .unwrap();
+        fixture
+            .vault
+            .save_expert_registry(revision, &registry.snapshot())
+            .await
+            .unwrap();
+        let descriptor = registry
+            .expert_descriptor(
+                fixture.session.person_id,
+                fixture.assignment,
+                registry.revision(),
+                fixture.grant.handle,
+            )
+            .unwrap();
+        *model.steps.lock().unwrap().front_mut().unwrap() = ModelStep::Call {
+            capability_id: descriptor.id,
+            input: serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 }).unwrap(),
+        };
+        let result = fixture
+            .core
+            .run_calendar_agent_turn(
+                &fixture.vault,
+                &access,
+                &model,
+                fixture.request(),
+                now,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
+        assert_eq!(result.proposals.len(), 1);
+        assert_eq!(
+            result.proposals[0].result.as_ref().unwrap().state,
+            CalendarActionState::Pending
+        );
+        let committed = fixture.state().await;
+        let assignment = committed
+            .assignments
+            .iter()
+            .find(|entry| entry.id == fixture.assignment)
+            .unwrap();
+        assert_eq!(assignment.private_state.completed_invocations, 1);
+        let replay = fixture
+            .vault
+            .install_calendar_expert(request, Cancellation::default())
+            .await
+            .unwrap();
+        assert_eq!(replay.setup, installed.setup);
+        assert_eq!(fixture.state().await, committed);
+    }
+}
+
+#[tokio::test]
 async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_review_without_execution()
  {
     let fixture = Fixture::new().await;

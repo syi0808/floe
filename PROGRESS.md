@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and registry UI; bound Core Calendar/Expert turns and S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant management; live key/model/source and privacy gates | Calendar scope consent/setup and native connected-turn dispatch; models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and registry UI; atomic Core Calendar setup/turns and S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant UI; live key/model/source and privacy gates | Native Calendar setup transport/consent UI and connected-turn dispatch; models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,27 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 atomic Calendar Expert setup — 2026-09-07
+
+- Added a single-revision Core operation that atomically installs a fresh Calendar
+  binding, provider-pinned built-ins, Person assignments and a durable setup receipt.
+  All new components start disabled; setup does not infer consent or touch a source.
+- Exact retry returns the original receipt after reopen, revocation or private-state
+  advancement without regranting access. Changed intent and stale new requests fail;
+  encrypted CAS prevents receipt replacement and appropriation of old components.
+- Removed the sample-first dependency: an explicit sample Send can add its missing
+  package pair to an existing Calendar registry without replacing prior configuration.
+- Added 12 tests covering atomic rollback, pre/post-commit key loss, response-loss
+  reconciliation, sample coexistence, immutable receipts and installed Expert turns
+  into Pending S3 review. Tests use injected keys/access/models and fictional records.
+- Validation: 191 workspace Rust tests, three keyring example tests, 25 native
+  assertions, 146 Flutter tests, analysis, formatting and Clippy with existing
+  exclusions pass. Rust/macOS Debug builds and deep strict signature verification
+  pass; UI goldens are unchanged.
+- [Evidence and limits](docs/validation/s4-calendar-setup.md). Native setup transport,
+  scope consent/enablement UI and connected chat dispatch remain. S4 stays 0/14;
+  live key/model/source gates and S1/S3 acceptance are unchanged.
 
 ### S4 durable Calendar View bindings — 2026-09-07
 

@@ -6,6 +6,49 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn install_calendar_expert(
+        &self,
+        request: floe_agent::CalendarExpertSetup,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::CalendarExpertSetupResult, AgentFailure> {
+        let check = || {
+            if cancellation.is_cancelled() {
+                Err(AgentFailure::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
+        if request.instance_id != self.vault_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let previous = self.expert_registry().await?;
+        let mut registry = match &previous {
+            Some(snapshot) => AgentRegistry::restore(snapshot.clone(), self.vault_id)?,
+            None => AgentRegistry::new(self.vault_id),
+        };
+        let revision = registry.revision();
+        let setup = registry.install_calendar_expert(self.person_id, &request)?;
+        if registry.revision() != revision {
+            match previous {
+                Some(_) => {
+                    self.save_expert_registry_checked(revision, &registry.snapshot(), &check)
+                        .await?
+                }
+                None => {
+                    self.initialize_expert_registry_checked(&registry.snapshot(), &check)
+                        .await?
+                }
+            }
+        }
+        self.check_access()?;
+        check()?;
+        Ok(floe_agent::CalendarExpertSetupResult {
+            setup,
+            registry: registry.overview(self.person_id),
+        })
+    }
+
     pub async fn registry_overview(
         &self,
     ) -> Result<Option<floe_agent::RegistryOverview>, AgentFailure> {
@@ -82,6 +125,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         snapshot: &RegistrySnapshot,
     ) -> Result<(), AgentFailure> {
+        self.initialize_expert_registry_checked(snapshot, || Ok(()))
+            .await
+    }
+
+    pub(crate) async fn initialize_expert_registry_checked(
+        &self,
+        snapshot: &RegistrySnapshot,
+        check: impl Fn() -> Result<(), AgentFailure> + Sync,
+    ) -> Result<(), AgentFailure> {
+        check()?;
         let payload = self.registry_payload(snapshot)?;
         if snapshot
             .assignments
@@ -104,6 +157,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let changed = transaction.execute("UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1", ()).await.map_err(storage)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }
             self.check_access()?;
+            check()?;
             Ok(())
         }.await;
         self.finish_registry_transaction(transaction, result).await
@@ -118,7 +172,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    async fn save_expert_registry_checked(
+    pub(crate) async fn save_expert_registry_checked(
         &self,
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
@@ -141,6 +195,44 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(AgentFailure::NotFound)?;
             if previous.revision != expected_revision {
                 return Err(AgentFailure::Conflict);
+            }
+            if previous
+                .calendar_setups
+                .iter()
+                .any(|receipt| !snapshot.calendar_setups.contains(receipt))
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            for receipt in &snapshot.calendar_setups {
+                if previous.calendar_setups.contains(receipt) {
+                    continue;
+                }
+                if receipt.expected_revision != expected_revision
+                    || previous
+                        .calendar_views
+                        .iter()
+                        .any(|binding| binding.handle == receipt.view_handle)
+                    || previous.installations.iter().any(|installation| {
+                        [receipt.tool_installation_id, receipt.expert_installation_id]
+                            .contains(&installation.id)
+                    })
+                    || previous.assignments.iter().any(|assignment| {
+                        [receipt.tool_assignment_id, receipt.expert_assignment_id]
+                            .contains(&assignment.id)
+                    })
+                    || snapshot.installations.iter().any(|installation| {
+                        [receipt.tool_installation_id, receipt.expert_installation_id]
+                            .contains(&installation.id)
+                            && installation.enabled
+                    })
+                    || snapshot.assignments.iter().any(|assignment| {
+                        [receipt.tool_assignment_id, receipt.expert_assignment_id]
+                            .contains(&assignment.id)
+                            && assignment.enabled
+                    })
+                {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             for binding in &snapshot.calendar_views {
                 match previous

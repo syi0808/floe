@@ -41,7 +41,7 @@ contract. The sample panel renders structured Expert evidence; the secure host n
 A [Manager-to-S3 bridge](docs/validation/s4-manager-actions.md) now converts committed
 focus advice into the existing policy/review/action ledger with stable retry identity.
 [Registry enablement management](docs/validation/s4-registry-management.md) is now
-available in the unlocked panel. New installations, assignments/source grants,
+available in the unlocked panel. User-facing installation/source-grant setup,
 live sources and app-level proposal orchestration still remain.
 A [bounded Calendar Timeline adapter](docs/validation/s4-calendar-timeline.md) now
 projects exact authorized mirror scopes through the common Expert port, with a
@@ -49,7 +49,10 @@ native read-access boundary. [Core turn orchestration](docs/validation/s4-calend
 now connects ordinary model calls, leased Views, atomic Expert results and governed
 proposal preparation. The app's connected personal-chat route is not enabled yet.
 [Durable Calendar bindings](docs/validation/s4-calendar-bindings.md) now pin each
-connected View to an exact encrypted source scope; scope consent/setup UI remains open.
+connected View to an exact encrypted source scope. An
+[atomic Calendar setup operation](docs/validation/s4-calendar-setup.md) now installs
+disabled built-ins, assignments and a bound scope with durable retry identity;
+native transport and scope consent/setup UI remain open.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

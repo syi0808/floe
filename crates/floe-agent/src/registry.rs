@@ -4,6 +4,9 @@ use uuid::Uuid;
 
 use crate::{AGENT_VERSION, AgentFailure, DataClass};
 
+mod calendar_setup;
+pub use calendar_setup::*;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageKind {
@@ -146,6 +149,8 @@ pub struct RegistrySnapshot {
     pub assignments: Vec<PackageAssignment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendar_views: Vec<CalendarViewBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendar_setups: Vec<CalendarExpertSetupReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -268,6 +273,7 @@ impl AgentRegistry {
                 installations: vec![],
                 assignments: vec![],
                 calendar_views: vec![],
+                calendar_setups: vec![],
             },
         }
     }
@@ -295,6 +301,7 @@ impl AgentRegistry {
             || snapshot.installations.len() > 128
             || snapshot.assignments.len() > 256
             || snapshot.calendar_views.len() > 256
+            || snapshot.calendar_setups.len() > 64
         {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -343,6 +350,7 @@ impl AgentRegistry {
                 return Err(AgentFailure::InvalidInput);
             }
         }
+        registry.validate_calendar_setups()?;
         Ok(registry)
     }
 
