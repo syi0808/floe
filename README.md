@@ -35,7 +35,6 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)
-- [Interactive HTML UI prototype](prototypes/floe-ui/README.md)
 - [Product brief](docs/product-brief.md)
 - [MVP definition](docs/mvp.md)
 - [v0.8 integration and expert baseline](docs/decisions/0003-native-connectors-and-experts.md)
@@ -67,7 +66,6 @@ The node is loopback-only; it is not the hosted/sync server.
 
 JavaScript/TypeScript projects in this repository use **pnpm**, with the version
 pinned in each `package.json`. Commit `pnpm-lock.yaml`, not npm or Yarn lockfiles.
-See the [prototype setup](prototypes/floe-ui/README.md#run) for installation and scripts.
 
 - Product semantics come before implementation choices.
 - Personal memory must be inspectable, editable, deletable, and source-backed.

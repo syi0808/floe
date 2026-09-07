@@ -9,7 +9,8 @@ The no-FFI statements below describe the original executor checkpoint.
 Follow-up: [isolated live EventKit PoC](eventkit-live-poc.md) validates one disposable
 create/response-loss recovery and re-import through the existing app. The Rust
 executor itself remains fixture-only. UI work starts in the
-[HTML prototype](../design/s3-calendar-action-ui.md), not Flutter.
+[action-review contract](../design/s3-calendar-action-ui.md); current review happens
+in Flutter.
 
 ## Delivered boundary
 

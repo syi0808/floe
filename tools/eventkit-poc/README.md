@@ -2,7 +2,8 @@
 
 An isolated macOS arm64 command-line experiment, **not a production write adapter**.
 No Flutter UI/method channel, model tool or Rust executor binding is added.
-UI design remains in `prototypes/floe-ui` first.
+UI design and review happen in the Flutter client's design-system catalog and
+design-feedback mode.
 
 Build with the installed Apple SDK, no third-party dependencies:
 

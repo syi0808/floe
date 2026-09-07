@@ -62,5 +62,6 @@ clock, duplicate approval, reopen and an unchanged empty timeline/provider fixtu
 
 No live calendar read/write or OS permission interaction is needed for these tests.
 S3 remains 0/5. Flutter approval UI, native executor/preflight/recovery, read retry
-and the controlled S1/live S3 matrix remain unfinished. Continue using the
-[prototype-first review gate](../design/s3-calendar-action-ui.md) before UI porting.
+and the controlled S1/live S3 matrix remain unfinished. Review subsequent UI changes
+in the Flutter preview and design-feedback mode against the
+[action-review contract](../design/s3-calendar-action-ui.md).

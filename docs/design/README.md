@@ -27,7 +27,6 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | [Components](components.md) | Shared controls, cards, timeline items, rails, and overlays |
 | [Selection controls](selection-controls.md) | Checkbox, Radio, Select and Dropdown behavior, motion and input semantics |
 | [Action review](s3-calendar-action-ui.md) | Decision-first summaries, explicit approval, progressive diagnostic disclosure and safe recovery |
-| [Prototype component boundaries](prototype-components.md) | As-built React units, state/props/style ownership and reverse-spec catalog (not normative product requirements) |
 | [Assistant and interventions](assistant-and-interventions.md) | Passive, suggestion, active, and confirmation states |
 | [Accessibility and motion](accessibility-and-motion.md) | Input, focus, scaling, semantics, motion, validation |
 | [Application shell](screens/application-shell.md) | Global navigation, local tools, desktop and narrow layout |
@@ -35,13 +34,13 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | [Notes](screens/notes.md) | Note collection and detail transitions |
 | [Task Detail](screens/task-detail.md) | Task fields, subtasks, related context, and suggestions |
 | [Reference analysis](reference-analysis.md) | What the September 2026 mockups contributed or did not decide |
-| [Flutter visual parity](flutter-visual-parity.md) | Paired HTML/Flutter captures, measured geometry, reproduction, and remaining differences |
 
 ## Production UI renders
 
 The following images translate the specifications into coherent desktop product screens. They are implementation references rather than pixel contracts; the written tokens, semantics, responsive rules, and accessibility requirements remain authoritative.
 
-The interactive [`prototypes/floe-ui/`](../../prototypes/floe-ui/README.md) HTML implementation is now the primary visual validation surface. Use the PNG files below only as composition history and comparison material.
+Use the Flutter design-system catalog and design-feedback mode as the primary visual
+validation surfaces. The PNG files below remain composition history only.
 
 | Screen | Render | Governing specification |
 | --- | --- | --- |
@@ -63,4 +62,7 @@ The interactive [`prototypes/floe-ui/`](../../prototypes/floe-ui/README.md) HTML
 
 The Flutter client implements the shared squircle primitive, semantic tokens, responsive application shell, Day Canvas, Notes collection, and Task Detail baseline. Current domain data limits editing, note excerpts, subtasks, and live suggestions; those controls must stay explicit about unavailable behavior until their application services are connected.
 
-The September 4 parity pass compares the actual HTML and Flutter widget renders at desktop and phone sizes. See the [comparison gallery](renders/flutter-parity/index.html); the preview fixture is isolated from the production database.
+Run `flutter run -d macos -t lib/main_design_system.dart` from `apps/client` to review
+shared components. In a debug or preview build, press `Command-Shift-F` to inspect the
+rendered product and export anchored feedback. The preview fixture is isolated from
+the production database.

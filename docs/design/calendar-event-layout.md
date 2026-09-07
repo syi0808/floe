@@ -61,7 +61,7 @@ The micro-event accent is a separate straight 3px bar inset 4px from the left an
 - Reserve at least 112px per column in the timeline. On narrow screens or with many
   overlaps, allow horizontal scrolling inside the calendar, not page overflow.
 
-## Prototype verification
+## Preview verification
 
 Fixtures include 12:30–12:35 and 23:55–24:00 five-minute events. Alongside 30-, 45-
 and 60-minute records, they exercise thin bars, zoom density and the final day boundary.

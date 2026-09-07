@@ -2,11 +2,11 @@
 
 Flutter client for Floe's Personal Day experience.
 
-The production UI follows the squircle-first HTML reference: a compact desktop rail becomes a floating bottom navigation at `780px` and below. The time grid, in-flow capture field, context cards, collections, and task detail share the same shell. Empty days retain the same calendar rather than switching to a separate hero layout.
+The production UI uses Floe's shared design system: a compact desktop rail becomes a floating bottom navigation at `780px` and below. The time grid, in-flow capture field, context cards, collections, and task detail share the same shell. Empty days retain the same calendar rather than switching to a separate hero layout.
 
 The app bundles Pretendard, Lucide icons, and the reference mascot SVG. `FloeSquircle` uses `figma_squircle` with corner smoothing `0.82`; a zero-width border is truly absent rather than a hairline.
 
-The desktop shell now includes the prototype's inset squircle frame and icon-only navigation. On macOS, content extends into a transparent, title-free titlebar; standard window controls, resizing, and native window dragging remain available.
+The desktop shell includes icon-only navigation. On macOS, content extends into a transparent, title-free titlebar; standard window controls, resizing, and native window dragging remain available.
 
 ## Run on macOS
 
@@ -23,7 +23,7 @@ Run `flutter gen-l10n` after editing ARB resources; commit the generated `app_lo
 
 Native macOS permission descriptions are English in `macos/Runner/Info.plist`; future native translations belong in localized `InfoPlist.strings` files, not Dart ARB resources. Gateway diagnostics also use English, while the UI presents localized recovery messages.
 
-## Compare with the HTML prototype
+## Preview the product UI
 
 ```sh
 flutter run -d macos -t lib/main_preview.dart
@@ -31,18 +31,18 @@ flutter run -d macos -t lib/main_preview.dart
 
 This separate entry point uses an in-memory gateway with September 4 sample content, including overlapping and five-minute events. It uses the **same production widgets**, never opens the production database, and does not persist preview edits. `DayAppearance` supplies optional display metadata (tone, note excerpt, task context) without inventing backend fields. Production uses real items and neutral empty metadata until those fields are connected. Preview event timestamps are explicitly UTC, not simulated IANA timezone conversion.
 
-The Tasks destination retains the working task collection. Open a task to compare its detail with the HTML Tasks screen. The HTML-only Progress dashboard is not a product destination in this app.
+The Tasks destination retains the working task collection. Open a task to review its detail with the same production widgets used by the app.
 
-### Interaction parity
+### Interaction behavior
 
-- Navigation replays the prototype's 180 ms fade/3 px entrance without animating ordinary data updates; reduced motion disables the entrance.
+- Navigation uses a 180 ms fade/3 px entrance without animating ordinary data updates; reduced motion disables the entrance.
 - Icon navigation provides hover, keyboard-focus, tooltips and press feedback. Selecting the current destination also returns from task detail.
 - The 24-hour calendar has a 1–12× slider, matching scrollbars, exact duration geometry and overlap lanes. Hour/half-hour guides stay sparse; five-minute events remain accurate, with tooltip and detail access. Zoom and scroll survive navigation.
 - Event details use a shared 240 ms entrance / 120 ms exit dialog with backdrop blur, rounded time/source panels and read-only provenance. Reduced motion skips dialog animation. Empty days center their message over the blurred calendar; refreshing keeps the calendar underneath an eight-dot spinner.
 - Connect and Settings open a service list; the plain icon/name/description card opens detail, with Back to connections. Counts, status and read-only badges are not shown on list cards.
 - Notes supports search, Personal filtering, and Clear filters. New note opens an autofocus editor and saves through the capture/classification gateway, with empty-input prevention, pending protection, and retry feedback. Saving clears filters so the new note is visible; cancelling does not create an item.
 - Capture retains the real classification flow, then shows dismissible, screen-reader-announced success feedback only after saving.
-- Week/Month and the previous timeline suggestion bubble are removed, matching the current calendar prototype. Unsupported domain actions are not simulated as successful native operations.
+- Week/Month and the previous timeline suggestion bubble are not exposed. Unsupported domain actions are not simulated as successful native operations.
 
 Flutter automated tests cover controller loading, data processing and native gateway integration only. Design, layout and interaction are reviewed manually in the preview; widget, geometry and visual-capture regression suites are not maintained.
 
@@ -64,7 +64,7 @@ For custom controls, use `PressableScale(builder: (states) => InkWell(statesCont
 
 This uses Flutter's paint-transform rendering path, not a separate GPU-acceleration switch. No blanket `RepaintBoundary` or raster-cache hints are added; verify raster performance with a profile build on the target device before adding them.
 
-Use `flutter run -d macos -t lib/main_preview.dart` to review design and interaction manually at desktop and narrow window sizes. `../../docs/design/flutter-visual-parity.md` retains historical comparison notes, not an automated layout contract.
+Use `flutter run -d macos -t lib/main_preview.dart` to review design and interaction manually at desktop and narrow window sizes.
 
 ### Design feedback mode
 
@@ -95,12 +95,10 @@ typed failures. Relaunch displays cached data; refresh explicitly to recollect i
 Switching calendars replaces the previous mirror without touching local items.
 This path is macOS-only. Fixture integration tests do not access personal calendars.
 
-The native gateway still supports one selected calendar. The prototype's all-calendar inventory,
+The native gateway still supports one selected calendar. All-calendar inventory,
 disconnect/cache deletion, recurrence metadata and original-zone formatting require domain/API
 work and are not falsely exposed as implemented. The existing task collection and capture
 classification flows remain functional rather than being replaced by static demo content.
-
-Reusable Flutter boundaries and parity rules: [Flutter prototype parity](../../docs/design/flutter-prototype-parity.md).
 
 Live acceptance, timezone/recurrence limitations, and dogfood steps are tracked in
 [`docs/validation/s1-calendar.md`](../../docs/validation/s1-calendar.md).

@@ -3,7 +3,7 @@ import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/day_appearance.dart';
 import 'package:flutter/widgets.dart';
 
-Widget prototypeAppearance(Widget child) => DayAppearance(
+Widget previewAppearance(Widget child) => DayAppearance(
   tones: const {
     'making': ItemTone.mint,
     'research': ItemTone.violet,
@@ -98,21 +98,21 @@ Widget prototypeAppearance(Widget child) => DayAppearance(
   child: child,
 );
 
-final prototypeNow = DateTime.utc(2026, 9, 3, 14, 28);
-final prototypeQuery = DayQuery(
+final previewNow = DateTime.utc(2026, 9, 3, 14, 28);
+final previewQuery = DayQuery(
   personId: 'visual-preview',
-  date: prototypeNow,
-  now: prototypeNow,
+  date: previewNow,
+  now: previewNow,
   timezoneOffsetSeconds: 0,
 );
 
-FakeDayGateway prototypeGateway({bool detail = false}) => FakeDayGateway(
+FakeDayGateway previewGateway({bool detail = false}) => FakeDayGateway(
   initialItems: [
     EventItem(
       id: 'all-day',
       title: 'Product launch',
       revision: 0,
-      createdAt: prototypeNow,
+      createdAt: previewNow,
       startsAt: DateTime.utc(2026, 9, 3),
       endsAt: DateTime.utc(2026, 9, 4),
       isAllDay: true,
@@ -130,7 +130,7 @@ FakeDayGateway prototypeGateway({bool detail = false}) => FakeDayGateway(
         id: id,
         title: title,
         revision: 0,
-        createdAt: prototypeNow,
+        createdAt: previewNow,
         startsAt: DateTime.utc(2026, 9, 3, 8).add(Duration(minutes: start)),
         endsAt: DateTime.utc(
           2026,
@@ -149,7 +149,7 @@ FakeDayGateway prototypeGateway({bool detail = false}) => FakeDayGateway(
         id: id,
         title: detail && id == 'feedback' ? 'Prepare launch brief' : title,
         revision: 0,
-        createdAt: prototypeNow,
+        createdAt: previewNow,
         deadline: id == 'gift' ? null : DateTime.utc(2026, 9, 3, 23, 59),
       ),
     for (final (id, title) in [
@@ -163,6 +163,6 @@ FakeDayGateway prototypeGateway({bool detail = false}) => FakeDayGateway(
       ('team-retro', 'Team retro'),
       ('evening-reset', 'Evening reset'),
     ])
-      NoteItem(id: id, title: title, revision: 0, createdAt: prototypeNow),
+      NoteItem(id: id, title: title, revision: 0, createdAt: previewNow),
   ],
 );

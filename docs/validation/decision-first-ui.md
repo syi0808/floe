@@ -2,6 +2,9 @@
 
 Date: 2026-09-06. Two parallel implementation tracks integrated and checked together.
 
+This is a historical validation record. The HTML prototype and its commands described
+below have since been removed; ongoing review happens in Flutter.
+
 ## Delivered
 
 - Prototype Select and Dropdown share controlled selection/navigation, continuous

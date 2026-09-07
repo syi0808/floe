@@ -11,8 +11,8 @@ The Today context rail now loads Person-scoped proposals for gateways implementi
 destination/provider/ID, title, start/end, timezone, Person, expiry, proposal and
 execution IDs, approval time and any recorded external ID/reason.
 
-This ports the [HTML review reference](../design/s3-calendar-action-ui.md), not its
-simulated reducer or execution progress. The existing prototype/live PoC evidence
+This implements the [action-review contract](../design/s3-calendar-action-ui.md).
+The historical prototype/live PoC evidence
 does not establish S1 Verified or authorize product write rollout.
 
 ## Deliberate interim behavior

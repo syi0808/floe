@@ -56,7 +56,7 @@ late reads cannot resurrect disconnected data across reconnect.
 
 ## Delivery boundary
 
-The HTML prototype demonstrates the unified composition with Work, Personal and
+The Flutter preview demonstrates the unified composition with Work, Personal and
 Product team fixtures. It does not implement native storage migration, per-source
 partial-fetch reconciliation, discovery, or real permissions. Existing single-calendar
 native tests remain historical evidence, not acceptance of this expanded contract.

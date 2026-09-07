@@ -1,12 +1,10 @@
 # Floe selection controls
 
-## Select and Dropdown — September 2026 prototype
+## Select and Dropdown
 
-`Select` is a controlled single value; `Dropdown` is an action menu, not another
-value field. The requested “Dropbox” is interpreted as Dropdown, not a connection
-to the Dropbox service. Both live in `prototypes/floe-ui/src/components/ui/Select.jsx`.
-The Settings interaction preview is explicitly non-persistent and has no external
-effects. Select also supports calendar destination review without exposing IDs.
+`FloeSelect` is a controlled single value; `FloeDropdown` is an action menu, not
+another value field. Select also supports calendar destination review without
+exposing IDs.
 
 - Keep the visible label, current choice, and only useful distinguishing context
   (such as account or read-only status). Internal values never become labels.
@@ -26,28 +24,19 @@ contract rather than importing another visual system.
 
 ### Semantics and keyboard contract
 
-The labeled button owns a listbox (`Select`) or menu (`Dropdown`). DOM focus moves
-to the popup; `aria-activedescendant` tracks the active row, distinct from committed
-selection. Enter/Space opens and explicitly commits; Up/Down opens or moves;
-Home/End jumps; prefix typing searches enabled labels, repeated letters cycle.
-Disabled rows are skipped and cannot invoke callbacks. Escape cancels and restores
-trigger focus; Tab closes and continues from the trigger in normal tab order.
-Pointer/focus outside dismiss without stealing focus. Portals stay inside a parent
-native dialog to preserve its modal accessibility boundary. Resize and scroll
-reposition the popup; the active row scrolls into view.
+The labeled button owns a listbox (`FloeSelect`) or menu (`FloeDropdown`). Keyboard
+focus tracks the active row separately from committed selection. Enter/Space opens
+and explicitly commits; Up/Down opens or moves; Home/End jumps; prefix typing
+searches enabled labels, and repeated letters cycle. Disabled rows are skipped and
+cannot invoke callbacks. Escape cancels and restores trigger focus; Tab closes and
+continues in normal tab order. Pointer/focus outside dismisses without stealing
+focus, and the active row scrolls into view.
 
 Callers supply unique stable `value` keys and readable `label` strings in options
 or items, with optional `description` and `disabled`. `onChange(value)` and
 `onAction(value)` fire only on explicit activation, never on focus or dismissal.
 List options are expected to remain stable while open; loading/searchable or
-multi-select controls are not part of this prototype contract.
-
-Validation commands: `node scripts/check-selection-controls.mjs`,
-`pnpm check:components`, and `pnpm build`. The standalone assertions exercise the
-actual navigation helpers and guard the semantic/motion contract in source;
-browser interaction validation is recorded separately from these static checks.
-
-Prototype reference: 2026-09-05. Flutter implementation added 2026-09-06.
+multi-select controls are not part of this contract.
 
 `Checkbox` and `Radio` share a controlled native input and Floe visual layer. Checkbox
 uses a softened squircle (rounded fallback); Radio retains circular group semantics.
@@ -69,21 +58,12 @@ delays, spring overshoot, layout animation or added motion dependency. Reduced m
 removes transitions/transforms. Hover is gated to fine pointers; forced colors use
 system Canvas/Highlight/GrayText colors and retain focus outlines.
 
-Applied to calendar scope, Today context task, reference task completion and subtasks
-through the existing CheckControl adapter. Scope persistence and save/cancel behavior
-are unchanged. Build/catalog checks are supplemented by browser interaction checks.
-
-Validation: production build, 45 component contracts and 26 existing action assertions
-pass. Browser scope dialog visually inspected; ArrowDown changes the radio selection,
-Space toggles a checkbox, All disables included-source checkboxes, and clearing the
-selected subset disables Save. Reduced-motion/forced-color styles are implemented;
-OS-mode and narrow-viewport visual verification remain unperformed in this checkpoint.
-
-## Flutter
+Applied to calendar scope, Today context task, task completion and subtasks. Scope
+persistence and save/cancel behavior are unchanged.
 
 `FloeCheckbox`, `FloeCheckboxTile` and `FloeRadioTile` are custom Flutter controls;
 they do not compose Material Checkbox, Radio or ListTile controls. They share the
-prototype's 20px visual, Floe colors, hover surface, animated mark and outer focus
+design system's 20px visual, Floe colors, hover surface, animated mark and outer focus
 ring. Pointer down does not scale either the row or control.
 Hover ownership is exclusive and its surface clears immediately, preventing adjacent
 rows from retaining overlapping hover fills. The check path is optically offset left.
@@ -95,15 +75,14 @@ and task/subtask completion use the shared checkboxes. Existing selection/save/c
 behavior is unchanged. Tests cover semantics, keyboard checkbox/radio operation,
 disabled activation prevention, no-scale press behavior, and calendar selection.
 
-`FloeSelect` and `FloeDropdown` use the prototype's shared squircle trigger and menu
+`FloeSelect` and `FloeDropdown` use the shared squircle trigger and menu
 surface, 44px option targets, violet active treatment, selected check, disabled rows,
-and origin-aware placement. Their custom overlay matches the prototype's 160ms ease-out
+and origin-aware placement. Their custom overlay uses the design system's 160ms ease-out
 opacity and 0.97-to-1 scale transition with a top-center transform origin instead of
 Flutter's 500ms staged height/item fade. Calendar destination and
 task actions use these controls instead of Material's default dropdown and popup menu.
 Closing reverses the overlay transition, while pointer hover changes only the active
 row and never invokes automatic scroll; keyboard navigation still reveals its target.
 
-Flutter validation: 75 tests and analysis pass. The earlier macOS release build and
-strict deep codesign verification remain recorded. Checkbox, Radio and Select pointer
-transitions were also reviewed in a dedicated native macOS debug harness.
+Review controls in `lib/main_design_system.dart`; use the debug design-feedback mode
+for feature-context review. Validate behavior with `flutter analyze` and `flutter test`.

@@ -1,21 +1,19 @@
 # S1 Calendar — UI reference
 
-Date: 2026-09-04. Status: interactive HTML design reference, **not native acceptance**.
-Reference: `prototypes/floe-ui`. Scope: [ADR 0008](../decisions/0008-unified-calendar-read.md).
+Date: 2026-09-04. Status: UI design reference, **not native acceptance**.
+Scope: [ADR 0008](../decisions/0008-unified-calendar-read.md).
 
 2026-09-05 update: Connect exposes explicit All/Selected scope. Selected preserves
 checked IDs; All includes new sources on refresh. Cancel keeps saved scope, and an
-empty selected subset cannot be saved. This picker was implemented in the prototype
-before Flutter. Partial-source cache status and disconnect are reflected natively.
-`?dst=spring` and `?dst=fall` show 23/25-hour elapsed timelines. Repeated local
-wall-clock hours remain distinct in layout without exposing timezone labels.
-Fixture date navigation is disabled.
+empty selected subset cannot be saved. Partial-source cache status and disconnect are
+reflected natively. Repeated local wall-clock hours remain distinct in layout without
+exposing timezone labels.
 
 ## Design intent
 
 - Today starts with the date and one refresh action, then the unified day timeline.
   No marketing heading, timezone label in the toolbar, source selector, healthy-status
-  badge, imported-data footer, or prototype lab. Use sentence case, including “All day.”
+  badge or imported-data footer. Use sentence case, including “All day.”
 - Date navigation automatically reads the destination date with a loading overlay
   inside the calendar box, not a page-level banner. Cached event actions are disabled
   during loading and the surrounding layout stays in place.
@@ -31,7 +29,7 @@ Fixture date navigation is disabled.
 - Show contextual banners only for pending, stale or problematic data. An unread date
   is not empty; an empty result must mean a successful read across all included sources.
 - Disclose the EventKit full-access exception and all-calendar read scope before the
-  simulated OS prompt. The app remains read-only despite the broader OS authorization.
+  OS prompt. The app remains read-only despite the broader OS authorization.
 
 ## Pages and popups
 
@@ -42,16 +40,16 @@ Fixture date navigation is disabled.
 | macOS Calendar service detail | All included calendars/accounts, device/Person, stored dates, collection status, refresh, permission recovery, integration-wide disconnect; sidebar Connect returns to the list |
 | Local-load failure | Inspectable error and retry; no unexplained lone button |
 | Connection disclosure | Explicit all-calendar scope and read-only behavior; continue or cancel |
-| OS handoff simulation | Allow connects all calendars directly; denial leaves a recoverable local day |
-| Permission recovery | Simulated access restoration refreshes all calendars; keep cache or close |
+| OS handoff | Allow connects all calendars directly; denial leaves a recoverable local day |
+| Permission recovery | Restored access refreshes all calendars; keep cache or close |
 | Event details | Source account/calendar, original/display time, recurrence, all-day exclusive end and source identifiers; no external editing |
 | Disconnect confirmation | Remove all imported copies, preserve Floe tasks/notes and external events; OS authorization remains separate |
 
 There is no calendar picker or switch confirmation. New calendars join subsequent
 date-navigation reads or explicit refreshes. Native dialogs handle modality, focus restoration, Escape and
-viewport scrolling. OS handoffs never change actual settings in the prototype.
+viewport scrolling.
 
-## State coverage without on-page demo controls
+## State coverage
 
 Popup entry uses a 240ms ease-out scale (0.96 → 1), 8px upward settling and opacity,
 with a 200ms backdrop fade. No overshoot, content staggering or layout animation.
@@ -63,27 +61,10 @@ scroll lock remain until exit completes; reduced-motion closes immediately. This
 the restrained scale and easing guidance in
 [Emil Kowalski's animation tips](https://emilkowal.ski/ui/7-practical-animation-tips).
 
-For development review only, load `/?state=<value>` directly. Normal navigation has
-no lab, state dropdown, badge or link to the old reference.
-
-| Value | Presentation |
-| --- | --- |
-| `connected` (default) | Unified sample events; no healthy-status banner/badge on Today |
-| `disconnected` | Optional connection invitation; local items remain usable |
-| `syncing` | Cache retained under calendar-local loading overlay; completes after 1.1 seconds even on direct URL entry, duplicate refresh disabled |
-| `cached` | Saved data with collection time and refresh action |
-| `offline` | Last good cache, failure timestamp and retry |
-| `denied` | Local day and permission recovery |
-| `revoked` | Cached events with paused-read warning and recovery |
-| `missing` | Calendar/account unavailable warning, retained cache, link to inventory |
-| `noCalendars` | No-source message; manage calendars in macOS then retry |
-| `empty` | Successful all-calendar empty-date inline status over an enabled grid |
-| `uncollected` | Unknown date with read action, previous cached date retained |
-| `loadError` | Local-load error and retry |
-
-Query states are static fixtures, not actual provider failure injection. Successful
-refreshes use non-blocking live-region messages. State resets on
-reload, not navigation. Local notes survive simulated integration disconnection.
+The preview should cover connected, disconnected, syncing, cached, offline, denied,
+revoked, missing-source, no-calendar, empty, uncollected and local-load-error states.
+Successful refreshes use non-blocking live-region messages. Local notes survive
+integration disconnection.
 
 ## Data and implementation boundary
 
@@ -97,15 +78,14 @@ Cards never grow to fit text. [Timeline density rules](calendar-event-layout.md)
 five-minute duration bands, available content, keyboard/touch access and zoom behavior.
 Only hour and half-hour guides are drawn, never five-minute grid lines.
 
-The native implementation still selects one calendar. This prototype and the updated
-plan do not deliver native multi-calendar migration, per-source partial-failure
+The native implementation still selects one calendar. This design does not deliver
+native multi-calendar migration, per-source partial-failure
 reconciliation, discovery, persistent storage, robust DST handling, or live acceptance.
-Those remain required by ADR 0008. The old external-edit/deletion lab was removed;
-the prototype no longer exposes that simulation. Native integration evidence is unchanged.
+Those remain required by ADR 0008. Native integration evidence is unchanged.
 
 ## Validation
 
-Use Node 24 and `pnpm build`. Browser review covers the simplified Today, mixed-source
-event provenance, all-calendar inventory, permission handoff and disconnection flows,
-and responsive mobile layout. This prototype has no automated test harness; browser
-checks and static build are design validation, not S1-A1–A4 integration evidence.
+Use the Flutter preview and design-feedback mode to review the simplified Today,
+mixed-source event provenance, all-calendar inventory, permission handoff,
+disconnection flows and responsive layout. This design review is not S1-A1–A4
+integration evidence.

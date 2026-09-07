@@ -1,7 +1,4 @@
-# S3 approved Calendar action — prototype first
-
-2026-09-05. User direction: implement/review UI in the HTML prototype before
-porting to Flutter. This is an interactive design reference, not live execution.
+# S3 approved Calendar action
 
 2026-09-06: [Native execution](../validation/s3-native-executor.md) binds the
 Flutter review to the durable ledger. A later product decision replaces this
@@ -22,7 +19,7 @@ human-readable destination, date/time, and the one-event scope. Keep guests,
 alerts, recurrence and effects on existing events explicit. Reducing noise must
 not reduce the user's understanding of what they authorize.
 
-The prototype and Flutter display both endpoints in the device's local time. Full
+Flutter displays both endpoints in the device's local time. Full
 dates avoid ambiguity for overnight events. The user neither enters nor reviews a
 timezone, offset or UTC string. This is presentation only: approval retains the
 original immutable UTC instants and internal scheduling metadata, never a reparsed
@@ -50,39 +47,14 @@ Destination changes produce a new proposal revision before approval. Decline doe
 not create an event; closing the dialog is not approval or rejection.
 
 Approval shows revalidation, create and re-import as separate steps. The created
-event appears in Today only after simulated re-import. Closing/reopening or
+event appears in Today only after successful re-import. Closing/reopening or
 navigating during execution does not restart its request. All terminal and
 ambiguous states remain accessible through the card; never rely only on a toast.
 
-## Review scenarios
-
-Use `/?action=ready`, `conflict`, `denied`, `expired`, `timeout`, `missing`, or
-`read-error` and click **Review suggestion → Approve & create**.
-
-- `ready`: checks → create → re-import → one timeline event.
-- `conflict`, `denied`, `expired`: no create; request/review a fresh proposal and
-  explicitly approve again. The fresh fixture simulates the prerequisite resolved.
-- `timeout`: ambiguous result; **Check Calendar for this event** only looks up the
-  original execution, then re-imports its matched receipt.
-- `missing`: lookup cannot confirm a match; keep unresolved and require inspection
-  of the original calendar. No create/retry/replacement button is offered.
-- `read-error`: create succeeded, collection failed. **Retry Calendar read** never
-  sends another create.
-- Decline: terminal no-write state with an explicit fresh-proposal path.
-- Non-current fixture day hides the proposal; stale/disconnected days cannot approve.
-
-The reducer enforces allowed transitions and ignores duplicate clicks/out-of-order
-callbacks. Approval expires after 15 real minutes in the browser; the displayed
-event date is the existing fixed Sep 4 fixture, not a real scheduling recommendation.
-No model, OS settings operation, EventKit call or real persistent ledger is involved.
-Reload resets the simulation. Native durable restart behavior is tested separately
-in Rust; it is not established by this prototype.
-
 ## Validation boundary
 
-The simplified review is implemented in the prototype and Flutter. Production
-decisions/state remain bound to the Rust ledger, not this simulated reducer.
-All app builds include Calendar create.
-This presentation change does not
+The simplified review is implemented in Flutter. Production decisions and state
+remain bound to the Rust ledger. All app builds include Calendar create. Review the
+surface with the Flutter preview and design-feedback mode. This presentation does not
 advance the remaining live acceptance or dogfood gates recorded in
 [S3 native validation](../validation/s3-native-executor.md).

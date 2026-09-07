@@ -9,7 +9,7 @@ Healthy source batches commit within one atomic CAS while failed sources retain 
 Disconnect removes imported copies only; revision tombstones prevent late-read resurrection
 across reconnect. External events and OS permission are not changed by disconnect.
 
-Scope UI was implemented in the HTML prototype before Flutter. Prototype fixtures
+At this checkpoint, scope UI was implemented in the now-retired HTML prototype before Flutter. Prototype fixtures
 `?state=partial`, `?dst=spring`, `?dst=fall` simulate partial recovery and 23/25-hour
 elapsed timelines. These are not EventKit acceptance evidence.
 

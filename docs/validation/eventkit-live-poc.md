@@ -75,9 +75,10 @@ product writes based on this test. The Swift helper is not the Rust executor; on
 the provider feasibility and real EventKit-to-existing-read-path behavior were live.
 No server-side iCloud/cross-device/full-sync guarantee was measured.
 
-## Prototype evidence
+## Historical prototype evidence
 
-S3 UI is implemented **first in the HTML prototype**, no native UI changes.
+At this checkpoint S3 UI was implemented first in the now-retired HTML prototype,
+with no native UI changes.
 Independent dev server: `http://127.0.0.1:5184`, loopback only; existing port 5173
 belongs to another project and was left alone.
 
