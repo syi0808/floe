@@ -507,6 +507,40 @@ impl AgentRegistry {
         Ok(())
     }
 
+    pub fn validate_historical_result(
+        &self,
+        result: &crate::ExpertResult,
+    ) -> Result<(), AgentFailure> {
+        if result.schema_version != AGENT_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        if result.instance_id != self.instance_id() {
+            return Err(AgentFailure::NotFound);
+        }
+        let assignment = self.assignment(result.person_id, result.assignment_id)?;
+        let installation = self.installation(assignment.installation_id)?;
+        let package = self.package(&installation.package)?;
+        if package.reference.kind != PackageKind::Expert || package.required_tools.len() != 1 {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let PackageImplementation::TimelineRead { data_class } =
+            self.package(&package.required_tools[0])?.implementation
+        else {
+            return Err(AgentFailure::CapabilityDenied);
+        };
+        let resolved = ResolvedExpert {
+            registry_revision: self.revision(),
+            package: package.clone(),
+            assignment: assignment.clone(),
+            data_class,
+        };
+        Self::validate_result_content(result, &resolved)?;
+        if result.state_revision == 0 || result.state_revision > assignment.private_state.revision {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+
     fn resolve_result(
         &self,
         expected_revision: u64,
@@ -522,6 +556,14 @@ impl AgentRegistry {
             expected_revision,
             &[result.view_handle],
         )?;
+        Self::validate_result_content(result, &resolved)?;
+        Ok(resolved)
+    }
+
+    fn validate_result_content(
+        result: &crate::ExpertResult,
+        resolved: &ResolvedExpert,
+    ) -> Result<(), AgentFailure> {
         if result.package != resolved.package.reference
             || result.data_class != resolved.data_class
             || result.view_calls != 1
@@ -558,7 +600,7 @@ impl AgentRegistry {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        Ok(resolved)
+        Ok(())
     }
 
     pub fn register_calendar_view(

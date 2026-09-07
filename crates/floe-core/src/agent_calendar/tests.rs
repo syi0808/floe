@@ -347,6 +347,85 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_without_republication()
+{
+    for class in [DataClass::Synthetic, DataClass::Personal] {
+        let fixture = Fixture::with_class(class).await;
+        let result = fixture
+            .core
+            .run_calendar_agent_turn(
+                &fixture.vault,
+                &Access::default(),
+                &Model::default(),
+                fixture.request(),
+                now,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let action = result.proposals[0].result.as_ref().unwrap();
+        let reference = result.proposals[0].reference.clone();
+        let snapshot = fixture.state().await;
+        fixture
+            .vault
+            .configure_registry(
+                RegistryConfiguration {
+                    instance_id: snapshot.instance_id,
+                    expected_revision: snapshot.revision,
+                    target: RegistryConfigurationTarget::CalendarView {
+                        id: fixture.grant.handle,
+                        enabled: false,
+                    },
+                },
+                Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fixture
+                .core
+                .inspect_expert_calendar_action(
+                    &fixture.vault,
+                    ExpertCalendarInspection {
+                        reference: reference.clone(),
+                        cancellation: Cancellation::default(),
+                        deadline: Instant::now() + Duration::from_secs(5),
+                    }
+                )
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(action)
+        );
+        assert_eq!(
+            fixture
+                .core
+                .prepare_expert_calendar_action(
+                    &fixture.vault,
+                    ExpertCalendarRequest {
+                        reference,
+                        destination: fixture.request().destination.unwrap(),
+                        cancellation: Cancellation::default(),
+                        deadline: Instant::now() + Duration::from_secs(5),
+                    },
+                    now
+                )
+                .await,
+            Err(AgentFailure::CapabilityDenied)
+        );
+        assert_eq!(fixture.state().await.revision, snapshot.revision + 1);
+        assert_eq!(
+            fixture
+                .core
+                .calendar_actions(fixture.session.person_id)
+                .await
+                .unwrap(),
+            std::slice::from_ref(action)
+        );
+    }
+}
+
+#[tokio::test]
 async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_governed_turn_path() {
     for class in [DataClass::Synthetic, DataClass::Personal] {
         let mut fixture = Fixture::with_class(class).await;

@@ -34,7 +34,8 @@ impl AgentActionOrigin {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExpertProposalReference {
     pub person_id: PersonId,
     pub session_id: Uuid,
@@ -68,7 +69,67 @@ mod manager {
         pub deadline: Instant,
     }
 
+    pub struct ExpertCalendarInspection {
+        pub reference: ExpertProposalReference,
+        pub cancellation: Cancellation,
+        pub deadline: Instant,
+    }
+
     impl FloeCore {
+        pub async fn inspect_expert_calendar_action<Keys: VaultKeyProvider>(
+            &self,
+            vault: &EncryptedAgentVault<Keys>,
+            request: ExpertCalendarInspection,
+        ) -> Result<Option<CalendarAction>, AgentFailure> {
+            let deadline = request
+                .deadline
+                .min(Instant::now() + std::time::Duration::from_secs(30));
+            let session_id = request.reference.session_id;
+            let result = tokio::select! {
+                biased;
+                _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
+                _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
+                result = vault.with_recorded_expert_proposal(&request.reference, |evidence| async move {
+                    if !matches!(evidence.data_class, DataClass::Synthetic | DataClass::Personal) {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    let Some(action) = self.store.bounded_expert_calendar_action(evidence.person_id, evidence.invocation_id).await? else {
+                        return Ok(None);
+                    };
+                    let Some(origin) = action.agent_origin.as_ref() else {
+                        return Err(AgentFailure::Conflict);
+                    };
+                    let proposal = &evidence.action_proposals[0];
+                    if !origin.valid_for(&action)
+                        || origin.instance_id != evidence.instance_id
+                        || origin.session_id != session_id
+                        || origin.invocation_id != evidence.invocation_id
+                        || origin.assignment_id != evidence.assignment_id
+                        || origin.package != evidence.package
+                        || origin.view_handle != evidence.view_handle
+                        || origin.state_revision != evidence.state_revision
+                        || origin.data_class != evidence.data_class
+                        || action.title != "Focus time"
+                        || action.schedule.starts_at != timestamp(proposal.starts_at_unix_ms)?
+                        || action.schedule.ends_at != timestamp(proposal.ends_at_unix_ms)?
+                        || action.expires_at > timestamp(evidence.expires_at_unix_ms)?
+                        || (evidence.source_handle.starts_with("calendar.timeline:")
+                            && evidence.source_handle != format!("calendar.timeline:{}:{}", evidence.view_handle, action.connection_revision))
+                    {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    Ok(Some(action))
+                }) => result,
+            };
+            if request.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            result
+        }
+
         pub async fn prepare_expert_calendar_action<Keys: VaultKeyProvider>(
             &self,
             vault: &EncryptedAgentVault<Keys>,
@@ -274,7 +335,7 @@ mod manager {
 }
 
 #[cfg(unix)]
-pub use manager::{ExpertCalendarDestination, ExpertCalendarRequest};
+pub use manager::{ExpertCalendarDestination, ExpertCalendarInspection, ExpertCalendarRequest};
 
 #[cfg(all(test, unix))]
 mod tests;

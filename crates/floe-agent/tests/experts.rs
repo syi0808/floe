@@ -337,6 +337,56 @@ impl ExpertViews for Views {
 }
 
 #[tokio::test]
+async fn historical_validation_preserves_provenance_without_restoring_execution_grants() {
+    let fixture = Fixture::new();
+    let views = Views {
+        view: fixture.view.clone(),
+        reads: AtomicUsize::new(0),
+    };
+    let result = ExpertHost {
+        registry: &fixture.registry,
+        views: &views,
+    }
+    .invoke(fixture.invocation(fixture.schedule))
+    .await
+    .unwrap();
+    let mut snapshot = fixture.registry.lock().unwrap().snapshot();
+    let replacement_view = Uuid::new_v4();
+    for installation in &mut snapshot.installations {
+        installation.enabled = false;
+    }
+    for assignment in &mut snapshot.assignments {
+        assignment.enabled = false;
+        assignment.granted_view_handles = vec![replacement_view];
+    }
+    let registry = AgentRegistry::restore(snapshot.clone(), fixture.instance).unwrap();
+    registry.validate_historical_result(&result).unwrap();
+    assert_eq!(
+        registry.validate_recorded_result(&result),
+        Err(AgentFailure::CapabilityDenied)
+    );
+    for mode in 0..7 {
+        let mut invalid = result.clone();
+        match mode {
+            0 => invalid.instance_id = Uuid::new_v4(),
+            1 => invalid.person_id = PersonId::new(),
+            2 => invalid.state_revision += 1,
+            3 => invalid.package.version = "different".into(),
+            4 => invalid.data_class = DataClass::Personal,
+            5 => invalid.view_calls = 0,
+            _ => invalid.action_proposals.push(ExpertFocusProposal {
+                view_handle: Uuid::new_v4(),
+                starts_at_unix_ms: 0,
+                ends_at_unix_ms: 60_000,
+            }),
+        }
+        assert!(registry.validate_historical_result(&invalid).is_err());
+    }
+    assert_eq!(registry.snapshot(), snapshot);
+    assert_eq!(views.reads.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
 async fn recorded_result_reconstructs_only_the_validated_private_state_transition() {
     let fixture = Fixture::new();
     let baseline = fixture.registry.lock().unwrap().snapshot();

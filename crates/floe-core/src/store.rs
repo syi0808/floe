@@ -228,6 +228,45 @@ impl TursoStore {
         Ok(action)
     }
 
+    pub(crate) async fn bounded_expert_calendar_action(
+        &self,
+        person_id: PersonId,
+        id: uuid::Uuid,
+    ) -> Result<Option<crate::CalendarAction>, floe_agent::AgentFailure> {
+        use floe_agent::AgentFailure;
+        let connection = self
+            .connection()
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let mut rows = connection.query(
+            "SELECT length(CAST(payload AS BLOB)), CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload ELSE NULL END FROM calendar_actions WHERE id = ? AND person_id = ?",
+            (id.to_string(), person_id.to_string()),
+        ).await.map_err(|_| AgentFailure::StorageUnavailable)?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+        else {
+            return Ok(None);
+        };
+        if row
+            .get::<i64>(0)
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            > 65_536
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let action: crate::CalendarAction = serde_json::from_str(
+            &row.get::<String>(1)
+                .map_err(|_| AgentFailure::StorageUnavailable)?,
+        )
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if action.person_id != person_id || action.id != id {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(Some(action))
+    }
+
     pub(crate) async fn save_calendar_action(
         &self,
         action: &crate::CalendarAction,

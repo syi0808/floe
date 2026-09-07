@@ -57,6 +57,9 @@ now expose explicit setup/reconciliation and scope enablement.
 [Calendar access UI](docs/validation/s4-calendar-consent.md) selects and confirms an
 exact existing connection scope without automatically expanding grants. Connected
 chat dispatch and live key/model/source verification remain open.
+Core [read-only proposal inspection](docs/validation/s4-proposal-inspection.md) now
+recovers existing S3 action links after restart or scope revocation without re-execution;
+native transport and conversation-card recovery controls remain open.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

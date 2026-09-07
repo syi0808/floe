@@ -17,6 +17,8 @@ use tokio::time::Instant;
 use super::*;
 use crate::*;
 
+mod inspection;
+
 fn now() -> DateTime<Utc> {
     static CLOCK: OnceLock<DateTime<Utc>> = OnceLock::new();
     *CLOCK.get_or_init(Utc::now)

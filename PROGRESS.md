@@ -44,6 +44,28 @@ verified criteria, not estimated implementation percentages.
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
 
+### S4 read-only proposal inspection — 2026-09-07
+
+- Added Core inspection of a committed Expert proposal's existing S3 action. It
+  authenticates encrypted receipt/session/package identity and returns the original
+  action without model/provider calls, publication or approval/execution transitions.
+- Historical evidence validation is separate from live grant checks: revocation and
+  source changes do not hide an existing action, but still block new publication.
+  Bounded action reads reject mismatched or oversized ledger records; missing actions
+  remain absent rather than being recreated. Protected-key/cancel/deadline checks
+  prevent returning uncertain evidence as successful inspection.
+- Added eight tests covering historical versus current permissions, absent/recorded
+  actions, all S3 states, reopen/revocation, copied receipts, corrupted records and
+  cancellation/key loss. Calendar tests use both data classes with fictional records
+  and injected models/access/keys, not live Personal sources.
+- Validation: 203 workspace Rust tests, three keyring example tests, 25 native
+  assertions, 169 Flutter tests, analysis, formatting and Clippy with existing
+  exclusions pass. Rust/macOS Debug builds and deep strict signature verification
+  pass; UI goldens are unchanged.
+- [Evidence and limits](docs/validation/s4-proposal-inspection.md). Native inspection
+  jobs, conversation-card recovery controls and connected-turn dispatch remain, along
+  with live key/model/source/privacy gates. S4 stays 0/14; S1/S3 is unchanged.
+
 ### S4 Calendar scope consent UI — 2026-09-07
 
 - Added Calendar access under Tools & Experts, using the existing same-Person Day
