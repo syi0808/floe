@@ -174,8 +174,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   }
 
   @override
-  Widget build(BuildContext context) => FloeSquircle(
-    padding: const EdgeInsets.all(24),
+  Widget build(BuildContext context) => FloeCard(
     child: FloeLoadingOverlay(
       loading: busy,
       label: status,

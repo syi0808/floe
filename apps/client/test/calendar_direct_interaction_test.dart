@@ -42,7 +42,8 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pump();
     expect(value.hour, 15);
-    await tester.tap(find.byTooltip('Decrease Starts minute'));
+    await tester.tap(find.byType(TextFormField).last);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(value.minute, 29);
     await tester.enterText(find.byType(TextFormField).last, '99');

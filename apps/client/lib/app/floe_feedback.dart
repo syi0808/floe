@@ -122,7 +122,7 @@ class FloeDetailDialog extends StatelessWidget {
     constraints: BoxConstraints(maxWidth: 540),
     insetPadding: EdgeInsets.all(FloeSpace.lg),
     child: SingleChildScrollView(
-      padding: EdgeInsets.all(FloeSpace.xl),
+      padding: FloeControlInsets.dialog,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -30,8 +30,7 @@ class CalendarContextRail extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        FloeSquircle(
-          padding: EdgeInsets.all(FloeSpace.lg),
+        FloeCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -84,8 +83,7 @@ class CalendarContextRail extends StatelessWidget {
           ),
         ),
         SizedBox(height: FloeSpace.lg),
-        FloeSquircle(
-          padding: EdgeInsets.all(FloeSpace.lg),
+        FloeCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

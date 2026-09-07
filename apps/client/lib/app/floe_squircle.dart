@@ -66,3 +66,27 @@ final class FloeSquircle extends StatelessWidget {
     child: padding == null ? child : Padding(padding: padding!, child: child),
   );
 }
+
+final class FloeCard extends StatelessWidget {
+  const FloeCard({
+    required this.child,
+    this.fill = FloeColor.surface,
+    this.borderColor = FloeColor.border,
+    this.padding = FloeControlInsets.card,
+    super.key,
+  });
+
+  final Widget child;
+  final Color fill;
+  final Color borderColor;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.lg,
+    fill: fill,
+    borderColor: borderColor,
+    padding: padding,
+    child: child,
+  );
+}

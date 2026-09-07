@@ -158,8 +158,7 @@ class _CatalogSection extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => FloeSquircle(
-    padding: const EdgeInsets.all(FloeSpace.lg),
+  Widget build(BuildContext context) => FloeCard(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

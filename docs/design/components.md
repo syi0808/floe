@@ -66,6 +66,10 @@ Universal Capture is a dedicated productivity control, not a chat composer. It a
 
 Cards use `sq-lg`, 20–24px padding, and flat white or a step-50 tint. A card exists only when grouping or interaction needs a boundary.
 
+Flutter's standard card is `FloeCard`; it owns `sq-lg`, the semantic surface and
+border colors, and the default 20px content inset. Use `FloeSquircle` directly only
+when the surface is not a card or needs a documented semantic size.
+
 - Do not wrap every timeline row in a card.
 - Do not tint the entire card more strongly than step `100`.
 - Do not use a sparkle on ordinary user-authored notes.
