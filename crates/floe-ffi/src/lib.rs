@@ -1,9 +1,11 @@
+mod agent_run;
 mod native_calendar;
 
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
+    sync::Arc,
 };
 
 use chrono::{DateTime, NaiveDate, Utc};
@@ -17,7 +19,14 @@ use uuid::Uuid;
 
 pub struct FloeHandle {
     runtime: Runtime,
-    core: FloeCore,
+    core: Arc<FloeCore>,
+    agent_runs: agent_run::AgentRuns,
+}
+
+impl Drop for FloeHandle {
+    fn drop(&mut self) {
+        self.agent_runs.close(&self.runtime);
+    }
 }
 
 type BridgeResult<T> = Result<T, ErrorDto>;
@@ -177,6 +186,9 @@ pub fn agent_fixture(
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     let session = match request.operation {
+        AgentFixtureOperationDto::Resume {} => handle
+            .runtime
+            .block_on(handle.core.resume_agent_fixture(person_id)),
         AgentFixtureOperationDto::Start {} => handle
             .runtime
             .block_on(handle.core.start_agent_fixture(person_id)),
@@ -191,6 +203,7 @@ pub fn agent_fixture(
             expected_revision,
         } => {
             let session_id = parse_id(&session_id, "session_id", |value| value)?;
+            handle.agent_runs.ensure_idle(person_id, session_id)?;
             handle.runtime.block_on(handle.core.recover_agent_fixture(
                 person_id,
                 session_id,
@@ -203,11 +216,8 @@ pub fn agent_fixture(
             prompt,
         } => {
             let session_id = parse_id(&session_id, "session_id", |value| value)?;
-            let prompt = match prompt {
-                AgentFixturePromptDto::Today => floe_core::AgentFixturePrompt::Today,
-                AgentFixturePromptDto::FollowUp => floe_core::AgentFixturePrompt::FollowUp,
-                AgentFixturePromptDto::RepeatedCall => floe_core::AgentFixturePrompt::RepeatedCall,
-            };
+            handle.agent_runs.ensure_idle(person_id, session_id)?;
+            let prompt = agent_run::fixture_prompt(prompt);
             let result = handle
                 .runtime
                 .block_on(handle.core.run_agent_fixture(
@@ -837,7 +847,11 @@ pub unsafe extern "C" fn floe_core_open(
             .build()
             .map_err(|value| error(ErrorCodeDto::Internal, value.to_string()))?;
         let core = runtime.block_on(FloeCore::open(path)).map_err(core_error)?;
-        Ok(Box::into_raw(Box::new(FloeHandle { runtime, core })))
+        Ok(Box::into_raw(Box::new(FloeHandle {
+            runtime,
+            core: Arc::new(core),
+            agent_runs: Default::default(),
+        })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(Ok(value)) => value,
@@ -915,6 +929,20 @@ pub unsafe extern "C" fn floe_core_agent_fixture(
         let request = serde_json::from_str(c_input(request_json, "request_json")?)
             .map_err(|value| invalid("request_json", value.to_string()))?;
         agent_fixture(handle, request)
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_agent_fixture_run(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request = serde_json::from_str(c_input(request_json, "request_json")?)
+            .map_err(|value| invalid("request_json", value.to_string()))?;
+        agent_run::run(handle, request)
     })
 }
 

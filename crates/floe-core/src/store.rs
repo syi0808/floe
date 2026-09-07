@@ -135,6 +135,24 @@ impl TursoStore {
         Ok(session)
     }
 
+    pub(crate) async fn latest_agent_fixture_session(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<floe_agent::AgentSession>, CoreError> {
+        let connection = self.connection().await?;
+        let mut rows = connection.query(
+            "SELECT payload FROM agent_fixture_sessions WHERE person_id = ? ORDER BY rowid DESC LIMIT 1",
+            [person_id.to_string()],
+        ).await.map_err(storage_error)?;
+        match rows.next().await.map_err(storage_error)? {
+            Some(row) => {
+                let payload: String = row.get(0).map_err(storage_error)?;
+                Ok(Some(from_str(&payload).map_err(storage_error)?))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn save_agent_fixture_session(
         &self,
         session: &floe_agent::AgentSession,

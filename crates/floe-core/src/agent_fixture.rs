@@ -1,6 +1,7 @@
 use floe_agent::*;
 use floe_domain::PersonId;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{CoreError, ErrorCode, FloeCore, TursoStore};
@@ -11,6 +12,7 @@ pub enum AgentFixturePrompt {
     Today,
     FollowUp,
     RepeatedCall,
+    Unavailable,
 }
 
 impl AgentFixturePrompt {
@@ -19,6 +21,7 @@ impl AgentFixturePrompt {
             Self::Today => "Show the sample day briefing.",
             Self::FollowUp => "What can the sample assistant change?",
             Self::RepeatedCall => "Repeat the sample read without progress.",
+            Self::Unavailable => "Show a sample model connection failure.",
         }
     }
 }
@@ -29,7 +32,29 @@ pub struct AgentFixtureResult {
     pub events: Vec<AgentEvent>,
 }
 
+pub struct AgentFixtureTurn {
+    pub person_id: PersonId,
+    pub session_id: Uuid,
+    pub expected_revision: u64,
+    pub prompt: AgentFixturePrompt,
+}
+
 impl FloeCore {
+    pub async fn resume_agent_fixture(
+        &self,
+        person_id: PersonId,
+    ) -> Result<AgentSession, AgentFailure> {
+        match self
+            .store
+            .latest_agent_fixture_session(person_id)
+            .await
+            .map_err(agent_error)?
+        {
+            Some(session) => Ok(session),
+            None => self.start_agent_fixture(person_id).await,
+        }
+    }
+
     pub async fn start_agent_fixture(
         &self,
         person_id: PersonId,
@@ -61,9 +86,43 @@ impl FloeCore {
         expected_revision: u64,
         prompt: AgentFixturePrompt,
     ) -> Result<AgentFixtureResult, AgentFailure> {
+        let mut events = vec![];
+        let session = self
+            .fixture_turn(
+                AgentFixtureTurn {
+                    person_id,
+                    session_id,
+                    expected_revision,
+                    prompt,
+                },
+                Cancellation::default(),
+                Duration::ZERO,
+                |event| events.push(event),
+            )
+            .await?;
+        Ok(AgentFixtureResult { session, events })
+    }
+
+    pub async fn stream_agent_fixture(
+        &self,
+        turn: AgentFixtureTurn,
+        cancellation: Cancellation,
+        emit: impl FnMut(AgentEvent) + Send,
+    ) -> Result<AgentSession, AgentFailure> {
+        self.fixture_turn(turn, cancellation, Duration::from_millis(500), emit)
+            .await
+    }
+
+    async fn fixture_turn(
+        &self,
+        turn: AgentFixtureTurn,
+        cancellation: Cancellation,
+        latency: Duration,
+        emit: impl FnMut(AgentEvent) + Send,
+    ) -> Result<AgentSession, AgentFailure> {
         let policy = fixture_policy();
         let store = FixtureStore(&self.store);
-        let model = FixtureModel;
+        let model = FixtureModel { latency };
         let capabilities = FixtureCapabilities;
         let runtime = AgentRuntime {
             store: &store,
@@ -72,25 +131,23 @@ impl FloeCore {
             policy: &policy,
             budget: AgentBudget::default(),
         };
-        let mut events = vec![];
-        let session = runtime
+        runtime
             .run_turn(
                 AgentCommand {
                     schema_version: AGENT_VERSION,
-                    person_id,
-                    session_id,
-                    expected_revision,
-                    text: prompt.text().into(),
+                    person_id: turn.person_id,
+                    session_id: turn.session_id,
+                    expected_revision: turn.expected_revision,
+                    text: turn.prompt.text().into(),
                 },
                 AgentContext {
                     projection_version: 1,
                     evidence: vec![],
                 },
-                Cancellation::default(),
-                |event| events.push(event),
+                cancellation,
+                emit,
             )
-            .await?;
-        Ok(AgentFixtureResult { session, events })
+            .await
     }
 
     pub async fn recover_agent_fixture(
@@ -102,7 +159,9 @@ impl FloeCore {
         let policy = fixture_policy();
         AgentRuntime {
             store: &FixtureStore(&self.store),
-            model: &FixtureModel,
+            model: &FixtureModel {
+                latency: Duration::ZERO,
+            },
             capabilities: &FixtureCapabilities,
             policy: &policy,
             budget: AgentBudget::default(),
@@ -146,7 +205,9 @@ impl SessionStore for FixtureStore<'_> {
     }
 }
 
-struct FixtureModel;
+struct FixtureModel {
+    latency: Duration,
+}
 
 impl ModelRunner for FixtureModel {
     fn placement(&self) -> ModelPlacement {
@@ -154,6 +215,9 @@ impl ModelRunner for FixtureModel {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        if !self.latency.is_zero() {
+            tokio::time::sleep(self.latency).await;
+        }
         let prompt = request
             .messages
             .iter()
@@ -163,6 +227,9 @@ impl ModelRunner for FixtureModel {
                 _ => None,
             })
             .ok_or(AgentFailure::InvalidInput)?;
+        if prompt == AgentFixturePrompt::Unavailable.text() {
+            return Err(AgentFailure::ModelUnavailable);
+        }
         let step = if prompt == AgentFixturePrompt::FollowUp.text() {
             ModelStep::Answer { text: "This is synthetic evidence only. Calendar changes still require the existing Review and action authority boundary.".into() }
         } else if prompt == AgentFixturePrompt::RepeatedCall.text()

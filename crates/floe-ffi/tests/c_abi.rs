@@ -49,6 +49,14 @@ impl Core {
         .unwrap();
         take_json(unsafe { floe_core_agent_fixture(self.0, request.as_ptr()) })
     }
+
+    fn agent_run(&self, person_id: &str, session: &Value, operation: Value) -> Value {
+        let request = CString::new(json!({
+            "schema_version": 1, "person_id": person_id,
+            "session_id": session["id"], "expected_revision": session["revision"], "operation": operation,
+        }).to_string()).unwrap();
+        take_json(unsafe { floe_core_agent_fixture_run(self.0, request.as_ptr()) })
+    }
 }
 
 impl Drop for Core {
@@ -73,6 +81,163 @@ fn day() -> Value {
         "timezone_offset_seconds": 0,
         "now": "2026-09-02T10:30:00Z"
     })
+}
+
+#[test]
+fn async_agent_progress_is_replayable_bounded_and_cancellable_without_blocking_calendar() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("stream.db").to_str().unwrap());
+    let person = Uuid::new_v4().to_string();
+    let started = core.agent(&person, json!({"kind":"start"}));
+    let session = &data(&started)["session"];
+    let begin = core.agent_run(&person, session, json!({"kind":"begin","prompt":"today"}));
+    assert_eq!(data(&begin)["done"], false);
+    let first = poll_until(&core, &person, session, |update| {
+        update["next_sequence"].as_u64().unwrap() >= 3
+    });
+    assert_eq!(first["done"], false);
+    assert!(
+        first["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"]["kind"] == "model_started")
+    );
+    let replay = core.agent_run(&person, session, json!({"kind":"poll","after_sequence":0}));
+    let length = first["events"].as_array().unwrap().len();
+    assert_eq!(
+        &data(&replay)["events"].as_array().unwrap()[..length],
+        first["events"].as_array().unwrap()
+    );
+    assert_eq!(
+        core.agent_run(
+            &person,
+            session,
+            json!({"kind":"poll","after_sequence":9999})
+        )["error"]["code"],
+        "validation"
+    );
+    assert_eq!(
+        core.agent_run(&Uuid::new_v4().to_string(), session, json!({"kind":"stop"}))["error"]["code"],
+        "not_found"
+    );
+    assert_eq!(
+        core.agent_run(&person, session, json!({"kind":"release"}))["error"]["code"],
+        "conflict"
+    );
+    let current = core.agent(&person, json!({"kind":"get","session_id":session["id"]}));
+    assert_eq!(
+        core.agent(
+            &person,
+            json!({"kind":"recover","session_id":session["id"],
+        "expected_revision":data(&current)["session"]["revision"]})
+        )["error"]["code"],
+        "conflict"
+    );
+    let before = std::time::Instant::now();
+    assert_eq!(
+        data(&core.load(json!({"schema_version":1,"person_id":person,"day":day()})))["items"],
+        json!([])
+    );
+    assert!(before.elapsed() < std::time::Duration::from_millis(400));
+    data(&core.agent_run(&person, session, json!({"kind":"stop"})));
+    let stopped = poll_until(&core, &person, session, |update| update["done"] == true);
+    assert_eq!(stopped["session"]["last_outcome"]["reason"], "cancelled");
+    assert!(
+        !stopped["session"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["kind"] == "assistant")
+    );
+    data(&core.agent_run(&person, session, json!({"kind":"release"})));
+    assert_eq!(
+        core.agent_run(&person, session, json!({"kind":"begin","prompt":"today"}))["error"]["code"],
+        "conflict"
+    );
+}
+
+#[test]
+fn async_agent_completion_and_typed_failure_resume_without_duplicate_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("complete.db");
+    let person = Uuid::new_v4().to_string();
+    let core = Core::open(path.to_str().unwrap());
+    let initial = core.agent(&person, json!({"kind":"resume"}));
+    let session = &data(&initial)["session"];
+    let begin = json!({"kind":"begin","prompt":"today"});
+    data(&core.agent_run(&person, session, begin.clone()));
+    data(&core.agent_run(&person, session, begin));
+    let completed = poll_until(&core, &person, session, |update| update["done"] == true);
+    assert_eq!(
+        completed["session"]["messages"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(completed["session"]["last_outcome"]["status"], "completed");
+    let replay = core.agent_run(&person, session, json!({"kind":"poll","after_sequence":0}));
+    assert_eq!(data(&replay), &completed);
+    data(&core.agent_run(&person, session, json!({"kind":"release"})));
+    drop(core);
+    let core = Core::open(path.to_str().unwrap());
+    let restored = core.agent(&person, json!({"kind":"resume"}));
+    assert_eq!(data(&restored)["session"], completed["session"]);
+    let session = &data(&restored)["session"];
+    data(&core.agent_run(
+        &person,
+        session,
+        json!({"kind":"begin","prompt":"unavailable"}),
+    ));
+    let failed = poll_until(&core, &person, session, |update| update["done"] == true);
+    assert_eq!(
+        failed["session"]["last_outcome"]["reason"],
+        "model_unavailable"
+    );
+    assert_eq!(failed["session"]["messages"].as_array().unwrap().len(), 4);
+    data(&core.agent_run(&person, session, json!({"kind":"release"})));
+    let newer = core.agent(&person, json!({"kind":"start"}));
+    assert_eq!(
+        data(&core.agent(&person, json!({"kind":"resume"})))["session"],
+        data(&newer)["session"]
+    );
+}
+
+#[test]
+fn closing_native_handle_stops_active_fixture_before_reopening() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("close.db");
+    let person = Uuid::new_v4().to_string();
+    let core = Core::open(path.to_str().unwrap());
+    let initial = core.agent(&person, json!({"kind":"start"}));
+    let session = &data(&initial)["session"];
+    data(&core.agent_run(&person, session, json!({"kind":"begin","prompt":"today"})));
+    poll_until(&core, &person, session, |update| {
+        update["next_sequence"].as_u64().unwrap() >= 3
+    });
+    drop(core);
+    let core = Core::open(path.to_str().unwrap());
+    let restored = core.agent(&person, json!({"kind":"resume"}));
+    assert_eq!(data(&restored)["session"]["id"], session["id"]);
+    assert_eq!(data(&restored)["session"]["active_turn"], Value::Null);
+    assert_eq!(
+        data(&restored)["session"]["last_outcome"]["reason"],
+        "cancelled"
+    );
+}
+
+fn poll_until(core: &Core, person: &str, session: &Value, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let response = core.agent_run(person, session, json!({"kind":"poll","after_sequence":0}));
+        let update = data(&response);
+        if ready(update) {
+            return update.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent poll timed out: {update}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]

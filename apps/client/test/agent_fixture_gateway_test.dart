@@ -1,10 +1,59 @@
 import 'dart:io';
 
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
+import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'native streaming controller stops, releases and resumes completed turns',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      expect(
+        library.existsSync(),
+        isTrue,
+        reason: 'Run cargo build -p floe-ffi.',
+      );
+      final directory = await Directory.systemTemp.createTemp(
+        'floe-agent-stream-',
+      );
+      final gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${directory.path}/fixture.db',
+      );
+      final controller = AgentController(
+        gateway: gateway,
+        personId: localPersonId,
+      );
+      addTearDown(() async {
+        controller.dispose();
+        await gateway.close();
+        await directory.delete(recursive: true);
+      });
+      await controller.load();
+      final running = controller.send(AgentFixturePrompt.today);
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (controller.messages.isEmpty) {
+        expect(DateTime.now().isBefore(deadline), isTrue);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(controller.running, isTrue);
+      expect(controller.messages, hasLength(1));
+      await controller.stop();
+      await running;
+      expect(controller.failure, 'cancelled');
+      expect(controller.needsReload, isFalse);
+      await controller.retry();
+      expect(controller.session!.lastOutcome!.completed, isTrue);
+      expect(controller.messages, hasLength(4));
+      final resumed = await gateway.resumeAgentFixture(localPersonId);
+      expect(resumed.session.id, controller.session!.id);
+      expect(resumed.session.revision, controller.session!.revision);
+      expect(resumed.session.messages, hasLength(4));
+    },
+  );
+
   test(
     'Agent fixture crosses Dart/C ABI and resumes after core restart',
     () async {

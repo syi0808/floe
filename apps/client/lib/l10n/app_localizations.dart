@@ -94,6 +94,186 @@ abstract class AppLocalizations {
   /// A list of this localizations delegate's supported locales.
   static const List<Locale> supportedLocales = <Locale>[Locale('en')];
 
+  /// No description provided for @agentEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe is here to help'**
+  String get agentEntry;
+
+  /// No description provided for @agentEntryHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Try a sample conversation'**
+  String get agentEntryHint;
+
+  /// No description provided for @agentSampleTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sample conversation'**
+  String get agentSampleTitle;
+
+  /// No description provided for @agentSampleBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Sample data only. Personal chat stays locked until secure storage is ready.'**
+  String get agentSampleBoundary;
+
+  /// No description provided for @agentNewConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'New sample conversation'**
+  String get agentNewConversation;
+
+  /// No description provided for @agentEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Start with a sample briefing, then ask a follow-up. No connected sources are read.'**
+  String get agentEmpty;
+
+  /// No description provided for @agentPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Sample question'**
+  String get agentPrompt;
+
+  /// No description provided for @agentBriefing.
+  ///
+  /// In en, this message translates to:
+  /// **'Show a sample briefing'**
+  String get agentBriefing;
+
+  /// No description provided for @agentFollowUp.
+  ///
+  /// In en, this message translates to:
+  /// **'What can Floe change?'**
+  String get agentFollowUp;
+
+  /// No description provided for @agentSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Send sample'**
+  String get agentSend;
+
+  /// No description provided for @agentStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop response'**
+  String get agentStop;
+
+  /// No description provided for @agentRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get agentRetry;
+
+  /// No description provided for @agentReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload conversation'**
+  String get agentReload;
+
+  /// No description provided for @agentRecover.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover conversation'**
+  String get agentRecover;
+
+  /// No description provided for @agentYou.
+  ///
+  /// In en, this message translates to:
+  /// **'You'**
+  String get agentYou;
+
+  /// No description provided for @agentSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Sample schedule'**
+  String get agentSource;
+
+  /// No description provided for @agentSourceDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'View sample source'**
+  String get agentSourceDetails;
+
+  /// No description provided for @agentSourceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This sample source is unavailable.'**
+  String get agentSourceUnavailable;
+
+  /// No description provided for @agentLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading saved conversation…'**
+  String get agentLoading;
+
+  /// No description provided for @agentPreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing sample reply…'**
+  String get agentPreparing;
+
+  /// No description provided for @agentReading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading the sample schedule…'**
+  String get agentReading;
+
+  /// No description provided for @agentStopping.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping response…'**
+  String get agentStopping;
+
+  /// No description provided for @agentStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Response stopped. Saved messages are kept.'**
+  String get agentStopped;
+
+  /// No description provided for @agentInterrupted.
+  ///
+  /// In en, this message translates to:
+  /// **'The previous response did not finish. Recover the saved conversation before continuing.'**
+  String get agentInterrupted;
+
+  /// No description provided for @agentRecovered.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved conversation recovered. You can try the question again.'**
+  String get agentRecovered;
+
+  /// No description provided for @agentUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The sample model is unavailable. Your saved conversation is kept.'**
+  String get agentUnavailable;
+
+  /// No description provided for @agentBudget.
+  ///
+  /// In en, this message translates to:
+  /// **'This response reached its limit. You can ask another sample question.'**
+  String get agentBudget;
+
+  /// No description provided for @agentStalled.
+  ///
+  /// In en, this message translates to:
+  /// **'The sample read repeated without progress, so Floe stopped it.'**
+  String get agentStalled;
+
+  /// No description provided for @agentReloadNeeded.
+  ///
+  /// In en, this message translates to:
+  /// **'The response could not be confirmed. Reload saved messages before sending again.'**
+  String get agentReloadNeeded;
+
+  /// No description provided for @agentFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'The response could not finish. Saved messages are kept.'**
+  String get agentFailure;
+
   /// No description provided for @settings.
   ///
   /// In en, this message translates to:

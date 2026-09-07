@@ -36,7 +36,7 @@ final class FfiDayGateway
         CalendarGateway,
         CalendarActionExecutionGateway,
         CalendarDirectActionGateway,
-        AgentFixtureGateway {
+        AgentFixtureStreamingGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -111,6 +111,43 @@ final class FfiDayGateway
   @override
   Future<AgentFixtureResult> startAgentFixture(String personId) =>
       _agentFixture(personId, {'kind': 'start'});
+
+  @override
+  Future<AgentFixtureResult> resumeAgentFixture(String personId) =>
+      _agentFixture(personId, {'kind': 'resume'});
+
+  @override
+  Future<AgentRunUpdate> beginAgentFixtureRun(
+    AgentSession session,
+    AgentFixturePrompt prompt,
+  ) => _agentRun(session, {'kind': 'begin', 'prompt': prompt.wireName});
+
+  @override
+  Future<AgentRunUpdate> pollAgentFixtureRun(
+    AgentSession session,
+    int afterSequence,
+  ) => _agentRun(session, {'kind': 'poll', 'after_sequence': afterSequence});
+
+  @override
+  Future<AgentRunUpdate> stopAgentFixtureRun(AgentSession session) =>
+      _agentRun(session, {'kind': 'stop'});
+
+  @override
+  Future<AgentRunUpdate> releaseAgentFixtureRun(AgentSession session) =>
+      _agentRun(session, {'kind': 'release'});
+
+  Future<AgentRunUpdate> _agentRun(
+    AgentSession session,
+    Map<String, Object?> operation,
+  ) async => AgentRunUpdate.fromJson(
+    await _request('agent_fixture_run', {
+      'schema_version': agentSchemaVersion,
+      'person_id': session.personId,
+      'session_id': session.id,
+      'expected_revision': session.revision,
+      'operation': operation,
+    }),
+  );
 
   @override
   Future<AgentFixtureResult> loadAgentFixture(
@@ -807,6 +844,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
           'execute' => bindings.execute(handle, input),
           'calendar_actions' => bindings.calendarActions(handle, input),
           'agent_fixture' => bindings.agentFixture(handle, input),
+          'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };
         if (output == nullptr) {

@@ -2,6 +2,10 @@
 
 Date: 2026-09-07. Evidence: deterministic fixture, macOS arm64.
 
+This is the initial foundation checkpoint. The subsequent
+[sample panel and incremental transport checkpoint](s4-agent-panel.md) supersedes
+its statements about missing UI/stop transport; the privacy and live-model gates remain.
+
 ## Scope and status
 
 This checkpoint starts the P0-I/S4 runtime foundation. It does not complete S4's

@@ -3,10 +3,18 @@ const agentSchemaVersion = 1;
 enum AgentFixturePrompt {
   today('today'),
   followUp('follow_up'),
-  repeatedCall('repeated_call');
+  repeatedCall('repeated_call'),
+  unavailable('unavailable');
 
   const AgentFixturePrompt(this.wireName);
   final String wireName;
+
+  String get sampleText => switch (this) {
+    today => 'Show the sample day briefing.',
+    followUp => 'What can the sample assistant change?',
+    repeatedCall => 'Repeat the sample read without progress.',
+    unavailable => 'Show a sample model connection failure.',
+  };
 }
 
 abstract interface class AgentFixtureGateway {
@@ -20,6 +28,52 @@ abstract interface class AgentFixtureGateway {
     AgentFixturePrompt prompt,
   );
   Future<AgentFixtureResult> recoverAgentFixture(AgentSession session);
+}
+
+abstract interface class AgentFixtureStreamingGateway
+    implements AgentFixtureGateway {
+  Future<AgentFixtureResult> resumeAgentFixture(String personId);
+  Future<AgentRunUpdate> beginAgentFixtureRun(
+    AgentSession session,
+    AgentFixturePrompt prompt,
+  );
+  Future<AgentRunUpdate> pollAgentFixtureRun(
+    AgentSession session,
+    int afterSequence,
+  );
+  Future<AgentRunUpdate> stopAgentFixtureRun(AgentSession session);
+  Future<AgentRunUpdate> releaseAgentFixtureRun(AgentSession session);
+}
+
+final class AgentRunUpdate {
+  AgentRunUpdate.fromJson(Map<String, Object?> json)
+    : sessionId = json['session_id']! as String,
+      expectedRevision = json['expected_revision']! as int,
+      nextSequence = json['next_sequence']! as int,
+      done = json['done']! as bool,
+      session = json['session'] == null
+          ? null
+          : AgentSession.fromJson(_object(json['session'])),
+      failure = json['failure'] as String?,
+      events = List.unmodifiable(
+        (json['events']! as List).map(
+          (value) => AgentEvent.fromJson(_object(value)),
+        ),
+      ) {
+    if (nextSequence < events.length ||
+        done != (session != null || failure != null) ||
+        session != null && failure != null) {
+      throw const FormatException('Invalid Agent run state.');
+    }
+  }
+
+  final String sessionId;
+  final int expectedRevision;
+  final int nextSequence;
+  final bool done;
+  final AgentSession? session;
+  final String? failure;
+  final List<AgentEvent> events;
 }
 
 final class AgentFixtureResult {

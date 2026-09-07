@@ -16,6 +16,7 @@ pub struct AgentFixtureRequestDto {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentFixtureOperationDto {
     Start {},
+    Resume {},
     Get {
         session_id: String,
     },
@@ -36,6 +37,38 @@ pub enum AgentFixturePromptDto {
     Today,
     FollowUp,
     RepeatedCall,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentFixtureRunRequestDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub session_id: String,
+    pub expected_revision: u64,
+    pub operation: AgentFixtureRunOperationDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentFixtureRunOperationDto {
+    Begin { prompt: AgentFixturePromptDto },
+    Poll { after_sequence: usize },
+    Stop {},
+    Release {},
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentFixtureRunDto {
+    pub session_id: String,
+    pub expected_revision: u64,
+    pub events: Vec<floe_agent::AgentEvent>,
+    pub next_sequence: usize,
+    pub done: bool,
+    pub session: Option<floe_agent::AgentSession>,
+    pub failure: Option<floe_agent::AgentFailure>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -1,4 +1,7 @@
 import 'package:intl/intl.dart';
+
+import 'dart:async';
+
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -29,6 +32,9 @@ import 'calendar_context_rail.dart';
 import 'connector_screen.dart';
 import '../../../app/floe_feedback.dart';
 import '../../server/settings_screen.dart';
+import '../../agent/agent_fixture_gateway.dart';
+import '../../agent/agent_controller.dart';
+import '../../agent/agent_panel.dart';
 
 enum _DestinationView { today, tasks, notes, activity, connections, settings }
 
@@ -45,9 +51,11 @@ class PersonalDayScreen extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.query,
+    this.agentGateway,
   });
   final DayGateway gateway;
   final DayQuery query;
+  final AgentFixtureStreamingGateway? agentGateway;
   @override
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
@@ -55,6 +63,9 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen> {
   late final PersonalDayController controller;
   CalendarActionController? actionController;
+  AgentController? agentController;
+  bool assistantOpen = false;
+  final assistantEntryFocus = FocusNode();
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
@@ -76,12 +87,26 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       )..load();
     }
     screenState = Listenable.merge([controller, ?actionController]);
+    final agentGateway =
+        widget.agentGateway ??
+        switch (widget.gateway) {
+          final AgentFixtureStreamingGateway gateway => gateway,
+          _ => null,
+        };
+    if (agentGateway != null) {
+      agentController = AgentController(
+        gateway: agentGateway,
+        personId: widget.query.personId,
+      );
+    }
   }
 
   @override
   void dispose() {
     controller.dispose();
     actionController?.dispose();
+    agentController?.dispose();
+    assistantEntryFocus.dispose();
     super.dispose();
   }
 
@@ -352,11 +377,35 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
           onTasks: () => _selectDestination(_DestinationView.tasks),
           onOpenTask: (task) => setState(() => selectedTaskId = task.id),
         ),
+        if (agentController != null) ...[
+          const SizedBox(height: FloeSpace.lg),
+          FloeButton.outlined(
+            focusNode: assistantEntryFocus,
+            onPressed: _openAssistant,
+            icon: const FloeMascot(size: 28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(AppLocalizations.of(context).agentEntry),
+                Text(
+                  AppLocalizations.of(context).agentEntryHint,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
     return LayoutBuilder(
       builder: (context, constraints) {
         if (MediaQuery.sizeOf(context).width <= 960) {
+          if (assistantOpen && agentController != null) {
+            return AgentPanel(
+              controller: agentController!,
+              onClose: _closeAssistant,
+            );
+          }
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -376,7 +425,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
                 288,
                 double.infinity,
               ),
-              child: SingleChildScrollView(child: rail),
+              child: assistantOpen && agentController != null
+                  ? AgentPanel(
+                      controller: agentController!,
+                      onClose: _closeAssistant,
+                    )
+                  : SingleChildScrollView(child: rail),
             ),
           ],
         );
@@ -385,9 +439,45 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
   }
 
   void _selectDestination(_DestinationView value) {
+    unawaited(agentController?.stop());
     setState(() {
+      assistantOpen = false;
       destination = value;
       selectedTaskId = null;
+    });
+  }
+
+  Future<void> _openAssistant() async {
+    final agent = agentController;
+    if (agent == null) return;
+    if (agent.session == null && !agent.busy) unawaited(agent.load());
+    if (MediaQuery.sizeOf(context).width > 960) {
+      setState(() => assistantOpen = true);
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .88,
+        child: AgentPanel(
+          controller: agent,
+          onClose: () => Navigator.pop(context),
+        ),
+      ),
+    );
+    unawaited(agent.stop());
+  }
+
+  void _closeAssistant() {
+    unawaited(agentController?.stop());
+    setState(() => assistantOpen = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && destination == _DestinationView.today) {
+        assistantEntryFocus.requestFocus();
+      }
     });
   }
 

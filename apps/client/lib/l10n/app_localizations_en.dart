@@ -10,6 +10,105 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String get agentEntry => 'Floe is here to help';
+
+  @override
+  String get agentEntryHint => 'Try a sample conversation';
+
+  @override
+  String get agentSampleTitle => 'Sample conversation';
+
+  @override
+  String get agentSampleBoundary =>
+      'Sample data only. Personal chat stays locked until secure storage is ready.';
+
+  @override
+  String get agentNewConversation => 'New sample conversation';
+
+  @override
+  String get agentEmpty =>
+      'Start with a sample briefing, then ask a follow-up. No connected sources are read.';
+
+  @override
+  String get agentPrompt => 'Sample question';
+
+  @override
+  String get agentBriefing => 'Show a sample briefing';
+
+  @override
+  String get agentFollowUp => 'What can Floe change?';
+
+  @override
+  String get agentSend => 'Send sample';
+
+  @override
+  String get agentStop => 'Stop response';
+
+  @override
+  String get agentRetry => 'Try again';
+
+  @override
+  String get agentReload => 'Reload conversation';
+
+  @override
+  String get agentRecover => 'Recover conversation';
+
+  @override
+  String get agentYou => 'You';
+
+  @override
+  String get agentSource => 'Sample schedule';
+
+  @override
+  String get agentSourceDetails => 'View sample source';
+
+  @override
+  String get agentSourceUnavailable => 'This sample source is unavailable.';
+
+  @override
+  String get agentLoading => 'Loading saved conversation…';
+
+  @override
+  String get agentPreparing => 'Preparing sample reply…';
+
+  @override
+  String get agentReading => 'Reading the sample schedule…';
+
+  @override
+  String get agentStopping => 'Stopping response…';
+
+  @override
+  String get agentStopped => 'Response stopped. Saved messages are kept.';
+
+  @override
+  String get agentInterrupted =>
+      'The previous response did not finish. Recover the saved conversation before continuing.';
+
+  @override
+  String get agentRecovered =>
+      'Saved conversation recovered. You can try the question again.';
+
+  @override
+  String get agentUnavailable =>
+      'The sample model is unavailable. Your saved conversation is kept.';
+
+  @override
+  String get agentBudget =>
+      'This response reached its limit. You can ask another sample question.';
+
+  @override
+  String get agentStalled =>
+      'The sample read repeated without progress, so Floe stopped it.';
+
+  @override
+  String get agentReloadNeeded =>
+      'The response could not be confirmed. Reload saved messages before sending again.';
+
+  @override
+  String get agentFailure =>
+      'The response could not finish. Saved messages are kept.';
+
+  @override
   String get settings => 'Settings';
 
   @override

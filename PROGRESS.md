@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; preparatory foundation implemented | Rust runtime and durable synthetic sessions through C ABI/Dart; fixture evidence only | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F session vault | Assistant panel on the shared event contract; session vault gate before personal chat |
+| S4 — Connected Agent/Experts | Planned; preparatory panel integrated | User-invoked sample panel, incremental C ABI events, stop/retry/resume; fixture evidence only | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F session vault | Encrypted session vault/key-unavailable gate before personal chat and real models |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,27 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 sample assistant panel — 2026-09-07
+
+- Added one user-invoked Floe entry on Today: a contextual desktop panel and a
+  narrow-screen sheet. Sample questions, source disclosure, progress, Stop,
+  retry, read-only reload, explicit interrupted-session recovery and new/resumed
+  conversations now use the shared Rust session/event contract.
+- Added a bounded native run slot with begin/poll/stop/release, replayable event
+  cursors and cancellation on native-handle shutdown. Calendar requests remain
+  usable while the cooperative fixture model is waiting.
+- The panel never accepts free text, reads connected sources or sends data to a
+  model provider. Responses are synthetic; model delay is intentional fixture
+  latency, not token streaming. Personal chat stays locked pending the vault.
+- Controller/native tests cover cancellation, duplicate starts, response replay,
+  shutdown, persistence and transport recovery; widget checks cover 320/390
+  widths, 200% text, keyboard focus and the desktop/sheet entry paths.
+- Validation: 77 Rust and 117 Flutter tests pass (three new native and 13 new
+  Dart/widget tests); Flutter analyzer and macOS Debug app build pass. Strict
+  whole-workspace Clippy still reports the two existing Calendar warnings.
+- [Validation and remaining gates](docs/validation/s4-agent-panel.md).
+  S4 stays 0/14; S1/S3 live acceptance is unchanged.
 
 ### S4 Agent contract foundation — 2026-09-07
 
