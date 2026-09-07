@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'agent_calendar_experts.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_registry.dart';
+import 'agent_request_id.dart';
 import 'agent_vault_gateway.dart';
 
 enum AgentProgress { idle, loading, model, capability, stopping }
@@ -30,6 +32,147 @@ final class AgentController extends ChangeNotifier {
   AgentRegistryView? registry;
   String? registryFailure;
   bool registryLoaded = false;
+  AgentCalendarExperts? calendarExperts;
+  String? calendarExpertFailure;
+  AgentCalendarSetup? _pendingCalendarSetup;
+
+  AgentCalendarSetup? get pendingCalendarSetup => _pendingCalendarSetup;
+  bool get hasCalendarExpertManagement =>
+      hasRegistryManagement && gateway is AgentCalendarExpertGateway;
+  bool get canManageCalendarExperts =>
+      hasCalendarExpertManagement && canManageRegistry;
+
+  Future<void> loadCalendarExperts() => _calendarOperation(
+    () => (gateway as AgentCalendarExpertGateway).readCalendarExperts(personId),
+  );
+
+  Future<void> installCalendarExpert({
+    required String provider,
+    required List<String> calendarIds,
+  }) async {
+    final current = calendarExperts;
+    if (!canManageCalendarExperts ||
+        current == null ||
+        _pendingCalendarSetup != null) {
+      return;
+    }
+    try {
+      _pendingCalendarSetup = AgentCalendarSetup(
+        personId: personId,
+        instanceId: current.registry.instanceId,
+        expectedRevision: current.registry.revision,
+        setupId: newAgentRequestId(),
+        provider: provider,
+        calendarIds: calendarIds,
+      );
+    } on FormatException {
+      calendarExpertFailure = 'invalid_input';
+      _notify();
+      return;
+    }
+    await retryCalendarSetup();
+  }
+
+  Future<void> retryCalendarSetup() async {
+    final pending = _pendingCalendarSetup;
+    if (pending == null) return;
+    await _calendarOperation(
+      () => (gateway as AgentCalendarExpertGateway).installCalendarExpert(
+        pending,
+      ),
+      submitted: pending,
+    );
+  }
+
+  void discardUncommittedCalendarSetup() {
+    final current = calendarExperts;
+    final pending = _pendingCalendarSetup;
+    if (!canManageCalendarExperts ||
+        current == null ||
+        pending == null ||
+        current.registry.instanceId != pending.instanceId ||
+        current.setups.any((entry) => entry.setupId == pending.setupId)) {
+      return;
+    }
+    _pendingCalendarSetup = null;
+    _notify();
+  }
+
+  Future<void> configureCalendarView(String handle, bool enabled) async {
+    final current = calendarExperts;
+    if (current == null || _pendingCalendarSetup != null) return;
+    final before = current.views
+        .where((entry) => entry.handle == handle)
+        .singleOrNull;
+    if (before == null) return;
+    await _calendarOperation(() async {
+      final configured = await (gateway as AgentRegistryGateway)
+          .configureRegistry(
+            current.registry,
+            target: AgentRegistryTarget.calendarView,
+            id: handle,
+            enabled: enabled,
+          );
+      final next = await (gateway as AgentCalendarExpertGateway)
+          .readCalendarExperts(personId);
+      final updated = next.views
+          .where((entry) => entry.handle == handle)
+          .singleOrNull;
+      if (configured.instanceId != current.registry.instanceId ||
+          configured.revision != current.registry.revision + 1 ||
+          next.registry.instanceId != configured.instanceId ||
+          next.registry.revision != configured.revision ||
+          updated == null ||
+          updated.enabled != enabled ||
+          updated.provider != before.provider ||
+          !listEquals(updated.calendarIds, before.calendarIds)) {
+        throw const FormatException('Calendar configuration mismatch');
+      }
+      return next;
+    });
+  }
+
+  Future<void> _calendarOperation(
+    Future<AgentCalendarExperts> Function() operation, {
+    AgentCalendarSetup? submitted,
+  }) async {
+    if (!canManageCalendarExperts) return;
+    _begin();
+    calendarExpertFailure = null;
+    _notify();
+    try {
+      final result = await operation();
+      if (_sealed || _disposed) return;
+      if (result.registry.personId != personId) {
+        throw const FormatException('Calendar Person mismatch');
+      }
+      if (submitted != null && result.receiptFor(submitted) == null) {
+        throw const FormatException('Missing Calendar setup receipt');
+      }
+      if (_pendingCalendarSetup case final pending?) {
+        if (result.receiptFor(pending) != null) _pendingCalendarSetup = null;
+      }
+      calendarExperts = result;
+      registry = result.registry;
+      registryLoaded = true;
+      registryFailure = null;
+    } on Object catch (error) {
+      if (_sealed || _disposed) return;
+      calendarExperts = null;
+      registry = null;
+      registryLoaded = false;
+      calendarExpertFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      if (calendarExpertFailure == 'vault_unavailable' ||
+          calendarExpertFailure == 'interrupted') {
+        _fail(calendarExpertFailure!);
+      }
+    } finally {
+      _end();
+      _notify();
+    }
+  }
 
   bool get hasRegistryManagement =>
       usesVault && gateway is AgentRegistryGateway;
@@ -85,10 +228,12 @@ final class AgentController extends ChangeNotifier {
       }
       registry = result;
       registryLoaded = true;
+      calendarExperts = null;
     } on Object catch (error) {
       if (_sealed || _disposed) return;
       registry = null;
       registryLoaded = false;
+      calendarExperts = null;
       registryFailure = error is AgentVaultException
           ? error.failure
           : 'storage_unavailable';
@@ -126,6 +271,9 @@ final class AgentController extends ChangeNotifier {
           registry = null;
           registryLoaded = false;
           registryFailure = null;
+          calendarExperts = null;
+          calendarExpertFailure = null;
+          _pendingCalendarSetup = null;
           session = null;
           messages = [];
           needsReload = false;
@@ -337,6 +485,9 @@ final class AgentController extends ChangeNotifier {
     registry = null;
     registryFailure = null;
     registryLoaded = false;
+    calendarExperts = null;
+    calendarExpertFailure = null;
+    _pendingCalendarSetup = null;
     session = null;
     messages = [];
     _lastPrompt = null;
@@ -376,6 +527,8 @@ final class AgentController extends ChangeNotifier {
     if (usesVault) {
       registry = null;
       registryLoaded = false;
+      calendarExperts = null;
+      _pendingCalendarSetup = null;
       session = null;
       messages = [];
       vaultState = AgentVaultState.unavailable;

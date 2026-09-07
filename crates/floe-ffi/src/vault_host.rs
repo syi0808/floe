@@ -76,6 +76,7 @@ struct Progress {
     state: Option<AgentVaultStateDto>,
     session: Option<AgentSession>,
     registry: Option<floe_agent::RegistryOverview>,
+    calendar_experts: Option<floe_agent::CalendarExpertOverview>,
     failure: Option<AgentFailure>,
 }
 
@@ -111,10 +112,11 @@ impl Worker {
                     }
                     if let Ok(mut progress) = job.progress.lock() {
                         match result {
-                            Ok((state, session, registry)) => {
+                            Ok((state, session, registry, calendar_experts)) => {
                                 progress.state = Some(state);
                                 progress.session = session;
                                 progress.registry = registry;
+                                progress.calendar_experts = calendar_experts;
                             }
                             Err(failure) => {
                                 progress.state = Some(AgentVaultStateDto::Unavailable);
@@ -185,6 +187,7 @@ impl Worker {
             state: progress.state,
             session: progress.session.clone(),
             registry: progress.registry.clone(),
+            calendar_experts: progress.calendar_experts.clone(),
             failure: progress.failure,
         };
         drop(progress);
@@ -219,6 +222,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultStateDto,
         Option<AgentSession>,
         Option<floe_agent::RegistryOverview>,
+        Option<floe_agent::CalendarExpertOverview>,
     ),
     AgentFailure,
 > {
@@ -235,7 +239,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::Status {} => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
-                return Ok((AgentVaultStateDto::Ready, None, None));
+                return Ok((AgentVaultStateDto::Ready, None, None, None));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
                 Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
@@ -244,7 +248,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None, None))
+            Ok((state, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -257,7 +261,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None))
         }
         AgentVaultActionDto::Unlock {} => {
             if current.is_some() {
@@ -265,11 +269,11 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
-            Ok((AgentVaultStateDto::Locked, None, None))
+            Ok((AgentVaultStateDto::Locked, None, None, None))
         }
         AgentVaultActionDto::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -322,7 +326,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         .await?
                 }
             };
-            Ok((AgentVaultStateDto::Ready, Some(session), None))
+            Ok((AgentVaultStateDto::Ready, Some(session), None, None))
         }
         AgentVaultActionDto::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -337,7 +341,20 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, registry))
+            Ok((AgentVaultStateDto::Ready, None, registry, None))
+        }
+        AgentVaultActionDto::CalendarExperts { setup } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            if let Some(request) = setup {
+                vault
+                    .install_calendar_expert(request.clone(), job.cancellation.clone())
+                    .await?;
+            }
+            let overview = vault.calendar_expert_overview().await?;
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            Ok((AgentVaultStateDto::Ready, None, None, Some(overview)))
         }
     }
 }
@@ -363,6 +380,8 @@ mod tests {
     use super::*;
     use floe_core::VaultKey;
     use std::{collections::HashMap, sync::Condvar, time::Instant};
+
+    mod calendar_experts;
 
     #[derive(Clone, Default)]
     struct Keys(Arc<KeyState>);

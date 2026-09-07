@@ -1,7 +1,7 @@
-import 'dart:math';
-
+import 'agent_calendar_experts.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_registry.dart';
+import 'agent_request_id.dart';
 
 enum AgentVaultState { missing, locked, ready, unavailable }
 
@@ -19,12 +19,52 @@ abstract interface class AgentVaultGateway
 }
 
 final class NativeAgentVaultGateway
-    implements AgentVaultGateway, AgentRegistryGateway {
+    implements
+        AgentVaultGateway,
+        AgentRegistryGateway,
+        AgentCalendarExpertGateway {
   NativeAgentVaultGateway(this.request);
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   _VaultJob? _pending;
   AgentSession? _run;
+
+  @override
+  Future<AgentCalendarExperts> readCalendarExperts(String personId) async {
+    final result = await _perform(personId, {
+      'kind': 'calendar_experts',
+      'setup': null,
+    });
+    return _calendarExperts(personId, result);
+  }
+
+  @override
+  Future<AgentCalendarExperts> installCalendarExpert(
+    AgentCalendarSetup setup,
+  ) async {
+    final result = await _perform(setup.personId, {
+      'kind': 'calendar_experts',
+      'setup': setup.toJson(),
+    });
+    final overview = _calendarExperts(setup.personId, result);
+    if (overview.receiptFor(setup) == null) {
+      throw const FormatException('Missing Calendar setup receipt');
+    }
+    return overview;
+  }
+
+  AgentCalendarExperts _calendarExperts(
+    String personId,
+    Map<String, dynamic> result,
+  ) {
+    final overview = AgentCalendarExperts.fromJson(
+      Map<String, dynamic>.from(result['calendar_experts'] as Map),
+    );
+    if (overview.registry.personId != personId || result['state'] != 'ready') {
+      throw const FormatException('Calendar Expert Person or vault mismatch');
+    }
+    return overview;
+  }
 
   @override
   Future<AgentRegistryView?> readRegistry(String personId) async {
@@ -55,7 +95,7 @@ final class NativeAgentVaultGateway
       'change': {
         'instance_id': current.instanceId,
         'expected_revision': current.revision,
-        'target': {'kind': target.name, 'id': id, 'enabled': enabled},
+        'target': {'kind': target.wireName, 'id': id, 'enabled': enabled},
       },
     });
     final overview = AgentRegistryView.fromJson(
@@ -134,7 +174,7 @@ final class NativeAgentVaultGateway
       throw const AgentVaultException('conflict');
     }
     if (_pending != null) await _drain();
-    final job = _VaultJob(personId, _requestId());
+    final job = _VaultJob(personId, newAgentRequestId());
     _pending = job;
     final result = await _finish(
       await _call(job, {'kind': 'submit', 'action': action}),
@@ -184,7 +224,7 @@ final class NativeAgentVaultGateway
     }
     if (_run == null) {
       if (_pending != null) await _drain();
-      _pending = _VaultJob(session.personId, _requestId());
+      _pending = _VaultJob(session.personId, newAgentRequestId());
       _run = session;
     }
     return _update(
@@ -269,15 +309,4 @@ final class _VaultJob {
   _VaultJob(this.personId, this.id);
   final String personId;
   final String id;
-}
-
-String _requestId() {
-  final random = Random.secure();
-  final bytes = List.generate(16, (_) => random.nextInt(256));
-  bytes[6] = (bytes[6] & 15) | 64;
-  bytes[8] = (bytes[8] & 63) | 128;
-  final hex = bytes
-      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-      .join();
-  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }

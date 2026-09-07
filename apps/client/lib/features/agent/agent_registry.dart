@@ -1,4 +1,10 @@
-enum AgentRegistryTarget { installation, assignment }
+enum AgentRegistryTarget {
+  installation,
+  assignment,
+  calendarView;
+
+  String get wireName => this == calendarView ? 'calendar_view' : name;
+}
 
 abstract interface class AgentRegistryGateway {
   Future<AgentRegistryView?> readRegistry(String personId);

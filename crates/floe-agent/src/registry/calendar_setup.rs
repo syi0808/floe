@@ -32,7 +32,35 @@ pub struct CalendarExpertSetupResult {
     pub registry: RegistryOverview,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarExpertOverview {
+    pub registry: RegistryOverview,
+    pub views: Vec<CalendarViewBinding>,
+    pub setups: Vec<CalendarExpertSetupReceipt>,
+}
+
 impl AgentRegistry {
+    pub fn calendar_expert_overview(&self, person_id: PersonId) -> CalendarExpertOverview {
+        CalendarExpertOverview {
+            registry: self.overview(person_id),
+            views: self
+                .snapshot
+                .calendar_views
+                .iter()
+                .filter(|binding| binding.person_id == person_id)
+                .cloned()
+                .collect(),
+            setups: self
+                .snapshot
+                .calendar_setups
+                .iter()
+                .filter(|setup| setup.person_id == person_id)
+                .cloned()
+                .collect(),
+        }
+    }
+
     pub fn calendar_expert_setup(
         &self,
         person_id: PersonId,

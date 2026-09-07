@@ -223,6 +223,7 @@ pub struct RegistryConfiguration {
 pub enum RegistryConfigurationTarget {
     Installation { id: Uuid, enabled: bool },
     Assignment { id: Uuid, enabled: bool },
+    CalendarView { id: Uuid, enabled: bool },
 }
 
 pub struct AgentRegistry {

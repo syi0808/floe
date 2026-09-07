@@ -8,6 +8,50 @@ use floe_domain::{
 use floe_protocol::*;
 
 #[test]
+fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_keys() {
+    let action = serde_json::json!({
+        "kind": "calendar_experts",
+        "setup": {
+            "instance_id": "00000000-0000-4000-8000-000000000001",
+            "expected_revision": 0,
+            "setup_id": "00000000-0000-4000-8000-000000000002",
+            "provider": "event_kit",
+            "calendar_ids": ["explicit-calendar"]
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in [
+        "enabled",
+        "person_id",
+        "key",
+        "data_class",
+        "private_state",
+        "view_handle",
+    ] {
+        let mut forged = action.clone();
+        forged["setup"][field] = serde_json::json!(true);
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+    let view_change = serde_json::json!({
+        "kind": "registry", "change": {
+            "instance_id": "00000000-0000-4000-8000-000000000001",
+            "expected_revision": 1,
+            "target": {"kind": "calendar_view", "id": "00000000-0000-4000-8000-000000000002", "enabled": false}
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(view_change.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), view_change);
+    let legacy = serde_json::json!({
+        "request_id": "00000000-0000-4000-8000-000000000001", "events": [],
+        "next_sequence": 0, "done": true, "state": "ready", "session": null, "failure": null
+    });
+    let result: AgentVaultResultDto = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(result.calendar_experts.is_none());
+    assert_eq!(serde_json::to_value(result).unwrap(), legacy);
+}
+
+#[test]
 fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations() {
     let change = serde_json::json!({
         "instance_id": "00000000-0000-4000-8000-000000000001",

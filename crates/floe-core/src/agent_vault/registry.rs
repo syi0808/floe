@@ -6,6 +6,18 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn calendar_expert_overview(
+        &self,
+    ) -> Result<floe_agent::CalendarExpertOverview, AgentFailure> {
+        let registry = match self.expert_registry().await? {
+            Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?,
+            None => AgentRegistry::new(self.vault_id),
+        };
+        let overview = registry.calendar_expert_overview(self.person_id);
+        self.check_access()?;
+        Ok(overview)
+    }
+
     pub async fn install_calendar_expert(
         &self,
         request: floe_agent::CalendarExpertSetup,
@@ -81,6 +93,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::NotFound)?;
         let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
         match configuration.target {
+            floe_agent::RegistryConfigurationTarget::CalendarView { id, enabled } => registry
+                .set_calendar_view_enabled(
+                    configuration.expected_revision,
+                    self.person_id,
+                    id,
+                    enabled,
+                )?,
             floe_agent::RegistryConfigurationTarget::Installation { id, enabled } => {
                 registry.set_installation_enabled(configuration.expected_revision, id, enabled)?
             }

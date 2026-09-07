@@ -52,7 +52,9 @@ proposal preparation. The app's connected personal-chat route is not enabled yet
 connected View to an exact encrypted source scope. An
 [atomic Calendar setup operation](docs/validation/s4-calendar-setup.md) now installs
 disabled built-ins, assignments and a bound scope with durable retry identity;
-native transport and scope consent/setup UI remain open.
+[native transport and controller management](docs/validation/s4-calendar-management.md)
+now expose explicit setup/reconciliation and scope enablement, while the consent/setup
+UI remains open.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

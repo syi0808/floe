@@ -35,6 +35,9 @@ pub enum AgentVaultActionDto {
     Registry {
         change: Option<floe_agent::RegistryConfiguration>,
     },
+    CalendarExperts {
+        setup: Option<floe_agent::CalendarExpertSetup>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -57,6 +60,8 @@ pub struct AgentVaultResultDto {
     pub session: Option<floe_agent::AgentSession>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<floe_agent::RegistryOverview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_experts: Option<floe_agent::CalendarExpertOverview>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 

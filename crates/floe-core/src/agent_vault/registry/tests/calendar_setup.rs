@@ -11,6 +11,64 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
 }
 
 #[tokio::test]
+async fn management_overview_is_read_only_and_view_configuration_is_scoped_revision_checked() {
+    let fixture = Fixture::new().await;
+    let empty = fixture.vault.calendar_expert_overview().await.unwrap();
+    assert_eq!(
+        empty.registry.instance_id,
+        fixture.vault.registry_instance_id()
+    );
+    assert_eq!(empty.registry.revision, 0);
+    assert!(empty.views.is_empty() && empty.setups.is_empty());
+    assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
+    let request = setup_request(&fixture, 0);
+    let installed = fixture
+        .vault
+        .install_calendar_expert(request, Cancellation::default())
+        .await
+        .unwrap();
+    let before = fixture.vault.calendar_expert_overview().await.unwrap();
+    assert_eq!(
+        before.views[0].calendar_ids,
+        ["setup-private-calendar-canary"]
+    );
+    assert_eq!(before.setups, [installed.setup]);
+    let configuration = RegistryConfiguration {
+        instance_id: before.registry.instance_id,
+        expected_revision: before.registry.revision,
+        target: RegistryConfigurationTarget::CalendarView {
+            id: before.views[0].handle,
+            enabled: true,
+        },
+    };
+    fixture
+        .vault
+        .configure_registry(configuration.clone(), Cancellation::default())
+        .await
+        .unwrap();
+    let after = fixture.vault.calendar_expert_overview().await.unwrap();
+    assert!(after.views[0].enabled);
+    assert_eq!(after.setups, before.setups);
+    assert_eq!(after.registry.assignments, before.registry.assignments);
+    assert_eq!(
+        fixture
+            .vault
+            .configure_registry(configuration, Cancellation::default())
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(
+        fixture.vault.calendar_expert_overview().await.unwrap(),
+        after
+    );
+    fixture.keys.0.blocked.store(true, Ordering::Release);
+    assert_eq!(
+        fixture.vault.calendar_expert_overview().await,
+        Err(AgentFailure::VaultUnavailable)
+    );
+}
+
+#[tokio::test]
 async fn setup_bootstraps_without_a_sample_and_replays_after_reopen_without_resurrection() {
     let mut fixture = Fixture::new().await;
     let request = setup_request(&fixture, 0);
