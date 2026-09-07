@@ -23,6 +23,8 @@ use uuid::Uuid;
 
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 
+mod calendar_turn;
+
 pub(crate) struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
@@ -82,6 +84,7 @@ struct Progress {
     session: Option<AgentSession>,
     registry: Option<floe_agent::RegistryOverview>,
     calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    calendar_turn: Option<AgentCalendarTurnResultDto>,
     proposal: Option<AgentProposalInspectionDto>,
     failure: Option<AgentFailure>,
 }
@@ -121,11 +124,19 @@ impl Worker {
                     }
                     if let Ok(mut progress) = job.progress.lock() {
                         match result {
-                            Ok((state, session, registry, calendar_experts, proposal)) => {
+                            Ok((
+                                state,
+                                session,
+                                registry,
+                                calendar_experts,
+                                calendar_turn,
+                                proposal,
+                            )) => {
                                 progress.state = Some(state);
                                 progress.session = session;
                                 progress.registry = registry;
                                 progress.calendar_experts = calendar_experts;
+                                progress.calendar_turn = calendar_turn;
                                 progress.proposal = proposal;
                             }
                             Err(failure) => {
@@ -198,6 +209,7 @@ impl Worker {
             session: progress.session.clone(),
             registry: progress.registry.clone(),
             calendar_experts: progress.calendar_experts.clone(),
+            calendar_turn: progress.calendar_turn.clone(),
             proposal: progress.proposal.clone(),
             failure: progress.failure,
         };
@@ -235,6 +247,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         Option<AgentSession>,
         Option<floe_agent::RegistryOverview>,
         Option<floe_agent::CalendarExpertOverview>,
+        Option<AgentCalendarTurnResultDto>,
         Option<AgentProposalInspectionDto>,
     ),
     AgentFailure,
@@ -252,7 +265,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::Status {} => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
-                return Ok((AgentVaultStateDto::Ready, None, None, None, None));
+                return Ok((AgentVaultStateDto::Ready, None, None, None, None, None));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
                 Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
@@ -261,7 +274,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None, None, None, None))
+            Ok((state, None, None, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -274,7 +287,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None, None, None))
         }
         AgentVaultActionDto::Unlock {} => {
             if current.is_some() {
@@ -282,11 +295,11 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None, None))
+            Ok((AgentVaultStateDto::Ready, None, None, None, None, None))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
-            Ok((AgentVaultStateDto::Locked, None, None, None, None))
+            Ok((AgentVaultStateDto::Locked, None, None, None, None, None))
         }
         AgentVaultActionDto::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -339,7 +352,14 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         .await?
                 }
             };
-            Ok((AgentVaultStateDto::Ready, Some(session), None, None, None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                Some(session),
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::Registry { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -354,7 +374,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, registry, None, None))
+            Ok((AgentVaultStateDto::Ready, None, registry, None, None, None))
         }
         AgentVaultActionDto::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -367,7 +387,14 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, None, Some(overview), None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                Some(overview),
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::CalendarSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -401,7 +428,44 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, Some(session), None, None, None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                Some(session),
+                None,
+                None,
+                None,
+                None,
+            ))
+        }
+        AgentVaultActionDto::CalendarTurn { request } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let (session, result) = calendar_turn::run(
+                core,
+                vault,
+                job.person,
+                request,
+                job.cancellation.clone(),
+                |event| {
+                    if let Ok(mut progress) = job.progress.lock() {
+                        if progress.events.len() < 64 {
+                            progress.events.push(event);
+                        } else {
+                            job.cancellation.cancel();
+                        }
+                    } else {
+                        job.cancellation.cancel();
+                    }
+                },
+            )
+            .await?;
+            Ok((
+                AgentVaultStateDto::Ready,
+                Some(session),
+                None,
+                None,
+                Some(result),
+                None,
+            ))
         }
         AgentVaultActionDto::InspectProposal {
             session_id,
@@ -428,23 +492,34 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 person_id: job.person.to_string(),
                 session_id: reference.session_id.to_string(),
                 invocation_id: reference.invocation_id.to_string(),
-                action: action.map(|action| AgentProposalActionDto {
-                    action_id: action.id.to_string(),
-                    execution_id: action.execution_id.to_string(),
-                    expires_at: action.expires_at,
-                    status: match action.state {
-                        CalendarActionState::Pending => AgentProposalStatusDto::Pending,
-                        CalendarActionState::Approved => AgentProposalStatusDto::Approved,
-                        CalendarActionState::Rejected => AgentProposalStatusDto::Rejected,
-                        CalendarActionState::Executing => AgentProposalStatusDto::Executing,
-                        CalendarActionState::Blocked { .. } => AgentProposalStatusDto::Blocked,
-                        CalendarActionState::Unknown { .. } => AgentProposalStatusDto::Unknown,
-                        CalendarActionState::Succeeded { .. } => AgentProposalStatusDto::Succeeded,
-                    },
-                }),
+                action: action.map(calendar_action),
             };
-            Ok((AgentVaultStateDto::Ready, None, None, None, Some(proposal)))
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                None,
+                None,
+                Some(proposal),
+            ))
         }
+    }
+}
+
+fn calendar_action(action: floe_core::CalendarAction) -> AgentProposalActionDto {
+    AgentProposalActionDto {
+        action_id: action.id.to_string(),
+        execution_id: action.execution_id.to_string(),
+        expires_at: action.expires_at,
+        status: match action.state {
+            CalendarActionState::Pending => AgentProposalStatusDto::Pending,
+            CalendarActionState::Approved => AgentProposalStatusDto::Approved,
+            CalendarActionState::Rejected => AgentProposalStatusDto::Rejected,
+            CalendarActionState::Executing => AgentProposalStatusDto::Executing,
+            CalendarActionState::Blocked { .. } => AgentProposalStatusDto::Blocked,
+            CalendarActionState::Unknown { .. } => AgentProposalStatusDto::Unknown,
+            CalendarActionState::Succeeded { .. } => AgentProposalStatusDto::Succeeded,
+        },
     }
 }
 
@@ -472,6 +547,7 @@ mod tests {
 
     mod calendar_experts;
     mod calendar_sessions;
+    mod calendar_turns;
     mod proposals;
 
     impl Worker {

@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'agent_calendar_experts.dart';
 import 'agent_calendar_session_gateway.dart';
+import 'agent_calendar_turn_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
@@ -26,12 +29,89 @@ final class NativeAgentVaultGateway
         AgentRegistryGateway,
         AgentProposalGateway,
         AgentCalendarSessionGateway,
+        AgentCalendarTurnGateway,
         AgentCalendarExpertGateway {
   NativeAgentVaultGateway(this.request);
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
   _VaultJob? _pending;
   AgentSession? _run;
+  AgentCalendarTurnRequest? _calendarRun;
+
+  @override
+  Future<AgentCalendarTurnUpdate> beginCalendarTurn(
+    AgentCalendarTurnRequest turn,
+  ) async {
+    final scope = turn.session.scope;
+    if (scope == null || turn.day.personId != turn.session.personId) {
+      throw const FormatException('Calendar turn scope mismatch');
+    }
+    if (_calendarRun != null && !_sameCalendarTurn(_calendarRun!, turn)) {
+      throw const AgentVaultException('conflict');
+    }
+    if (_calendarRun == null) {
+      if (_pending != null) await _drain();
+      _pending = _VaultJob(turn.session.personId, newAgentRequestId());
+      _run = turn.session;
+      _calendarRun = turn;
+    }
+    return _calendarUpdate(
+      turn,
+      await _call(_pending!, {
+        'kind': 'submit',
+        'action': {'kind': 'calendar_turn', 'request': turn.toJson()},
+      }),
+    );
+  }
+
+  @override
+  Future<AgentCalendarTurnUpdate> pollCalendarTurn(
+    AgentCalendarTurnRequest turn,
+    int afterSequence,
+  ) => _calendarCall(turn, {'kind': 'poll', 'after_sequence': afterSequence});
+
+  @override
+  Future<AgentCalendarTurnUpdate> stopCalendarTurn(
+    AgentCalendarTurnRequest turn,
+  ) => _calendarCall(turn, {'kind': 'stop'});
+
+  @override
+  Future<AgentCalendarTurnUpdate> releaseCalendarTurn(
+    AgentCalendarTurnRequest turn,
+  ) async {
+    final result = await _calendarCall(turn, {'kind': 'release'});
+    _pending = null;
+    _run = null;
+    _calendarRun = null;
+    return result;
+  }
+
+  Future<AgentCalendarTurnUpdate> _calendarCall(
+    AgentCalendarTurnRequest turn,
+    Map<String, Object?> operation,
+  ) async {
+    if (_calendarRun == null || !_sameCalendarTurn(_calendarRun!, turn)) {
+      throw const AgentVaultException('conflict');
+    }
+    return _calendarUpdate(turn, await _call(_pending!, operation));
+  }
+
+  AgentCalendarTurnUpdate _calendarUpdate(
+    AgentCalendarTurnRequest turn,
+    Map<String, dynamic> result,
+  ) => AgentCalendarTurnUpdate.fromJson({
+    ...result,
+    'session_id': turn.session.id,
+    'expected_revision': turn.session.revision,
+  }, turn);
+
+  bool _sameCalendarTurn(
+    AgentCalendarTurnRequest left,
+    AgentCalendarTurnRequest right,
+  ) =>
+      identical(left, right) ||
+      left.session.personId == right.session.personId &&
+          jsonEncode(left.toJson()) == jsonEncode(right.toJson());
 
   @override
   Future<AgentSession> startCalendarSession(String personId, String setupId) =>
@@ -294,6 +374,7 @@ final class NativeAgentVaultGateway
       if (error.failure != 'not_found') rethrow;
       _pending = null;
       _run = null;
+      _calendarRun = null;
     }
   }
 
@@ -347,6 +428,7 @@ final class NativeAgentVaultGateway
     final result = await _runCall(session, {'kind': 'release'});
     _pending = null;
     _run = null;
+    _calendarRun = null;
     return result;
   }
 
@@ -392,6 +474,7 @@ final class NativeAgentVaultGateway
     await _call(job, {'kind': 'release'});
     _pending = null;
     _run = null;
+    _calendarRun = null;
   }
 
   Map<String, Object?> _turn(AgentSession session, AgentFixturePrompt prompt) =>

@@ -1,0 +1,302 @@
+use floe_agent::{
+    AgentBudget, AgentCommand, AgentContext, AgentEvent, AgentFailure, AgentMessage, DataClass,
+    ExpertInput, InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
+    ModelStep, TransferConsent,
+};
+use floe_core::{
+    CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
+    CalendarReadAccessStamp, CalendarTimelineGrant, EncryptedAgentVault, ExpertCalendarDestination,
+    FloeCore, VaultKeyProvider,
+};
+use floe_domain::{CalendarProvider, PersonId};
+use floe_protocol::{
+    AgentCalendarModelDto, AgentCalendarPromptDto, AgentCalendarProposalOutcomeDto,
+    AgentCalendarTurnRequestDto, AgentCalendarTurnResultDto, PROTOCOL_VERSION,
+};
+
+use crate::{local_model::FoundationModelRunner, native_calendar::NativeCalendar};
+
+use super::{calendar_action, session_uuid};
+
+pub(super) async fn run<Keys: VaultKeyProvider>(
+    core: &FloeCore,
+    vault: &EncryptedAgentVault<Keys>,
+    person_id: PersonId,
+    request: &AgentCalendarTurnRequestDto,
+    cancellation: floe_agent::Cancellation,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<(floe_agent::AgentSession, AgentCalendarTurnResultDto), AgentFailure> {
+    let session_id = session_uuid(&request.session_id)?;
+    let session = vault.calendar_session(session_id).await?;
+    if session.person_id != person_id || session.revision != request.expected_revision {
+        return Err(AgentFailure::Conflict);
+    }
+    let setup = vault.calendar_session_setup(&session).await?;
+    let overview = vault.calendar_expert_overview().await?;
+    let binding = overview
+        .views
+        .iter()
+        .find(|binding| binding.handle == setup.view_handle)
+        .ok_or(AgentFailure::Conflict)?;
+    let connection = core
+        .calendar_connection(person_id)
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?
+        .ok_or(AgentFailure::StaleContext)?;
+    if connection.disconnected || connection.provider != binding.provider {
+        return Err(AgentFailure::StaleContext);
+    }
+    if let Some(destination) = &request.destination
+        && (destination.provider != connection.provider
+            || destination.connection_revision != connection.revision
+            || !binding.calendar_ids.contains(&destination.calendar_id)
+            || destination.timezone.trim().is_empty()
+            || destination.timezone.len() > 128)
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    if request.model == AgentCalendarModelDto::DeterministicFixture
+        && binding.provider != CalendarProvider::Fixture
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let now = chrono::Utc::now();
+    let data_class = match binding.provider {
+        CalendarProvider::Fixture => DataClass::Synthetic,
+        CalendarProvider::EventKit => DataClass::Personal,
+    };
+    let turn = CalendarAgentTurnRequest {
+        command: AgentCommand {
+            schema_version: PROTOCOL_VERSION,
+            person_id,
+            session_id,
+            expected_revision: request.expected_revision,
+            text: prompt_text(request.prompt),
+        },
+        context: AgentContext {
+            projection_version: 1,
+            evidence: vec![],
+        },
+        policy: InferencePolicyDecision {
+            purpose: match request.prompt {
+                AgentCalendarPromptDto::Briefing { .. } => "calendar-briefing",
+                AgentCalendarPromptDto::ProposeFocus { .. } => "calendar-focus-proposal",
+            }
+            .into(),
+            data_classes: vec![data_class],
+            allowed_placements: vec![ModelPlacement::DeviceLocal],
+            performance_class: "interactive".into(),
+            projection_version: 1,
+            external_transfer_consent: TransferConsent::NotGranted,
+            bounded_sensitive_projection: false,
+        },
+        budget: AgentBudget::default(),
+        grant: CalendarTimelineGrant {
+            person_id,
+            handle: setup.view_handle,
+            provider: binding.provider,
+            calendar_ids: binding.calendar_ids.clone(),
+            connection_revision: connection.revision,
+            day: request.day.clone(),
+            starts_at: request.starts_at,
+            ends_at: request.ends_at,
+            expires_at: now + chrono::Duration::minutes(2),
+        },
+        assignment_id: setup.expert_assignment_id,
+        destination: request
+            .destination
+            .as_ref()
+            .map(|destination| ExpertCalendarDestination {
+                provider: destination.provider,
+                calendar_id: destination.calendar_id.clone(),
+                connection_revision: destination.connection_revision,
+                timezone: destination.timezone.clone(),
+            }),
+        cancellation,
+    };
+    let access = Access::new(binding.provider, binding.calendar_ids.clone());
+    let model = Model::new(request.model, request.prompt);
+    let result = core
+        .run_calendar_agent_turn(vault, &access, &model, turn, chrono::Utc::now, emit)
+        .await?;
+    let proposals = result
+        .proposals
+        .into_iter()
+        .map(|proposal| match proposal.result {
+            Ok(action) => AgentCalendarProposalOutcomeDto {
+                invocation_id: proposal.reference.invocation_id.to_string(),
+                action: Some(calendar_action(action)),
+                failure: None,
+            },
+            Err(failure) => AgentCalendarProposalOutcomeDto {
+                invocation_id: proposal.reference.invocation_id.to_string(),
+                action: None,
+                failure: Some(failure),
+            },
+        })
+        .collect();
+    let response = AgentCalendarTurnResultDto {
+        schema_version: PROTOCOL_VERSION,
+        person_id: person_id.to_string(),
+        session_id: result.session.id.to_string(),
+        setup_id: setup.setup_id.to_string(),
+        model: request.model,
+        proposals,
+    };
+    Ok((result.session, response))
+}
+
+fn prompt_text(prompt: AgentCalendarPromptDto) -> String {
+    match prompt {
+        AgentCalendarPromptDto::Briefing { focus_minutes } => {
+            format!("Brief today's calendar and find a {focus_minutes}-minute focus window.")
+        }
+        AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
+            format!("Propose a {focus_minutes}-minute focus block from today's calendar.")
+        }
+    }
+}
+
+enum Access {
+    Fixture(FixtureAccess),
+    Native(NativeCalendar),
+}
+
+impl Access {
+    fn new(provider: CalendarProvider, calendar_ids: Vec<String>) -> Self {
+        match provider {
+            CalendarProvider::Fixture => Self::Fixture(FixtureAccess { calendar_ids }),
+            CalendarProvider::EventKit => Self::Native(NativeCalendar::new(calendar_ids)),
+        }
+    }
+}
+
+impl CalendarReadAccess for Access {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        match self {
+            Self::Fixture(access) => access.check(request).await,
+            Self::Native(access) => access.check(request).await,
+        }
+    }
+}
+
+struct FixtureAccess {
+    calendar_ids: Vec<String>,
+}
+
+impl CalendarReadAccess for FixtureAccess {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        if request.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if request.deadline <= tokio::time::Instant::now() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        if request.provider != CalendarProvider::Fixture
+            || request.calendar_ids != self.calendar_ids
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        Ok(CalendarReadAccessStamp {
+            schema_version: PROTOCOL_VERSION,
+            person_id: request.person_id,
+            provider: request.provider,
+            calendar_ids: request.calendar_ids,
+            generation: "bounded-fixture".into(),
+        })
+    }
+}
+
+enum Model {
+    Deterministic(DeterministicModel),
+    Foundation(FoundationModelRunner),
+}
+
+impl Model {
+    fn new(selection: AgentCalendarModelDto, prompt: AgentCalendarPromptDto) -> Self {
+        match selection {
+            AgentCalendarModelDto::DeterministicFixture => {
+                Self::Deterministic(DeterministicModel { prompt })
+            }
+            AgentCalendarModelDto::FoundationModels => Self::Foundation(FoundationModelRunner),
+        }
+    }
+}
+
+impl ModelRunner for Model {
+    fn placement(&self) -> ModelPlacement {
+        match self {
+            Self::Deterministic(model) => model.placement(),
+            Self::Foundation(model) => model.placement(),
+        }
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        match self {
+            Self::Deterministic(model) => model.generate(request).await,
+            Self::Foundation(model) => model.generate(request).await,
+        }
+    }
+}
+
+struct DeterministicModel {
+    prompt: AgentCalendarPromptDto,
+}
+
+impl ModelRunner for DeterministicModel {
+    fn placement(&self) -> ModelPlacement {
+        ModelPlacement::DeviceLocal
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        if request.cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if request.deadline <= tokio::time::Instant::now() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        if request.policy.data_classes != [DataClass::Synthetic] {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let step = if request
+            .messages
+            .iter()
+            .any(|message| matches!(message, AgentMessage::Capability { .. }))
+        {
+            ModelStep::Answer {
+                text: "Synthetic Calendar result recorded. No live personal source was read."
+                    .into(),
+            }
+        } else {
+            let input = match self.prompt {
+                AgentCalendarPromptDto::Briefing { focus_minutes } => {
+                    ExpertInput::Briefing { focus_minutes }
+                }
+                AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
+                    ExpertInput::ProposeFocus { focus_minutes }
+                }
+            };
+            ModelStep::Call {
+                capability_id: request
+                    .capabilities
+                    .first()
+                    .ok_or(AgentFailure::CapabilityDenied)?
+                    .id
+                    .clone(),
+                input: serde_json::to_string(&input).map_err(|_| AgentFailure::InvalidInput)?,
+            }
+        };
+        Ok(ModelResponse {
+            schema_version: PROTOCOL_VERSION,
+            step,
+            used_tokens: 32,
+            cost_micros: 0,
+        })
+    }
+}

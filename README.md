@@ -66,8 +66,10 @@ recovers existing S3 action links after restart or scope revocation without re-e
 now show saved action status and open existing S3 review.
 [Isolated Calendar sessions](docs/validation/s4-calendar-sessions.md) now support
 encrypted start/resume/get/recover through native and Dart storage APIs.
-Implementation is paused at the user's request. Native connected-turn dispatch is
-a local uncommitted draft, not shipped UI; see the
+[Native Calendar turn dispatch](docs/validation/s4-calendar-native-turn.md) now binds
+those sessions to the current durable scope, streams Core events and waits for Manager
+proposal preparation. Its typed Dart transport validates completed job identity without
+enabling Personal model input. See the
 [S4 handoff and remaining work](docs/validation/s4-handoff.md) for the committed
 baseline, validation limits and restart checklist. S4 acceptance remains 0/14.
 

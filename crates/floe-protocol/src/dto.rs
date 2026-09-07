@@ -45,6 +45,9 @@ pub enum AgentVaultActionDto {
     CalendarSession {
         operation: AgentCalendarSessionOperationDto,
     },
+    CalendarTurn {
+        request: AgentCalendarTurnRequestDto,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,6 +66,61 @@ pub enum AgentCalendarSessionOperationDto {
         session_id: String,
         expected_revision: u64,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCalendarTurnRequestDto {
+    pub session_id: String,
+    pub expected_revision: u64,
+    pub prompt: AgentCalendarPromptDto,
+    pub model: AgentCalendarModelDto,
+    pub day: floe_domain::CalendarRange,
+    pub starts_at: chrono::DateTime<chrono::Utc>,
+    pub ends_at: chrono::DateTime<chrono::Utc>,
+    pub destination: Option<AgentCalendarDestinationDto>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentCalendarPromptDto {
+    Briefing { focus_minutes: u16 },
+    ProposeFocus { focus_minutes: u16 },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCalendarModelDto {
+    DeterministicFixture,
+    FoundationModels,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCalendarDestinationDto {
+    pub provider: floe_domain::CalendarProvider,
+    pub calendar_id: String,
+    pub connection_revision: u64,
+    pub timezone: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCalendarTurnResultDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub session_id: String,
+    pub setup_id: String,
+    pub model: AgentCalendarModelDto,
+    pub proposals: Vec<AgentCalendarProposalOutcomeDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCalendarProposalOutcomeDto {
+    pub invocation_id: String,
+    pub action: Option<AgentProposalActionDto>,
+    pub failure: Option<floe_agent::AgentFailure>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -118,6 +176,8 @@ pub struct AgentVaultResultDto {
     pub registry: Option<floe_agent::RegistryOverview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_turn: Option<AgentCalendarTurnResultDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<AgentProposalInspectionDto>,
     pub failure: Option<floe_agent::AgentFailure>,

@@ -103,6 +103,46 @@ fn calendar_session_transport_cannot_supply_classification_grants_or_model_input
 }
 
 #[test]
+fn calendar_turn_transport_requires_explicit_bounded_model_and_destination() {
+    let action = json!({
+        "kind": "calendar_turn",
+        "request": {
+            "session_id": Uuid::new_v4(),
+            "expected_revision": 3,
+            "prompt": {"kind": "propose_focus", "focus_minutes": 60},
+            "model": "foundation_models",
+            "day": {
+                "start_date": "2026-09-08",
+                "end_date_exclusive": "2026-09-09",
+                "timezone_offset_seconds": 32400
+            },
+            "starts_at": "2026-09-08T00:00:00Z",
+            "ends_at": "2026-09-08T12:00:00Z",
+            "destination": {
+                "provider": "event_kit",
+                "calendar_id": "explicit-calendar",
+                "connection_revision": 9,
+                "timezone": "Asia/Seoul"
+            }
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in [
+        "person_id",
+        "view_handle",
+        "assignment_id",
+        "allowed_placements",
+        "external_transfer_consent",
+        "credential",
+    ] {
+        let mut forged = action.clone();
+        forged["request"][field] = json!("untrusted");
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}
+
+#[test]
 fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     let action = json!({
         "kind": "inspect_proposal",

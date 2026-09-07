@@ -115,3 +115,15 @@ S4 수용 기준은 **0/14**, S1은 **0/4**, S3는 **2/5**다.
 
 이 문서 커밋은 작업 인계만 수행한다. Goal 재개, 미검증 구현 승인, 실제 환경 설정 변경을
 의미하지 않는다.
+
+## 재개 후 진행 — 2026-09-08
+
+재개 순서 1의 native Calendar turn dispatch와 focused 통합 테스트를 별도 increment로
+완료했다. 암호화 세션, durable setup/View, 현재 connection revision, bounded grant와
+Manager proposal 준비가 owned worker job으로 연결되며 duplicate submit, invalid bounds,
+stale destination과 disconnect를 검증한다. 세부 근거는
+[native Calendar turn dispatch](s4-calendar-native-turn.md)에 있다.
+
+typed Dart begin/poll/stop/release transport까지 연결했다. 다음 순서는 Calendar turn
+전용 stop/deadline/key-loss 경계 보강과 controller/UI 연결이다. 실제 Personal model
+generation과 live source gate는 여전히 닫혀 있으며 S4는 **0/14**다.

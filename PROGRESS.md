@@ -54,13 +54,28 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
 - Baseline validation: 216 workspace Rust tests, three keyring example tests,
   25 native assertions, 189 Flutter tests, analysis, formatting/Clippy with existing
   exclusions, Rust/macOS builds and deep strict signature verification pass.
-- Three local files contain an uncommitted native Calendar turn draft. Only its
-  compilation and existing 18 FFI tests passed; new lifecycle tests and Dart/UI
-  execution wiring remain. This documentation commit excludes that code.
+- At the pause point, three local files held an uncommitted Calendar turn draft.
+  The later 2026-09-08 increment below supersedes that draft with tested native and
+  Dart transport; controller/UI execution wiring remains.
 - [Handoff, exact local files, validation limits and ordered remaining work](docs/validation/s4-handoff.md).
   Actual key/model/source/privacy gates remain open. S4 stays 0/14; S1/S3 is unchanged.
 - Earlier dated entries below are historical checkpoints; their then-remaining
   work may have been completed by the increments summarized here.
+
+### S4 native Calendar turn dispatch — 2026-09-08
+
+- Added a versioned encrypted-vault Calendar turn job with explicit session revision,
+  prompt, model, bounded day/window and optional S3 destination.
+- Native dispatch resolves the durable Calendar setup/View and current connection,
+  validates destination scope and revision, streams Core events and does not finish
+  until Manager proposal preparation has completed.
+- Deterministic execution remains Fixture-only and Foundation Models retains its
+  existing Personal-input denial; there is no silent model fallback.
+- Added typed Dart begin/poll/stop/release transport with strict completed-response and
+  changed-retry validation; controller and UI dispatch remain next.
+- [Evidence and remaining app/live gates](docs/validation/s4-calendar-native-turn.md).
+  FFI library tests pass 20/20, focused Flutter tests 2/2 and analysis pass. S4 remains
+  0/14 and S1/S3 is unchanged.
 
 ### S4 read-only proposal inspection — 2026-09-07
 
