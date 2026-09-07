@@ -5,6 +5,34 @@ import CryptoKit
 private let actionLock = NSLock()
 private let localPerson = "00000000-0000-4000-8000-000000000001"
 
+private final class CalendarViewGeneration: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current = UUID().uuidString
+  private var observer: NSObjectProtocol?
+
+  init() {
+    observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: nil, queue: nil) { [weak self] _ in
+      self?.invalidate()
+    }
+  }
+
+  private func invalidate() {
+    lock.lock()
+    current = UUID().uuidString
+    lock.unlock()
+  }
+
+  func value() -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    return current
+  }
+
+  deinit { if let observer = observer { NotificationCenter.default.removeObserver(observer) } }
+}
+
+private let calendarViewGeneration = CalendarViewGeneration()
+
 private struct NativeFailure: Error {
   let reason: String
   init(_ reason: String) { self.reason = reason }
@@ -124,9 +152,36 @@ func localConflict(_ records: [[String: Any]], _ proposal: Proposal) throws -> B
   return false
 }
 
+func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
+                        contains: (String) -> Bool, generation: () -> String) throws -> [String: Any] {
+  guard request["schema_version"] as? Int == 1,
+        request["person_id"] as? String == localPerson,
+        request["provider"] as? String == "event_kit",
+        let identifiers = request["calendar_ids"] as? [String],
+        !identifiers.isEmpty, identifiers.count <= 4,
+        Set(identifiers).count == identifiers.count,
+        identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 512 }) else {
+    throw NativeFailure("permission_denied")
+  }
+  let deadline = try timestamp(request["deadline"])
+  guard Date() < deadline, deadline.timeIntervalSinceNow <= 30 else { throw NativeFailure("timeout") }
+  try permission()
+  let before = generation()
+  guard identifiers.allSatisfy(contains) else { throw NativeFailure("provider_unavailable") }
+  try permission()
+  guard before == generation(), Date() < deadline else { throw NativeFailure("timeout") }
+  return ["schema_version": 1, "person_id": localPerson, "provider": "event_kit",
+          "calendar_ids": identifiers.sorted(), "generation": before]
+}
+
 private func runAction(_ request: [String: Any]) throws -> Any {
   guard let operation = request["operation"] as? String else { throw NativeFailure("uncertain_result") }
   if operation == "capabilities" { return ["writes_enabled": true] }
+  if operation == "view_access" {
+    let store = EKEventStore()
+    return try calendarViewAccess(request, permission: requirePermission,
+      contains: { store.calendar(withIdentifier: $0) != nil }, generation: calendarViewGeneration.value)
+  }
   guard let raw = request["action"] as? [String: Any] else { throw NativeFailure("uncertain_result") }
   let proposal = try Proposal(raw)
   let deadline = try timestamp(request["deadline"])

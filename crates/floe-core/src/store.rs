@@ -262,6 +262,38 @@ impl TursoStore {
         self.get("calendar_mirrors", person_id.to_string()).await
     }
 
+    pub(crate) async fn bounded_calendar_mirror(
+        &self,
+        person_id: PersonId,
+    ) -> Result<floe_domain::CalendarMirror, floe_agent::AgentFailure> {
+        use floe_agent::AgentFailure;
+        let connection = self
+            .connection()
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        let mut rows = connection.query(
+            "SELECT length(CAST(payload AS BLOB)), CASE WHEN length(CAST(payload AS BLOB)) <= 4194304 THEN payload ELSE NULL END FROM calendar_mirrors WHERE id = ? AND person_id = ?",
+            (person_id.to_string(), person_id.to_string()),
+        ).await.map_err(|_| AgentFailure::StorageUnavailable)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        if row
+            .get::<i64>(0)
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            > 4_194_304
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        serde_json::from_str(
+            &row.get::<String>(1)
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?,
+        )
+        .map_err(|_| AgentFailure::CapabilityUnavailable)
+    }
+
     pub async fn put_calendar_mirror(
         &self,
         person_id: PersonId,

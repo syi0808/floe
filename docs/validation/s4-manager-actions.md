@@ -2,6 +2,10 @@
 
 Date: 2026-09-07. Core integration with synthetic fixtures; S4 remains **0/14**.
 
+Follow-up: the [bounded Calendar Timeline adapter](s4-calendar-timeline.md) now feeds
+this bridge in a Core/Expert/vault fixture test. Production Manager orchestration
+and live native/source verification remain open.
+
 ## Authority and input boundary
 
 The trusted Core Manager can now call `prepare_expert_calendar_action` with a

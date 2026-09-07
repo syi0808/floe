@@ -55,4 +55,48 @@ check(otherConflict, "update ignores other overlaps")
 updateRaw["mutation"] = ["original": original, "delete": true]
 let deletion = try Proposal(updateRaw)
 check(deletion.deleting, "delete operation lost")
-print("13 native validation assertions passed; no OS permission or event access invoked")
+let formatter = ISO8601DateFormatter()
+let accessRequest: [String: Any] = ["schema_version": 1, "person_id": raw["person_id"]!,
+  "provider": "event_kit", "calendar_ids": ["second", "first"],
+  "deadline": formatter.string(from: Date().addingTimeInterval(10))]
+var permissions = 0
+let stamp = try calendarViewAccess(accessRequest, permission: { permissions += 1 },
+  contains: { ["first", "second"].contains($0) }, generation: { "stable" })
+check(permissions == 2, "access must be checked on both sides of inventory lookup")
+check(stamp["calendar_ids"] as? [String] == ["first", "second"], "scope was changed")
+check(stamp["generation"] as? String == "stable", "generation was lost")
+for change: [String: Any] in [
+  ["schema_version": 2], ["person_id": UUID().uuidString], ["calendar_ids": [String]()],
+  ["calendar_ids": ["first", "first"]], ["calendar_ids": ["1", "2", "3", "4", "5"]],
+  ["deadline": formatter.string(from: Date().addingTimeInterval(-1))]
+] {
+  var invalid = accessRequest
+  invalid.merge(change) { _, updated in updated }
+  var touched = false
+  do {
+    _ = try calendarViewAccess(invalid, permission: { touched = true }, contains: { _ in true }, generation: { "stable" })
+    fatalError("invalid access request was allowed")
+  } catch { check(!touched, "invalid input reached permission boundary") }
+}
+var generations = 0
+do {
+  _ = try calendarViewAccess(accessRequest, permission: {}, contains: { _ in true }, generation: {
+    generations += 1; return String(generations)
+  })
+  fatalError("changed access generation was allowed")
+} catch { check(generations == 2, "generation must be checked after lookup") }
+var queried = false
+do {
+  _ = try calendarViewAccess(accessRequest, permission: { throw NSError(domain: "fixture", code: 1) },
+    contains: { _ in queried = true; return true }, generation: { "stable" })
+  fatalError("denied permission was ignored")
+} catch { check(!queried, "denied permission reached Calendar lookup") }
+var laterPermissions = 0
+do {
+  _ = try calendarViewAccess(accessRequest, permission: {
+    laterPermissions += 1
+    if laterPermissions == 2 { throw NSError(domain: "fixture", code: 2) }
+  }, contains: { _ in true }, generation: { "stable" })
+  fatalError("permission withdrawal during inventory lookup was ignored")
+} catch { check(laterPermissions == 2, "permission was not rechecked") }
+print("25 native validation assertions passed; no OS permission or event access invoked")

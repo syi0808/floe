@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; bounded Experts; Core Manager-to-S3 bridge; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Live authorized Timeline and Manager orchestration; local/remote models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; bounded Calendar View/Experts; Core Manager-to-S3 bridge; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Per-turn Calendar lease and Manager orchestration; local/remote models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,24 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 bounded Calendar Timeline View — 2026-09-07
+
+- Added a Core-backed Expert View for exact Person/calendar grants, current connection
+  revisions and bounded fresh import coverage. Old/failed/overfull sources fail rather
+  than appearing empty or producing a false free slot; healthy explicit subsets work.
+- Minimized provider metadata, clipped crossing/all-day intervals, preserved DST day
+  bounds and added a revalidation lease with cancellation/deadline/drop ownership.
+- Added a native read-access boundary that checks full permission, inventory and a
+  process-local change generation without requesting access or reading event bodies.
+- Validation: 151 workspace Rust tests, 135 Flutter tests, three keyring example
+  tests and 25 native assertions pass; analysis, formatting, Clippy with existing
+  exclusions, macOS Debug build and deep strict signature verification pass. A fixture
+  runs Calendar mirror → View → actual Expert → encrypted result → S3 Review.
+- [Evidence and limits](docs/validation/s4-calendar-timeline.md). This is not a live
+  native/source gate or production Agent turn. The sample panel remains synthetic;
+  per-turn host orchestration, registry configuration and live key/model work remain.
+  S4 stays 0/14, with S1/S3 acceptance unchanged.
 
 ### S4 Manager-to-S3 action bridge — 2026-09-07
 

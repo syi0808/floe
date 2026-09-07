@@ -41,6 +41,9 @@ contract. The sample panel renders structured Expert evidence; the secure host n
 A [Manager-to-S3 bridge](docs/validation/s4-manager-actions.md) now converts committed
 focus advice into the existing policy/review/action ledger with stable retry identity.
 Registry management, live sources and app-level proposal orchestration still remain.
+A [bounded Calendar Timeline adapter](docs/validation/s4-calendar-timeline.md) now
+projects exact authorized mirror scopes through the common Expert port, with a
+native read-access boundary. Its production Agent orchestration is not enabled yet.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

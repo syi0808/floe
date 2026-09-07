@@ -1,3 +1,4 @@
+use floe_agent::AgentFailure;
 use floe_core::{
     ActionFailure, CalendarAction, CalendarActionProvider, CalendarCreateReceipt, CalendarPreflight,
 };
@@ -69,6 +70,101 @@ impl CalendarActionProvider for NativeCalendar {
     ) -> Result<Vec<CalendarCreateReceipt>, ActionFailure> {
         self.request("lookup", action)
     }
+}
+
+impl floe_core::CalendarReadAccess for NativeCalendar {
+    async fn check(
+        &self,
+        request: floe_core::CalendarReadAccessRequest,
+    ) -> Result<floe_core::CalendarReadAccessStamp, AgentFailure> {
+        check_calendar_read(
+            request,
+            &self.calendar_ids,
+            call::<floe_core::CalendarReadAccessStamp>,
+        )
+        .await
+    }
+}
+
+async fn check_calendar_read(
+    request: floe_core::CalendarReadAccessRequest,
+    included: &[String],
+    invoke: impl FnOnce(Value) -> Result<floe_core::CalendarReadAccessStamp, ActionFailure>
+    + Send
+    + 'static,
+) -> Result<floe_core::CalendarReadAccessStamp, AgentFailure> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    struct Permit;
+    impl Drop for Permit {
+        fn drop(&mut self) {
+            ACTIVE.store(false, Ordering::Release);
+        }
+    }
+    if request.person_id.to_string() != LOCAL_PERSON
+        || request.provider != floe_domain::CalendarProvider::EventKit
+        || request.calendar_ids.is_empty()
+        || request.calendar_ids.len() > 4
+        || request.calendar_ids.iter().any(|identifier| {
+            identifier.trim().is_empty() || identifier.len() > 512 || !included.contains(identifier)
+        })
+        || request
+            .calendar_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != request.calendar_ids.len()
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    if request.cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    let remaining = request
+        .deadline
+        .saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    if ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    let permit = Permit;
+    let native_deadline = chrono::Utc::now()
+        + chrono::Duration::from_std(remaining.min(std::time::Duration::from_secs(12)))
+            .map_err(|_| AgentFailure::InvalidInput)?;
+    let input = json!({"operation": "view_access", "schema_version": 1,
+            "person_id": request.person_id, "provider": request.provider,
+            "calendar_ids": request.calendar_ids, "deadline": native_deadline.to_rfc3339()});
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("floe-calendar-access".into())
+        .spawn(move || {
+            let result = invoke(input);
+            drop(permit);
+            let _ = sender.send(result);
+        })
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    let result = tokio::select! {
+        biased;
+        _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+        _ = tokio::time::sleep_until(request.deadline) => return Err(AgentFailure::DeadlineExceeded),
+        result = receiver => result.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+    };
+    if request.cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    if tokio::time::Instant::now() >= request.deadline {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    result.map_err(|error| match error {
+        ActionFailure::PermissionDenied => AgentFailure::CapabilityDenied,
+        ActionFailure::Timeout => AgentFailure::DeadlineExceeded,
+        _ => AgentFailure::CapabilityUnavailable,
+    })
 }
 
 fn call<T: DeserializeOwned>(request: Value) -> Result<T, ActionFailure> {
@@ -153,3 +249,6 @@ fn invoke(request: Value) -> Result<Value, ActionFailure> {
         }
     }
 }
+
+#[cfg(test)]
+mod access_tests;
