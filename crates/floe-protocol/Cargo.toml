@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 chrono.workspace = true
 floe-domain = { path = "../floe-domain" }
+floe-agent = { path = "../floe-agent" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

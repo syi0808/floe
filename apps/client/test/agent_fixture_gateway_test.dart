@@ -1,0 +1,148 @@
+import 'dart:io';
+
+import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
+import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test(
+    'Agent fixture crosses Dart/C ABI and resumes after core restart',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      expect(
+        library.existsSync(),
+        isTrue,
+        reason: 'Run cargo build -p floe-ffi.',
+      );
+      final directory = await Directory.systemTemp.createTemp(
+        'floe-agent-test-',
+      );
+      FfiDayGateway? gateway;
+      addTearDown(() async {
+        await gateway?.close();
+        await directory.delete(recursive: true);
+      });
+      gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${directory.path}/fixture.db',
+      );
+      final initial = await gateway.startAgentFixture(localPersonId);
+      expect(initial.session.messages, isEmpty);
+      expect(initial.session.dataClasses, ['synthetic']);
+      final first = await gateway.runAgentFixture(
+        initial.session,
+        AgentFixturePrompt.today,
+      );
+      expect(first.session.lastOutcome!.completed, isTrue);
+      expect(first.session.messages, hasLength(3));
+      expect(first.session.messages[1], isA<AgentCapabilityMessage>());
+      expect(first.events.first.event, isA<AgentStarted>());
+      expect(first.events.last.event, isA<AgentFinished>());
+      expect(
+        first.events.where((event) => event.event is AgentMessageCommitted),
+        hasLength(3),
+      );
+      await expectLater(
+        gateway.runAgentFixture(initial.session, AgentFixturePrompt.today),
+        throwsA(
+          isA<FfiDayGatewayException>().having(
+            (error) => error.code,
+            'code',
+            'conflict',
+          ),
+        ),
+      );
+      await expectLater(
+        gateway.loadAgentFixture(
+          '00000000-0000-4000-8000-000000000002',
+          first.session.id,
+        ),
+        throwsA(
+          isA<FfiDayGatewayException>().having(
+            (error) => error.code,
+            'code',
+            'not_found',
+          ),
+        ),
+      );
+      await gateway.close();
+      gateway = null;
+      gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${directory.path}/fixture.db',
+      );
+      final restored = await gateway.loadAgentFixture(
+        localPersonId,
+        first.session.id,
+      );
+      expect(restored.session.revision, first.session.revision);
+      expect(restored.session.messages, hasLength(3));
+      expect(restored.events, isEmpty);
+      final next = await gateway.runAgentFixture(
+        restored.session,
+        AgentFixturePrompt.followUp,
+      );
+      expect(next.session.messages, hasLength(5));
+      final stalled = await gateway.runAgentFixture(
+        next.session,
+        AgentFixturePrompt.repeatedCall,
+      );
+      expect(stalled.session.lastOutcome!.failure, 'stalled');
+      expect(stalled.session.activeTurn, isNull);
+      final retry = await gateway.runAgentFixture(
+        stalled.session,
+        AgentFixturePrompt.today,
+      );
+      expect(retry.session.lastOutcome!.completed, isTrue);
+    },
+  );
+
+  test('Agent event decoder rejects unknown versions and kinds', () {
+    final event = <String, Object?>{
+      'schema_version': 1,
+      'session_id': 'session',
+      'turn_id': 'turn',
+      'event': {'kind': 'started'},
+    };
+    expect(AgentEvent.fromJson(event).event, isA<AgentStarted>());
+    expect(
+      () => AgentEvent.fromJson({...event, 'schema_version': 2}),
+      throwsFormatException,
+    );
+    expect(
+      () => AgentEvent.fromJson({
+        ...event,
+        'event': {'kind': 'execute_without_review'},
+      }),
+      throwsFormatException,
+    );
+  });
+
+  test('Agent decoder rejects incomplete capability and outcome records', () {
+    final message = <String, Object?>{
+      'kind': 'capability',
+      'turn_id': 'turn',
+      'call_id': 'call',
+      'capability_id': 'fixture.read',
+      'input': 'sample',
+    };
+    for (final result in [
+      {},
+      {'Ok': 'result', 'Err': 'failure'},
+    ]) {
+      expect(
+        () => AgentMessage.fromJson({...message, 'result': result}),
+        throwsFormatException,
+      );
+    }
+    expect(
+      () => AgentOutcome.fromJson({'status': 'halted'}),
+      throwsFormatException,
+    );
+    expect(
+      () =>
+          AgentOutcome.fromJson({'status': 'completed', 'reason': 'cancelled'}),
+      throwsFormatException,
+    );
+  });
+}

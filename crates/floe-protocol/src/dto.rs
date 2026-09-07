@@ -6,6 +6,47 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentFixtureRequestDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub operation: AgentFixtureOperationDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentFixtureOperationDto {
+    Start {},
+    Get {
+        session_id: String,
+    },
+    Turn {
+        session_id: String,
+        expected_revision: u64,
+        prompt: AgentFixturePromptDto,
+    },
+    Recover {
+        session_id: String,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFixturePromptDto {
+    Today,
+    FollowUp,
+    RepeatedCall,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentFixtureResultDto {
+    pub session: floe_agent::AgentSession,
+    pub events: Vec<floe_agent::AgentEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarActionRequestDto {
     pub schema_version: u32,
     pub person_id: String,

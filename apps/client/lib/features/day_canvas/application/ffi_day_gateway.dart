@@ -15,6 +15,7 @@ import 'day_gateway.dart';
 import 'calendar_gateway.dart';
 import 'calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
+import '../../agent/agent_fixture_gateway.dart';
 
 const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
@@ -34,7 +35,8 @@ final class FfiDayGateway
         DayGateway,
         CalendarGateway,
         CalendarActionExecutionGateway,
-        CalendarDirectActionGateway {
+        CalendarDirectActionGateway,
+        AgentFixtureGateway {
   FfiDayGateway._(
     this._isolate,
     this._commands,
@@ -105,6 +107,46 @@ final class FfiDayGateway
     final executableDirectory = File(Platform.resolvedExecutable).parent.path;
     return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
   }
+
+  @override
+  Future<AgentFixtureResult> startAgentFixture(String personId) =>
+      _agentFixture(personId, {'kind': 'start'});
+
+  @override
+  Future<AgentFixtureResult> loadAgentFixture(
+    String personId,
+    String sessionId,
+  ) => _agentFixture(personId, {'kind': 'get', 'session_id': sessionId});
+
+  @override
+  Future<AgentFixtureResult> runAgentFixture(
+    AgentSession session,
+    AgentFixturePrompt prompt,
+  ) => _agentFixture(session.personId, {
+    'kind': 'turn',
+    'session_id': session.id,
+    'expected_revision': session.revision,
+    'prompt': prompt.wireName,
+  });
+
+  @override
+  Future<AgentFixtureResult> recoverAgentFixture(AgentSession session) =>
+      _agentFixture(session.personId, {
+        'kind': 'recover',
+        'session_id': session.id,
+        'expected_revision': session.revision,
+      });
+
+  Future<AgentFixtureResult> _agentFixture(
+    String personId,
+    Map<String, Object?> operation,
+  ) async => AgentFixtureResult.fromJson(
+    await _request('agent_fixture', {
+      'schema_version': agentSchemaVersion,
+      'person_id': personId,
+      'operation': operation,
+    }),
+  );
 
   @override
   Future<List<CalendarAction>> loadCalendarActions(String personId) =>
@@ -764,6 +806,7 @@ Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
           'load_day' => bindings.loadDay(handle, input),
           'execute' => bindings.execute(handle, input),
           'calendar_actions' => bindings.calendarActions(handle, input),
+          'agent_fixture' => bindings.agentFixture(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };
         if (output == nullptr) {

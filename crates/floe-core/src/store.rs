@@ -45,6 +45,7 @@ impl TursoStore {
             "calendar_mirrors",
             "calendar_actions",
             "action_authorities",
+            "agent_fixture_sessions",
         ] {
             connection.execute(
                 &format!("CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)"),
@@ -104,6 +105,60 @@ impl TursoStore {
             )
             .await
             .map_err(storage_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
+    pub(crate) async fn agent_fixture_session(
+        &self,
+        person_id: PersonId,
+        session_id: uuid::Uuid,
+    ) -> Result<floe_agent::AgentSession, CoreError> {
+        let session: floe_agent::AgentSession = self
+            .get("agent_fixture_sessions", session_id.to_string())
+            .await?
+            .ok_or_else(|| {
+                CoreError::new(ErrorCode::NotFound, "agent fixture session not found")
+            })?;
+        if session.person_id != person_id {
+            return Err(CoreError::new(
+                ErrorCode::NotFound,
+                "agent fixture session not found",
+            ));
+        }
+        Ok(session)
+    }
+
+    pub(crate) async fn save_agent_fixture_session(
+        &self,
+        session: &floe_agent::AgentSession,
+        previous: Option<&floe_agent::AgentSession>,
+    ) -> Result<(), CoreError> {
+        let connection = self.connection().await?;
+        let payload = to_string(session).map_err(storage_error)?;
+        let changed = if let Some(previous) = previous {
+            connection.execute(
+                "UPDATE agent_fixture_sessions SET payload = ? WHERE id = ? AND person_id = ? AND payload = ?",
+                (payload, session.id.to_string(), session.person_id.to_string(), to_string(previous).map_err(storage_error)?),
+            ).await.map_err(storage_error)?
+        } else {
+            connection.execute(
+                "INSERT OR IGNORE INTO agent_fixture_sessions(id, person_id, payload) VALUES (?, ?, ?)",
+                (session.id.to_string(), session.person_id.to_string(), payload),
+            ).await.map_err(storage_error)?
+        };
+        if changed != 1 {
+            return Err(CoreError::new(
+                ErrorCode::Conflict,
+                "agent fixture session changed; reload",
+            ));
+        }
         Ok(())
     }
 

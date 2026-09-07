@@ -58,6 +58,8 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>(
         'floe_core_calendar_actions',
       );
+  late final FloeCallDart agentFixture = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_fixture');
   late final FloeFreeStringDart freeString;
   late final FloeFreeCoreDart freeCore;
   late final FloeProtocolVersionDart protocolVersion;

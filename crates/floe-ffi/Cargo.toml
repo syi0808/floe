@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 chrono.workspace = true
 floe-core = { path = "../floe-core" }
+floe-agent = { path = "../floe-agent" }
 floe-domain = { path = "../floe-domain" }
 floe-protocol = { path = "../floe-protocol" }
 serde.workspace = true

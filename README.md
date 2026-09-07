@@ -19,6 +19,11 @@ privacy-aware local/remote model routing (S4), governed
 Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
 cross-device/server (S8) and intervention (S9).
 
+S4 preparatory work now includes a bounded Rust Agent runtime and durable,
+preset-only synthetic sessions through the C ABI/Dart gateway. Personal chat,
+assistant UI and live model/source integration remain gated; see the
+[foundation validation record](docs/validation/s4-agent-foundation.md).
+
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 
 ## Start here

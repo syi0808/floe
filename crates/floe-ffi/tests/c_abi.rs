@@ -38,6 +38,17 @@ impl Core {
         .unwrap();
         take_json(unsafe { floe_core_calendar_actions(self.0, request.as_ptr()) })
     }
+
+    fn agent(&self, person_id: &str, operation: Value) -> Value {
+        let request = CString::new(
+            json!({
+                "schema_version": 1, "person_id": person_id, "operation": operation
+            })
+            .to_string(),
+        )
+        .unwrap();
+        take_json(unsafe { floe_core_agent_fixture(self.0, request.as_ptr()) })
+    }
 }
 
 impl Drop for Core {
@@ -62,6 +73,59 @@ fn day() -> Value {
         "timezone_offset_seconds": 0,
         "now": "2026-09-02T10:30:00Z"
     })
+}
+
+#[test]
+fn agent_fixture_bridge_resumes_typed_events_but_does_not_accept_personal_text_or_policy() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent.db");
+    let person = Uuid::new_v4().to_string();
+    let core = Core::open(path.to_str().unwrap());
+    let initial = core.agent(&person, json!({"kind": "start"}));
+    let session_id = data(&initial)["session"]["id"].clone();
+    let operation = json!({"kind": "turn", "session_id": session_id, "expected_revision": 0, "prompt": "today"});
+    for field in ["text", "policy", "context", "model", "credentials"] {
+        let mut injected = operation.clone();
+        injected[field] = json!("PRIVATE_SENTINEL");
+        assert_eq!(core.agent(&person, injected)["error"]["code"], "validation");
+    }
+    let mut bad_prompt = operation.clone();
+    bad_prompt["prompt"] = json!("PRIVATE_SENTINEL");
+    assert_eq!(
+        core.agent(&person, bad_prompt)["error"]["code"],
+        "validation"
+    );
+    let response = core.agent(&person, operation.clone());
+    assert_eq!(
+        data(&response)["session"]["last_outcome"]["status"],
+        "completed"
+    );
+    assert_eq!(data(&response)["events"][0]["schema_version"], 1);
+    assert_eq!(core.agent(&person, operation)["error"]["code"], "conflict");
+    assert_eq!(
+        core.agent(
+            &Uuid::new_v4().to_string(),
+            json!({"kind": "get", "session_id": session_id})
+        )["error"]["code"],
+        "not_found"
+    );
+    drop(core);
+    let core = Core::open(path.to_str().unwrap());
+    let restored = core.agent(&person, json!({"kind": "get", "session_id": session_id}));
+    assert_eq!(data(&restored)["session"], data(&response)["session"]);
+    let next = core.agent(
+        &person,
+        json!({"kind": "turn", "session_id": session_id,
+        "expected_revision": data(&restored)["session"]["revision"], "prompt": "follow_up"}),
+    );
+    assert_eq!(
+        data(&next)["session"]["messages"].as_array().unwrap().len(),
+        5
+    );
+    assert_eq!(
+        data(&core.load(json!({"schema_version": 1, "person_id": person, "day": day()})))["items"],
+        json!([])
+    );
 }
 
 fn command(person_id: &str, command: Value) -> Value {

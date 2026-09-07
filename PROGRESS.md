@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned | None | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F session vault | Today briefing uses bounded sources across explicit local/remote inference policy |
+| S4 — Connected Agent/Experts | Planned; preparatory foundation implemented | Rust runtime and durable synthetic sessions through C ABI/Dart; fixture evidence only | 0/14 | S3 Accepted; P0-I/P0-C/P0-K/P0-L; P0-F session vault | Assistant panel on the shared event contract; session vault gate before personal chat |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,28 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 Agent contract foundation — 2026-09-07
+
+- Began preparatory S4 implementation at the user's request without promoting the
+  slice past its S3/session-vault prerequisites. S1/S3 live status is unchanged;
+  S4 remains 0/14, not Integrated or Accepted.
+- Added provider/UI-independent `floe-agent` ports, versioned commands/events,
+  bounded multi-turn execution, read-only capability discovery, cancellation,
+  deadline/token/cost/output/context/session limits and repeated-call halting.
+- Added explicit inference placement/consent/projection checks, sensitive history
+  classification retention, stale-source checks and fail-closed vault availability.
+  Raw device data and credentials are excluded from Agent context entirely.
+- Added CAS-persisted synthetic sessions and a preset-only fixture route through
+  JSON/C ABI and typed Dart gateway. Completed capability input/results stay
+  paired; final assistant text and successful outcome commit atomically.
+- No personal chat storage, actual model, native chat UI, live connectors or S3
+  mutation integration is enabled. Native fixture responses batch events; live
+  streaming/stop transport, encrypted vault and Expert registries remain next work.
+- [Validation, reproduction and exact boundaries](docs/validation/s4-agent-foundation.md).
+- Validation: 74 Rust tests and 104 Flutter tests pass, including 24 new Rust
+  Agent/core/ABI tests and three Dart tests. Flutter analyzer, Agent Clippy and
+  formatting checks pass; whole-workspace Clippy retains two existing Calendar warnings.
 
 ### Decision-first UI checkpoint — 2026-09-06
 

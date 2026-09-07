@@ -170,6 +170,82 @@ pub fn load_day(handle: &FloeHandle, request: LoadDayRequestDto) -> BridgeResult
     snapshot(handle, person_id, &request.day)
 }
 
+pub fn agent_fixture(
+    handle: &FloeHandle,
+    request: AgentFixtureRequestDto,
+) -> BridgeResult<AgentFixtureResultDto> {
+    check_version(request.schema_version)?;
+    let person_id = parse_person(&request.person_id)?;
+    let session = match request.operation {
+        AgentFixtureOperationDto::Start {} => handle
+            .runtime
+            .block_on(handle.core.start_agent_fixture(person_id)),
+        AgentFixtureOperationDto::Get { session_id } => {
+            let session_id = parse_id(&session_id, "session_id", |value| value)?;
+            handle
+                .runtime
+                .block_on(handle.core.agent_fixture_session(person_id, session_id))
+        }
+        AgentFixtureOperationDto::Recover {
+            session_id,
+            expected_revision,
+        } => {
+            let session_id = parse_id(&session_id, "session_id", |value| value)?;
+            handle.runtime.block_on(handle.core.recover_agent_fixture(
+                person_id,
+                session_id,
+                expected_revision,
+            ))
+        }
+        AgentFixtureOperationDto::Turn {
+            session_id,
+            expected_revision,
+            prompt,
+        } => {
+            let session_id = parse_id(&session_id, "session_id", |value| value)?;
+            let prompt = match prompt {
+                AgentFixturePromptDto::Today => floe_core::AgentFixturePrompt::Today,
+                AgentFixturePromptDto::FollowUp => floe_core::AgentFixturePrompt::FollowUp,
+                AgentFixturePromptDto::RepeatedCall => floe_core::AgentFixturePrompt::RepeatedCall,
+            };
+            let result = handle
+                .runtime
+                .block_on(handle.core.run_agent_fixture(
+                    person_id,
+                    session_id,
+                    expected_revision,
+                    prompt,
+                ))
+                .map_err(agent_failure)?;
+            return Ok(AgentFixtureResultDto {
+                session: result.session,
+                events: result.events,
+            });
+        }
+    }
+    .map_err(agent_failure)?;
+    Ok(AgentFixtureResultDto {
+        session,
+        events: vec![],
+    })
+}
+
+fn agent_failure(failure: floe_agent::AgentFailure) -> ErrorDto {
+    use floe_agent::AgentFailure;
+    let code = match failure {
+        AgentFailure::NotFound => ErrorCodeDto::NotFound,
+        AgentFailure::Conflict => ErrorCodeDto::Conflict,
+        AgentFailure::StorageUnavailable => ErrorCodeDto::Storage,
+        AgentFailure::UnsupportedVersion => ErrorCodeDto::UnsupportedVersion,
+        _ => ErrorCodeDto::Validation,
+    };
+    let mut result = error(code, "Agent fixture request could not complete");
+    if let Ok(Value::String(reason)) = serde_json::to_value(failure) {
+        result.metadata.insert("agent_failure".into(), reason);
+    }
+    result
+}
+
 #[derive(Serialize)]
 pub struct CalendarActionsResult {
     pub actions: Vec<floe_core::CalendarAction>,
@@ -825,6 +901,20 @@ pub unsafe extern "C" fn floe_core_calendar_actions(
         let request = serde_json::from_str(c_input(request_json, "request_json")?)
             .map_err(|value| invalid("request_json", value.to_string()))?;
         calendar_actions(handle, request)
+    })
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_agent_fixture(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request = serde_json::from_str(c_input(request_json, "request_json")?)
+            .map_err(|value| invalid("request_json", value.to_string()))?;
+        agent_fixture(handle, request)
     })
 }
 
