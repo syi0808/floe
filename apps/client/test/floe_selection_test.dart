@@ -250,6 +250,42 @@ void main() {
     expect(find.byKey(const ValueKey('floe-selection-popup')), findsNothing);
   });
 
+  testWidgets('disabled select ignores pointer hover', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: const Scaffold(
+          body: SizedBox(
+            width: 320,
+            child: FloeSelect<String>(
+              label: 'Target calendar',
+              value: 'home',
+              options: [FloeSelectOption(value: 'home', label: 'Home')],
+              enabled: false,
+              onChanged: _ignoreSelection,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    ShapeDecoration triggerDecoration() =>
+        tester
+                .widget<AnimatedContainer>(find.byType(AnimatedContainer))
+                .decoration!
+            as ShapeDecoration;
+
+    final initialDecoration = triggerDecoration();
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(find.text('Home')));
+    await tester.pumpAndSettle();
+
+    expect(triggerDecoration().color, initialDecoration.color);
+    expect(triggerDecoration().shape, initialDecoration.shape);
+  });
+
   testWidgets('pointer hover does not scroll an open select', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -313,3 +349,5 @@ void main() {
     expect(calls, 1);
   });
 }
+
+void _ignoreSelection(String? _) {}

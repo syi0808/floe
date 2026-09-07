@@ -631,7 +631,7 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
   @override
   Widget build(BuildContext context) {
     final reduced = FloeMotion.reduceMotion(context);
-    final highlighted = widget.open || hovered;
+    final highlighted = widget.open || (widget.enabled && hovered);
     final iconOnly = widget.icon != null;
     return Semantics(
       button: true,
@@ -643,7 +643,9 @@ class _FloeSelectionTriggerState extends State<_FloeSelectionTrigger> {
         cursor: widget.enabled
             ? SystemMouseCursors.click
             : SystemMouseCursors.forbidden,
-        onEnter: (_) => setState(() => hovered = true),
+        onEnter: (_) {
+          if (widget.enabled) setState(() => hovered = true);
+        },
         onExit: (_) => setState(() => hovered = false),
         child: Focus(
           focusNode: widget.focusNode,
