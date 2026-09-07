@@ -9,6 +9,7 @@ import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_loading.dart';
 import '../../../app/floe_squircle.dart';
+import '../../agent/agent_capability_label.dart';
 import '../application/calendar_action_controller.dart';
 import '../domain/calendar_action.dart';
 import '../domain/day_models.dart';
@@ -414,8 +415,7 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
                   strings.actionProposalId: action.id,
                   strings.actionExecutionId: action.executionId,
                   if (action.agentOrigin case final origin?) ...{
-                    strings.actionExpert:
-                        '${origin.expertId} ${origin.expertVersion}',
+                    strings.actionExpert: agentCapabilityTitle(origin.expertId),
                     strings.actionConversationId: origin.sessionId,
                     strings.actionExpertCallId: origin.invocationId,
                   },

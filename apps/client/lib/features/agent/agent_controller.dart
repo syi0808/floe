@@ -287,9 +287,53 @@ final class AgentController extends ChangeNotifier {
     );
   }
 
+  Future<void> configureCapability(String installationId, bool enabled) async {
+    final current = registry;
+    if (current == null) return;
+    final installation = current.installations
+        .where((entry) => entry.id == installationId)
+        .singleOrNull;
+    if (installation == null) return;
+    final assignments = current.assignments
+        .where((entry) => entry.installationId == installationId)
+        .toList();
+    final changes = <(AgentRegistryTarget, String)>[
+      if (enabled && !installation.enabled)
+        (AgentRegistryTarget.installation, installation.id),
+      if (enabled)
+        for (final assignment in assignments)
+          if (!assignment.enabled)
+            (AgentRegistryTarget.assignment, assignment.id),
+      if (!enabled)
+        for (final assignment in assignments)
+          if (assignment.enabled)
+            (AgentRegistryTarget.assignment, assignment.id),
+      if (!enabled && installation.enabled)
+        (AgentRegistryTarget.installation, installation.id),
+    ];
+    if (changes.isEmpty) return;
+    await _registryOperation(() async {
+      var next = current;
+      for (final (target, id) in changes) {
+        final configured = await (gateway as AgentRegistryGateway)
+            .configureRegistry(next, target: target, id: id, enabled: enabled);
+        if (configured.instanceId != next.instanceId ||
+            configured.revision != next.revision + 1) {
+          throw const FormatException('Registry configuration mismatch');
+        }
+        next = configured;
+      }
+      return next;
+    }, expectedChanges: changes.length);
+    if (hasCalendarExpertManagement && canManageCalendarExperts) {
+      await loadCalendarExperts();
+    }
+  }
+
   Future<void> _registryOperation(
-    Future<AgentRegistryView> Function()? change,
-  ) async {
+    Future<AgentRegistryView> Function()? change, {
+    int expectedChanges = 1,
+  }) async {
     if (!canManageRegistry) return;
     final previous = registry;
     _begin();
@@ -307,7 +351,7 @@ final class AgentController extends ChangeNotifier {
           (result == null ||
               previous == null ||
               result.instanceId != previous.instanceId ||
-              result.revision != previous.revision + 1)) {
+              result.revision != previous.revision + expectedChanges)) {
         throw const FormatException('Registry configuration mismatch');
       }
       registry = result;

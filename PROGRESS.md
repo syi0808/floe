@@ -82,7 +82,11 @@ storage and Day Canvas. No live acceptance criterion is marked verified yet.
 - Removed user-facing conversation setup/unlock/lock actions. Vault creation and unlock
   are automatic on assistant load/resume while close/background still seal the session.
 - Moved Expert, assignment and Calendar scope management from the assistant panel to
-  Settings > Assistant permissions.
+  Settings > Floe access.
+- Flattened assistant access into Settings, replaced internal identifiers and counters
+  with user-facing ability language, and unified paired internal controls per ability.
+- Reworked the assistant launcher as a spacious action card instead of a dense outlined
+  button.
 - Added and applied the animated, accessible `FloeSwitch` design-system component.
 - [Evidence and validation limits](docs/validation/s4-agent-experience-feedback.md).
   S4 remains 0/14 and live key/model/source/privacy gates remain unchanged.

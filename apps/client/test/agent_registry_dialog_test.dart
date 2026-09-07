@@ -57,33 +57,27 @@ void main() {
         addTearDown(controller.dispose);
         await controller.load();
         await tester.pumpWidget(app(controller, width == 320 ? 2 : 1));
-        await tester.ensureVisible(find.text('Manage assistant access'));
-        await tester.tap(find.text('Manage assistant access'));
         await tester.pumpAndSettle();
-        expect(find.byType(AgentRegistryDialog), findsOneWidget);
+        expect(find.byType(AgentRegistrySettings), findsOneWidget);
         final toggle = find.byKey(
-          const ValueKey('assignment-$registryAssignment'),
+          const ValueKey('capability-$registryInstallation'),
         );
         await tester.ensureVisible(toggle);
         await tester.tap(toggle);
         await tester.pumpAndSettle();
         expect(controller.registry!.assignments.single.enabled, false);
-        expect(gateway.changes, 1);
-        expect(
-          find.text('State revision 2 · 2 completed invocations'),
-          findsOneWidget,
-        );
+        expect(controller.registry!.installations.single.enabled, false);
+        expect(gateway.changes, 2);
+        expect(find.text('Schedule planning'), findsOneWidget);
+        expect(find.text('floe.schedule'), findsNothing);
         expect(find.text(registryAssignment), findsNothing);
         expect(tester.takeException(), isNull);
         if (width == 520) {
           await expectLater(
-            find.byType(AgentRegistryDialog),
+            find.byType(SettingsScreen),
             matchesGoldenFile('goldens/agent_registry.png'),
           );
         }
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        expect(find.byType(AgentRegistryDialog), findsNothing);
       },
     );
   }
@@ -99,10 +93,9 @@ void main() {
       addTearDown(controller.dispose);
       await controller.load();
       await tester.pumpWidget(app(controller, 1));
-      await tester.tap(find.text('Manage assistant access'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('No packages are installed yet.'),
+        find.textContaining('No additional abilities are available yet.'),
         findsOneWidget,
       );
       expect(gateway.changes, 0);
@@ -110,7 +103,7 @@ void main() {
       await tester.tap(find.text('Refresh settings'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('The current settings could not be confirmed.'),
+        find.textContaining('Floe could not confirm these settings.'),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);

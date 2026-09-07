@@ -8,6 +8,7 @@ import '../../app/floe_mascot.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
+import 'agent_capability_label.dart';
 import 'agent_controller.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal_card.dart';
@@ -266,7 +267,7 @@ class _AgentPanelState extends State<AgentPanel> {
     String clock(DateTime time) =>
         '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
     return [
-      strings.agentExpertSource(result.expert, result.version, result.source),
+      strings.agentExpertSource(agentCapabilityTitle(result.expert)),
       for (final insight in result.insights)
         switch (insight.kind) {
           'commitment' => strings.agentExpertCommitment(

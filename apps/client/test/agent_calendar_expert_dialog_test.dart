@@ -91,12 +91,8 @@ open(WidgetTester tester, {double scale = 1}) async {
   addTearDown(source.dispose);
   await controller.load();
   await tester.pumpWidget(app(controller, source, scale));
-  await tester.ensureVisible(find.text('Manage assistant access'));
-  await tester.tap(find.text('Manage assistant access'));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Calendar access'));
-  await tester.pumpAndSettle();
-  expect(find.byType(AgentCalendarExpertDialog), findsOneWidget);
+  expect(find.byType(AgentCalendarSettings), findsOneWidget);
   expect(gateway.transport.installations, 0);
   return (controller, gateway, source);
 }
@@ -186,7 +182,7 @@ void main() {
         await tapKey(tester, 'calendar-setup-consent');
         if (width == 520) {
           await expectLater(
-            find.byType(AgentCalendarExpertDialog),
+            find.byType(SettingsScreen),
             matchesGoldenFile('goldens/agent_calendar_consent.png'),
           );
         }
@@ -243,11 +239,6 @@ void main() {
         await tester.pumpAndSettle();
         await tester.ensureVisible(find.byTooltip('Settings'));
         await tester.tap(find.byTooltip('Settings'));
-        await tester.pumpAndSettle();
-        await tester.ensureVisible(find.text('Manage assistant access'));
-        await tester.tap(find.text('Manage assistant access'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Calendar access'));
         await tester.pumpAndSettle();
         expect(find.text('Connected test Calendar'), findsOneWidget);
         expect(

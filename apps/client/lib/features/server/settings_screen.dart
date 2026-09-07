@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
-import '../../app/floe_button.dart';
 import '../../app/floe_loading.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
+import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_registry_dialog.dart';
 import '../agent/agent_vault_gateway.dart';
@@ -120,7 +120,7 @@ class SettingsScreen extends StatelessWidget {
   );
 }
 
-class _AgentPermissions extends StatelessWidget {
+class _AgentPermissions extends StatefulWidget {
   const _AgentPermissions({
     required this.controller,
     this.calendarSources,
@@ -132,6 +132,62 @@ class _AgentPermissions extends StatelessWidget {
   final Listenable? calendarSourceChanges;
 
   @override
+  State<_AgentPermissions> createState() => _AgentPermissionsState();
+}
+
+class _AgentPermissionsState extends State<_AgentPermissions> {
+  bool loading = false;
+  bool registryRequested = false;
+  bool calendarRequested = false;
+
+  AgentController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller.addListener(_controllerChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void didUpdateWidget(_AgentPermissions oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != controller) {
+      oldWidget.controller.removeListener(_controllerChanged);
+      controller.addListener(_controllerChanged);
+      registryRequested = false;
+      calendarRequested = false;
+      _load();
+    }
+  }
+
+  void _controllerChanged() {
+    if (!controller.busy) _load();
+  }
+
+  Future<void> _load() async {
+    if (loading || !controller.canManageRegistry) return;
+    loading = true;
+    if (!registryRequested) {
+      registryRequested = true;
+      await controller.loadRegistry();
+    }
+    if (controller.hasCalendarExpertManagement &&
+        !calendarRequested &&
+        controller.canManageCalendarExperts) {
+      calendarRequested = true;
+      await controller.loadCalendarExperts();
+    }
+    loading = false;
+  }
+
+  @override
+  void dispose() {
+    controller.removeListener(_controllerChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
     builder: (context, _) => FloeSquircle(
@@ -140,39 +196,28 @@ class _AgentPermissions extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Assistant permissions',
+            'Floe access',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: FloeSpace.sm),
           const Text(
-            'Manage which Experts and connected Calendar scopes Floe may use in conversations.',
+            'Choose what Floe can use when helping you. You can change these choices at any time.',
             style: TextStyle(color: FloePalette.neutral600, height: 1.5),
           ),
-          const SizedBox(height: FloeSpace.base),
-          FloeButton.outlined(
-            onPressed:
-                controller.vaultState == AgentVaultState.ready &&
-                    controller.hasRegistryManagement &&
-                    !controller.busy
-                ? () async {
-                    final loading = controller.loadRegistry();
-                    await showDialog<void>(
-                      context: context,
-                      builder: (_) => AgentRegistryDialog(
-                        controller: controller,
-                        calendarSources: calendarSources,
-                        calendarSourceChanges: calendarSourceChanges,
-                      ),
-                    );
-                    await loading;
-                  }
-                : null,
-            child: const Text('Manage assistant access'),
-          ),
+          const SizedBox(height: FloeSpace.lg),
+          AgentRegistrySettings(controller: controller),
+          if (controller.hasCalendarExpertManagement) ...[
+            const Divider(height: FloeSpace.xxl),
+            AgentCalendarSettings(
+              controller: controller,
+              sources: widget.calendarSources,
+              sourceChanges: widget.calendarSourceChanges,
+            ),
+          ],
           if (controller.vaultState != AgentVaultState.ready) ...[
             const SizedBox(height: FloeSpace.sm),
             const Text(
-              'Assistant access becomes available automatically when the local conversation store is ready.',
+              'Floe access will appear automatically when your private data is ready.',
               style: TextStyle(color: FloePalette.neutral600, height: 1.4),
             ),
           ],

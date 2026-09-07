@@ -20,7 +20,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentSampleBoundary =>
-      'Sample data only. Personal chat stays locked until secure storage is ready.';
+      'Sample data only. Connected information is not used in this conversation.';
 
   @override
   String get agentNewConversation => 'New sample conversation';
@@ -66,8 +66,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentSourceUnavailable => 'This sample source is unavailable.';
 
   @override
-  String agentExpertSource(String expert, String version, String source) {
-    return 'Expert: $expert $version\nSource: $source';
+  String agentExpertSource(String ability) {
+    return 'Provided by $ability';
   }
 
   @override
@@ -900,21 +900,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionSaveApproval => 'Save approval only';
 
   @override
-  String get agentCreateStorage => 'Set up secure storage';
-
-  @override
-  String get agentUnlockStorage => 'Unlock conversation storage';
-
-  @override
-  String get agentLockStorage => 'Lock conversation storage';
-
-  @override
   String get agentStorageMissing =>
-      'Set up encrypted storage on this device before trying a sample conversation. Your device key stays in its secure key store.';
+      'Floe is preparing your private conversation data. Try again in a moment.';
 
   @override
   String get agentStorageLocked =>
-      'Conversation storage is locked. Unlock it to resume your saved sample conversation.';
+      'Floe is reconnecting to your private conversation data. Try again in a moment.';
 
   @override
   String get agentStorageUnavailable =>
@@ -925,25 +916,25 @@ class AppLocalizationsEn extends AppLocalizations {
       'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.';
 
   @override
-  String get agentRegistryTitle => 'Tools & Experts';
+  String get agentRegistryTitle => 'Conversation abilities';
 
   @override
   String get agentRegistryBoundary =>
-      'Manage installed packages and their assignments to this Person. Enabling restores only existing grants; it does not add sources, change grants or approve actions. Disabling blocks new invocations, not existing proposals or approvals.';
+      'Choose the kinds of help Floe may provide in your conversations.';
 
   @override
   String get agentRegistryEmpty =>
-      'No packages are installed yet. Use Calendar access, when available, to install a Calendar Expert. The first sample turn separately sets up the sample Timeline Tool and Schedule Expert.';
+      'No additional abilities are available yet. Add calendars below to get started.';
 
   @override
-  String get agentCalendarTitle => 'Calendar access';
+  String get agentCalendarTitle => 'Calendars';
 
   @override
   String get agentCalendarBoundary =>
-      'Choose an exact Calendar scope for the Schedule Expert. Installation starts disabled and does not request OS permission, read events or approve actions. Closing this screen does not undo a submitted change. Connected chat is not enabled yet; these settings do not change the sample assistant.';
+      'Choose which calendars Floe may use to understand your day and prepare suggestions.';
 
   @override
-  String get agentCalendarChoose => 'Choose up to 4 connected calendars';
+  String get agentCalendarChoose => 'Choose up to 4 calendars';
 
   @override
   String agentCalendarSelected(int count) {
@@ -952,90 +943,66 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentCalendarConsent =>
-      'I confirm these exact calendars. Any different scope requires a new confirmation; future calendars are not included automatically.';
+      'I understand Floe will only use the calendars selected here.';
 
   @override
-  String get agentCalendarInstall => 'Install disabled Expert';
+  String get agentCalendarInstall => 'Add selected calendars';
 
   @override
-  String get agentCalendarInstalled => 'Saved Calendar scopes';
+  String get agentCalendarInstalled => 'Calendars Floe can use';
 
   @override
-  String get agentCalendarScopeEnabled => 'Allow this Calendar scope';
+  String get agentCalendarScopeEnabled => 'Use these calendars';
 
   @override
   String get agentCalendarSeparateEnablement =>
-      'Tool and Expert installations and their Person assignments must also be enabled in Tools & Experts. Disabling this scope blocks new use, not existing proposals or approvals.';
+      'Turning this off stops Floe from using these calendars in new conversations.';
 
   @override
   String get agentCalendarConnect =>
-      'Connect and select calendars in Connections, then return here. No Calendar permission is requested from this screen.';
+      'Connect and choose calendars in Connections, then return here.';
 
   @override
   String get agentCalendarChanged =>
-      'The Calendar connection changed. Select and confirm the scope again before installing or retrying.';
+      'Your calendar connection changed. Choose the calendars again before continuing.';
 
   @override
   String get agentCalendarSourceUnavailable =>
-      'This source reports an import problem. Floe must recheck access and freshness before use.';
+      'This calendar is temporarily unavailable.';
 
   @override
   String get agentCalendarScopeUnavailable =>
-      'This exact scope is not available in the current connection. You can still turn it off; reconnect and select its calendars before enabling it.';
+      'These calendars are no longer connected. You can turn access off or reconnect them first.';
 
   @override
   String get agentCalendarExists =>
-      'This exact scope is already saved. Manage it below instead of installing a duplicate.';
+      'These calendars are already available to Floe.';
 
   @override
   String get agentCalendarPending =>
-      'Installation is not yet confirmed. Refresh to check whether it was saved, or retry the same confirmed scope. Do not create a replacement setup.';
+      'Floe could not confirm this change yet. Refresh to check, or try the same selection again.';
 
   @override
-  String get agentCalendarRetry => 'Retry same setup';
+  String get agentCalendarRetry => 'Try again';
 
   @override
-  String get agentCalendarDiscard => 'Discard unsaved setup request';
+  String get agentCalendarDiscard => 'Cancel this change';
 
   @override
-  String get agentCalendarApple => 'Apple Calendar · personal scope';
+  String get agentCalendarApple => 'Apple Calendar';
 
   @override
-  String get agentCalendarFixture => 'Fixture Calendar · synthetic scope';
+  String get agentCalendarFixture => 'Demo Calendar';
 
   @override
-  String get agentCalendarMissingName =>
-      'Calendar not in the current selection';
+  String get agentCalendarMissingName => 'A previously selected calendar';
 
   @override
   String get agentRegistryFailure =>
-      'The current settings could not be confirmed. Refresh before making another change; the previous change may already be saved.';
+      'Floe could not confirm these settings. Refresh before making another change.';
 
   @override
   String get agentRegistryRefresh => 'Refresh settings';
-
-  @override
-  String get agentRegistryInstallation => 'Installation enabled';
-
-  @override
-  String get agentRegistryAssignment => 'Enabled for this Person';
-
-  @override
-  String get agentRegistryInstallationOff =>
-      'This assignment cannot run while its installation is disabled.';
-
-  @override
-  String get agentRegistryUnassigned => 'Not assigned to this Person.';
-
-  @override
-  String agentRegistryGrants(int views, int tools) {
-    return 'Granted Views: $views · Tools: $tools';
-  }
-
-  @override
-  String agentRegistryState(int revision, int count) {
-    return 'State revision $revision · $count completed invocations';
-  }
 
   @override
   String get agentProposalTitle => 'Suggested focus time';

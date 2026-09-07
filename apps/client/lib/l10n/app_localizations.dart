@@ -115,7 +115,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentSampleBoundary.
   ///
   /// In en, this message translates to:
-  /// **'Sample data only. Personal chat stays locked until secure storage is ready.'**
+  /// **'Sample data only. Connected information is not used in this conversation.'**
   String get agentSampleBoundary;
 
   /// No description provided for @agentNewConversation.
@@ -205,8 +205,8 @@ abstract class AppLocalizations {
   /// No description provided for @agentExpertSource.
   ///
   /// In en, this message translates to:
-  /// **'Expert: {expert} {version}\nSource: {source}'**
-  String agentExpertSource(String expert, String version, String source);
+  /// **'Provided by {ability}'**
+  String agentExpertSource(String ability);
 
   /// No description provided for @agentExpertCommitment.
   ///
@@ -1636,34 +1636,16 @@ abstract class AppLocalizations {
   /// **'Save approval only'**
   String get actionSaveApproval;
 
-  /// No description provided for @agentCreateStorage.
-  ///
-  /// In en, this message translates to:
-  /// **'Set up secure storage'**
-  String get agentCreateStorage;
-
-  /// No description provided for @agentUnlockStorage.
-  ///
-  /// In en, this message translates to:
-  /// **'Unlock conversation storage'**
-  String get agentUnlockStorage;
-
-  /// No description provided for @agentLockStorage.
-  ///
-  /// In en, this message translates to:
-  /// **'Lock conversation storage'**
-  String get agentLockStorage;
-
   /// No description provided for @agentStorageMissing.
   ///
   /// In en, this message translates to:
-  /// **'Set up encrypted storage on this device before trying a sample conversation. Your device key stays in its secure key store.'**
+  /// **'Floe is preparing your private conversation data. Try again in a moment.'**
   String get agentStorageMissing;
 
   /// No description provided for @agentStorageLocked.
   ///
   /// In en, this message translates to:
-  /// **'Conversation storage is locked. Unlock it to resume your saved sample conversation.'**
+  /// **'Floe is reconnecting to your private conversation data. Try again in a moment.'**
   String get agentStorageLocked;
 
   /// No description provided for @agentStorageUnavailable.
@@ -1681,37 +1663,37 @@ abstract class AppLocalizations {
   /// No description provided for @agentRegistryTitle.
   ///
   /// In en, this message translates to:
-  /// **'Tools & Experts'**
+  /// **'Conversation abilities'**
   String get agentRegistryTitle;
 
   /// No description provided for @agentRegistryBoundary.
   ///
   /// In en, this message translates to:
-  /// **'Manage installed packages and their assignments to this Person. Enabling restores only existing grants; it does not add sources, change grants or approve actions. Disabling blocks new invocations, not existing proposals or approvals.'**
+  /// **'Choose the kinds of help Floe may provide in your conversations.'**
   String get agentRegistryBoundary;
 
   /// No description provided for @agentRegistryEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No packages are installed yet. Use Calendar access, when available, to install a Calendar Expert. The first sample turn separately sets up the sample Timeline Tool and Schedule Expert.'**
+  /// **'No additional abilities are available yet. Add calendars below to get started.'**
   String get agentRegistryEmpty;
 
   /// No description provided for @agentCalendarTitle.
   ///
   /// In en, this message translates to:
-  /// **'Calendar access'**
+  /// **'Calendars'**
   String get agentCalendarTitle;
 
   /// No description provided for @agentCalendarBoundary.
   ///
   /// In en, this message translates to:
-  /// **'Choose an exact Calendar scope for the Schedule Expert. Installation starts disabled and does not request OS permission, read events or approve actions. Closing this screen does not undo a submitted change. Connected chat is not enabled yet; these settings do not change the sample assistant.'**
+  /// **'Choose which calendars Floe may use to understand your day and prepare suggestions.'**
   String get agentCalendarBoundary;
 
   /// No description provided for @agentCalendarChoose.
   ///
   /// In en, this message translates to:
-  /// **'Choose up to 4 connected calendars'**
+  /// **'Choose up to 4 calendars'**
   String get agentCalendarChoose;
 
   /// No description provided for @agentCalendarSelected.
@@ -1723,103 +1705,103 @@ abstract class AppLocalizations {
   /// No description provided for @agentCalendarConsent.
   ///
   /// In en, this message translates to:
-  /// **'I confirm these exact calendars. Any different scope requires a new confirmation; future calendars are not included automatically.'**
+  /// **'I understand Floe will only use the calendars selected here.'**
   String get agentCalendarConsent;
 
   /// No description provided for @agentCalendarInstall.
   ///
   /// In en, this message translates to:
-  /// **'Install disabled Expert'**
+  /// **'Add selected calendars'**
   String get agentCalendarInstall;
 
   /// No description provided for @agentCalendarInstalled.
   ///
   /// In en, this message translates to:
-  /// **'Saved Calendar scopes'**
+  /// **'Calendars Floe can use'**
   String get agentCalendarInstalled;
 
   /// No description provided for @agentCalendarScopeEnabled.
   ///
   /// In en, this message translates to:
-  /// **'Allow this Calendar scope'**
+  /// **'Use these calendars'**
   String get agentCalendarScopeEnabled;
 
   /// No description provided for @agentCalendarSeparateEnablement.
   ///
   /// In en, this message translates to:
-  /// **'Tool and Expert installations and their Person assignments must also be enabled in Tools & Experts. Disabling this scope blocks new use, not existing proposals or approvals.'**
+  /// **'Turning this off stops Floe from using these calendars in new conversations.'**
   String get agentCalendarSeparateEnablement;
 
   /// No description provided for @agentCalendarConnect.
   ///
   /// In en, this message translates to:
-  /// **'Connect and select calendars in Connections, then return here. No Calendar permission is requested from this screen.'**
+  /// **'Connect and choose calendars in Connections, then return here.'**
   String get agentCalendarConnect;
 
   /// No description provided for @agentCalendarChanged.
   ///
   /// In en, this message translates to:
-  /// **'The Calendar connection changed. Select and confirm the scope again before installing or retrying.'**
+  /// **'Your calendar connection changed. Choose the calendars again before continuing.'**
   String get agentCalendarChanged;
 
   /// No description provided for @agentCalendarSourceUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'This source reports an import problem. Floe must recheck access and freshness before use.'**
+  /// **'This calendar is temporarily unavailable.'**
   String get agentCalendarSourceUnavailable;
 
   /// No description provided for @agentCalendarScopeUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'This exact scope is not available in the current connection. You can still turn it off; reconnect and select its calendars before enabling it.'**
+  /// **'These calendars are no longer connected. You can turn access off or reconnect them first.'**
   String get agentCalendarScopeUnavailable;
 
   /// No description provided for @agentCalendarExists.
   ///
   /// In en, this message translates to:
-  /// **'This exact scope is already saved. Manage it below instead of installing a duplicate.'**
+  /// **'These calendars are already available to Floe.'**
   String get agentCalendarExists;
 
   /// No description provided for @agentCalendarPending.
   ///
   /// In en, this message translates to:
-  /// **'Installation is not yet confirmed. Refresh to check whether it was saved, or retry the same confirmed scope. Do not create a replacement setup.'**
+  /// **'Floe could not confirm this change yet. Refresh to check, or try the same selection again.'**
   String get agentCalendarPending;
 
   /// No description provided for @agentCalendarRetry.
   ///
   /// In en, this message translates to:
-  /// **'Retry same setup'**
+  /// **'Try again'**
   String get agentCalendarRetry;
 
   /// No description provided for @agentCalendarDiscard.
   ///
   /// In en, this message translates to:
-  /// **'Discard unsaved setup request'**
+  /// **'Cancel this change'**
   String get agentCalendarDiscard;
 
   /// No description provided for @agentCalendarApple.
   ///
   /// In en, this message translates to:
-  /// **'Apple Calendar · personal scope'**
+  /// **'Apple Calendar'**
   String get agentCalendarApple;
 
   /// No description provided for @agentCalendarFixture.
   ///
   /// In en, this message translates to:
-  /// **'Fixture Calendar · synthetic scope'**
+  /// **'Demo Calendar'**
   String get agentCalendarFixture;
 
   /// No description provided for @agentCalendarMissingName.
   ///
   /// In en, this message translates to:
-  /// **'Calendar not in the current selection'**
+  /// **'A previously selected calendar'**
   String get agentCalendarMissingName;
 
   /// No description provided for @agentRegistryFailure.
   ///
   /// In en, this message translates to:
-  /// **'The current settings could not be confirmed. Refresh before making another change; the previous change may already be saved.'**
+  /// **'Floe could not confirm these settings. Refresh before making another change.'**
   String get agentRegistryFailure;
 
   /// No description provided for @agentRegistryRefresh.
@@ -1827,42 +1809,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Refresh settings'**
   String get agentRegistryRefresh;
-
-  /// No description provided for @agentRegistryInstallation.
-  ///
-  /// In en, this message translates to:
-  /// **'Installation enabled'**
-  String get agentRegistryInstallation;
-
-  /// No description provided for @agentRegistryAssignment.
-  ///
-  /// In en, this message translates to:
-  /// **'Enabled for this Person'**
-  String get agentRegistryAssignment;
-
-  /// No description provided for @agentRegistryInstallationOff.
-  ///
-  /// In en, this message translates to:
-  /// **'This assignment cannot run while its installation is disabled.'**
-  String get agentRegistryInstallationOff;
-
-  /// No description provided for @agentRegistryUnassigned.
-  ///
-  /// In en, this message translates to:
-  /// **'Not assigned to this Person.'**
-  String get agentRegistryUnassigned;
-
-  /// No description provided for @agentRegistryGrants.
-  ///
-  /// In en, this message translates to:
-  /// **'Granted Views: {views} · Tools: {tools}'**
-  String agentRegistryGrants(int views, int tools);
-
-  /// No description provided for @agentRegistryState.
-  ///
-  /// In en, this message translates to:
-  /// **'State revision {revision} · {count} completed invocations'**
-  String agentRegistryState(int revision, int count);
 
   /// No description provided for @agentProposalTitle.
   ///

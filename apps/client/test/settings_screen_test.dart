@@ -30,14 +30,17 @@ void main() {
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
-          body: SettingsScreen(client: null, agentController: controller),
+          body: SingleChildScrollView(
+            child: SettingsScreen(client: null, agentController: controller),
+          ),
         ),
       ),
     );
-    expect(find.text('Assistant permissions'), findsOneWidget);
-    await tester.tap(find.text('Manage assistant access'));
     await tester.pumpAndSettle();
-    expect(find.byType(AgentRegistryDialog), findsOneWidget);
+    expect(find.text('Floe access'), findsOneWidget);
+    expect(find.byType(AgentRegistrySettings), findsOneWidget);
+    expect(find.text('Schedule planning'), findsOneWidget);
+    expect(find.text('floe.schedule'), findsNothing);
   });
 
   for (final width in [390.0, 1200.0]) {

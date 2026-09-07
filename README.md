@@ -71,7 +71,7 @@ those sessions to the current durable scope, streams Core events and waits for M
 proposal preparation. Its typed Dart transport validates completed job identity without
 enabling Personal model input. The
 [assistant access experience update](docs/validation/s4-agent-experience-feedback.md)
-for automatic conversation-store access, Settings-owned permissions and the custom
+for automatic conversation-store access, flat Settings-owned permissions and the custom
 Floe switch component. See the
 [S4 handoff and remaining work](docs/validation/s4-handoff.md) for the committed
 baseline, validation limits and restart checklist. S4 acceptance remains 0/14.

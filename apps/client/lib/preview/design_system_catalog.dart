@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../app/design_tokens.dart';
+import '../app/floe_action_card.dart';
 import '../app/floe_button.dart';
 import '../app/floe_input.dart';
 import '../app/floe_selection.dart';
@@ -160,6 +161,13 @@ class _DesignSystemCatalogState extends State<DesignSystemCatalog> {
                       value: false,
                       label: Text('Unavailable integration'),
                       onChanged: null,
+                    ),
+                    FloeActionCard(
+                      leading: const Icon(Icons.auto_awesome_outlined),
+                      title: const Text('Floe is here to help'),
+                      description: const Text('Start a conversation'),
+                      trailing: const Icon(Icons.arrow_forward),
+                      onPressed: () {},
                     ),
                   ],
                 ),

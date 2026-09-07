@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
-import '../../app/floe_feedback.dart';
 import '../../app/floe_squircle.dart';
 import '../../app/floe_switch.dart';
 import '../../l10n/app_localizations.dart';
@@ -10,8 +9,8 @@ import 'agent_calendar_sources.dart';
 import 'agent_controller.dart';
 import 'agent_vault_gateway.dart';
 
-class AgentCalendarExpertDialog extends StatefulWidget {
-  const AgentCalendarExpertDialog({
+class AgentCalendarSettings extends StatefulWidget {
+  const AgentCalendarSettings({
     super.key,
     required this.controller,
     this.sources,
@@ -22,11 +21,10 @@ class AgentCalendarExpertDialog extends StatefulWidget {
   final Listenable? sourceChanges;
 
   @override
-  State<AgentCalendarExpertDialog> createState() =>
-      _AgentCalendarExpertDialogState();
+  State<AgentCalendarSettings> createState() => _AgentCalendarSettingsState();
 }
 
-class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
+class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   late Listenable _changes;
   final Set<String> _selected = {};
   String? _fingerprint;
@@ -55,7 +53,7 @@ class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
   }
 
   @override
-  void didUpdateWidget(AgentCalendarExpertDialog oldWidget) {
+  void didUpdateWidget(AgentCalendarSettings oldWidget) {
     super.didUpdateWidget(oldWidget);
     _changes.removeListener(_changed);
     _selected.clear();
@@ -130,11 +128,18 @@ class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
     final sources = _sources;
     final pending = controller.pendingCalendarSetup;
     final canManage = controller.canManageCalendarExperts;
-    return FloeDetailDialog(
-      title: strings.agentCalendarTitle,
-      loading: controller.busy,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(strings.agentCalendarBoundary),
+        Text(
+          strings.agentCalendarTitle,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: FloeSpace.xs),
+        Text(
+          strings.agentCalendarBoundary,
+          style: const TextStyle(color: FloePalette.neutral600, height: 1.5),
+        ),
         const SizedBox(height: FloeSpace.base),
         if (!ready)
           Text(
@@ -224,7 +229,6 @@ class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(source.id),
                     if (source.error != null)
                       Text(strings.agentCalendarSourceUnavailable),
                   ],
@@ -369,7 +373,6 @@ class _AgentCalendarExpertDialogState extends State<AgentCalendarExpertDialog> {
                   strings.agentCalendarMissingName
             : strings.agentCalendarMissingName,
       ),
-      Text(identifier),
     ],
   ];
 }

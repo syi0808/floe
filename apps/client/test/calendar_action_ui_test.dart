@@ -389,7 +389,7 @@ void main() {
       await tester.ensureVisible(find.text('Technical details'));
       await tester.tap(find.text('Technical details'));
       await tester.pumpAndSettle();
-      expect(find.text('floe.schedule 1.0.0'), findsOneWidget);
+      expect(find.text('Schedule planning'), findsOneWidget);
       expect(find.text('saved-conversation'), findsOneWidget);
       expect(find.text('Expert call ID'), findsOneWidget);
       expect(tester.takeException(), isNull);

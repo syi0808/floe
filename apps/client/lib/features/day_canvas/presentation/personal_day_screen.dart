@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
+import '../../../app/floe_action_card.dart';
 import '../../../app/floe_selection.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_input.dart';
@@ -398,20 +399,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         ),
         if (agentController != null) ...[
           const SizedBox(height: FloeSpace.lg),
-          FloeButton.outlined(
+          FloeActionCard(
             focusNode: assistantEntryFocus,
             onPressed: _openAssistant,
-            icon: const FloeMascot(size: 28),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(AppLocalizations.of(context).agentEntry),
-                Text(
-                  AppLocalizations.of(context).agentEntryHint,
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ],
-            ),
+            leading: const FloeMascot(size: 32),
+            title: Text(AppLocalizations.of(context).agentEntry),
+            description: Text(AppLocalizations.of(context).agentEntryHint),
+            trailing: const Icon(LucideIcons.arrowRight),
           ),
         ],
       ],

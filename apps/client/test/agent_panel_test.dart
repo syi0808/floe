@@ -54,7 +54,7 @@ void main() {
       await tester.tap(find.text('View sample source'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('Expert: floe.schedule 1.0.0'),
+        find.textContaining('Provided by Schedule planning'),
         findsOneWidget,
       );
       expect(
@@ -122,7 +122,10 @@ void main() {
         app(AgentPanel(controller: controller, onClose: () => closed = true)),
       );
       expect(find.byType(TextField), findsNothing);
-      expect(find.textContaining('Personal chat stays locked'), findsOneWidget);
+      expect(
+        find.textContaining('Connected information is not used'),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Send sample'));
       await tester.pump();
       expect(find.text('Preparing sample reply…'), findsOneWidget);
