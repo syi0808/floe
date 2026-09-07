@@ -22,10 +22,12 @@ CalendarAction action({
   String? reason,
   bool direct = false,
   String? targetEventId,
+  Map<String, dynamic>? agentOrigin,
 }) {
   final now = DateTime.now().toUtc();
   return CalendarAction.fromJson({
     'direct': direct,
+    'agent_origin': ?agentOrigin,
     if (targetEventId != null)
       'mutation': {
         'original': {'id': targetEventId},
@@ -99,6 +101,46 @@ class Gateway implements CalendarActionGateway {
 }
 
 void main() {
+  setUpAll(() async {
+    final font = FontLoader('Pretendard')
+      ..addFont(rootBundle.load('assets/fonts/Pretendard-Regular.otf'))
+      ..addFont(rootBundle.load('assets/fonts/Pretendard-SemiBold.otf'));
+    await font.load();
+    final icons = FontLoader('packages/lucide_icons_flutter/Lucide')
+      ..addFont(
+        rootBundle.load('packages/lucide_icons_flutter/assets/lucide.ttf'),
+      );
+    await icons.load();
+    final material = FontLoader('MaterialIcons')
+      ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
+    await material.load();
+  });
+
+  Map<String, dynamic> origin() => {
+    'schema_version': 1,
+    'session_id': 'saved-conversation',
+    'invocation_id': 'proposal',
+    'package': {'kind': 'expert', 'id': 'floe.schedule', 'version': '1.0.0'},
+    'data_class': 'synthetic',
+  };
+
+  test('Agent action attribution is optional, scoped and versioned', () {
+    expect(action().agentOrigin, isNull);
+    final attributed = action(agentOrigin: origin());
+    expect(attributed.agentOrigin!.expertId, 'floe.schedule');
+    expect(attributed.agentOrigin!.sessionId, 'saved-conversation');
+    expect(attributed.status, CalendarActionStatus.pending);
+    for (final change in [
+      {'schema_version': 2},
+      {'invocation_id': 'another-action'},
+      {'data_class': 'highly_sensitive'},
+    ]) {
+      expect(
+        () => action(agentOrigin: {...origin(), ...change}),
+        throwsFormatException,
+      );
+    }
+  });
   test(
     'approval guards stale, expired, disconnected and foreign proposals',
     () async {
@@ -218,6 +260,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
+        debugShowCheckedModeBanner: false,
         theme: FloeTheme.light,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
@@ -313,6 +356,50 @@ void main() {
       controller.dispose();
     });
   }
+
+  testWidgets(
+    'Expert action attribution stays readable at 320 pixels and large text',
+    (tester) async {
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final gateway = Gateway()
+        ..saved = [
+          action(
+            agentOrigin: origin(),
+            startsAt: DateTime(2099, 1, 1, 10).toUtc(),
+            endsAt: DateTime(2099, 1, 1, 11).toUtc(),
+          ),
+        ];
+      final controller = CalendarActionController(
+        gateway: gateway,
+        personId: 'person',
+      );
+      await loadController(tester, controller);
+      await mount(tester, controller, 320);
+      await tester.ensureVisible(find.text('Review request'));
+      await tester.tap(find.text('Review request'));
+      await tester.pumpAndSettle();
+      expect(find.text('Suggested by Floe'), findsOneWidget);
+      expect(find.text('saved-conversation'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/agent_action_review.png'),
+      );
+      await tester.ensureVisible(find.text('Technical details'));
+      await tester.tap(find.text('Technical details'));
+      await tester.pumpAndSettle();
+      expect(find.text('floe.schedule 1.0.0'), findsOneWidget);
+      expect(find.text('saved-conversation'), findsOneWidget);
+      expect(find.text('Expert call ID'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(gateway.decisions, 0);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    },
+  );
 
   testWidgets('activity reload is positioned in the page header', (
     tester,

@@ -9,6 +9,8 @@ use crate::{CoreError, ErrorCode, FloeCore};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_origin: Option<crate::AgentActionOrigin>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub direct: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +133,21 @@ impl FloeCore {
         schedule: TimedSchedule,
         now: DateTime<Utc>,
     ) -> Result<CalendarAction, CoreError> {
+        let action = self
+            .draft_calendar_action(person_id, calendar_id, title, schedule, now)
+            .await?;
+        self.store.save_calendar_action(&action, None).await?;
+        Ok(action)
+    }
+
+    pub(crate) async fn draft_calendar_action(
+        &self,
+        person_id: PersonId,
+        calendar_id: String,
+        title: String,
+        schedule: TimedSchedule,
+        now: DateTime<Utc>,
+    ) -> Result<CalendarAction, CoreError> {
         TimedSchedule::new(schedule.starts_at, schedule.ends_at, &schedule.timezone)?;
         if title.trim().is_empty() || schedule.starts_at <= now {
             return Err(CoreError::new(
@@ -150,6 +167,7 @@ impl FloeCore {
             .find(|calendar| calendar.calendar_id == calendar_id)
             .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
         let action = CalendarAction {
+            agent_origin: None,
             direct: false,
             mutation: None,
             id: Uuid::new_v4(),
@@ -166,7 +184,6 @@ impl FloeCore {
             execution_id: Uuid::new_v4(),
             state: CalendarActionState::Pending,
         };
-        self.store.save_calendar_action(&action, None).await?;
         Ok(action)
     }
 
@@ -228,6 +245,7 @@ impl FloeCore {
             .find(|calendar| calendar.calendar_id == calendar_id)
             .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
         let action = CalendarAction {
+            agent_origin: None,
             direct: true,
             mutation,
             id: Uuid::new_v4(),
@@ -414,6 +432,18 @@ impl FloeCore {
             || !policy.allowed_calendar_ids.contains(&action.calendar_id)
         {
             return Ok(Some(ActionBlockReason::PolicyDenied));
+        }
+        if let Some(origin) = &action.agent_origin {
+            let authority = self
+                .action_authority(action.person_id)
+                .await?
+                .calendar_create;
+            if !origin.valid_for(action)
+                || authority == crate::ActionAuthorityMode::Deny
+                || (origin.automatic && authority != crate::ActionAuthorityMode::Allow)
+            {
+                return Ok(Some(ActionBlockReason::PolicyDenied));
+            }
         }
         let mirror = self.store.calendar_mirror(action.person_id).await?;
         if let Some(mutation) = &action.mutation {

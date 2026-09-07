@@ -38,7 +38,9 @@ A [bounded Expert foundation](docs/validation/s4-expert-foundation.md) now suppl
 versioned Tool/Expert registration, Person grants and a shared Schedule/declarative
 contract. The sample panel renders structured Expert evidence; the secure host now
 [persists registry/private state atomically with conversation results](docs/validation/s4-expert-persistence.md).
-Registry management, live sources and S3 proposal integration still remain.
+A [Manager-to-S3 bridge](docs/validation/s4-manager-actions.md) now converts committed
+focus advice into the existing policy/review/action ledger with stable retry identity.
+Registry management, live sources and app-level proposal orchestration still remain.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

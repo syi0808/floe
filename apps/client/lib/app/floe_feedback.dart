@@ -127,24 +127,41 @@ class FloeDetailDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -1,
-                  ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final heading = Text(
+                title,
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -1,
                 ),
-              ),
-              IconButton(
+              );
+              final close = IconButton(
                 tooltip: AppLocalizations.of(context).close,
                 onPressed: () => Navigator.pop(context),
                 icon: Icon(LucideIcons.x, size: 20),
-              ),
-            ],
+              );
+              if (constraints.maxWidth < 320 &&
+                  MediaQuery.textScalerOf(context).scale(26) > 39) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: close,
+                    ),
+                    heading,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: heading),
+                  close,
+                ],
+              );
+            },
           ),
           SizedBox(height: FloeSpace.lg),
           FloeLoadingOverlay(

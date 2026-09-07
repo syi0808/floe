@@ -4,6 +4,10 @@ Date: 2026-09-07. Synthetic data only; S4 remains **0/14**.
 This supersedes the secure sample path's per-turn registry limitation recorded in
 [the Expert foundation checkpoint](s4-expert-foundation.md).
 
+Follow-up: the [Manager action bridge](s4-manager-actions.md) consumes committed
+proposal evidence and adds an append-only guard to ordinary vault session CAS.
+Its Core/S3 integration does not yet enable live proposals from the app.
+
 ## Storage and initialization
 
 Tool/Expert packages, installations, Person assignments, grants and private state

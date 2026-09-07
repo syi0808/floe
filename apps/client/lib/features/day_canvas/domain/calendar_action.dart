@@ -32,9 +32,41 @@ enum CalendarActionStatus {
   };
 }
 
+final class AgentActionOrigin {
+  AgentActionOrigin.fromJson(Map<String, dynamic> json, String actionId)
+    : sessionId = json['session_id'] as String,
+      invocationId = json['invocation_id'] as String,
+      expertId = (json['package'] as Map)['id'] as String,
+      expertVersion = (json['package'] as Map)['version'] as String {
+    if (json['schema_version'] != 1 ||
+        (json['package'] as Map)['kind'] != 'expert' ||
+        invocationId != actionId ||
+        sessionId.isEmpty ||
+        sessionId.length > 128 ||
+        expertId.isEmpty ||
+        expertId.length > 128 ||
+        expertVersion.isEmpty ||
+        expertVersion.length > 64 ||
+        !['synthetic', 'personal'].contains(json['data_class'])) {
+      throw const FormatException('Invalid Agent action origin');
+    }
+  }
+
+  final String sessionId;
+  final String invocationId;
+  final String expertId;
+  final String expertVersion;
+}
+
 final class CalendarAction {
   CalendarAction.fromJson(Map<String, dynamic> json)
-    : direct = json['direct'] as bool? ?? false,
+    : agentOrigin = json['agent_origin'] == null
+          ? null
+          : AgentActionOrigin.fromJson(
+              json['agent_origin'] as Map<String, dynamic>,
+              json['id'] as String,
+            ),
+      direct = json['direct'] as bool? ?? false,
       mutation = json['mutation'] as Map<String, dynamic>?,
       id = json['id'] as String,
       personId = json['person_id'] as String,
@@ -61,6 +93,7 @@ final class CalendarAction {
       externalId = (json['state'] as Map)['external_id'] as String?;
 
   final String id;
+  final AgentActionOrigin? agentOrigin;
   final bool direct;
   final Map<String, dynamic>? mutation;
   bool get needsReview => !direct && status.needsReview;

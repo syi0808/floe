@@ -187,7 +187,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_registry_transaction(transaction, result).await
     }
 
-    async fn finish_registry_transaction<T>(
+    pub(super) async fn finish_registry_transaction<T>(
         &self,
         transaction: turso::transaction::Transaction<'_>,
         result: Result<T, AgentFailure>,
@@ -240,7 +240,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(payload)
     }
 
-    async fn registry_on(
+    pub(super) async fn registry_on(
         &self,
         connection: &turso::Connection,
     ) -> Result<Option<RegistrySnapshot>, AgentFailure> {

@@ -825,6 +825,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionExecutionId => 'Execution ID';
 
   @override
+  String get actionSuggestedByFloe => 'Suggested by Floe';
+
+  @override
+  String get actionExpert => 'Expert';
+
+  @override
+  String get actionConversationId => 'Conversation ID';
+
+  @override
+  String get actionExpertCallId => 'Expert call ID';
+
+  @override
   String get actionApprovedAt => 'Approved at';
 
   @override

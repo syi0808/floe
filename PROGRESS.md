@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; native model availability; bounded Schedule/declarative Expert contract and source rendering | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Manager-to-S3 proposals; live local/remote model and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel and atomic Expert state; bounded Experts; Core Manager-to-S3 bridge; native model availability | 0/14 | S3 Accepted; registry management; live key/model/source and privacy gates | Live authorized Timeline and Manager orchestration; local/remote models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,27 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 Manager-to-S3 action bridge — 2026-09-07
+
+- Added a trusted Core entry point that resolves committed Expert proposal references
+  through encrypted sessions, durable receipts and current registry grants. Ordinary
+  vault CAS now also prevents rewriting historical evidence or removing classifications.
+- Reused the S3 Calendar draft/ledger and executor: Person authority routes to Review,
+  approved delegated work or blocked Activity. Execution rechecks current authority;
+  automatic approval cannot survive an allow-to-ask/deny change during preflight.
+- One invocation maps to one stable action. Retry/restart/uncertain publication keeps
+  its original execution ID and terminal state. Synthetic data cannot target EventKit;
+  source text and conversation content are not copied into the action ledger.
+- Flutter shows Floe attribution with scoped Expert/conversation metadata in Technical
+  details. The default sample panel still cannot initiate Calendar changes.
+- Validation: 136 workspace Rust and 135 Flutter tests, three keyring example tests,
+  analyzer, formatting, native/macOS Debug builds and signature verification pass;
+  Clippy passes with the existing exclusions. Fifteen new Manager/Expert/vault/S3
+  cases use fictional data, fake providers and injected keys. The 320-pixel/200%-text
+  Review golden uses real fonts and was rendered/reviewed. This is not live acceptance.
+- [Evidence and remaining app/live gates](docs/validation/s4-manager-actions.md).
+  S4 remains 0/14; S1/S3 and live key/model/Connector gates are unchanged.
 
 ### S4 encrypted Expert persistence — 2026-09-07
 

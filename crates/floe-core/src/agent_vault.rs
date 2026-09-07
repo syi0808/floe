@@ -16,6 +16,7 @@ use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod expert_actions;
 mod keyring;
 mod registry;
 pub use keyring::KeyringVaultKeys;
@@ -354,6 +355,20 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
         let revision = i64::try_from(session.revision).map_err(|_| AgentFailure::Conflict)?;
         let previous = i64::try_from(previous_revision).map_err(|_| AgentFailure::Conflict)?;
         let payload = self.payload(session)?;
+        let stored = self.load(session.person_id, session.id).await?;
+        if stored.revision != previous_revision
+            || session.messages.len() < stored.messages.len()
+            || session.messages[..stored.messages.len()] != stored.messages
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if stored
+            .data_classes
+            .iter()
+            .any(|class| !session.data_classes.contains(class))
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let changed = self
             .connection()?
             .execute(

@@ -1504,6 +1504,30 @@ abstract class AppLocalizations {
   /// **'Execution ID'**
   String get actionExecutionId;
 
+  /// No description provided for @actionSuggestedByFloe.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggested by Floe'**
+  String get actionSuggestedByFloe;
+
+  /// No description provided for @actionExpert.
+  ///
+  /// In en, this message translates to:
+  /// **'Expert'**
+  String get actionExpert;
+
+  /// No description provided for @actionConversationId.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation ID'**
+  String get actionConversationId;
+
+  /// No description provided for @actionExpertCallId.
+  ///
+  /// In en, this message translates to:
+  /// **'Expert call ID'**
+  String get actionExpertCallId;
+
   /// No description provided for @actionApprovedAt.
   ///
   /// In en, this message translates to:

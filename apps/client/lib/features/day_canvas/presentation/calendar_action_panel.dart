@@ -264,6 +264,10 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
               action.title,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
+            if (action.agentOrigin != null) ...[
+              const SizedBox(height: 8),
+              Text(strings.actionSuggestedByFloe),
+            ],
             const SizedBox(height: 16),
             Text(
               strings.actionDestination,
@@ -409,6 +413,12 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
                   strings.actionExpires: localDateTime(action.expiresAt),
                   strings.actionProposalId: action.id,
                   strings.actionExecutionId: action.executionId,
+                  if (action.agentOrigin case final origin?) ...{
+                    strings.actionExpert:
+                        '${origin.expertId} ${origin.expertVersion}',
+                    strings.actionConversationId: origin.sessionId,
+                    strings.actionExpertCallId: origin.invocationId,
+                  },
                   if (action.approvedAt != null)
                     strings.actionApprovedAt: localDateTime(action.approvedAt!),
                   if (action.externalId != null)

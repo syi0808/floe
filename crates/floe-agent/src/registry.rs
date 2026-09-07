@@ -360,6 +360,39 @@ impl AgentRegistry {
         expected_revision: u64,
         result: &crate::ExpertResult,
     ) -> Result<(), AgentFailure> {
+        let resolved = self.resolve_result(expected_revision, result)?;
+        if result.state_revision
+            != resolved
+                .assignment
+                .private_state
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::BudgetExceeded)?
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.complete(&resolved, result.invocation_id)?;
+        Ok(())
+    }
+
+    pub fn validate_recorded_result(
+        &self,
+        result: &crate::ExpertResult,
+    ) -> Result<(), AgentFailure> {
+        let resolved = self.resolve_result(self.revision(), result)?;
+        if result.state_revision == 0
+            || result.state_revision > resolved.assignment.private_state.revision
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+
+    fn resolve_result(
+        &self,
+        expected_revision: u64,
+        result: &crate::ExpertResult,
+    ) -> Result<ResolvedExpert, AgentFailure> {
         if result.schema_version != AGENT_VERSION {
             return Err(AgentFailure::UnsupportedVersion);
         }
@@ -403,18 +436,10 @@ impl AgentRegistry {
                             ends_at_unix_ms: proposal.ends_at_unix_ms,
                         })
             })
-            || result.state_revision
-                != resolved
-                    .assignment
-                    .private_state
-                    .revision
-                    .checked_add(1)
-                    .ok_or(AgentFailure::BudgetExceeded)?
         {
             return Err(AgentFailure::InvalidInput);
         }
-        self.complete(&resolved, result.invocation_id)?;
-        Ok(())
+        Ok(resolved)
     }
 
     pub(crate) fn resolve(

@@ -194,7 +194,12 @@ async fn recorded_result_reconstructs_only_the_validated_private_state_transitio
     .await
     .unwrap();
     let mut restored = AgentRegistry::restore(baseline.clone(), fixture.instance).unwrap();
+    assert_eq!(
+        restored.validate_recorded_result(&result),
+        Err(AgentFailure::InvalidInput)
+    );
     restored.record_result(baseline.revision, &result).unwrap();
+    restored.validate_recorded_result(&result).unwrap();
     assert_eq!(
         restored.snapshot(),
         fixture.registry.lock().unwrap().snapshot()
@@ -217,6 +222,13 @@ async fn recorded_result_reconstructs_only_the_validated_private_state_transitio
         );
         assert_eq!(registry.snapshot(), baseline);
     }
+    restored
+        .set_assignment_enabled(restored.revision(), fixture.person, fixture.schedule, false)
+        .unwrap();
+    assert_eq!(
+        restored.validate_recorded_result(&result),
+        Err(AgentFailure::CapabilityDenied)
+    );
 }
 
 #[tokio::test]
