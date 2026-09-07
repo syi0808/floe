@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_loading.dart';
+import 'package:floe_client/app/floe_time_picker.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_gateway.dart';
@@ -331,9 +332,8 @@ void main() {
       final inputs = tester
           .widgetList<TextFormField>(find.byType(TextFormField))
           .toList();
-      expect(inputs, hasLength(5));
-      expect(inputs[1].controller!.text, matches(r'^\d{2}$'));
-      expect(inputs[2].controller!.text, matches(r'^\d{2}$'));
+      expect(inputs, hasLength(1));
+      expect(find.byType(FloeTimePickerButton), findsNWidgets(2));
       await tester.ensureVisible(find.text('Create event'));
       await tester.tap(find.text('Create event'));
       await tester.pumpAndSettle();

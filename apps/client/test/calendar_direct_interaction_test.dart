@@ -1,8 +1,10 @@
 import 'package:flutter/gestures.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_time_picker.dart';
 import 'package:floe_client/app/floe_context_menu.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_agenda.dart';
@@ -17,7 +19,7 @@ Widget host(Widget child) => MaterialApp(
 );
 
 void main() {
-  testWidgets('time segments support typing, arrow stepping and validation', (
+  testWidgets('time field uses the wheel picker and commits on Done', (
     tester,
   ) async {
     final form = GlobalKey<FormState>();
@@ -36,19 +38,19 @@ void main() {
         ),
       ),
     );
-    await tester.enterText(find.byType(TextFormField).first, '14');
+    await tester.tap(find.byType(FloeTimePickerButton));
+    await tester.pumpAndSettle();
+    expect(find.byType(FloeTimePicker), findsOneWidget);
+    expect(find.byType(CupertinoDatePicker), findsOneWidget);
+    tester
+        .widget<CupertinoDatePicker>(find.byType(CupertinoDatePicker))
+        .onDateTimeChanged(DateTime(2000, 1, 1, 14, 45));
     await tester.pump();
-    expect(value.hour, 14);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    expect(value.hour, 15);
-    await tester.tap(find.byType(TextFormField).last);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(value.minute, 29);
-    await tester.enterText(find.byType(TextFormField).last, '99');
-    expect(form.currentState!.validate(), isFalse);
-    expect(value.minute, 29);
+    expect(value, DateTime(2026, 9, 8, 9, 30));
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(value, DateTime(2026, 9, 8, 14, 45));
+    expect(form.currentState!.validate(), isTrue);
     expect(tester.takeException(), isNull);
   });
 

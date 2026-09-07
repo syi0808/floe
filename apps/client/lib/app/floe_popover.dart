@@ -10,17 +10,22 @@ Rect floeAnchorRect(BuildContext context) {
   return box.localToGlobal(Offset.zero) & box.size;
 }
 
+enum FloePopoverHorizontalAnchor { start, center }
+
 Future<T?> showFloePopover<T>({
   required BuildContext context,
   required Rect anchor,
   required WidgetBuilder builder,
   required double width,
   required double height,
+  FloePopoverHorizontalAnchor horizontalAnchor =
+      FloePopoverHorizontalAnchor.start,
 }) => Navigator.of(context).push<T>(
   _FloePopoverRoute<T>(
     anchor: anchor,
     width: width,
     height: height,
+    horizontalAnchor: horizontalAnchor,
     builder: builder,
     themes: InheritedTheme.capture(
       from: context,
@@ -36,6 +41,7 @@ class _FloePopoverRoute<T> extends PopupRoute<T> {
     required this.anchor,
     required this.width,
     required this.height,
+    required this.horizontalAnchor,
     required this.builder,
     required this.themes,
     required this.reduceMotion,
@@ -44,6 +50,7 @@ class _FloePopoverRoute<T> extends PopupRoute<T> {
   final Rect anchor;
   final double width;
   final double height;
+  final FloePopoverHorizontalAnchor horizontalAnchor;
   final WidgetBuilder builder;
   final CapturedThemes themes;
   final bool reduceMotion;
@@ -83,15 +90,25 @@ class _FloePopoverRoute<T> extends PopupRoute<T> {
           height,
           math.max(0.0, bottomEdge - topEdge),
         );
-        final above =
-            anchor.bottom + 6 + panelHeight > bottomEdge &&
-            anchor.top > constraints.maxHeight / 2;
-        final left = anchor.left.clamp(
+        const gap = 6.0;
+        final roomAbove = math.max(0.0, anchor.top - topEdge - gap);
+        final roomBelow = math.max(0.0, bottomEdge - anchor.bottom - gap);
+        final above = roomBelow < panelHeight && roomAbove > roomBelow;
+        final anchorX = switch (horizontalAnchor) {
+          FloePopoverHorizontalAnchor.start => anchor.left,
+          FloePopoverHorizontalAnchor.center => anchor.center.dx,
+        };
+        final idealLeft = switch (horizontalAnchor) {
+          FloePopoverHorizontalAnchor.start => anchorX,
+          FloePopoverHorizontalAnchor.center => anchorX - panelWidth / 2,
+        };
+        final left = idealLeft.clamp(
           leftEdge,
           math.max(leftEdge, rightEdge - panelWidth),
         );
-        final top = (above ? anchor.top - panelHeight - 6 : anchor.bottom + 6)
-            .clamp(topEdge, math.max(topEdge, bottomEdge - panelHeight));
+        final top =
+            (above ? anchor.top - panelHeight - gap : anchor.bottom + gap)
+                .clamp(topEdge, math.max(topEdge, bottomEdge - panelHeight));
         return Stack(
           children: [
             Positioned(
@@ -103,8 +120,10 @@ class _FloePopoverRoute<T> extends PopupRoute<T> {
                 animation: animation,
                 beginScale: .97,
                 alignment: Alignment(
-                  ((anchor.left - left) / math.max(1.0, panelWidth) * 2 - 1)
-                      .clamp(-1, 1),
+                  ((anchorX - left) / math.max(1.0, panelWidth) * 2 - 1).clamp(
+                    -1,
+                    1,
+                  ),
                   above ? 1 : -1,
                 ),
                 child: FloeSquircle(

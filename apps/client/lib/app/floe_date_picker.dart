@@ -16,6 +16,7 @@ Future<DateTime?> showFloeDatePicker({
   anchor: anchor,
   width: 300,
   height: 386,
+  horizontalAnchor: FloePopoverHorizontalAnchor.center,
   builder: (_) => FloeDatePicker(initialDate: initialDate),
 );
 
@@ -30,6 +31,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
   late DateTime active = DateUtils.dateOnly(widget.initialDate);
   late DateTime month = DateTime(active.year, active.month);
   final gridFocus = FocusNode();
+  DateTime? hoveredDate;
   int direction = 1;
 
   @override
@@ -184,6 +186,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                                     1 - leading + week * 7 + weekday,
                                   );
                                   return _DateCell(
+                                    key: ValueKey(date),
                                     date: date,
                                     label: DateFormat.yMMMMEEEEd(locale)
                                         .format(date),
@@ -192,6 +195,20 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                                     inMonth: date.month == month.month,
                                     enabled:
                                         date.year >= 1900 && date.year <= 2200,
+                                    hovered: DateUtils.isSameDay(
+                                      date,
+                                      hoveredDate,
+                                    ),
+                                    onHoverChanged: (hovered) => setState(() {
+                                      if (hovered) {
+                                        hoveredDate = date;
+                                      } else if (DateUtils.isSameDay(
+                                        hoveredDate,
+                                        date,
+                                      )) {
+                                        hoveredDate = null;
+                                      }
+                                    }),
                                     onSelected: () =>
                                         Navigator.of(context).pop(date),
                                   );
@@ -231,14 +248,17 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
   }
 }
 
-class _DateCell extends StatefulWidget {
+class _DateCell extends StatelessWidget {
   const _DateCell({
+    super.key,
     required this.date,
     required this.label,
     required this.active,
     required this.today,
     required this.inMonth,
     required this.enabled,
+    required this.hovered,
+    required this.onHoverChanged,
     required this.onSelected,
   });
   final DateTime date;
@@ -247,62 +267,50 @@ class _DateCell extends StatefulWidget {
   final bool today;
   final bool inMonth;
   final bool enabled;
+  final bool hovered;
+  final ValueChanged<bool> onHoverChanged;
   final VoidCallback onSelected;
-  @override
-  State<_DateCell> createState() => _DateCellState();
-}
-
-class _DateCellState extends State<_DateCell> {
-  bool hovered = false;
   @override
   Widget build(BuildContext context) => Semantics(
     excludeSemantics: true,
-    label: widget.label,
+    label: label,
     button: true,
-    selected: widget.active,
-    enabled: widget.enabled,
-    onTap: widget.enabled ? widget.onSelected : null,
+    selected: active,
+    enabled: enabled,
+    onTap: enabled ? onSelected : null,
     child: MouseRegion(
-      cursor: widget.enabled
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => hovered = true),
-      onExit: (_) => setState(() => hovered = false),
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => onHoverChanged(enabled),
+      onExit: (_) => onHoverChanged(false),
       child: PressableScale(
         builder: (states) => InkWell(
           statesController: states,
           excludeFromSemantics: true,
-          onTap: widget.enabled ? widget.onSelected : null,
+          onTap: enabled ? onSelected : null,
           overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-          child: AnimatedContainer(
-            duration: FloeMotion.reduceMotion(context)
-                ? Duration.zero
-                : FloeMotion.hoverDuration,
-            curve: FloeMotion.easeOut,
+          child: Container(
             height: FloeControlSize.compact,
             margin: const EdgeInsets.all(FloeSpace.xxs),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(FloeRadius.xs),
-              color: widget.active
+              color: active
                   ? FloePalette.primary500
-                  : hovered && widget.enabled
+                  : hovered && enabled
                   ? FloeColor.selectionHover
                   : Colors.transparent,
-              border: widget.today
-                  ? Border.all(color: FloePalette.primary400)
-                  : null,
+              border: today ? Border.all(color: FloePalette.primary400) : null,
             ),
             child: Center(
               child: Text(
-                '${widget.date.day}',
+                '${date.day}',
                 style: TextStyle(
                   fontSize: 12,
-                  fontWeight: widget.active || widget.today
+                  fontWeight: active || today
                       ? FontWeight.w600
                       : FontWeight.w400,
-                  color: widget.active
+                  color: active
                       ? Colors.white
-                      : widget.inMonth && widget.enabled
+                      : inMonth && enabled
                       ? FloePalette.neutral950
                       : FloePalette.neutral400,
                 ),

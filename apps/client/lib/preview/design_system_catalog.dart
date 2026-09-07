@@ -6,6 +6,7 @@ import '../app/floe_button.dart';
 import '../app/floe_input.dart';
 import '../app/floe_selection.dart';
 import '../app/floe_squircle.dart';
+import '../app/floe_time_picker.dart';
 
 class DesignSystemCatalog extends StatefulWidget {
   const DesignSystemCatalog({super.key});
@@ -18,6 +19,7 @@ class _DesignSystemCatalogState extends State<DesignSystemCatalog> {
   String? calendar = 'personal';
   bool checked = true;
   bool loading = false;
+  TimeOfDay time = const TimeOfDay(hour: 9, minute: 30);
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -119,6 +121,14 @@ class _DesignSystemCatalogState extends State<DesignSystemCatalog> {
                           FloeSelectOption(value: 'work', label: 'Work'),
                         ],
                         onChanged: (value) => setState(() => calendar = value),
+                      ),
+                    ),
+                    FloeSquircle(
+                      fill: FloeColor.surfaceSubtle,
+                      child: FloeTimePickerButton(
+                        value: time,
+                        semanticLabel: 'Event time',
+                        onChanged: (value) => setState(() => time = value),
                       ),
                     ),
                   ],

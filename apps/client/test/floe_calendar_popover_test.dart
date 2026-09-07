@@ -7,6 +7,7 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_date_picker.dart';
 import 'package:floe_client/app/floe_context_menu.dart';
 import 'package:floe_client/app/floe_motion.dart';
+import 'package:floe_client/app/floe_popover.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_date_time_field.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -147,6 +148,94 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('calendar hover moves without leaving the previous date styled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(Center(child: FloeDatePicker(initialDate: DateTime(2028, 2, 14)))),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+
+    Color background(String label) {
+      final container = tester.widget<Container>(
+        find
+            .descendant(
+              of: find.bySemanticsLabel(label),
+              matching: find.byType(Container),
+            )
+            .first,
+      );
+      return (container.decoration! as BoxDecoration).color!;
+    }
+
+    const first = 'Tuesday, February 15, 2028';
+    const second = 'Wednesday, February 16, 2028';
+    await mouse.moveTo(tester.getCenter(find.bySemanticsLabel(first)));
+    await tester.pump();
+    expect(background(first), FloeColor.selectionHover);
+    await mouse.moveTo(tester.getCenter(find.bySemanticsLabel(second)));
+    await tester.pump();
+    expect(background(first), Colors.transparent);
+    expect(background(second), FloeColor.selectionHover);
+  });
+
+  testWidgets('popover centers on its trigger and uses directional origins', (
+    tester,
+  ) async {
+    Future<void> openAt(Alignment alignment) async {
+      await tester.pumpWidget(
+        host(
+          Align(
+            alignment: alignment,
+            child: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showFloeDatePicker(
+                  context: context,
+                  anchor: floeAnchorRect(context),
+                  initialDate: DateTime(2028, 2, 14),
+                ),
+                child: const Text('Calendar'),
+              ),
+            ),
+          ),
+          reducedMotion: true,
+        ),
+      );
+      await tester.tap(find.text('Calendar'));
+      await tester.pumpAndSettle();
+    }
+
+    await openAt(Alignment.topCenter);
+    var trigger = tester.getRect(find.text('Calendar'));
+    var picker = tester.getRect(find.byType(FloeDatePicker));
+    var transition = tester.widget<FloeFadeScaleTransition>(
+      find.ancestor(
+        of: find.byType(FloeDatePicker),
+        matching: find.byType(FloeFadeScaleTransition),
+      ),
+    );
+    expect(picker.center.dx, closeTo(trigger.center.dx, 1));
+    expect(picker.top, greaterThan(trigger.bottom));
+    expect(transition.alignment.y, -1);
+
+    await tester.tapAt(const Offset(4, 300));
+    await tester.pumpAndSettle();
+    await openAt(Alignment.bottomCenter);
+    trigger = tester.getRect(find.text('Calendar'));
+    picker = tester.getRect(find.byType(FloeDatePicker));
+    transition = tester.widget<FloeFadeScaleTransition>(
+      find.ancestor(
+        of: find.byType(FloeDatePicker),
+        matching: find.byType(FloeFadeScaleTransition),
+      ),
+    );
+    expect(picker.center.dx, closeTo(trigger.center.dx, 1));
+    expect(picker.bottom, lessThan(trigger.top));
+    expect(transition.alignment.y, 1);
+  });
 
   testWidgets(
     'menu stays in viewport, skips disabled entries and restores focus',
