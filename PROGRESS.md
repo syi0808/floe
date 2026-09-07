@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Conversational Agent/Experts | Planned | None | 0/5 | S3 Accepted; P0-I harness; P0-F session vault | Multi-turn chat invokes Schedule Expert and reaches S3 safely |
+| S4 — Connected Agent/Experts | Planned | None | 0/11 | S3 Accepted; P0-I/P0-C/P0-K; P0-F session vault | Today briefing grounds Calendar, mail, people, travel, weather and capacity |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -309,8 +309,9 @@ progress record, not rerun or newly verified by the 2026-09-04 planning change.
 2. Complete signed-app S3 approval/create/collection and provider-failure validation.
    Prototype review, Flutter UI and native Rust binding are implemented; runtime
    authority and fresh safety checks remain mandatory.
-3. Start S4 with text chat, durable sessions, the bounded Agent loop and the shared
-   Tool/Expert registry; connect Schedule Expert output to the S3 gate.
+3. Start S4 with text chat, durable sessions, the bounded Agent loop and shared
+   Tool/Expert/Connector registries; add Gmail, Contacts, location/ETA/weather plus
+   physical-device Screen Time and Apple Health gates before connecting Expert output to S3.
 4. Follow with S5 source-backed Memory and governed Playbook learning,
    then S6 press-to-talk voice and S7 local wake-up. Do not begin S8 server/sync
    as a shortcut.

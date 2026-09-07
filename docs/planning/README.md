@@ -58,6 +58,7 @@ floe-planning/
 │   └── android-and-windows.md
 │
 ├── 05-integrations/
+│   ├── assistant-context-portfolio.md
 │   ├── integration-fabric.md
 │   ├── connector-contract.md
 │   └── connector-sources.md
@@ -139,6 +140,13 @@ Agent, Memory와 voice slice를 구현하는 경우:
 4. `02-domain/personal-memory.md`
 5. `01-experience/voice-and-presence.md`
 6. `08-engineering/poc-plan.md`
+
+초기 connector 우선순위를 결정하는 경우:
+
+1. `05-integrations/assistant-context-portfolio.md`
+2. `05-integrations/initial-connector-set.md`
+3. `05-integrations/connector-data-policy.md`
+4. `05-integrations/connector-contract.md`
 
 ## Runtime Note
 

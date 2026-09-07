@@ -7,8 +7,9 @@
 Phase는 장기 제품 범위 지도이며 순차 구현 gate가 아니다.
 [ADR 0006](../../decisions/0006-slice-driven-delivery.md)에 따라 실제 구현은
 [S1–S9 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
-S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 Chat 기반
-Manager Agent → Expert/Tool → 승인 action 루프를 먼저 검증한다. S5는 그 대화와
+S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 Calendar/Gmail과
+device-local Screen Time/Apple Health context를 사용하는 Chat 기반 Manager Agent →
+Expert/Tool → 승인 action 루프를 먼저 검증한다. S5는 그 대화와
 결과를 source-backed Memory와 procedural Playbook으로 학습하는 통제된 self-improvement를
 추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용한 뒤,
 S8–S9에서 서버·기기·개입으로 확장한다. 이 순서는 Floe의 핵심 제품 가설을 network
@@ -56,6 +57,8 @@ Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것�
 - Google Calendar
 - Contacts
 - OS calendar integration
+- current location / travel ETA / Weather
+- Screen Time public-API feasibility
 - HealthKit
 - Health Connect
 - Health Expert
@@ -65,6 +68,10 @@ Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것�
 검증 질문:
 
 > 연결된 데이터로 기존 생산성 앱이 못하던 판단을 실제로 할 수 있는가?
+
+S4는 모든 connector breadth가 아니라 Today briefing에 필요한 Time,
+Commitments, People, Feasibility, Capacity cohort를 먼저 검증한다. 선정과 제외 근거는
+[Assistant Context Portfolio](../05-integrations/assistant-context-portfolio.md)를 따른다.
 
 ## Phase 3 — Personal Memory
 

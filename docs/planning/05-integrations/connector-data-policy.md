@@ -44,6 +44,12 @@ Raw source는 device/provider에 남기고 Floe는 derived state만 sync한다.
 
 예: Health.
 
+### Ephemeral Context
+
+현재 판단에만 쓰고 source history를 만들지 않는다.
+
+예: current location, route ETA. Weather는 event window의 short-lived cache만 둔다.
+
 ## Initial Mapping
 
 | Domain | Policy |
@@ -52,6 +58,9 @@ Raw source는 device/provider에 남기고 Floe는 derived state만 sync한다.
 | Mail | Index + On-demand |
 | Contacts | Identity Reference |
 | Health | Derived Only |
+| Screen Time / Device Activity | Derived Only or Unsupported |
+| Current Location / ETA | Ephemeral Context |
+| Weather | Short-lived Context Cache |
 | Floe Task | Floe Canonical |
 | Floe Note | Floe Canonical |
 

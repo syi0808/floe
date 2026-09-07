@@ -40,6 +40,7 @@ AgentRuntime
 ├─ ModelRunner
 ├─ ToolRegistry
 ├─ ExpertRegistry / ExpertHost
+├─ ConnectorRegistry / ViewProvider
 ├─ PolicyEngine
 ├─ LearningSink
 └─ AgentEventSink
@@ -52,11 +53,19 @@ Required invariants:
 - Model adapters converge on one internal message/tool-call representation.
 - Tools and Experts register through versioned descriptors with availability and
   permission checks; core code does not maintain provider-specific switch lists.
+- Connectors register capabilities and provider-neutral Views. Agent context never
+  embeds OAuth credentials, native framework objects or unrestricted raw datasets.
 - ExpertPackage, Installation and Person Assignment remain separate.
 - Every call receives a deadline, cancellation token, Person, session, granted
   view handles and a trace identifier.
 - Optional subsystems fail locally. Missing Memory, voice or one Expert cannot
   corrupt the session or disable unrelated capabilities.
+
+S4 dogfoods the same port with a local Go Gmail connector, Contacts,
+location/ETA/weather, Apple device context providers and fixtures. Execution
+location is descriptor metadata, not a different Agent API. Apple Health and
+Screen Time stay local-derived; without S8 sync their physical-device validation
+does not make those Views available to macOS.
 
 ## Turn lifecycle
 

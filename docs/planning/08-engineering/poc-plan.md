@@ -4,8 +4,9 @@
 
 ## Near-term slice gates
 
-S3 acceptance 뒤 순서는 P0-I Agent/Expert Contract와 P0-F session vault/key →
-S4 Conversational Agent → P0-D Memory/Learning Compiler와 P0-F memory vault → S5 Governed Memory → P0-A
+S3 acceptance 뒤 순서는 P0-I Agent/Expert Contract, P0-C Gmail subset, P0-K Apple
+context와 P0-F session vault/key → S4 Connected Agent → P0-D Memory/Learning
+Compiler와 P0-F memory vault → S5 Governed Memory → P0-A
 Streaming Voice → S6 Voice Mode → P0-J Local Wake → S7 Wake-up이다. P0-F의
 self-host key model과 sync/server는 S5 prerequisite가 아니다. P1-B Sync Chaos는
 S8 착수 전에 수행한다.
@@ -61,6 +62,11 @@ Derived State
 - sync semantics
 - capability mapping
 - upstream 업데이트 비용
+
+S4 gate에서는 Activepieces breadth보다 공식 Gmail API를 우선한다. local Go
+connector에서 OAuth scope, bounded initial import, `messages.list/get`, on-demand
+body, restart-safe cursor/history, revoke/rate-limit/partial failure와 untrusted-content
+경계를 검증한다. 범용 adapter 변환은 이 결과를 막지 않는다.
 
 ## P0-D — Memory Compiler
 
@@ -200,6 +206,26 @@ target을 고정한다. 이 PoC는 arbitrary code/Wasm이나 server placement를
 
 S7 착수 전에 다양한 거리, 소음과 유사 발화 corpus를 고정한다. speaker recognition은
 편의 신호로만 평가하며 action authorization을 대체하지 않는다.
+
+## P0-K — Apple Assistant Context Sources
+
+signed Apple builds와 physical iPhone/iPad에서 검증:
+
+- Contacts limited/full/denied access와 identity-reference projection
+- Core Location When In Use/reduced accuracy, revoke와 ephemeral retention
+- MapKit ETA throttle/cancel/error와 next-event leave-by 계산
+- WeatherKit entitlement, event-window query/cache와 attribution
+- Family Controls/Device Activity의 individual authorization과 entitlement 상태
+- app/website usage data의 OS/region/distribution 제한
+- privacy-preserving attention aggregate를 host app이 실제 소비할 수 있는지
+- HealthKit availability와 sleep/activity 최소 read authorization
+- raw Health sample → local coarse HealthState derivation
+- denial/revocation/no-data/stale/external deletion 상태
+
+Screen Time public API가 필요한 signal을 합법적으로 제공하지 않으면 unsupported
+capability와 대체 가능한 coarse signal을 ADR로 결정한다. private database, undocumented
+API, entitlement 우회는 성공 조건이 아니다. HealthKit은 macOS에서 data access가
+불가능하므로 macOS fixture와 iOS live evidence를 명확히 구분한다.
 
 ## P1-A — Day Canvas Dogfood
 

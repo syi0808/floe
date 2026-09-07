@@ -1,7 +1,7 @@
 {
   "project": "Floe",
   "version": "planning-v0.8",
-  "document_count": 53,
+  "document_count": 54,
   "structure": [
     "00-overview/product-boundaries.md",
     "00-overview/product-principles.md",
@@ -25,6 +25,7 @@
     "04-platform/android-and-windows.md",
     "04-platform/apple-platforms.md",
     "04-platform/device-agent.md",
+    "05-integrations/assistant-context-portfolio.md",
     "05-integrations/connector-contract.md",
     "05-integrations/connector-data-policy.md",
     "05-integrations/connector-sources.md",

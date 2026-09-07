@@ -388,3 +388,19 @@ progressive procedural knowledge, isolated learning review, approval gates and r
 curation. Floe keeps typed domain Memory and defaults inferred durable changes to
 human Review; Agent identity, safety, permissions and model weights are immutable
 to the learning loop.
+
+---
+
+## D-039 — S4 validates heterogeneous connected context
+
+**Status:** Accepted — 2026-09-07
+
+S4 adds live Gmail read/search, Contacts identity, location/ETA/weather and
+physical-device Screen Time and Apple Health gates to the conversational Agent
+foundation. All sources register provider-neutral capabilities and Views;
+Agent/Experts never receive credentials or unrestricted raw source data. Gmail may
+run in the local Go boundary without implying the S8 server. Apple APIs use public
+entitlements only, and their device/region limitations must be reported rather than
+bypassed.
+
+See [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md).

@@ -6,7 +6,8 @@
 >
 > Decision: [ADR 0006](../../decisions/0006-slice-driven-delivery.md), amended by
 > [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md) and
-> [ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md)
+> [ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md),
+> with S4 scope amended by [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md)
 
 ## 목적과 문서 역할
 
@@ -109,19 +110,24 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 **제외:** 일정 이동·삭제, 메일 전송, 자동 승인, 범용 workflow 엔진.
 
-## S4 — Conversational Agent and Expert Foundation
+## S4 — Conversational Connected Agent and Expert Foundation
 
 **사용자 결과:** 사용자가 Day Canvas의 assistant panel에서 Floe와 여러 turn을
-대화한다. Manager는 오늘 일정과 Schedule Expert를 사용해 답하거나 집중 시간
-작업을 제안하고, 사용자는 실행 과정을 확인·중단하며 나중에 같은 대화를 재개한다.
+대화한다. Manager는 Calendar, Gmail과 기기에서 허용된 attention/health context를
+Contacts, 다음 일정의 위치·ETA·날씨와 함께 전문 Expert를 통해 종합해 오늘
+브리핑을 답하거나 집중 시간 작업을 제안한다. 사용자는 각 source와 실행 과정을
+확인·중단하며 나중에 같은 대화를 재개한다.
 
 **의존성:** S3 Accepted, S1 calendar view, P0-I Agent/Expert contract harness,
-P0-F의 session store at-rest/key boundary.
+P0-F의 session store at-rest/key boundary, P0-C Gmail과 P0-K Apple context gate.
 sync/account server나 resident Device Agent 없이 macOS 앱과 local Agent host에서
 먼저 검증한다. model runner가 기기 밖에 있으면 inference class와 전송 동의를 따른다.
 
-첫 범위는 text chat, 한 Person, built-in Schedule Expert, deterministic declarative
-fixture Expert와 Calendar read/create capability로 제한한다. 자세한 runtime 계약은
+첫 범위는 text chat, 한 Person, built-in Schedule/Communication/Health Expert의
+최소 projection, deterministic declarative fixture Expert와 Calendar read/create,
+Gmail read/search, Contacts identity, location/ETA/weather와 device attention/health
+read capability로 제한한다. source 선정 근거는
+[Assistant Context Portfolio](../05-integrations/assistant-context-portfolio.md), runtime 계약은
 [Agent Runtime and Governed Learning](../03-intelligence/agent-runtime-and-learning.md)을
 따른다.
 
@@ -144,16 +150,54 @@ fixture Expert와 Calendar read/create capability로 제한한다. 자세한 run
   prompt-injection fixture와 실제 모델 대화 세트를 통과한다. 실제 개인 대화는
   session at-rest/key-unavailable gate를 통과한 build에서만 dogfood한다.
 
+### Connector acceptance
+
+- **S4-C1 — Common contract:** Connections에서 provider, execution location,
+  granted scopes/data types, freshness, last success/error와 disconnect/reconnect를
+  확인한다. Connector는 versioned capability/View descriptor로 등록되며 Agent와
+  Expert는 credential이나 provider-native object를 받지 않는다. 연결된 각 View는
+  Today briefing에서 실제 소비되고, 하나가 unavailable이어도 나머지 briefing은
+  source 누락을 설명하며 계속 동작한다.
+- **S4-C2 — Gmail:** 실제 Google OAuth 연결에서 bounded initial import,
+  `mail.search`, thread/message metadata와 on-demand body read가 동작한다. cursor 또는
+  history checkpoint가 재시작 후 유지되고 revoke, expired credential, partial fetch,
+  rate limit을 typed state로 복구한다. 메일 content는 untrusted data로 격리한다.
+- **S4-C3 — Contacts:** 실제 Apple Contacts의 limited/full/denied 상태와 선택 변경을
+  처리하고 sender/attendee를 `ExternalIdentity` evidence로 resolve한다. 연락처 전체나
+  note field를 Personal Memory로 복사하지 않고 revoke 후 새 접근을 중단한다.
+- **S4-C4 — Next-event feasibility:** When In Use 또는 macOS equivalent location,
+  MapKit ETA와 WeatherKit current/hourly forecast로 다음 physical event의 leave-by와
+  날씨 제약을 계산한다. 위치는 ephemeral/derived, ETA/날씨는 short-lived cache이며
+  Always location, 이동 이력과 불필요한 route polling을 요구하지 않는다. Weather
+  표시에는 provider attribution을 유지한다.
+- **S4-C5 — Screen Time:** signed physical supported Apple device에서 public
+  FamilyControls/DeviceActivity API의 individual authorization, entitlement와 region
+  availability를 확인하고 가능한 경우 coarse `AttentionStateView` 하나를 만든다.
+  private database를 읽지 않으며 raw app/domain usage나 shield mutation을 Agent에
+  노출하지 않는다. 공식 경계가 signal을 제공하지 못하면 원인과 지원 불가 capability를
+  ADR에 기록하는 것이 gate 결과이며 private workaround로 acceptance를 만들지 않는다.
+- **S4-C6 — Apple Health:** signed physical iPhone/iPad에서 HealthKit availability와
+  최소 read type 권한을 요청하고 raw sample로부터 coarse `HealthStateView`를 로컬에서
+  만든다. raw sample은 Agent, Go server, log에 전달하지 않고 denial/revocation,
+  no-data, stale source와 외부 변경을 구분한다.
+
 ### 구현 increment
 
 1. fixture model의 한 turn을 typed event stream으로 assistant panel에 표시·저장한다.
 2. multi-turn resume, streaming stop/retry와 session failure recovery를 연결한다.
-3. registry/assignment와 두 Expert 구현을 같은 host contract로 실행한다.
-4. Schedule Expert 결과를 Manager 답변과 S3 ActionProposal에 연결한다.
-5. live model, capability denial, injection, budget/stall/cancel 회귀를 검증한다.
+3. registry/assignment와 Expert 구현을 같은 host contract로 실행한다.
+4. common ConnectorConnection/View fixture를 Communication/Health/Schedule Expert에 연결한다.
+5. live Gmail read/search와 on-demand body를 local Go connector로 검증한다.
+6. Contacts identity와 location/ETA/weather 기반 next-event feasibility를 연결한다.
+7. physical Apple device에서 Screen Time gate와 Health derived-only connector를 검증한다.
+8. source cohort로 today briefing을 만들고 Expert 결과를 S3 ActionProposal에 연결한다.
+9. live model, capability denial, injection, budget/stall/cancel 회귀를 검증한다.
 
-**제외:** durable Personal Memory, 자가개선, arbitrary code/Wasm Expert, Marketplace,
-background execution, voice, multi-agent persona/chat, Expert 직접 mutation.
+**제외:** Gmail send/archive, Contacts write/note import, Always location/history,
+Screen Time restriction/shield, raw Health sync/diagnosis,
+Apple source의 macOS 직접 접근이나 cross-device delivery, durable Personal Memory,
+자가개선, arbitrary code/Wasm Expert, Marketplace, background execution, voice,
+multi-agent persona/chat, Expert 직접 mutation.
 
 ## S5 — Governed Memory and Self-Improvement
 
@@ -349,9 +393,9 @@ Known limitations / blocker: 남은 제약과 해소 조건
 
 | Phase | 먼저 검증하는 slice 경계 | 여전히 별도 검증이 필요한 범위 |
 | --- | --- | --- |
-| 0 — PoCs | S1 connector, S3 executor, S4 Agent/Expert contract, S5 memory/learning, S6 voice, S7 wake, S8 sync/security | Health 및 나머지 PoC |
+| 0 — PoCs | S1 connector, S3 executor, S4 Agent/Expert/source contracts, S5 memory/learning, S6 voice, S7 wake, S8 sync/security | provider별 미검증 technical risk와 나머지 PoC |
 | 1 — Personal Day | S1 Day Canvas, S3 승인 UI, S4 chat, S6 voice capture | 편집·folding·MVP dogfood |
-| 2 — Connected | S1 Calendar, S3 생성, S4 Schedule Expert | Gmail, Contacts, Health, 추가 Expert |
+| 2 — Connected | S1/S3 Calendar, S4 Gmail/Contacts/location/ETA/weather/Health/Screen Time gate와 Experts | provider parity, work/files, 추가 Expert |
 | 3 — Memory | S5 대화 기반 Memory/Playbook lifecycle | People/Relationship/Episode, 외부 source, identity resolution |
 | 3.5 — Experts | S4 local contract, assignment, permission, built-in/declarative 실행 | Wasm, SDK, marketplace, server placement |
 | 4 — Cross-device | S8 두 기기 sync, S7 local resident lifecycle | iOS/Android/Windows 전체 경험과 voice handoff |

@@ -6,15 +6,19 @@
 
 초기 Floe의 핵심 루프를 완성하는 데 필요한 connector만 먼저 구현한다.
 
-기준은 다음 네 가지다.
+기준은 다음 여섯 가지다.
 
 1. **하루를 이해한다** — Calendar
 2. **커뮤니케이션에서 해야 할 일과 약속을 발견한다** — Mail
 3. **사람을 올바르게 식별하고 관계 Memory와 연결한다** — Contacts
 4. **사용자의 컨디션을 이해한다** — Health
+5. **다음 일정이 실제 가능한지 판단한다** — Location / ETA / Weather
+6. **현재 attention state를 과잉 수집 없이 이해한다** — Device Activity
 
 Todo와 Notes는 초기에는 Floe-native domain으로 시작한다.
-Voice, Location, Notification은 Connector가 아니라 Device Provider로 분리한다.
+Voice, Location, Travel Time, Weather, Device Activity, Notification은 Connector가
+아니라 Device/Context Provider로 분리한다. Connections UI에 함께 보여도 runtime
+authority와 retention class를 동일하다고 가정하지 않는다.
 
 ---
 
@@ -34,6 +38,9 @@ Floe-native Domains
 Device Providers
 ├─ Voice
 ├─ Location
+├─ Travel Time
+├─ Weather
+├─ Attention / Device Activity
 ├─ Notifications
 ├─ Secure Storage
 └─ Invocation
@@ -84,6 +91,7 @@ Calendar Connector
 초기에는 read-only.
 
 Contacts 자체를 Personal Memory로 복사하는 것이 아니라 `ExternalIdentity` evidence로 사용한다.
+S4에서는 limited/full/denied access와 선택 변경을 지원하고 contact note는 읽지 않는다.
 
 ### Gmail
 
@@ -100,6 +108,10 @@ Contacts 자체를 Personal Memory로 복사하는 것이 아니라 `ExternalIde
 
 초기에는 **메일 전송보다 읽기/검색/변화 감지**를 우선한다.
 
+S4에서는 hosted account server가 아니라 기존 local Go boundary에서 한 Person의
+OAuth/read path를 먼저 검증한다. connector execution placement와 S8 sync/account
+server 완료를 혼동하지 않는다.
+
 Draft와 Send는 Action Authority가 안정된 뒤 추가할 수 있다.
 
 ### HealthKit
@@ -115,11 +127,12 @@ Heuristic / Tiny Model
       ↓
 Derived Health State
       ↓
-Floe State Sync
+Local HealthStateView
 ```
 
 macOS에서는 HealthKit store를 직접 읽는 것을 전제로 하지 않는다.
-건강 데이터는 iPhone/iPad Device Agent에서 공급한다.
+건강 데이터는 iPhone/iPad Device Agent에서 공급한다. S4는 해당 기기의 local view를
+검증하고 macOS 전달은 S8 sync 이전에 가정하지 않는다.
 
 초기 read type 후보:
 
@@ -131,6 +144,30 @@ macOS에서는 HealthKit store를 직접 읽는 것을 전제로 하지 않는�
 - workout/exercise session
 
 Raw Health data는 server connector payload가 아니다.
+
+### Location, ETA and Weather
+
+**Implementation:** Device-native context providers
+
+```text
+Current Location (ephemeral)
++ Event Location
+→ MapKit ETA
++ WeatherKit event-window forecast
+→ NextEventFeasibilityView
+```
+
+S4는 When In Use/reduced accuracy, visible next-event query와 short-lived cache를
+기본으로 한다. Always location, movement history와 background route polling은 제외한다.
+
+### Screen Time / Device Activity
+
+**Implementation:** Device-native feasibility gate
+
+Family Controls/Device Activity의 public API, entitlement와 region 경계 안에서 coarse
+`AttentionStateView`를 만들 수 있는지 physical device에서 검증한다. private Screen
+Time database나 raw app/domain timeline을 읽지 않는다. 공식 API로 필요한 signal을
+제공할 수 없으면 unsupported capability로 기록한다.
 
 ---
 
@@ -631,56 +668,54 @@ Connector-level output should mainly be local health signals/changes consumed by
 
 Raw generic `health.sample.read` API does not need to be exposed to the server Manager.
 
+## Assistant Context Providers
+
+```text
+people.identity.resolve
+device.location.current
+travel.eta.next_event
+weather.event_window.read
+attention.state.read
+health.state.read
+```
+
+이 capability는 raw provider API가 아니라 bounded View를 반환한다.
+
 ---
 
 # 12. Initial Implementation Order
 
-## P0 — macOS Daily Loop
+## P0 — S4 Connected Agent Loop
 
 1. Apple Calendar
-2. Apple Contacts
-3. Gmail read/search/change
-4. Floe-native Task/Note
+2. Gmail read/search/on-demand body
+3. Apple Contacts identity reference
+4. current location + next-event ETA + Weather
+5. iOS/iPadOS Apple Health derived state
+6. Screen Time public-API feasibility gate
+7. Floe-native Task/Note
 
 This validates:
 
 ```text
-Calendar
-+
-People
-+
-Communication
-+
-Day Canvas
-+
-Personal Memory
-```
-
-## P0.5 — Health Loop
-
-5. iOS HealthKit companion connector
-
-This validates:
-
-```text
-Health raw data
-→ local derived state
-→ Manager schedule intervention
+Time + Commitments + People + Feasibility + Capacity
+→ Experts
+→ Manager today briefing / S3 proposal
 ```
 
 ## P1 — Direct Calendar Reliability
 
-6. Google Calendar direct connector
+8. Google Calendar direct connector
 
 If the primary dogfood calendar is Google, this moves into P0 because it enables always-online schedule management.
 
 ## P1 — Android/Windows Completion
 
-7. Health Connect
-8. Android Calendar
-9. Android Contacts
-10. Microsoft Calendar
-11. Microsoft Mail
+9. Health Connect
+10. Android Calendar
+11. Android Contacts
+12. Microsoft Calendar
+13. Microsoft Mail
 
 ---
 
@@ -727,4 +762,15 @@ Calendar
 → Manager intervention
 ```
 
-이 네 루프가 완성되지 않는 connector는 initial scope에서 우선순위를 낮춘다.
+### Scenario E — Next-event Preparation
+
+```text
+Calendar location
++ Contacts
++ current location / ETA
++ event-window Weather
+→ Schedule Expert
+→ Manager leave-by / preparation answer
+```
+
+이 다섯 루프가 완성되지 않는 connector는 initial scope에서 우선순위를 낮춘다.
