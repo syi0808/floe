@@ -102,11 +102,9 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 
 ## Remaining integration
 
-These controller methods are not yet wired to a Calendar selection/confirmation or
-binding-management screen. Tools & Experts still presents only its existing package
-and assignment enablement controls. The upcoming screen must use actual selected
-Calendar connection context, present exact consent and pending/reconciled outcomes,
-and avoid silently expanding grants when source selection changes. Native connected
+These controller methods now have a [Calendar access consent screen](s4-calendar-consent.md)
+under Tools & Experts, using selected same-Person Calendar metadata, explicit bounded
+confirmation and saved-scope enablement without automatic expansion. Native connected
 chat dispatch, live protected-key/model/source gates, other connectors, remote privacy
 and authentication, and S1/S3 acceptance remain open. No S4 acceptance condition is
 promoted by these fictional/injected tests.

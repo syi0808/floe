@@ -933,7 +933,79 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentRegistryEmpty =>
-      'No packages are installed yet. The first sample turn sets up the sample Timeline Tool and Schedule Expert. Installing other packages and editing source grants aren’t available here yet.';
+      'No packages are installed yet. Use Calendar access, when available, to install a Calendar Expert. The first sample turn separately sets up the sample Timeline Tool and Schedule Expert.';
+
+  @override
+  String get agentCalendarTitle => 'Calendar access';
+
+  @override
+  String get agentCalendarBoundary =>
+      'Choose an exact Calendar scope for the Schedule Expert. Installation starts disabled and does not request OS permission, read events or approve actions. Closing this screen does not undo a submitted change. Connected chat is not enabled yet; these settings do not change the sample assistant.';
+
+  @override
+  String get agentCalendarChoose => 'Choose up to 4 connected calendars';
+
+  @override
+  String agentCalendarSelected(int count) {
+    return '$count of 4 selected';
+  }
+
+  @override
+  String get agentCalendarConsent =>
+      'I confirm these exact calendars. Any different scope requires a new confirmation; future calendars are not included automatically.';
+
+  @override
+  String get agentCalendarInstall => 'Install disabled Expert';
+
+  @override
+  String get agentCalendarInstalled => 'Saved Calendar scopes';
+
+  @override
+  String get agentCalendarScopeEnabled => 'Allow this Calendar scope';
+
+  @override
+  String get agentCalendarSeparateEnablement =>
+      'Tool and Expert installations and their Person assignments must also be enabled in Tools & Experts. Disabling this scope blocks new use, not existing proposals or approvals.';
+
+  @override
+  String get agentCalendarConnect =>
+      'Connect and select calendars in Connections, then return here. No Calendar permission is requested from this screen.';
+
+  @override
+  String get agentCalendarChanged =>
+      'The Calendar connection changed. Select and confirm the scope again before installing or retrying.';
+
+  @override
+  String get agentCalendarSourceUnavailable =>
+      'This source reports an import problem. Floe must recheck access and freshness before use.';
+
+  @override
+  String get agentCalendarScopeUnavailable =>
+      'This exact scope is not available in the current connection. You can still turn it off; reconnect and select its calendars before enabling it.';
+
+  @override
+  String get agentCalendarExists =>
+      'This exact scope is already saved. Manage it below instead of installing a duplicate.';
+
+  @override
+  String get agentCalendarPending =>
+      'Installation is not yet confirmed. Refresh to check whether it was saved, or retry the same confirmed scope. Do not create a replacement setup.';
+
+  @override
+  String get agentCalendarRetry => 'Retry same setup';
+
+  @override
+  String get agentCalendarDiscard => 'Discard unsaved setup request';
+
+  @override
+  String get agentCalendarApple => 'Apple Calendar · personal scope';
+
+  @override
+  String get agentCalendarFixture => 'Fixture Calendar · synthetic scope';
+
+  @override
+  String get agentCalendarMissingName =>
+      'Calendar not in the current selection';
 
   @override
   String get agentRegistryFailure =>

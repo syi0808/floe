@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel/registry UI; native Calendar setup management; Core connected turns/S3 preparation; native model availability | 0/14 | S3 Accepted; installation/grant UI; live key/model/source and privacy gates | Calendar scope consent/enablement UI and connected-turn dispatch; models and connectors |
+| S4 — Connected Agent/Experts | Planned; secure panel, native model and Expert preparation | Encrypted sample panel/registry UI; Calendar scope consent/setup; Core connected turns/S3 preparation; native model availability | 0/14 | S3 Accepted; connected chat; live key/model/source and privacy gates | Native connected-turn dispatch and proposal recovery; models and connectors |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,25 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 Calendar scope consent UI — 2026-09-07
+
+- Added Calendar access under Tools & Experts, using the existing same-Person Day
+  Calendar selection in desktop and narrow assistant layouts. It requests no OS
+  permission and requires exact one-to-four selection plus separate confirmation.
+- Installation remains disabled; saved-scope enablement is separate from package and
+  Person assignment flags. Connection changes clear local consent without expanding
+  grants; unavailable scopes can still be revoked. Pending setup refresh/retry retains
+  its original intent, and lock removes source metadata immediately.
+- Added ten projection/widget cases for consent, responsive layouts, actual Today
+  wiring, source changes, duplicate/legacy handling, revocation and uncertain/late
+  results. The new real-font consent golden is rendered and reviewed.
+- Validation: 169 Flutter tests, analysis, 195 workspace Rust tests, three keyring
+  example tests and 25 native assertions pass. The macOS Debug build and deep strict
+  signature verification pass; existing UI goldens are unchanged.
+- [Evidence and limits](docs/validation/s4-calendar-consent.md). Connected chat/native
+  turn dispatch, proposal recovery and live key/model/source/privacy gates remain.
+  S4 stays 0/14; S1/S3 acceptance is unchanged.
 
 ### S4 Calendar Expert management transport — 2026-09-07
 

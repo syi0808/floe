@@ -34,6 +34,7 @@ import '../../../app/floe_feedback.dart';
 import '../../server/settings_screen.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/agent_controller.dart';
+import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_panel.dart';
 
 enum _DestinationView { today, tasks, notes, activity, connections, settings }
@@ -414,6 +415,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           if (assistantOpen && agentController != null) {
             return AgentPanel(
               controller: agentController!,
+              calendarSources: _agentCalendarSources,
+              calendarSourceChanges: controller,
               onClose: _closeAssistant,
             );
           }
@@ -439,6 +442,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               child: assistantOpen && agentController != null
                   ? AgentPanel(
                       controller: agentController!,
+                      calendarSources: _agentCalendarSources,
+                      calendarSourceChanges: controller,
                       onClose: _closeAssistant,
                     )
                   : SingleChildScrollView(child: rail),
@@ -475,11 +480,27 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         height: MediaQuery.sizeOf(context).height * .88,
         child: AgentPanel(
           controller: agent,
+          calendarSources: _agentCalendarSources,
+          calendarSourceChanges: controller,
           onClose: () => Navigator.pop(context),
         ),
       ),
     );
     unawaited(agent.closeView());
+  }
+
+  AgentCalendarSources? _agentCalendarSources() {
+    final snapshot = controller.snapshot;
+    final connection = snapshot?.calendar;
+    if (controller.loadState != DayLoadState.ready ||
+        snapshot == null ||
+        connection == null) {
+      return null;
+    }
+    return AgentCalendarSources(
+      personId: snapshot.personId,
+      connection: connection,
+    );
   }
 
   void _closeAssistant() {

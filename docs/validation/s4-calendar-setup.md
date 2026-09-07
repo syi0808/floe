@@ -107,8 +107,8 @@ codesign --verify --deep --strict build/macos/Build/Products/Debug/floe_client.a
 
 This is a trusted Core setup operation, not a model capability or a user-visible
 consent flow. [Native/Dart management transport](s4-calendar-management.md) now wraps
-these operations. Calendar selection and confirmation UI, source-binding enablement
-controls and connected chat dispatch remain.
+these operations, and [Calendar consent UI](s4-calendar-consent.md) supplies explicit
+selection/confirmation and source-binding enablement. Connected chat dispatch remains.
 The app still runs encrypted samples. Live protected-key provisioning, local/remote
 models, other source connectors, privacy/authentication gates and S1/S3 acceptance
 remain open. These tests do not promote any complete S4 acceptance criterion.

@@ -9,6 +9,7 @@ import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
+import 'agent_calendar_sources.dart';
 import 'agent_expert_result.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_registry_dialog.dart';
@@ -19,10 +20,14 @@ class AgentPanel extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onClose,
+    this.calendarSources,
+    this.calendarSourceChanges,
   });
 
   final AgentController controller;
   final VoidCallback onClose;
+  final AgentCalendarSources? Function()? calendarSources;
+  final Listenable? calendarSourceChanges;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -157,8 +162,12 @@ class _AgentPanelState extends State<AgentPanel> {
                               final loading = controller.loadRegistry();
                               await showDialog<void>(
                                 context: context,
-                                builder: (_) =>
-                                    AgentRegistryDialog(controller: controller),
+                                builder: (_) => AgentRegistryDialog(
+                                  controller: controller,
+                                  calendarSources: widget.calendarSources,
+                                  calendarSourceChanges:
+                                      widget.calendarSourceChanges,
+                                ),
                               );
                               _registryOpen = false;
                               await loading;

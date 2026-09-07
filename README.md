@@ -53,8 +53,10 @@ connected View to an exact encrypted source scope. An
 [atomic Calendar setup operation](docs/validation/s4-calendar-setup.md) now installs
 disabled built-ins, assignments and a bound scope with durable retry identity;
 [native transport and controller management](docs/validation/s4-calendar-management.md)
-now expose explicit setup/reconciliation and scope enablement, while the consent/setup
-UI remains open.
+now expose explicit setup/reconciliation and scope enablement.
+[Calendar access UI](docs/validation/s4-calendar-consent.md) selects and confirms an
+exact existing connection scope without automatically expanding grants. Connected
+chat dispatch and live key/model/source verification remain open.
 
 The canonical planning specification is now **floe-planning v0.8** in [`docs/planning/`](docs/planning/README.md).
 

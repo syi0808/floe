@@ -6,12 +6,21 @@ import '../../app/floe_feedback.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_controller.dart';
+import 'agent_calendar_expert_dialog.dart';
+import 'agent_calendar_sources.dart';
 import 'agent_registry.dart';
 import 'agent_vault_gateway.dart';
 
 class AgentRegistryDialog extends StatelessWidget {
-  const AgentRegistryDialog({super.key, required this.controller});
+  const AgentRegistryDialog({
+    super.key,
+    required this.controller,
+    this.calendarSources,
+    this.calendarSourceChanges,
+  });
   final AgentController controller;
+  final AgentCalendarSources? Function()? calendarSources;
+  final Listenable? calendarSourceChanges;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -26,6 +35,24 @@ class AgentRegistryDialog extends StatelessWidget {
         children: [
           Text(strings.agentRegistryBoundary),
           const SizedBox(height: FloeSpace.base),
+          if (ready && controller.hasCalendarExpertManagement)
+            FloeButton.outlined(
+              onPressed: controller.canManageCalendarExperts
+                  ? () async {
+                      final loading = controller.loadCalendarExperts();
+                      await showDialog<void>(
+                        context: context,
+                        builder: (_) => AgentCalendarExpertDialog(
+                          controller: controller,
+                          sources: calendarSources,
+                          sourceChanges: calendarSourceChanges,
+                        ),
+                      );
+                      await loading;
+                    }
+                  : null,
+              child: Text(strings.agentCalendarTitle),
+            ),
           if (!ready)
             Text(
               controller.vaultState == AgentVaultState.unavailable

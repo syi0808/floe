@@ -1693,8 +1693,128 @@ abstract class AppLocalizations {
   /// No description provided for @agentRegistryEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No packages are installed yet. The first sample turn sets up the sample Timeline Tool and Schedule Expert. Installing other packages and editing source grants aren’t available here yet.'**
+  /// **'No packages are installed yet. Use Calendar access, when available, to install a Calendar Expert. The first sample turn separately sets up the sample Timeline Tool and Schedule Expert.'**
   String get agentRegistryEmpty;
+
+  /// No description provided for @agentCalendarTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar access'**
+  String get agentCalendarTitle;
+
+  /// No description provided for @agentCalendarBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an exact Calendar scope for the Schedule Expert. Installation starts disabled and does not request OS permission, read events or approve actions. Closing this screen does not undo a submitted change. Connected chat is not enabled yet; these settings do not change the sample assistant.'**
+  String get agentCalendarBoundary;
+
+  /// No description provided for @agentCalendarChoose.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose up to 4 connected calendars'**
+  String get agentCalendarChoose;
+
+  /// No description provided for @agentCalendarSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} of 4 selected'**
+  String agentCalendarSelected(int count);
+
+  /// No description provided for @agentCalendarConsent.
+  ///
+  /// In en, this message translates to:
+  /// **'I confirm these exact calendars. Any different scope requires a new confirmation; future calendars are not included automatically.'**
+  String get agentCalendarConsent;
+
+  /// No description provided for @agentCalendarInstall.
+  ///
+  /// In en, this message translates to:
+  /// **'Install disabled Expert'**
+  String get agentCalendarInstall;
+
+  /// No description provided for @agentCalendarInstalled.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved Calendar scopes'**
+  String get agentCalendarInstalled;
+
+  /// No description provided for @agentCalendarScopeEnabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow this Calendar scope'**
+  String get agentCalendarScopeEnabled;
+
+  /// No description provided for @agentCalendarSeparateEnablement.
+  ///
+  /// In en, this message translates to:
+  /// **'Tool and Expert installations and their Person assignments must also be enabled in Tools & Experts. Disabling this scope blocks new use, not existing proposals or approvals.'**
+  String get agentCalendarSeparateEnablement;
+
+  /// No description provided for @agentCalendarConnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Connect and select calendars in Connections, then return here. No Calendar permission is requested from this screen.'**
+  String get agentCalendarConnect;
+
+  /// No description provided for @agentCalendarChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The Calendar connection changed. Select and confirm the scope again before installing or retrying.'**
+  String get agentCalendarChanged;
+
+  /// No description provided for @agentCalendarSourceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This source reports an import problem. Floe must recheck access and freshness before use.'**
+  String get agentCalendarSourceUnavailable;
+
+  /// No description provided for @agentCalendarScopeUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This exact scope is not available in the current connection. You can still turn it off; reconnect and select its calendars before enabling it.'**
+  String get agentCalendarScopeUnavailable;
+
+  /// No description provided for @agentCalendarExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This exact scope is already saved. Manage it below instead of installing a duplicate.'**
+  String get agentCalendarExists;
+
+  /// No description provided for @agentCalendarPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation is not yet confirmed. Refresh to check whether it was saved, or retry the same confirmed scope. Do not create a replacement setup.'**
+  String get agentCalendarPending;
+
+  /// No description provided for @agentCalendarRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry same setup'**
+  String get agentCalendarRetry;
+
+  /// No description provided for @agentCalendarDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard unsaved setup request'**
+  String get agentCalendarDiscard;
+
+  /// No description provided for @agentCalendarApple.
+  ///
+  /// In en, this message translates to:
+  /// **'Apple Calendar · personal scope'**
+  String get agentCalendarApple;
+
+  /// No description provided for @agentCalendarFixture.
+  ///
+  /// In en, this message translates to:
+  /// **'Fixture Calendar · synthetic scope'**
+  String get agentCalendarFixture;
+
+  /// No description provided for @agentCalendarMissingName.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar not in the current selection'**
+  String get agentCalendarMissingName;
 
   /// No description provided for @agentRegistryFailure.
   ///
