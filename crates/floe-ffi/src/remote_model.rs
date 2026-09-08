@@ -80,6 +80,23 @@ fn output_schema() -> serde_json::Value {
     })
 }
 
+fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
+    let (conversation_history, current_turn) = request.conversation_messages();
+    if !current_turn
+        .iter()
+        .any(|message| matches!(message, floe_agent::AgentMessage::User { .. }))
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(json!({
+        "scoped": {"policy": &request.policy, "context": &request.context},
+        "conversation_history": conversation_history,
+        "current_turn": current_turn,
+        "allowed_capabilities": &request.capabilities,
+        "max_output_bytes": request.max_output_bytes.min(16384),
+    }))
+}
+
 fn decode_step(output: &str) -> Result<ModelStep, AgentFailure> {
     let step: WireStep =
         serde_json::from_str(output).map_err(|_| AgentFailure::InvalidModelOutput)?;
@@ -135,18 +152,14 @@ impl ModelRunner for ServerModelRunner {
             .no_proxy()
             .build()
             .map_err(|_| AgentFailure::ServerModelUnavailable)?;
+        let input = model_input(&request)?;
         let body = json!({
             "schema_version": 2,
             "purpose": self.route.purpose,
             "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
             "instructions": request.system_instructions,
-            "input": {
-                "scoped": {"policy": request.policy, "context": request.context},
-                "recent_messages": request.messages,
-                "allowed_capabilities": request.capabilities,
-                "max_output_bytes": request.max_output_bytes.min(16384),
-            },
+            "input": input,
             "output_schema": output_schema()
         });
         let send = client

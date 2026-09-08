@@ -1,8 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
-    ModelStep, SessionProtection,
+    AGENT_VERSION, AgentFailure, AgentMessage, ModelPlacement, ModelRequest, ModelResponse,
+    ModelRunner, ModelStep, SessionProtection,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -151,10 +151,18 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     }) {
         return Err(AgentFailure::CapabilityDenied);
     }
+    let (conversation_history, current_turn) = request.conversation_messages();
+    if !current_turn
+        .iter()
+        .any(|message| matches!(message, AgentMessage::User { .. }))
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
     let prompt = json!({
         "scoped": {"policy": request.policy},
         "retrieved_untrusted": request.context,
-        "recent_messages": request.messages,
+        "conversation_history": conversation_history,
+        "current_turn": current_turn,
         "allowed_capabilities": request.capabilities,
         "ephemeral": {"max_output_bytes": request.max_output_bytes.min(16384)},
     })
@@ -388,12 +396,13 @@ mod tests {
     }
 
     fn request() -> ModelRequest {
+        let turn_id = Uuid::new_v4();
         ModelRequest {
             schema_version: 1,
             system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
             person_id: PersonId::new(),
             session_id: Uuid::new_v4(),
-            turn_id: Uuid::new_v4(),
+            turn_id,
             policy: InferencePolicyDecision {
                 purpose: "synthetic-test".into(),
                 data_classes: vec![DataClass::Synthetic],
@@ -413,7 +422,7 @@ mod tests {
                 }],
             },
             messages: vec![AgentMessage::User {
-                turn_id: Uuid::new_v4(),
+                turn_id,
                 text: "Summarize this fixture".into(),
             }],
             capabilities: vec![CapabilityDescriptor {
@@ -465,12 +474,46 @@ mod tests {
                 .contains("disclose")
         );
         assert!(prompt.get("scoped").is_some());
-        assert!(prompt.get("recent_messages").is_some());
+        assert!(prompt.get("conversation_history").is_some());
+        assert_eq!(prompt["conversation_history"], json!([]));
+        assert_eq!(prompt["current_turn"][0]["kind"], "user");
         assert_eq!(
             prompt["allowed_capabilities"][0]["input_schema"]["type"],
             "object"
         );
         assert_eq!(input["maxResponseTokens"], 1024);
+    }
+
+    #[tokio::test]
+    async fn multi_turn_prompt_separates_history_from_the_current_request() {
+        let transport = Mock::new(answer());
+        let mut request = request();
+        let previous_turn = Uuid::new_v4();
+        request.messages.insert(
+            0,
+            AgentMessage::Assistant {
+                turn_id: previous_turn,
+                text: "The earlier answer".into(),
+            },
+        );
+        request.messages.insert(
+            0,
+            AgentMessage::User {
+                turn_id: previous_turn,
+                text: "The earlier question".into(),
+            },
+        );
+
+        generate(&transport, request, SessionProtection::SyntheticOnly)
+            .await
+            .unwrap();
+
+        let calls = transport.calls.lock().unwrap();
+        let prompt: Value =
+            serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
+        assert_eq!(prompt["conversation_history"].as_array().unwrap().len(), 2);
+        assert_eq!(prompt["current_turn"].as_array().unwrap().len(), 1);
+        assert_eq!(prompt["current_turn"][0]["text"], "Summarize this fixture");
     }
 
     #[tokio::test]
