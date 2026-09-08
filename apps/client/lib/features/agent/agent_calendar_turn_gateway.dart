@@ -2,6 +2,23 @@ import '../day_canvas/domain/day_models.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal.dart';
 
+final class AgentCalendarConversationContext {
+  const AgentCalendarConversationContext({
+    required this.day,
+    required this.connection,
+  });
+
+  final DayQuery day;
+  final CalendarConnection connection;
+
+  bool get usable =>
+      day.personId.isNotEmpty &&
+      connection.error == null &&
+      (connection.provider == 'fixture' ||
+          connection.provider == 'event_kit') &&
+      connection.selectedCalendarIds.isNotEmpty;
+}
+
 enum AgentCalendarPromptKind { briefing, proposeFocus }
 
 enum AgentCalendarModel {
@@ -160,7 +177,8 @@ final class AgentCalendarProposalOutcome {
               Map<String, dynamic>.from(json['action']! as Map),
             ),
       failure = json['failure'] as String? {
-    if ((action == null) == (failure == null)) {
+    if ((action == null) == (failure == null) ||
+        action != null && action!.id != invocationId) {
       throw const FormatException('Invalid Calendar proposal outcome');
     }
   }

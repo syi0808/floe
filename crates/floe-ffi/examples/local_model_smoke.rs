@@ -16,7 +16,7 @@ async fn main() -> std::process::ExitCode {
         eprintln!("Use --availability (no generation) or --exercise (one synthetic request)");
         return std::process::ExitCode::FAILURE;
     }
-    let model = FoundationModelRunner;
+    let model = FoundationModelRunner::synthetic();
     let availability = match model.availability() {
         Ok(availability) => availability,
         Err(failure) => {

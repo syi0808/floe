@@ -103,7 +103,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentEntryHint.
   ///
   /// In en, this message translates to:
-  /// **'Try a sample conversation'**
+  /// **'Talk through your day'**
   String get agentEntryHint;
 
   /// No description provided for @agentSampleTitle.
@@ -153,6 +153,120 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Send sample'**
   String get agentSend;
+
+  /// No description provided for @agentConnectedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar conversation'**
+  String get agentConnectedTitle;
+
+  /// No description provided for @agentConnectedBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Uses only the Calendar access enabled in Settings. Calendar changes still require Floe\'s review and action policy.'**
+  String get agentConnectedBoundary;
+
+  /// No description provided for @agentConnectedNewConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'New Calendar conversation'**
+  String get agentConnectedNewConversation;
+
+  /// No description provided for @agentConnectedEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask for a briefing or propose a focus block using your enabled calendars.'**
+  String get agentConnectedEmpty;
+
+  /// No description provided for @agentConnectedPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar request'**
+  String get agentConnectedPrompt;
+
+  /// No description provided for @agentConnectedBriefing.
+  ///
+  /// In en, this message translates to:
+  /// **'Brief my calendar'**
+  String get agentConnectedBriefing;
+
+  /// No description provided for @agentConnectedFocus.
+  ///
+  /// In en, this message translates to:
+  /// **'Propose a focus block'**
+  String get agentConnectedFocus;
+
+  /// No description provided for @agentConnectedSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask Floe'**
+  String get agentConnectedSend;
+
+  /// No description provided for @agentConnectedSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar evidence'**
+  String get agentConnectedSource;
+
+  /// No description provided for @agentConnectedSourceDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'View Calendar source'**
+  String get agentConnectedSourceDetails;
+
+  /// No description provided for @agentConnectedSourceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This Calendar source is unavailable.'**
+  String get agentConnectedSourceUnavailable;
+
+  /// No description provided for @agentConnectedPreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing Calendar reply…'**
+  String get agentConnectedPreparing;
+
+  /// No description provided for @agentConnectedReading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading the enabled calendars…'**
+  String get agentConnectedReading;
+
+  /// No description provided for @agentConnectedUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected on-device model is unavailable. Your saved conversation is kept.'**
+  String get agentConnectedUnavailable;
+
+  /// No description provided for @agentConnectedBudget.
+  ///
+  /// In en, this message translates to:
+  /// **'This response reached its limit. You can make another Calendar request.'**
+  String get agentConnectedBudget;
+
+  /// No description provided for @agentConnectedStalled.
+  ///
+  /// In en, this message translates to:
+  /// **'The Calendar read repeated without progress, so Floe stopped it.'**
+  String get agentConnectedStalled;
+
+  /// No description provided for @agentConnectedStale.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar access changed. Reload the conversation before continuing.'**
+  String get agentConnectedStale;
+
+  /// No description provided for @agentConnectedCommitment.
+  ///
+  /// In en, this message translates to:
+  /// **'{title}: {start}–{end}'**
+  String agentConnectedCommitment(String title, String start, String end);
+
+  /// No description provided for @agentConnectedFocusTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Possible focus time: {start}–{end}'**
+  String agentConnectedFocusTime(String start, String end);
 
   /// No description provided for @agentStop.
   ///

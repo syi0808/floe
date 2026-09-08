@@ -191,7 +191,7 @@ final class CalendarExpertTransport {
   }
 }
 
-final class TestCalendarExpertGateway extends TestVaultGateway
+class TestCalendarExpertGateway extends TestVaultGateway
     implements AgentRegistryGateway, AgentCalendarExpertGateway {
   TestCalendarExpertGateway() : super(personId: registryPerson) {
     state = AgentVaultState.ready;

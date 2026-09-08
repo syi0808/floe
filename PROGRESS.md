@@ -1,6 +1,6 @@
 # Floe Progress
 
-> Last updated: 2026-09-07
+> Last updated: 2026-09-08
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
@@ -34,7 +34,7 @@ verified criteria, not estimated implementation percentages.
 | --- | --- | --- | --- | --- | --- |
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
-| S4 — Connected Agent/Experts | Implementing; paused at user request | Encrypted sample panel/registry UI; Calendar scope consent and isolated sessions; Core connected turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; connected chat; live key/model/source and privacy gates | Validate native Calendar turn draft, then connect Dart/controller/UI |
+| S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
 | S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
@@ -43,6 +43,25 @@ verified criteria, not estimated implementation percentages.
 
 S1 implementation now connects a native EventKit adapter to Rust-owned mirror
 storage and Day Canvas. No live acceptance criterion is marked verified yet.
+
+### S4 Calendar conversation app integration — 2026-09-08
+
+- The assistant controller now discovers an explicitly enabled Calendar Expert scope,
+  resumes its isolated encrypted session and dispatches the current Day Canvas range
+  through the distinct Calendar turn transport. With no eligible scope it continues
+  to present the visibly labeled sample conversation rather than adopting a source.
+- The panel distinguishes sample and Calendar conversations and offers bounded briefing
+  and focus-proposal requests. Streaming progress, stop, retry, recovery, saved source
+  evidence and existing S3 proposal review use the shared presentation path.
+- EventKit turns explicitly select Foundation Models; fixture turns explicitly select
+  the deterministic model. The local adapter now permits Personal-class requests only
+  when invoked with the encrypted session boundary, while Synthetic-only use continues
+  to reject them and no remote fallback exists.
+- Focused Flutter controller/UI, transport/session and Rust local-model/Calendar-turn
+  tests pass; analysis passes. The refreshed bundled availability smoke reports
+  `AppleIntelligenceNotEnabled`; live generation and live EventKit conversation
+  validation remain open, so S4 remains 0/14.
+- [Evidence and limits](docs/validation/s4-calendar-app-turn.md).
 
 ### S4 paused handoff — 2026-09-07
 

@@ -9,6 +9,7 @@ import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_capability_label.dart';
+import 'agent_calendar_turn_gateway.dart';
 import 'agent_controller.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal_card.dart';
@@ -34,6 +35,7 @@ class _AgentPanelState extends State<AgentPanel> {
   final _scroll = ScrollController();
   final _actionFocus = FocusNode();
   AgentFixturePrompt _prompt = AgentFixturePrompt.today;
+  AgentCalendarPromptKind _calendarPrompt = AgentCalendarPromptKind.briefing;
   bool _wasBusy = false;
 
   @override
@@ -106,7 +108,9 @@ class _AgentPanelState extends State<AgentPanel> {
                         ),
                       ),
                       FloeButton.icon(
-                        tooltip: strings.agentNewConversation,
+                        tooltip: controller.isCalendarConversation
+                            ? strings.agentConnectedNewConversation
+                            : strings.agentNewConversation,
                         onPressed:
                             !controller.canSend ||
                                 controller.needsReload ||
@@ -124,13 +128,17 @@ class _AgentPanelState extends State<AgentPanel> {
                   ),
                   const SizedBox(height: FloeSpace.sm),
                   Text(
-                    strings.agentSampleTitle,
+                    controller.isCalendarConversation
+                        ? strings.agentConnectedTitle
+                        : strings.agentSampleTitle,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: FloeSpace.xs),
                   Text(
                     controller.usesVault
-                        ? strings.agentSecureSampleBoundary
+                        ? controller.isCalendarConversation
+                              ? strings.agentConnectedBoundary
+                              : strings.agentSecureSampleBoundary
                         : strings.agentSampleBoundary,
                     style: const TextStyle(
                       fontSize: 12,
@@ -151,7 +159,9 @@ class _AgentPanelState extends State<AgentPanel> {
                     ? Padding(
                         padding: const EdgeInsets.all(FloeSpace.base),
                         child: Text(
-                          strings.agentEmpty,
+                          controller.isCalendarConversation
+                              ? strings.agentConnectedEmpty
+                              : strings.agentEmpty,
                           style: const TextStyle(color: FloePalette.neutral600),
                         ),
                       )
@@ -229,11 +239,15 @@ class _AgentPanelState extends State<AgentPanel> {
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
       title: Text(
-        strings.agentSource,
+        widget.controller.isCalendarConversation
+            ? strings.agentConnectedSource
+            : strings.agentSource,
         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
       ),
       subtitle: Text(
-        strings.agentSourceDetails,
+        widget.controller.isCalendarConversation
+            ? strings.agentConnectedSourceDetails
+            : strings.agentSourceDetails,
         style: const TextStyle(fontSize: 12),
       ),
       children: [
@@ -261,7 +275,9 @@ class _AgentPanelState extends State<AgentPanel> {
     if (result == null) {
       final output = message.output;
       return output == null || output.trimLeft().startsWith('{')
-          ? strings.agentSourceUnavailable
+          ? widget.controller.isCalendarConversation
+                ? strings.agentConnectedSourceUnavailable
+                : strings.agentSourceUnavailable
           : output;
     }
     String clock(DateTime time) =>
@@ -270,15 +286,28 @@ class _AgentPanelState extends State<AgentPanel> {
       strings.agentExpertSource(agentCapabilityTitle(result.expert)),
       for (final insight in result.insights)
         switch (insight.kind) {
-          'commitment' => strings.agentExpertCommitment(
-            insight.title!,
-            clock(insight.start!),
-            clock(insight.end!),
-          ),
-          'focus_window' => strings.agentExpertFocus(
-            clock(insight.start!),
-            clock(insight.end!),
-          ),
+          'commitment' =>
+            widget.controller.isCalendarConversation
+                ? strings.agentConnectedCommitment(
+                    insight.title!,
+                    clock(insight.start!),
+                    clock(insight.end!),
+                  )
+                : strings.agentExpertCommitment(
+                    insight.title!,
+                    clock(insight.start!),
+                    clock(insight.end!),
+                  ),
+          'focus_window' =>
+            widget.controller.isCalendarConversation
+                ? strings.agentConnectedFocusTime(
+                    clock(insight.start!),
+                    clock(insight.end!),
+                  )
+                : strings.agentExpertFocus(
+                    clock(insight.start!),
+                    clock(insight.end!),
+                  ),
           _ => strings.agentExpertNoFocus,
         },
     ].join('\n');
@@ -296,6 +325,8 @@ class _AgentPanelState extends State<AgentPanel> {
         ? strings.agentReload
         : controller.needsRecovery
         ? strings.agentRecover
+        : controller.isCalendarConversation
+        ? strings.agentConnectedSend
         : strings.agentSend;
     final VoidCallback? action = storageLocked
         ? controller.busy
@@ -312,7 +343,9 @@ class _AgentPanelState extends State<AgentPanel> {
         : controller.needsRecovery
         ? () => controller.recover()
         : controller.canSend
-        ? () => controller.send(_prompt)
+        ? controller.isCalendarConversation
+              ? () => controller.sendCalendar(_calendarPrompt)
+              : () => controller.send(_prompt)
         : null;
     return Padding(
       padding: const EdgeInsets.all(FloeSpace.base),
@@ -332,7 +365,26 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          if (!storageLocked)
+          if (!storageLocked && controller.isCalendarConversation)
+            FloeSelect<AgentCalendarPromptKind>(
+              label: strings.agentConnectedPrompt,
+              value: _calendarPrompt,
+              enabled: controller.canSend,
+              options: [
+                FloeSelectOption(
+                  value: AgentCalendarPromptKind.briefing,
+                  label: strings.agentConnectedBriefing,
+                ),
+                FloeSelectOption(
+                  value: AgentCalendarPromptKind.proposeFocus,
+                  label: strings.agentConnectedFocus,
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _calendarPrompt = value);
+              },
+            )
+          else if (!storageLocked)
             FloeSelect<AgentFixturePrompt>(
               label: strings.agentPrompt,
               value: _prompt,
@@ -373,9 +425,15 @@ class _AgentPanelState extends State<AgentPanel> {
     if (controller.busy) {
       return switch (controller.progress) {
         AgentProgress.loading => strings.agentLoading,
-        AgentProgress.capability => strings.agentReading,
+        AgentProgress.capability =>
+          controller.isCalendarConversation
+              ? strings.agentConnectedReading
+              : strings.agentReading,
         AgentProgress.stopping => strings.agentStopping,
-        _ => strings.agentPreparing,
+        _ =>
+          controller.isCalendarConversation
+              ? strings.agentConnectedPreparing
+              : strings.agentPreparing,
       };
     }
     if (controller.usesVault &&
@@ -392,9 +450,19 @@ class _AgentPanelState extends State<AgentPanel> {
       null => null,
       'cancelled' => strings.agentStopped,
       'interrupted' => strings.agentRecovered,
-      'model_unavailable' => strings.agentUnavailable,
-      'stalled' => strings.agentStalled,
-      'budget_exceeded' || 'deadline_exceeded' => strings.agentBudget,
+      'model_unavailable' =>
+        controller.isCalendarConversation
+            ? strings.agentConnectedUnavailable
+            : strings.agentUnavailable,
+      'stalled' =>
+        controller.isCalendarConversation
+            ? strings.agentConnectedStalled
+            : strings.agentStalled,
+      'stale_context' => strings.agentConnectedStale,
+      'budget_exceeded' || 'deadline_exceeded' =>
+        controller.isCalendarConversation
+            ? strings.agentConnectedBudget
+            : strings.agentBudget,
       _ => strings.agentFailure,
     };
   }

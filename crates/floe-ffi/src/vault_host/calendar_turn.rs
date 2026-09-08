@@ -224,7 +224,9 @@ impl Model {
             AgentCalendarModelDto::DeterministicFixture => {
                 Self::Deterministic(DeterministicModel { prompt })
             }
-            AgentCalendarModelDto::FoundationModels => Self::Foundation(FoundationModelRunner),
+            AgentCalendarModelDto::FoundationModels => {
+                Self::Foundation(FoundationModelRunner::encrypted())
+            }
         }
     }
 }

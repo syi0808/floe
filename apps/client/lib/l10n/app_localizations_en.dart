@@ -13,7 +13,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentEntry => 'Floe is here to help';
 
   @override
-  String get agentEntryHint => 'Try a sample conversation';
+  String get agentEntryHint => 'Talk through your day';
 
   @override
   String get agentSampleTitle => 'Sample conversation';
@@ -40,6 +40,74 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentSend => 'Send sample';
+
+  @override
+  String get agentConnectedTitle => 'Calendar conversation';
+
+  @override
+  String get agentConnectedBoundary =>
+      'Uses only the Calendar access enabled in Settings. Calendar changes still require Floe\'s review and action policy.';
+
+  @override
+  String get agentConnectedNewConversation => 'New Calendar conversation';
+
+  @override
+  String get agentConnectedEmpty =>
+      'Ask for a briefing or propose a focus block using your enabled calendars.';
+
+  @override
+  String get agentConnectedPrompt => 'Calendar request';
+
+  @override
+  String get agentConnectedBriefing => 'Brief my calendar';
+
+  @override
+  String get agentConnectedFocus => 'Propose a focus block';
+
+  @override
+  String get agentConnectedSend => 'Ask Floe';
+
+  @override
+  String get agentConnectedSource => 'Calendar evidence';
+
+  @override
+  String get agentConnectedSourceDetails => 'View Calendar source';
+
+  @override
+  String get agentConnectedSourceUnavailable =>
+      'This Calendar source is unavailable.';
+
+  @override
+  String get agentConnectedPreparing => 'Preparing Calendar reply…';
+
+  @override
+  String get agentConnectedReading => 'Reading the enabled calendars…';
+
+  @override
+  String get agentConnectedUnavailable =>
+      'The selected on-device model is unavailable. Your saved conversation is kept.';
+
+  @override
+  String get agentConnectedBudget =>
+      'This response reached its limit. You can make another Calendar request.';
+
+  @override
+  String get agentConnectedStalled =>
+      'The Calendar read repeated without progress, so Floe stopped it.';
+
+  @override
+  String get agentConnectedStale =>
+      'Calendar access changed. Reload the conversation before continuing.';
+
+  @override
+  String agentConnectedCommitment(String title, String start, String end) {
+    return '$title: $start–$end';
+  }
+
+  @override
+  String agentConnectedFocusTime(String start, String end) {
+    return 'Possible focus time: $start–$end';
+  }
 
   @override
   String get agentStop => 'Stop response';

@@ -23,9 +23,23 @@ pub enum LocalModelAvailability {
     ModelUnavailable,
 }
 
-pub struct FoundationModelRunner;
+pub struct FoundationModelRunner {
+    protection: SessionProtection,
+}
 
 impl FoundationModelRunner {
+    pub const fn synthetic() -> Self {
+        Self {
+            protection: SessionProtection::SyntheticOnly,
+        }
+    }
+
+    pub(crate) const fn encrypted() -> Self {
+        Self {
+            protection: SessionProtection::Encrypted,
+        }
+    }
+
     pub fn availability(&self) -> Result<LocalModelAvailability, AgentFailure> {
         let reply =
             NativeTransport.call(json!({"schemaVersion": 1, "operation": "availability"}))?;
@@ -42,7 +56,7 @@ impl ModelRunner for FoundationModelRunner {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        generate(&NativeTransport, request).await
+        generate(&NativeTransport, request, self.protection).await
     }
 }
 
@@ -99,7 +113,7 @@ fn check_deadline(request: &ModelRequest) -> Result<(), AgentFailure> {
     }
 }
 
-fn prepare(request: &ModelRequest) -> Result<Value, AgentFailure> {
+fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Value, AgentFailure> {
     if request.schema_version != AGENT_VERSION {
         return Err(AgentFailure::UnsupportedVersion);
     }
@@ -109,7 +123,7 @@ fn prepare(request: &ModelRequest) -> Result<Value, AgentFailure> {
         .map_err(|_| AgentFailure::StaleContext)?;
     request.policy.authorize(
         ModelPlacement::DeviceLocal,
-        SessionProtection::SyntheticOnly,
+        protection,
         &request.context,
         u64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
     )?;
@@ -161,8 +175,9 @@ fn prepare(request: &ModelRequest) -> Result<Value, AgentFailure> {
 async fn generate(
     connection: &impl Transport,
     request: ModelRequest,
+    protection: SessionProtection,
 ) -> Result<ModelResponse, AgentFailure> {
-    let input = prepare(&request)?;
+    let input = prepare(&request, protection)?;
     let lease = Lease {
         connection,
         request_id: Uuid::new_v4(),
@@ -421,7 +436,9 @@ mod tests {
         let mut request = request();
         request.capabilities[0].input_schema =
             Some(json!({"type": "object", "additionalProperties": false}));
-        let result = generate(&transport, request).await.unwrap();
+        let result = generate(&transport, request, SessionProtection::SyntheticOnly)
+            .await
+            .unwrap();
         assert_eq!(result.used_tokens, 4096);
         assert_eq!(result.cost_micros, 0);
         assert_eq!(
@@ -456,37 +473,57 @@ mod tests {
         let mut limited = request();
         limited.remaining_tokens = 4095;
         assert!(matches!(
-            generate(&transport, limited).await,
+            generate(&transport, limited, SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::BudgetExceeded)
         ));
-        for class in [
-            DataClass::Credential,
-            DataClass::DeviceOnlyRaw,
-            DataClass::Personal,
-        ] {
+        for class in [DataClass::Credential, DataClass::DeviceOnlyRaw] {
             let mut denied = request();
             denied.policy.data_classes.push(class);
-            assert!(generate(&transport, denied).await.is_err());
+            assert!(
+                generate(&transport, denied, SessionProtection::SyntheticOnly)
+                    .await
+                    .is_err()
+            );
         }
         let mut remote = request();
         remote.policy.allowed_placements = vec![ModelPlacement::Remote];
         assert!(matches!(
-            generate(&transport, remote).await,
+            generate(&transport, remote, SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::PolicyDenied)
         ));
         let cancelled = request();
         cancelled.cancellation.cancel();
         assert!(matches!(
-            generate(&transport, cancelled).await,
+            generate(&transport, cancelled, SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::Cancelled)
         ));
         let mut stale = request();
         stale.context.evidence[0].expires_at_unix_ms = 0;
         assert!(matches!(
-            generate(&transport, stale).await,
+            generate(&transport, stale, SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::StaleContext)
         ));
         assert!(transport.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn personal_input_requires_an_encrypted_session_boundary() {
+        let transport = Mock::new(answer());
+        let mut personal = request();
+        personal.policy.data_classes = vec![DataClass::Personal];
+        personal.context.evidence[0].data_class = DataClass::Personal;
+        personal.capabilities[0].output_data_class = DataClass::Personal;
+        assert!(matches!(
+            prepare(&personal, SessionProtection::SyntheticOnly),
+            Err(AgentFailure::VaultUnavailable)
+        ));
+        assert!(transport.calls.lock().unwrap().is_empty());
+        assert!(
+            generate(&transport, personal, SessionProtection::Encrypted)
+                .await
+                .is_ok()
+        );
+        assert!(transport.released());
     }
 
     #[tokio::test]
@@ -494,7 +531,10 @@ mod tests {
         let transport = Mock::new(json!({"schemaVersion": 1, "status": "done", "step": {
             "kind": "call", "capabilityID": "fixture.read", "input": "today" }}));
         assert_eq!(
-            generate(&transport, request()).await.unwrap().step,
+            generate(&transport, request(), SessionProtection::SyntheticOnly,)
+                .await
+                .unwrap()
+                .step,
             ModelStep::Call {
                 capability_id: "fixture.read".into(),
                 input: "today".into()
@@ -503,7 +543,7 @@ mod tests {
         let denied = Mock::new(json!({"schemaVersion": 1, "status": "done", "step": {
             "kind": "call", "capabilityID": "calendar.create", "input": "{}" }}));
         assert!(matches!(
-            generate(&denied, request()).await,
+            generate(&denied, request(), SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::CapabilityDenied)
         ));
         assert!(denied.released());
@@ -519,7 +559,7 @@ mod tests {
         ] {
             let transport = Mock::new(reply);
             assert!(matches!(
-                generate(&transport, request()).await,
+                generate(&transport, request(), SessionProtection::SyntheticOnly,).await,
                 Err(AgentFailure::InvalidModelOutput)
             ));
             assert!(transport.released());
@@ -528,7 +568,7 @@ mod tests {
         let mut small = request();
         small.max_output_bytes = 1;
         assert!(matches!(
-            generate(&transport, small).await,
+            generate(&transport, small, SessionProtection::SyntheticOnly).await,
             Err(AgentFailure::BudgetExceeded)
         ));
     }
@@ -542,13 +582,20 @@ mod tests {
         let mut limited = request();
         limited.deadline = Instant::now() + Duration::from_millis(10);
         assert!(matches!(
-            generate(transport.as_ref(), limited).await,
+            generate(
+                transport.as_ref(),
+                limited,
+                SessionProtection::SyntheticOnly,
+            )
+            .await,
             Err(AgentFailure::DeadlineExceeded)
         ));
         assert!(transport.released());
         transport.calls.lock().unwrap().clear();
         let worker = transport.clone();
-        let task = tokio::spawn(async move { generate(worker.as_ref(), request()).await });
+        let task = tokio::spawn(async move {
+            generate(worker.as_ref(), request(), SessionProtection::SyntheticOnly).await
+        });
         tokio::time::timeout(Duration::from_secs(1), async {
             while transport.calls.lock().unwrap().is_empty() {
                 tokio::task::yield_now().await;

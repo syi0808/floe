@@ -20,12 +20,13 @@ and Rust validation reject invalid answer/call combinations. Rust additionally
 checks that a requested capability was advertised. Swift never invokes tools or
 Calendar APIs and never returns a reasoning field or framework debug descriptions.
 
-The current runner deliberately accepts only synthetic-classified requests until
-the personal vault gate passes. It rechecks placement, classification, projection
-freshness and read-only descriptors before any native model dispatch. This is a
-trusted host classification boundary, not an arbitrary-text content classifier.
-The default Flutter panel still uses the encrypted fixture route: personal/free-text
-input and real-model panel selection are **not** enabled by this checkpoint.
+The runner defaults to a synthetic-only construction. The trusted encrypted Calendar
+vault host now uses a separate encrypted construction that may admit Personal-class
+requests after the same placement, classification, projection freshness and read-only
+descriptor checks. Synthetic construction still rejects Personal input before native
+dispatch. This is a trusted host classification boundary, not an arbitrary-text content
+classifier. The Calendar panel path remains bounded to briefing/focus requests; general
+personal free-text input is not enabled.
 
 ## Bounds and cancellation
 

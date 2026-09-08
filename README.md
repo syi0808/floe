@@ -20,9 +20,11 @@ Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
 cross-device/server (S8) and intervention (S9).
 
 S4 preparatory work now includes a bounded Rust Agent runtime, durable synthetic
-sessions and a user-invoked sample conversation panel with progress, stop and
-resume through the C ABI/Dart gateway. Personal chat and live model/source
-integration remain gated. A separate encrypted session-store component now uses
+and Calendar-scoped sessions, and a user-invoked conversation panel with progress,
+stop and resume through the C ABI/Dart gateway. An enabled Calendar Expert scope now
+selects the isolated Calendar session and bounded native turn path; otherwise the
+panel remains visibly sample-only. General free-text chat and live model/source
+acceptance remain gated. A separate encrypted session-store component now uses
 the keyring-rs ecosystem for OS key access. The default panel now requires explicit
 secure-storage setup/unlock through a nonblocking native worker; it never falls
 back to the legacy plaintext sample store.
@@ -68,8 +70,10 @@ now show saved action status and open existing S3 review.
 encrypted start/resume/get/recover through native and Dart storage APIs.
 [Native Calendar turn dispatch](docs/validation/s4-calendar-native-turn.md) now binds
 those sessions to the current durable scope, streams Core events and waits for Manager
-proposal preparation. Its typed Dart transport validates completed job identity without
-enabling Personal model input. The
+proposal preparation. Its typed Dart transport validates completed job identity. The
+[Calendar conversation app path](docs/validation/s4-calendar-app-turn.md) now connects
+enabled scopes to the controller and panel and admits Personal input to Foundation Models
+only from the encrypted local session boundary; live generation is still unverified. The
 [assistant access experience update](docs/validation/s4-agent-experience-feedback.md)
 for automatic conversation-store access, flat Settings-owned permissions and the custom
 Floe switch component. See the
