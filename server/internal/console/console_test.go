@@ -151,6 +151,8 @@ func TestManagementAndInferenceAuthAreSeparate(test *testing.T) {
 		{"/manage/api/state", "GET", "", "evil.example:8431", "", true, ""},
 		{"/v1/inference-classes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
 		{"/v1/inference-classes", "GET", "", "127.0.0.1:8431", "", true, ""},
+		{"/v2/inference-purposes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
+		{"/v2/inference-purposes", "GET", "", "127.0.0.1:8431", "", true, ""},
 		{"/pair/start", "POST", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, ""},
 	} {
 		request := httptest.NewRequest(sample.method, "http://"+sample.host+sample.path, strings.NewReader(`{"id":"missing"}`))
@@ -203,6 +205,10 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
 	if !strings.Contains(classes.Body.String(), `"high_effort"`) || strings.Contains(classes.Body.String(), "fixture") {
 		test.Fatal("app inference inventory exposed server routing")
+	}
+	purposes := fixture.call("GET", "/v2/inference-purposes", nil, appToken)
+	if purposes.Code != 200 || !strings.Contains(purposes.Body.String(), `"everyday_assistance"`) || strings.Contains(purposes.Body.String(), "fixture") {
+		test.Fatal("app purpose inventory was not routed or exposed server configuration")
 	}
 	disk, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
 	if strings.Contains(state.Body.String()+string(disk), "private-provider-key") || len(fixture.vault.values) != 1 {
