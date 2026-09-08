@@ -96,6 +96,111 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     _editing = true;
   });
 
+  Future<void> _startAdditionalSetup() async {
+    final sources = _sources;
+    if (!controller.canManageCalendarExperts || sources == null) return;
+    final selected = <String>{};
+    var saving = false;
+    await showFloeDialog<void>(
+      context,
+      (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> save() async {
+            if (saving ||
+                !_fresh() ||
+                selected.isEmpty ||
+                selected.length > 4 ||
+                !sources.containsScope(sources.provider, selected)) {
+              return;
+            }
+            setDialogState(() => saving = true);
+            await controller.installCalendarExpert(
+              provider: sources.provider,
+              calendarIds: selected.toList(),
+            );
+            if (!dialogContext.mounted) return;
+            if (controller.calendarExpertFailure == null) {
+              Navigator.pop(dialogContext);
+            } else {
+              setDialogState(() => saving = false);
+            }
+          }
+
+          return FloeDialog(
+            title: const Text('Add Calendar scope'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Choose up to four calendars for this access scope.',
+                  style: FloeType.body.copyWith(
+                    color: FloePalette.neutral600,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: FloeSpace.md),
+                for (final source in sources.calendars)
+                  FloeCheckboxTile(
+                    key: ValueKey('calendar-choice-${source.id}'),
+                    title: Text(source.name),
+                    subtitle: source.error == null
+                        ? null
+                        : const Text(
+                            'This calendar is temporarily unavailable.',
+                          ),
+                    value: selected.contains(source.id),
+                    onChanged:
+                        !saving &&
+                            source.error == null &&
+                            (selected.contains(source.id) ||
+                                selected.length < 4)
+                        ? (checked) => setDialogState(() {
+                            if (checked == true) {
+                              selected.add(source.id);
+                            } else {
+                              selected.remove(source.id);
+                            }
+                          })
+                        : null,
+                  ),
+                const SizedBox(height: FloeSpace.xs),
+                Text(
+                  '${selected.length} of 4 selected',
+                  style: FloeType.bodySmall.copyWith(
+                    color: FloePalette.neutral600,
+                  ),
+                ),
+                const SizedBox(height: FloeSpace.md),
+                FloeSquircle(
+                  size: FloeSquircleSize.md,
+                  fill: FloePalette.primary50,
+                  borderWidth: 0,
+                  padding: const EdgeInsets.all(FloeSpace.base),
+                  child: Text(
+                    'Floe may read event details from only these calendars and prepare suggestions. Calendar changes remain controlled separately in Action permissions.',
+                    style: FloeType.body.copyWith(height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              FloeButton.text(
+                onPressed: saving ? null : () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FloeButton.filled(
+                key: const ValueKey('calendar-access-save'),
+                onPressed: !saving && selected.isNotEmpty ? save : null,
+                child: const Text('Allow access'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   void _startChange(AgentCalendarSetupReceipt setup, AgentCalendarView view) =>
       setState(() {
         _selected
@@ -223,7 +328,9 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               alignment: Alignment.centerLeft,
               child: FloeButton.outlined(
                 key: const ValueKey('calendar-access-add'),
-                onPressed: canManage && sources != null ? _startSetup : null,
+                onPressed: canManage && sources != null
+                    ? _startAdditionalSetup
+                    : null,
                 child: const Text('Add another Calendar scope'),
               ),
             ),

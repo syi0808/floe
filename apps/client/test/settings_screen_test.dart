@@ -132,10 +132,23 @@ void main() {
     expect(find.text('Allow external model transfer'), findsNothing);
     expect(find.text('Needs consent'), findsOneWidget);
     expect(find.text('Unavailable'), findsOneWidget);
+    expect(find.text('View recent data use (1)'), findsOneWidget);
+    expect(find.text('Completed'), findsNothing);
+
+    final activityButton = find.byKey(
+      const ValueKey('processing-activity-open'),
+    );
+    await tester.ensureVisible(activityButton);
+    await tester.tap(activityButton);
+    await tester.pumpAndSettle();
     expect(find.text('Recent data use'), findsOneWidget);
     expect(find.text('Completed'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('processing-activity-close')));
+    await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('external-model-consent')));
+    final consentSwitch = find.byKey(const ValueKey('external-model-consent'));
+    await tester.ensureVisible(consentSwitch);
+    await tester.tap(consentSwitch);
     await tester.pumpAndSettle();
     expect((await client.connection())!.allowExternal, true);
     expect(find.text('Needs consent'), findsNothing);

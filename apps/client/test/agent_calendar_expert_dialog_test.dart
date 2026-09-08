@@ -172,6 +172,22 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Pause'), findsOneWidget);
+      await tapKey(tester, 'calendar-access-add');
+      expect(find.text('Add Calendar scope'), findsOneWidget);
+      expect(find.byType(Dialog), findsOneWidget);
+      await tapKey(tester, 'calendar-choice-work');
+      expect(
+        tester
+            .widget<FloeButton>(
+              find.byKey(const ValueKey('calendar-access-save')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      await tester.tap(find.text('Cancel').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Add Calendar scope'), findsNothing);
+      expect(gateway.transport.installations, 1);
       expect(tester.takeException(), isNull);
     });
   }

@@ -3,6 +3,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_badge.dart';
+import '../../app/floe_button.dart';
+import '../../app/floe_feedback.dart';
 import '../../app/floe_primitives.dart';
 import '../../app/floe_loading.dart';
 import '../../app/floe_selection.dart';
@@ -373,46 +375,71 @@ class _AiProcessingState extends State<_AiProcessing> {
         const SizedBox(height: FloeSpace.xs),
         Text(
           'Floe chooses a permitted route for each task. Conversations do not select a model.',
-          style: FloeType.body.copyWith(color: FloePalette.neutral600),
+          style: FloeType.body.copyWith(
+            color: FloePalette.neutral600,
+            height: 1.5,
+          ),
         ),
-        const SizedBox(height: FloeSpace.base),
-        const _ProcessingRow(
-          title: 'On this device',
-          detail: 'Local data preparation and available local intelligence',
-          status: 'Preferred',
-        ),
+        const SizedBox(height: FloeSpace.lg),
+        const Text('Processing locations', style: FloeType.controlLabel),
         const SizedBox(height: FloeSpace.sm),
-        _ProcessingRow(
-          title: 'On your Floe Server',
-          detail: connection == null
-              ? 'Pair a server in Floe Server settings to add assisted routes.'
-              : 'Paired server may process only the context required for a task.',
-          status: connection == null ? 'Not paired' : 'Paired',
+        _ProcessingGroup(
+          children: [
+            const _ProcessingRow(
+              title: 'On this device',
+              detail:
+                  'Local data preparation and available local intelligence.',
+              status: 'Preferred',
+            ),
+            const FloeDivider(height: FloeSpace.lg),
+            _ProcessingRow(
+              title: 'On your Floe Server',
+              detail: connection == null
+                  ? 'Pair a server in Floe Server settings to add assisted routes.'
+                  : 'The paired server receives only the context required for a task.',
+              status: connection == null ? 'Not paired' : 'Paired',
+            ),
+          ],
         ),
         if (connection != null && purposes != null) ...[
-          const SizedBox(height: FloeSpace.sm),
-          for (final purpose in InferencePurpose.values)
-            Padding(
-              padding: const EdgeInsets.only(top: FloeSpace.xs),
-              child: _ProcessingRow(
-                title: switch (purpose) {
-                  InferencePurpose.quickResponse => 'Quick responses',
-                  InferencePurpose.everydayAssistance => 'Everyday assistance',
-                  InferencePurpose.deepWork => 'Deep work',
-                },
-                detail: purposes![purpose]!.recipient != null
-                    ? 'External recipient: ${purposes![purpose]!.recipient}. Selected automatically when needed.'
-                    : 'Processed on your Floe Server when selected automatically.',
-                status: !purposes![purpose]!.available
-                    ? 'Unavailable'
-                    : purposes![purpose]!.requiresExternalConsent &&
-                          !connection!.coversExternalRecipient(
-                            purposes![purpose]!.recipient,
-                          )
-                    ? 'Needs consent'
-                    : 'Available',
-              ),
+          const SizedBox(height: FloeSpace.lg),
+          const Text('Task routes', style: FloeType.controlLabel),
+          const SizedBox(height: FloeSpace.xs),
+          Text(
+            'Floe selects among these routes based on the work and your consent.',
+            style: FloeType.body.copyWith(
+              color: FloePalette.neutral600,
+              height: 1.5,
             ),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          _ProcessingGroup(
+            children: [
+              for (final purpose in InferencePurpose.values) ...[
+                _ProcessingRow(
+                  title: switch (purpose) {
+                    InferencePurpose.quickResponse => 'Quick responses',
+                    InferencePurpose.everydayAssistance =>
+                      'Everyday assistance',
+                    InferencePurpose.deepWork => 'Deep work',
+                  },
+                  detail: purposes![purpose]!.recipient != null
+                      ? 'External recipient: ${purposes![purpose]!.recipient}. Selected automatically when needed.'
+                      : 'Processed on your Floe Server when selected automatically.',
+                  status: !purposes![purpose]!.available
+                      ? 'Unavailable'
+                      : purposes![purpose]!.requiresExternalConsent &&
+                            !connection!.coversExternalRecipient(
+                              purposes![purpose]!.recipient,
+                            )
+                      ? 'Needs consent'
+                      : 'Available',
+                ),
+                if (purpose != InferencePurpose.values.last)
+                  const FloeDivider(height: FloeSpace.lg),
+              ],
+            ],
+          ),
         ],
         if (connection != null) ...[
           const FloeDivider(height: FloeSpace.xl),
@@ -435,33 +462,82 @@ class _AiProcessingState extends State<_AiProcessing> {
         ],
         if (connection != null && activity != null) ...[
           const FloeDivider(height: FloeSpace.xl),
-          const Text('Recent data use', style: FloeType.controlLabel),
-          const SizedBox(height: FloeSpace.xs),
-          if (activity!.isEmpty)
-            Text(
-              'No server model processing has been recorded since the server started.',
-              style: FloeType.body.copyWith(color: FloePalette.neutral600),
-            )
-          else
-            for (final record in activity!.take(5))
-              Padding(
-                padding: const EdgeInsets.only(top: FloeSpace.sm),
-                child: _ProcessingRow(
-                  title: switch (record.purpose) {
-                    'quick_response' => 'Quick response',
-                    'everyday_assistance' => 'Everyday assistance',
-                    'deep_work' => 'Deep work',
-                    _ => 'Assisted processing',
-                  },
-                  detail:
-                      '${record.dataClasses.join(', ')} · ${record.placement == 'remote' ? 'External provider' : 'Floe Server'} · Trace ${record.traceId.substring(0, 8)}',
-                  status: record.outcome == 'completed'
-                      ? 'Completed'
-                      : 'Failed',
-                ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FloeButton.text(
+              key: const ValueKey('processing-activity-open'),
+              onPressed: _showActivity,
+              child: Text(
+                activity!.isEmpty
+                    ? 'View recent data use'
+                    : 'View recent data use (${activity!.length})',
               ),
+            ),
+          ),
         ],
       ],
+    ),
+  );
+
+  Future<void> _showActivity() => showFloeDialog<void>(
+    context,
+    (dialogContext) => FloeDialog(
+      title: const Text('Recent data use'),
+      maxWidth: 640,
+      content: activity!.isEmpty
+          ? Text(
+              'No server model processing has been recorded since the server started.',
+              style: FloeType.body.copyWith(
+                color: FloePalette.neutral600,
+                height: 1.5,
+              ),
+            )
+          : _ProcessingGroup(
+              children: [
+                for (final record in activity!.take(5)) ...[
+                  _ProcessingRow(
+                    title: switch (record.purpose) {
+                      'quick_response' => 'Quick response',
+                      'everyday_assistance' => 'Everyday assistance',
+                      'deep_work' => 'Deep work',
+                      _ => 'Assisted processing',
+                    },
+                    detail:
+                        '${record.dataClasses.join(', ')} · ${record.placement == 'remote' ? 'External provider' : 'Floe Server'} · Trace ${record.traceId.substring(0, 8)}',
+                    status: record.outcome == 'completed'
+                        ? 'Completed'
+                        : 'Failed',
+                  ),
+                  if (record != activity!.take(5).last)
+                    const FloeDivider(height: FloeSpace.lg),
+                ],
+              ],
+            ),
+      actions: [
+        FloeButton.filled(
+          key: const ValueKey('processing-activity-close'),
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Done'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ProcessingGroup extends StatelessWidget {
+  const _ProcessingGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    size: FloeSquircleSize.md,
+    fill: FloePalette.neutral50,
+    borderWidth: 0,
+    padding: const EdgeInsets.all(FloeSpace.base),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
     ),
   );
 }
