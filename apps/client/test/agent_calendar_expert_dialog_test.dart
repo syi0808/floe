@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
@@ -163,6 +164,13 @@ void main() {
         true,
       );
       expect(find.text('Active'), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.text('Active'),
+          matching: find.byType(FloeBadge),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Pause'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });

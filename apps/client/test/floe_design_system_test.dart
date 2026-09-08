@@ -3,6 +3,7 @@ import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_selection.dart';
+import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_states.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:flutter/material.dart';
@@ -60,6 +61,17 @@ void main() {
 
     expect(find.text('Connected'), findsOneWidget);
     expect(tester.getSemantics(find.byType(FloeBadge)).label, 'Connected');
+    expect(
+      tester
+          .widget<FloeSquircle>(
+            find.descendant(
+              of: find.byType(FloeBadge),
+              matching: find.byType(FloeSquircle),
+            ),
+          )
+          .borderWidth,
+      0,
+    );
   });
 
   testWidgets('related controls enforce the shared size contract', (

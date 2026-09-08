@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
+import '../../app/floe_badge.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_primitives.dart';
@@ -355,9 +356,13 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               const Expanded(
                 child: Text('Calendars', style: FloeType.controlLabel),
               ),
-              Text(
-                status,
-                style: FloeType.body.copyWith(color: FloePalette.neutral600),
+              FloeBadge(
+                label: status,
+                tone: !connected
+                    ? FloeBadgeTone.warning
+                    : active
+                    ? FloeBadgeTone.success
+                    : FloeBadgeTone.neutral,
               ),
             ],
           ),

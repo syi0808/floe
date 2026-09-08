@@ -214,6 +214,7 @@ components:
   badge:
     typography: "{typography.label-md}"
     rounded: "{rounded.sq-xs}"
+    borderWidth: 0px
     padding: 4px 10px
   checkbox:
     size: 20px

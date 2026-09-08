@@ -44,7 +44,7 @@ underlying family, weight, line height, and role always come from `FloeType`.
 ## Status badges
 
 Statuses use `FloeBadge` instead of unadorned text. Neutral, info, success,
-warning, and danger tones combine a label with background and border contrast;
+warning, and danger tones combine a label with background and text contrast;
 color is supplemental to the status wording. Badges wrap on narrow surfaces and
 remain one semantic announcement.
 

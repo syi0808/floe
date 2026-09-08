@@ -21,32 +21,12 @@ final class FloeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (background, foreground, border) = switch (tone) {
-      FloeBadgeTone.neutral => (
-        FloePalette.neutral50,
-        FloePalette.neutral600,
-        FloePalette.neutral200,
-      ),
-      FloeBadgeTone.info => (
-        FloePalette.primary50,
-        FloePalette.primary700,
-        FloePalette.primary200,
-      ),
-      FloeBadgeTone.success => (
-        FloePalette.mint50,
-        FloePalette.mint700,
-        FloePalette.mint300,
-      ),
-      FloeBadgeTone.warning => (
-        FloePalette.amber50,
-        FloePalette.amber700,
-        FloePalette.amber300,
-      ),
-      FloeBadgeTone.danger => (
-        FloePalette.coral50,
-        FloePalette.coral700,
-        FloePalette.coral300,
-      ),
+    final (background, foreground) = switch (tone) {
+      FloeBadgeTone.neutral => (FloePalette.neutral50, FloePalette.neutral600),
+      FloeBadgeTone.info => (FloePalette.primary50, FloePalette.primary700),
+      FloeBadgeTone.success => (FloePalette.mint50, FloePalette.mint700),
+      FloeBadgeTone.warning => (FloePalette.amber50, FloePalette.amber700),
+      FloeBadgeTone.danger => (FloePalette.coral50, FloePalette.coral700),
     };
     return Semantics(
       label: label,
@@ -54,7 +34,7 @@ final class FloeBadge extends StatelessWidget {
         child: FloeSquircle(
           size: FloeSquircleSize.xs,
           fill: background,
-          borderColor: border,
+          borderWidth: 0,
           padding: EdgeInsets.symmetric(
             horizontal: compact ? FloeSpace.sm : 10,
             vertical: compact ? FloeSpace.xxs : FloeSpace.xs,
