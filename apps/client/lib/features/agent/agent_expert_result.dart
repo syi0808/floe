@@ -104,8 +104,9 @@ final class AgentExpertResult {
           !allowedDataClasses.contains(json['data_class']) ||
           json['view_calls'] != 1 ||
           modelCalls < 0 ||
-          modelCalls > 2 ||
-          (summary != null) != (modelCalls == 2) ||
+          modelCalls == 1 ||
+          modelCalls > 10 ||
+          (summary != null) != (modelCalls >= 2) ||
           (json['state_revision']! as int) < 1 ||
           (json['expires_at_unix_ms']! as num) < 0) {
         return null;

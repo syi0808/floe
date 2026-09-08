@@ -40,7 +40,9 @@ void main() {
         {'state_revision': -1},
         {'view_calls': 2},
         {'summary': 'summary without calls', 'model_calls': 0},
+        {'summary': null, 'model_calls': 1},
         {'summary': null, 'model_calls': 2},
+        {'summary': 'too many calls', 'model_calls': 11},
         {'summary': 'x' * 2049, 'model_calls': 2},
         {'insights': <Object?>[]},
         {

@@ -7,14 +7,18 @@ Date: 2026-09-08. Runtime integration with synthetic automated evidence; S4 rema
 
 - The Manager remains the only owner of user conversation history. A Schedule Expert
   invocation creates an ephemeral turn containing only the typed `ExpertInput` task.
-- The built-in Schedule implementation runs a two-call lightweight model loop. The
-  first response must call `schedule.find_free_windows` exactly once with `{}`; the
-  second must return a non-empty, bounded summary and cannot call another capability.
+- The built-in Schedule implementation runs a lightweight loop of at most ten model
+  calls. It must call `schedule.find_free_windows` at least once, may call it up to
+  nine times, and must finish with a non-empty bounded summary.
+- Each Tool call may cover the whole authorized View with `{}` or one explicit
+  subrange of at most 24 hours; the Expert contract caps a View at 14 days. This
+  supports comparing several dates without letting the model expand the host-issued
+  View or alter exact interval calculations.
 - `schedule.find_free_windows` is the existing deterministic Rust interval analysis.
   The model cannot alter its insights or focus proposal timestamps.
 - The loop derives a `fast`/`schedule-summary` policy while preserving the Calendar
   turn's model placement, data classes and transfer consent. It enforces separate
-  limits of two model calls, 8,192 reported tokens, 10,000
+  limits of ten model calls, nine Tool calls, 40,960 reported tokens, 50,000
   micro-cost units, 4 KiB per model output and the parent deadline/cancellation.
 - Only the final bounded summary and `model_calls` count join the structured
   `ExpertResult`. The internal task/tool messages are not committed to the Manager
@@ -22,6 +26,10 @@ Date: 2026-09-08. Runtime integration with synthetic automated evidence; S4 rema
 - Declarative Experts retain deterministic execution without a model. Expert output
   remains advisory; Calendar mutation still requires the existing S3 policy and
   review/action path.
+
+The current app Calendar turn still issues a one-day View. The loop and Tool contract
+can compare dates contained in a broader bounded View, but the native/Dart transport
+does not yet request or hydrate that multi-day View.
 
 ## Automated evidence
 

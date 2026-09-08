@@ -562,6 +562,9 @@ async fn stale_wrong_and_oversized_views_never_commit_expert_state() {
     let mut beyond = fixture.view.clone();
     beyond.items[0].ends_at_unix_ms = 8_000_000;
     invalid.push((beyond, AgentFailure::InvalidInput));
+    let mut too_wide = fixture.view.clone();
+    too_wide.range_end_unix_ms = too_wide.range_start_unix_ms + 15 * 86_400_000;
+    invalid.push((too_wide, AgentFailure::InvalidInput));
     for (view, reason) in invalid {
         let views = Views {
             view,
@@ -858,13 +861,33 @@ impl ModelRunner for ScheduleModel {
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         let has_capability = !request.capabilities.is_empty();
+        let call = self.requests.lock().unwrap().len() + 1;
+        let input = {
+            let AgentMessage::User { text, .. } = &request.messages[0] else {
+                return Err(AgentFailure::InvalidInput);
+            };
+            let task: serde_json::Value =
+                serde_json::from_str(text).map_err(|_| AgentFailure::InvalidInput)?;
+            let start = task["authorized_range"]["starts_at_unix_ms"]
+                .as_u64()
+                .ok_or(AgentFailure::InvalidInput)?;
+            let end = task["authorized_range"]["ends_at_unix_ms"]
+                .as_u64()
+                .ok_or(AgentFailure::InvalidInput)?;
+            let range_start = start + u64::try_from(call - 1).unwrap() * 86_400_000;
+            serde_json::json!({
+                "range_start_unix_ms": range_start,
+                "range_end_unix_ms": (range_start + 86_400_000).min(end)
+            })
+            .to_string()
+        };
         self.requests.lock().unwrap().push(request);
         Ok(ModelResponse {
             schema_version: AGENT_VERSION,
-            step: if has_capability && !self.skip_tool {
+            step: if has_capability && !self.skip_tool && call <= 3 {
                 ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
-                    input: "{}".into(),
+                    input,
                 }
             } else {
                 ModelStep::Answer {
@@ -890,10 +913,14 @@ fn synthetic_policy() -> InferencePolicyDecision {
 }
 
 #[tokio::test]
-async fn built_in_schedule_uses_an_isolated_two_call_model_loop_after_exact_analysis() {
+async fn built_in_schedule_repeats_bounded_range_tools_in_an_isolated_model_loop() {
+    assert_eq!(ExpertBudget::default().max_model_calls, 10);
+    assert_eq!(ExpertBudget::default().max_tool_calls, 9);
     let fixture = Fixture::new();
+    let mut multi_day_view = fixture.view.clone();
+    multi_day_view.range_end_unix_ms = multi_day_view.range_start_unix_ms + 3 * 86_400_000;
     let views = Views {
-        view: fixture.view.clone(),
+        view: multi_day_view,
         reads: AtomicUsize::new(0),
     };
     let model = ScheduleModel {
@@ -911,7 +938,7 @@ async fn built_in_schedule_uses_an_isolated_two_call_model_loop_after_exact_anal
     )
     .await
     .unwrap();
-    assert_eq!(result.model_calls, 2);
+    assert_eq!(result.model_calls, 4);
     assert_eq!(
         result.summary.as_deref(),
         Some("One commitment leaves a bounded focus window.")
@@ -922,13 +949,19 @@ async fn built_in_schedule_uses_an_isolated_two_call_model_loop_after_exact_anal
     ));
     {
         let requests = model.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 4);
         assert_eq!(requests[0].messages.len(), 1);
         assert_eq!(requests[0].policy.purpose, "schedule-summary");
         assert_eq!(requests[0].policy.performance_class, "fast");
         assert_eq!(requests[0].capabilities[0].id, "schedule.find_free_windows");
         assert_eq!(requests[1].messages.len(), 2);
-        assert!(requests[1].capabilities.is_empty());
+        assert_eq!(requests[2].messages.len(), 3);
+        assert_eq!(requests[3].messages.len(), 4);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.capabilities.len() == 1)
+        );
     }
     assert_eq!(views.reads.load(Ordering::Acquire), 1);
 

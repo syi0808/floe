@@ -41,10 +41,17 @@ Manager
   → Manager synthesis
 ```
 
-초기 loop는 두 번의 작은 model call로 제한한다. 첫 call은 deterministic scheduling
-Tool을 정확히 한 번 호출하고, 두 번째 call은 그 결과를 Manager용 요약으로 만든다.
-빈 시간 계산, interval 병합과 proposal 후보 생성은 계속 검증 가능한 Rust 로직이
-담당한다. Declarative fixture는 LLM 없이 같은 Tool/output contract를 검증할 수 있다.
+초기 loop는 최대 10번의 작은 model call로 제한한다. 최소 한 번, 최대 9번까지
+deterministic scheduling Tool을 호출한 뒤 Manager용 요약으로 종료해야 한다. Tool은
+최대 14일의 허가된 View 전체 또는 그 안의 최대 24시간 subrange를 받으므로 여러
+날짜 후보를 나눠 비교할 수 있다. 빈 시간 계산, interval 병합과 proposal 후보 생성은
+계속 검증 가능한 Rust 로직이 담당한다. Declarative fixture는 LLM 없이 같은
+Tool/output contract를 검증할 수 있다.
+
+다일 조회에는 host가 해당 날짜들을 포함하는 bounded Calendar View를 먼저 발급해야
+한다. Expert의 반복 호출 자체가 grant를 넓히거나 새로운 Calendar source를 읽을 수는
+없다. 현재 Day Canvas Calendar turn은 하루 View를 전달하며, 다일 View transport는
+후속 connector increment에서 명시적으로 확장한다.
 
 Expert는 독립적인 사용자-facing personality, 무제한 recursive agent 또는 Calendar
 writer가 아니다. Model placement, data class, consent, deadline과 token/cost budget은

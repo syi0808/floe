@@ -161,7 +161,10 @@ impl ModelRunner for Model<'_> {
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         if request.system_instructions == SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS {
-            let has_tool_result = request.capabilities.is_empty();
+            let has_tool_result = request
+                .messages
+                .iter()
+                .any(|message| matches!(message, AgentMessage::Capability { .. }));
             self.expert_requests.lock().unwrap().push(request);
             let step = if has_tool_result {
                 ModelStep::Answer {
@@ -684,7 +687,10 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         expert_requests[0].capabilities[0].id,
         "schedule.find_free_windows"
     );
-    assert!(expert_requests[1].capabilities.is_empty());
+    assert_eq!(
+        expert_requests[1].capabilities[0].id,
+        "schedule.find_free_windows"
+    );
     assert!(matches!(
         expert_requests[1].messages[1],
         AgentMessage::Capability { .. }

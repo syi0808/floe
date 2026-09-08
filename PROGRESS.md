@@ -8,13 +8,13 @@
 
 - Reframed the built-in Schedule Expert as a bounded domain subagent while keeping
   Floe's Manager as the only user-facing conversation owner.
-- Calendar turns now give the Schedule Expert a fresh, isolated two-call model loop:
-  first invoke the deterministic `schedule.find_free_windows` Tool, then produce a
-  concise Manager-facing summary. Expert-internal messages are not added to Manager
-  conversation history.
+- Calendar turns now give the Schedule Expert a fresh, isolated loop of up to ten
+  model calls. It can invoke the deterministic `schedule.find_free_windows` Tool up
+  to nine times over different bounded ranges before producing a concise
+  Manager-facing summary. Expert-internal messages are not added to Manager history.
 - Existing exact interval analysis and proposal creation remain deterministic. The
   Expert derives a `fast` schedule-summary policy from the active placement, data and
-  consent boundary and has separate call/token/cost/output/deadline limits;
+  consent boundary and has separate call/tool/token/cost/output/deadline limits;
   declarative fixtures remain model-free.
 - Structured results record only the bounded summary and model-call count alongside
   existing source-backed insights and proposals. Calendar mutation still routes
