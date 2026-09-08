@@ -269,8 +269,6 @@ pub struct CapabilityDescriptor {
     pub read_only: bool,
     pub output_data_class: crate::DataClass,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_successful_calls_per_turn: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
 }
 

@@ -133,7 +133,6 @@ struct Host {
     output: Result<String, AgentFailure>,
     read_only: bool,
     data_class: DataClass,
-    max_successful_calls_per_turn: Option<u32>,
 }
 
 impl Default for Host {
@@ -143,7 +142,6 @@ impl Default for Host {
             output: Ok("Synthetic timeline".into()),
             read_only: true,
             data_class: DataClass::Personal,
-            max_successful_calls_per_turn: None,
         }
     }
 }
@@ -156,7 +154,6 @@ impl CapabilityHost for Host {
             version: "1.0.0".into(),
             read_only: self.read_only,
             output_data_class: self.data_class,
-            max_successful_calls_per_turn: self.max_successful_calls_per_turn,
             input_schema: None,
         }]
     }
@@ -283,36 +280,6 @@ async fn soft_stop_continues_the_same_turn_with_an_expanded_budget() {
         1
     );
     assert_eq!(model.calls(), 2);
-}
-
-#[tokio::test]
-async fn capability_success_limit_requires_synthesis_without_blocking_other_reads() {
-    let store = Store::new();
-    let model = Model::new(vec![call(), answer()]);
-    let host = Host {
-        max_successful_calls_per_turn: Some(1),
-        ..Host::default()
-    };
-    let policy = policy();
-    let runtime = AgentRuntime {
-        store: &store,
-        model: &model,
-        capabilities: &host,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    };
-
-    let completed = runtime
-        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
-        .await
-        .unwrap();
-
-    assert_eq!(completed.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
-    let requests = model.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].capabilities.len(), 1);
-    assert!(requests[1].capabilities.is_empty());
 }
 
 #[tokio::test]

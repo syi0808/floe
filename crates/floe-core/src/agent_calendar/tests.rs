@@ -668,7 +668,6 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         requests[0].capabilities[0].input_schema.as_ref().unwrap()["properties"]["kind"]["enum"][1],
         "propose_focus"
     );
-    assert!(requests[1].capabilities.is_empty());
     let AgentMessage::Capability {
         result: Ok(output), ..
     } = &requests[1].messages[1]
@@ -689,7 +688,10 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         expert_requests[0].capabilities[0].id,
         "schedule.find_free_windows"
     );
-    assert!(expert_requests[1].capabilities.is_empty());
+    assert_eq!(
+        expert_requests[1].capabilities[0].id,
+        "schedule.find_free_windows"
+    );
     assert!(matches!(
         expert_requests[1].messages[1],
         AgentMessage::Capability { .. }

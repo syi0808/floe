@@ -408,8 +408,6 @@ impl<
                 input,
                 budget: ExpertBudget {
                     max_output_bytes: invocation.max_output_bytes,
-                    max_model_calls: 2,
-                    max_tool_calls: 1,
                     ..ExpertBudget::default()
                 },
                 deadline: invocation.deadline.min(self.deadline),

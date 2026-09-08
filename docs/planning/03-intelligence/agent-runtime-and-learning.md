@@ -86,13 +86,6 @@ wall-clock, model-token/cost, tool-call and output-size budgets. Identical reads
 not cached or rejected because the underlying snapshot may change between calls.
 Cancellation never records partial model text as a completed assistant turn.
 
-Capabilities may declare a semantic per-turn successful-call limit. The Calendar
-Schedule Expert declares one successful Manager call because one invocation covers
-the complete granted day; failed calls remain retryable. After success the runtime
-removes only that capability from the next model step, requiring synthesis without
-globally blocking repeated reads. Its bounded local reasoning uses one in-memory
-schedule analysis call and one synthesis call; it does not reread EventKit internally.
-
 Iteration, wall-clock, token, cost and Tool-call exhaustion is a soft stop at a safe
 boundary. The session persists the stopped turn ID, cumulative usage, placement and
 continuation level. A user-visible Continue action resumes that same turn without

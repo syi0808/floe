@@ -431,7 +431,6 @@ mod tests {
                 version: "1".into(),
                 read_only: true,
                 output_data_class: DataClass::Synthetic,
-                max_successful_calls_per_turn: None,
                 input_schema: None,
             }],
             remaining_tokens: 8192,
