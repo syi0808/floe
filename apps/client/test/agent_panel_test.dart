@@ -294,6 +294,30 @@ void main() {
     },
   );
 
+  for (final failure in {
+    'local_model_invalid_output':
+        'Apple Intelligence generated a response that Floe could not validate.',
+    'server_model_unavailable':
+        'The configured server model could not complete the request.',
+  }.entries) {
+    testWidgets('shows a distinct ${failure.key} explanation', (tester) async {
+      final gateway = TestAgentGateway()..responseFailure = failure.key;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      await tester.pumpWidget(
+        app(AgentPanel(controller: controller, onClose: () {})),
+      );
+      await tester.tap(find.text('Send sample'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(failure.value), findsOneWidget);
+      expect(
+        find.text('The response could not finish. Saved messages are kept.'),
+        findsNothing,
+      );
+    });
+  }
+
   testWidgets('sample assistant panel visual reference', (tester) async {
     tester.view.physicalSize = const Size(420, 900);
     tester.view.devicePixelRatio = 1;

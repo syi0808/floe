@@ -134,7 +134,7 @@ impl ModelRunner for ServerModelRunner {
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()
-            .map_err(|_| AgentFailure::ModelUnavailable)?;
+            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let body = json!({
             "schema_version": 2,
             "purpose": self.route.purpose,
@@ -159,24 +159,24 @@ impl ModelRunner for ServerModelRunner {
             .send();
         let response = tokio::select! {
             _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::ModelUnavailable })?,
+            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::ServerModelUnavailable })?,
         };
         match response.status() {
             StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
             StatusCode::FORBIDDEN => return Err(AgentFailure::ConsentRequired),
             StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
-            status if !status.is_success() => return Err(AgentFailure::ModelUnavailable),
+            status if !status.is_success() => return Err(AgentFailure::ServerModelUnavailable),
             _ => {}
         }
         let bytes = response
             .bytes()
             .await
-            .map_err(|_| AgentFailure::ModelUnavailable)?;
+            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         if bytes.len() > 65_536 {
             return Err(AgentFailure::BudgetExceeded);
         }
         let response: GenerateResponse =
-            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
         if response.schema_version != 2
             || response.purpose != self.route.purpose
             || response.trace_id.len() != 32
@@ -188,9 +188,12 @@ impl ModelRunner for ServerModelRunner {
                     "server_local"
                 }
         {
-            return Err(AgentFailure::InvalidModelOutput);
+            return Err(AgentFailure::ServerModelInvalidOutput);
         }
-        let step = decode_step(&response.output)?;
+        let step = decode_step(&response.output).map_err(|failure| match failure {
+            AgentFailure::InvalidModelOutput => AgentFailure::ServerModelInvalidOutput,
+            failure => failure,
+        })?;
         if let ModelStep::Call { capability_id, .. } = &step
             && !request
                 .capabilities
@@ -200,7 +203,7 @@ impl ModelRunner for ServerModelRunner {
             return Err(AgentFailure::CapabilityDenied);
         }
         if serde_json::to_vec(&step)
-            .map_err(|_| AgentFailure::InvalidModelOutput)?
+            .map_err(|_| AgentFailure::ServerModelInvalidOutput)?
             .len()
             > request.max_output_bytes.min(16384)
         {

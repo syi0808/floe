@@ -280,6 +280,42 @@ abstract class AppLocalizations {
   /// **'The configured server model is busy or over quota. Try again later or configure another route.'**
   String get agentRemoteQuotaExceeded;
 
+  /// No description provided for @agentLocalModelUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Apple Intelligence reported that its on-device model was available, but local generation could not run. No server fallback was used. Try again after the model finishes downloading or restart Floe.'**
+  String get agentLocalModelUnavailable;
+
+  /// No description provided for @agentLocalModelInvalidOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'Apple Intelligence generated a response that Floe could not validate. No server fallback was used. Try a shorter request or update macOS.'**
+  String get agentLocalModelInvalidOutput;
+
+  /// No description provided for @agentServerModelUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured server model could not complete the request. Check the server dashboard and recent privacy activity.'**
+  String get agentServerModelUnavailable;
+
+  /// No description provided for @agentServerModelInvalidOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'The server model returned a response that Floe could not validate. Check the server trace and model configuration.'**
+  String get agentServerModelInvalidOutput;
+
+  /// No description provided for @agentModelPolicyDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected model or Floe privacy policy declined this request. No alternate model was used.'**
+  String get agentModelPolicyDenied;
+
+  /// No description provided for @agentTransportUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe could not reach the selected model adapter. Check the server connection or restart Floe.'**
+  String get agentTransportUnavailable;
+
   /// No description provided for @agentConnectedBudget.
   ///
   /// In en, this message translates to:

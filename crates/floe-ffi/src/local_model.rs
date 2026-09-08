@@ -56,7 +56,13 @@ impl ModelRunner for FoundationModelRunner {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        generate(&NativeTransport, request, self.protection).await
+        generate(&NativeTransport, request, self.protection)
+            .await
+            .map_err(|failure| match failure {
+                AgentFailure::ModelUnavailable => AgentFailure::LocalModelUnavailable,
+                AgentFailure::InvalidModelOutput => AgentFailure::LocalModelInvalidOutput,
+                failure => failure,
+            })
     }
 }
 

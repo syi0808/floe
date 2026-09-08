@@ -112,6 +112,30 @@ class AppLocalizationsEn extends AppLocalizations {
       'The configured server model is busy or over quota. Try again later or configure another route.';
 
   @override
+  String get agentLocalModelUnavailable =>
+      'Apple Intelligence reported that its on-device model was available, but local generation could not run. No server fallback was used. Try again after the model finishes downloading or restart Floe.';
+
+  @override
+  String get agentLocalModelInvalidOutput =>
+      'Apple Intelligence generated a response that Floe could not validate. No server fallback was used. Try a shorter request or update macOS.';
+
+  @override
+  String get agentServerModelUnavailable =>
+      'The configured server model could not complete the request. Check the server dashboard and recent privacy activity.';
+
+  @override
+  String get agentServerModelInvalidOutput =>
+      'The server model returned a response that Floe could not validate. Check the server trace and model configuration.';
+
+  @override
+  String get agentModelPolicyDenied =>
+      'The selected model or Floe privacy policy declined this request. No alternate model was used.';
+
+  @override
+  String get agentTransportUnavailable =>
+      'Floe could not reach the selected model adapter. Check the server connection or restart Floe.';
+
+  @override
   String get agentConnectedBudget =>
       'This response reached its limit. You can make another Calendar request.';
 

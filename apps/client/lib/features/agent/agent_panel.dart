@@ -476,9 +476,15 @@ class _AgentPanelState extends State<AgentPanel> {
         controller.isConnectedConversation
             ? strings.agentConnectedUnavailable
             : strings.agentUnavailable,
+      'local_model_unavailable' => strings.agentLocalModelUnavailable,
+      'server_model_unavailable' => strings.agentServerModelUnavailable,
+      'local_model_invalid_output' => strings.agentLocalModelInvalidOutput,
+      'server_model_invalid_output' => strings.agentServerModelInvalidOutput,
       'consent_required' => strings.agentRemoteConsentRequired,
       'credential_expired' => strings.agentRemoteCredentialExpired,
       'quota_exceeded' => strings.agentRemoteQuotaExceeded,
+      'policy_denied' => strings.agentModelPolicyDenied,
+      'transport_unavailable' => strings.agentTransportUnavailable,
       'stalled' =>
         controller.isCalendarConversation
             ? strings.agentConnectedStalled
