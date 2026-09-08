@@ -15,7 +15,9 @@ import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
 
-class SettingsScreen extends StatelessWidget {
+enum _SettingsPage { actions, floeAccess, remoteServer }
+
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.client,
@@ -30,6 +32,39 @@ class SettingsScreen extends StatelessWidget {
   final AgentController? agentController;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late _SettingsPage selectedPage = _availablePages.first;
+
+  List<_SettingsPage> get _availablePages => [
+    if (widget.actionController != null) _SettingsPage.actions,
+    if (widget.agentController != null) _SettingsPage.floeAccess,
+    _SettingsPage.remoteServer,
+  ];
+
+  @override
+  void didUpdateWidget(SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_availablePages.contains(selectedPage)) {
+      selectedPage = _availablePages.first;
+    }
+  }
+
+  Widget _content() => switch (selectedPage) {
+    _SettingsPage.actions => _ActionPermissions(
+      controller: widget.actionController!,
+    ),
+    _SettingsPage.floeAccess => _AgentPermissions(
+      controller: widget.agentController!,
+      calendarSources: widget.calendarSources,
+      calendarSourceChanges: widget.calendarSourceChanges,
+    ),
+    _SettingsPage.remoteServer => _RemoteServerSettings(client: widget.client),
+  };
 
   @override
   Widget build(BuildContext context) => Column(
@@ -52,53 +87,15 @@ class SettingsScreen extends StatelessWidget {
       LayoutBuilder(
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 720;
-          final navigation = _SettingsNavigation(horizontal: narrow);
-          final content = Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (actionController case final controller?) ...[
-                _ActionPermissions(controller: controller),
-                const SizedBox(height: FloeSpace.lg),
-              ],
-              if (agentController case final controller?) ...[
-                _AgentPermissions(
-                  controller: controller,
-                  calendarSources: calendarSources,
-                  calendarSourceChanges: calendarSourceChanges,
-                ),
-                const SizedBox(height: FloeSpace.lg),
-              ],
-              if (client case final serverClient?)
-                LocalServerPanel(client: serverClient)
-              else
-                const FloeSquircle(
-                  padding: EdgeInsets.all(FloeSpace.lg),
-                  child: Text(
-                    'Remote server connection is available in the native Floe app.',
-                  ),
-                ),
-              const SizedBox(height: FloeSpace.lg),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Connection boundary',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Pairing authorizes this app to use assisted features on your server. Sensitive context is still approved per request, and service credentials remain on the server.',
-                      style: TextStyle(
-                        color: FloePalette.neutral600,
-                        height: 1.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          final navigation = _SettingsNavigation(
+            horizontal: narrow,
+            pages: _availablePages,
+            selected: selectedPage,
+            onSelected: (page) => setState(() => selectedPage = page),
+          );
+          final content = AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: KeyedSubtree(key: ValueKey(selectedPage), child: _content()),
           );
           if (narrow) {
             return Column(
@@ -115,6 +112,46 @@ class SettingsScreen extends StatelessWidget {
             ],
           );
         },
+      ),
+    ],
+  );
+}
+
+class _RemoteServerSettings extends StatelessWidget {
+  const _RemoteServerSettings({required this.client});
+
+  final LocalServerClient? client;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (client case final serverClient?)
+        LocalServerPanel(client: serverClient)
+      else
+        const FloeSquircle(
+          padding: EdgeInsets.all(FloeSpace.lg),
+          child: Text(
+            'Remote server connection is available in the native Floe app.',
+          ),
+        ),
+      const SizedBox(height: FloeSpace.lg),
+      const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Connection boundary',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'Pairing authorizes this app to use assisted features on your server. Sensitive context is still approved per request, and service credentials remain on the server.',
+              style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+            ),
+          ],
+        ),
       ),
     ],
   );
@@ -363,25 +400,44 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
 }
 
 class _SettingsNavigation extends StatelessWidget {
-  const _SettingsNavigation({required this.horizontal});
+  const _SettingsNavigation({
+    required this.horizontal,
+    required this.pages,
+    required this.selected,
+    required this.onSelected,
+  });
+
   final bool horizontal;
+  final List<_SettingsPage> pages;
+  final _SettingsPage selected;
+  final ValueChanged<_SettingsPage> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    const sections = [
-      _SettingsSection(
-        icon: LucideIcons.slidersHorizontal,
-        label: 'Action permissions',
-        selected: true,
-      ),
-      _SettingsSection(icon: LucideIcons.server, label: 'Remote server'),
+    final sections = [
+      for (final page in pages)
+        _SettingsSection(
+          key: ValueKey('settings-${page.name}'),
+          icon: switch (page) {
+            _SettingsPage.actions => LucideIcons.slidersHorizontal,
+            _SettingsPage.floeAccess => LucideIcons.sparkles,
+            _SettingsPage.remoteServer => LucideIcons.server,
+          },
+          label: switch (page) {
+            _SettingsPage.actions => 'Action permissions',
+            _SettingsPage.floeAccess => 'Floe access',
+            _SettingsPage.remoteServer => 'Remote server',
+          },
+          selected: page == selected,
+          onPressed: () => onSelected(page),
+        ),
     ];
     return horizontal
-        ? const SingleChildScrollView(
+        ? SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: sections),
           )
-        : const Column(
+        : Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: sections,
           );
@@ -392,11 +448,14 @@ class _SettingsSection extends StatelessWidget {
   const _SettingsSection({
     required this.icon,
     required this.label,
+    required this.onPressed,
     this.selected = false,
+    super.key,
   });
   final IconData icon;
   final String label;
   final bool selected;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -406,30 +465,35 @@ class _SettingsSection extends StatelessWidget {
       size: FloeSquircleSize.md,
       fill: selected ? FloePalette.primary100 : Colors.transparent,
       borderWidth: 0,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: selected ? FloePalette.primary700 : FloePalette.neutral600,
-            ),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected
-                      ? FloePalette.primary700
-                      : FloePalette.neutral600,
+      child: InkWell(
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: selected
+                    ? FloePalette.primary700
+                    : FloePalette.neutral600,
+              ),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    color: selected
+                        ? FloePalette.primary700
+                        : FloePalette.neutral600,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),

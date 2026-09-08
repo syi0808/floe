@@ -3,8 +3,8 @@ import 'package:intl/intl.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_button.dart';
-import '../../../app/floe_squircle.dart';
 import '../../../app/floe_date_picker.dart';
+import '../../../app/floe_field.dart';
 import '../../../app/floe_popover.dart';
 import '../../../app/floe_time_picker.dart';
 
@@ -24,6 +24,13 @@ class CalendarDateTimeField extends StatelessWidget {
   final bool enabled;
   final FormFieldValidator<DateTime>? validator;
 
+  static final fieldButtonStyle = TextButton.styleFrom(
+    alignment: Alignment.centerLeft,
+    padding: EdgeInsets.zero,
+    minimumSize: const Size(0, 32),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   void changeTime(int hour, int minute) {
     final next = DateTime(value.year, value.month, value.day, hour, minute);
     if (next.hour == hour && next.minute == minute) onChanged(next);
@@ -32,70 +39,71 @@ class CalendarDateTimeField extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FormField<DateTime>(
     validator: (_) => validator?.call(value),
-    builder: (field) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: FloePalette.neutral600),
-        ),
-        const SizedBox(height: 6),
-        FloeSquircle(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          fill: FloePalette.neutral50,
-          child: Row(
-            children: [
-              Expanded(
-                child: Builder(
-                  builder: (anchorContext) => FloeButton.text(
-                    onPressed: !enabled
-                        ? null
-                        : () async {
-                            final date = await showFloeDatePicker(
-                              context: context,
-                              anchor: floeAnchorRect(anchorContext),
-                              initialDate: value,
-                            );
-                            if (date != null && context.mounted) {
-                              final next = DateTime(
-                                date.year,
-                                date.month,
-                                date.day,
-                                value.hour,
-                                value.minute,
-                              );
-                              if (next.hour == value.hour &&
-                                  next.minute == value.minute) {
-                                onChanged(next);
-                              }
-                            }
-                          },
-                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                    child: Text(DateFormat.yMMMd().format(value)),
-                  ),
-                ),
-              ),
-              FloeTimePickerButton(
-                semanticLabel: '$label time',
-                value: TimeOfDay.fromDateTime(value),
-                enabled: enabled,
-                onChanged: (time) => changeTime(time.hour, time.minute),
-              ),
-            ],
-          ),
-        ),
-        if (field.hasError)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              field.errorText!,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontSize: 12,
+    builder: (field) => InputDecorator(
+      key: ValueKey('$label-${value.toIso8601String()}'),
+      decoration: FloeField.decoration(
+        label: label,
+        errorText: field.errorText,
+        enabled: enabled,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Builder(
+              builder: (anchorContext) => FloeButton.text(
+                onPressed: !enabled
+                    ? null
+                    : () async {
+                        final date = await showFloeDatePicker(
+                          context: context,
+                          anchor: floeAnchorRect(anchorContext),
+                          initialDate: value,
+                        );
+                        if (date != null && context.mounted) {
+                          final next = DateTime(
+                            date.year,
+                            date.month,
+                            date.day,
+                            value.hour,
+                            value.minute,
+                          );
+                          if (next.hour == value.hour &&
+                              next.minute == value.minute) {
+                            field.didChange(next);
+                            onChanged(next);
+                          }
+                        }
+                      },
+                style: fieldButtonStyle,
+                icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                child: Text(DateFormat.yMMMd().format(value)),
               ),
             ),
           ),
-      ],
+          const SizedBox(
+            height: 24,
+            child: VerticalDivider(width: FloeSpace.lg),
+          ),
+          FloeTimePickerButton(
+            semanticLabel: '$label time',
+            value: TimeOfDay.fromDateTime(value),
+            enabled: enabled,
+            style: fieldButtonStyle,
+            onChanged: (time) {
+              changeTime(time.hour, time.minute);
+              field.didChange(
+                DateTime(
+                  value.year,
+                  value.month,
+                  value.day,
+                  time.hour,
+                  time.minute,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
     ),
   );
 }

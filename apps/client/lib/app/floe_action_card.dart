@@ -37,9 +37,9 @@ final class FloeActionCard extends StatelessWidget {
             ? FloePalette.primary100
             : hovered
             ? FloePalette.primary50
-            : FloePalette.neutral50;
+            : FloeColor.surface;
         return FloeSquircle(
-          size: FloeSquircleSize.md,
+          size: FloeSquircleSize.lg,
           fill: fill,
           borderColor: hovered || pressed
               ? FloePalette.primary200
@@ -49,10 +49,7 @@ final class FloeActionCard extends StatelessWidget {
             focusNode: focusNode,
             statesController: states,
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: FloeSpace.base,
-                vertical: FloeSpace.md,
-              ),
+              padding: FloeControlInsets.card,
               child: Row(
                 children: [
                   if (leading case final leading?) ...[
@@ -67,6 +64,7 @@ final class FloeActionCard extends StatelessWidget {
                         DefaultTextStyle.merge(
                           style: const TextStyle(
                             color: FloePalette.neutral900,
+                            fontSize: 16,
                             fontWeight: FontWeight.w600,
                             height: 1.3,
                           ),

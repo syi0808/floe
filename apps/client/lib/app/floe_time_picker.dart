@@ -118,12 +118,14 @@ class FloeTimePickerButton extends StatelessWidget {
     required this.onChanged,
     this.enabled = true,
     this.semanticLabel,
+    this.style,
   });
 
   final TimeOfDay value;
   final ValueChanged<TimeOfDay> onChanged;
   final bool enabled;
   final String? semanticLabel;
+  final ButtonStyle? style;
 
   void step(int minutes) {
     final totalMinutes = (value.hour * 60 + value.minute + minutes) % 1440;
@@ -163,6 +165,7 @@ class FloeTimePickerButton extends StatelessWidget {
                     );
                     if (next != null && context.mounted) onChanged(next);
                   },
+            style: style,
             icon: const Icon(CupertinoIcons.clock, size: 17),
             child: Text(
               formatted,

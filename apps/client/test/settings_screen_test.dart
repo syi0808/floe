@@ -37,10 +37,57 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Floe access'), findsOneWidget);
+    expect(find.text('Floe access'), findsNWidgets(2));
     expect(find.byType(AgentRegistrySettings), findsOneWidget);
     expect(find.text('Schedule planning'), findsOneWidget);
     expect(find.text('floe.schedule'), findsNothing);
+  });
+
+  testWidgets('settings navigation switches between separate pages', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final actionController = CalendarActionController(
+      gateway: Executor(),
+      personId: 'person',
+    );
+    final agentController = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    addTearDown(actionController.dispose);
+    addTearDown(agentController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SettingsScreen(
+            client: LocalServerClient(store: MemoryServerCredentials()),
+            actionController: actionController,
+            agentController: agentController,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Allow all supported actions'), findsOneWidget);
+    expect(find.text('Remote server connection'), findsNothing);
+    expect(find.byType(AgentRegistrySettings), findsNothing);
+
+    await tester.tap(find.byKey(const Key('settings-floeAccess')));
+    await tester.pumpAndSettle();
+    expect(find.byType(AgentRegistrySettings), findsOneWidget);
+    expect(find.text('Allow all supported actions'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('settings-remoteServer')));
+    await tester.pumpAndSettle();
+    expect(find.text('Remote server connection'), findsOneWidget);
+    expect(find.byType(AgentRegistrySettings), findsNothing);
   });
 
   for (final width in [390.0, 1200.0]) {
