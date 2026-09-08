@@ -77,7 +77,7 @@ void main() {
             scale: width == 320 ? 2 : 1,
           ),
         );
-        await tap(tester, 'View sample source');
+        await tap(tester, 'View source');
         expect(find.text('Suggested focus time'), findsOneWidget);
         expect(gateway.requests, isEmpty);
         expect(find.text('Open Calendar action'), findsNothing);
@@ -173,7 +173,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         await tap(tester, 'Floe is here to help');
-        await tap(tester, 'View sample source');
+        await tap(tester, 'View source');
         await tap(tester, 'Check saved action');
         await tap(tester, 'Open Calendar action');
         await tester.pump(const Duration(milliseconds: 600));

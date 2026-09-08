@@ -106,65 +106,17 @@ abstract class AppLocalizations {
   /// **'Talk through your day'**
   String get agentEntryHint;
 
-  /// No description provided for @agentSampleTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Sample conversation'**
-  String get agentSampleTitle;
-
-  /// No description provided for @agentSampleBoundary.
-  ///
-  /// In en, this message translates to:
-  /// **'Sample data only. Connected information is not used in this conversation.'**
-  String get agentSampleBoundary;
-
   /// No description provided for @agentNewConversation.
   ///
   /// In en, this message translates to:
-  /// **'New sample conversation'**
+  /// **'New conversation'**
   String get agentNewConversation;
-
-  /// No description provided for @agentEmpty.
-  ///
-  /// In en, this message translates to:
-  /// **'Start with a sample briefing, then ask a follow-up. No connected sources are read.'**
-  String get agentEmpty;
-
-  /// No description provided for @agentPrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Sample question'**
-  String get agentPrompt;
-
-  /// No description provided for @agentBriefing.
-  ///
-  /// In en, this message translates to:
-  /// **'Show a sample briefing'**
-  String get agentBriefing;
-
-  /// No description provided for @agentFollowUp.
-  ///
-  /// In en, this message translates to:
-  /// **'What can Floe change?'**
-  String get agentFollowUp;
-
-  /// No description provided for @agentSend.
-  ///
-  /// In en, this message translates to:
-  /// **'Send sample'**
-  String get agentSend;
 
   /// No description provided for @agentConnectedTitle.
   ///
   /// In en, this message translates to:
   /// **'Calendar conversation'**
   String get agentConnectedTitle;
-
-  /// No description provided for @agentConnectedBoundary.
-  ///
-  /// In en, this message translates to:
-  /// **'Uses only the Calendar access enabled in Settings. Calendar changes still require Floe\'s review and action policy.'**
-  String get agentConnectedBoundary;
 
   /// No description provided for @agentConnectedNewConversation.
   ///
@@ -205,14 +157,8 @@ abstract class AppLocalizations {
   /// No description provided for @agentConversationTitle.
   ///
   /// In en, this message translates to:
-  /// **'Private conversation'**
+  /// **'Conversation'**
   String get agentConversationTitle;
-
-  /// No description provided for @agentConversationBoundary.
-  ///
-  /// In en, this message translates to:
-  /// **'Messages are encrypted on this device. Floe routes each turn locally or through your configured server purpose; no model is selected in this conversation.'**
-  String get agentConversationBoundary;
 
   /// No description provided for @agentConversationEmpty.
   ///
@@ -225,6 +171,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Message'**
   String get agentConversationPrompt;
+
+  /// No description provided for @agentConversationSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get agentConversationSource;
+
+  /// No description provided for @agentConversationSourceDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'View source'**
+  String get agentConversationSourceDetails;
+
+  /// No description provided for @agentConversationSourceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This source is unavailable.'**
+  String get agentConversationSourceUnavailable;
+
+  /// No description provided for @agentConversationCommitment.
+  ///
+  /// In en, this message translates to:
+  /// **'{title}: {start}–{end}'**
+  String agentConversationCommitment(String title, String start, String end);
+
+  /// No description provided for @agentConversationFocusTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Possible focus time: {start}–{end}'**
+  String agentConversationFocusTime(String start, String end);
+
+  /// No description provided for @agentConversationBudget.
+  ///
+  /// In en, this message translates to:
+  /// **'This response reached its limit. You can send another message.'**
+  String get agentConversationBudget;
 
   /// No description provided for @agentConnectedSource.
   ///
@@ -259,13 +241,13 @@ abstract class AppLocalizations {
   /// No description provided for @agentConnectedUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'No local or server route is available. Check Apple Intelligence or configure Everyday assistance in Server settings. Your saved conversation is kept.'**
+  /// **'No model is available. Connect a server or check the on-device model, then try again.'**
   String get agentConnectedUnavailable;
 
   /// No description provided for @agentRemoteConsentRequired.
   ///
   /// In en, this message translates to:
-  /// **'The on-device model is unavailable and the server route needs external-transfer consent. Enable it in Server settings or use a local server model.'**
+  /// **'The server needs your approval before it can use the configured model.'**
   String get agentRemoteConsentRequired;
 
   /// No description provided for @agentRemoteCredentialExpired.
@@ -283,19 +265,19 @@ abstract class AppLocalizations {
   /// No description provided for @agentLocalModelUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Apple Intelligence reported that its on-device model was available, but local generation could not run. No server fallback was used. Try again after the model finishes downloading or restart Floe.'**
+  /// **'The on-device model could not run. Check that it is ready, then try again.'**
   String get agentLocalModelUnavailable;
 
   /// No description provided for @agentLocalModelInvalidOutput.
   ///
   /// In en, this message translates to:
-  /// **'Apple Intelligence generated a response that Floe could not validate. No server fallback was used. Try a shorter request or update macOS.'**
+  /// **'The on-device model returned an invalid response. Try a shorter request.'**
   String get agentLocalModelInvalidOutput;
 
   /// No description provided for @agentServerModelUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'The configured server model could not complete the request. Check the server dashboard and recent privacy activity.'**
+  /// **'The configured server model could not complete the request. Check the server dashboard and try again.'**
   String get agentServerModelUnavailable;
 
   /// No description provided for @agentServerModelInvalidOutput.
@@ -307,7 +289,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentModelPolicyDenied.
   ///
   /// In en, this message translates to:
-  /// **'The selected model or Floe privacy policy declined this request. No alternate model was used.'**
+  /// **'The configured model could not handle this request.'**
   String get agentModelPolicyDenied;
 
   /// No description provided for @agentTransportUnavailable.
@@ -376,41 +358,11 @@ abstract class AppLocalizations {
   /// **'You'**
   String get agentYou;
 
-  /// No description provided for @agentSource.
-  ///
-  /// In en, this message translates to:
-  /// **'Sample schedule'**
-  String get agentSource;
-
-  /// No description provided for @agentSourceDetails.
-  ///
-  /// In en, this message translates to:
-  /// **'View sample source'**
-  String get agentSourceDetails;
-
-  /// No description provided for @agentSourceUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'This sample source is unavailable.'**
-  String get agentSourceUnavailable;
-
   /// No description provided for @agentExpertSource.
   ///
   /// In en, this message translates to:
   /// **'Provided by {ability}'**
   String agentExpertSource(String ability);
-
-  /// No description provided for @agentExpertCommitment.
-  ///
-  /// In en, this message translates to:
-  /// **'{title}: {start}–{end} (sample time)'**
-  String agentExpertCommitment(String title, String start, String end);
-
-  /// No description provided for @agentExpertFocus.
-  ///
-  /// In en, this message translates to:
-  /// **'Possible focus time: {start}–{end} (sample time)'**
-  String agentExpertFocus(String start, String end);
 
   /// No description provided for @agentExpertNoFocus.
   ///
@@ -427,14 +379,8 @@ abstract class AppLocalizations {
   /// No description provided for @agentPreparing.
   ///
   /// In en, this message translates to:
-  /// **'Preparing sample reply…'**
+  /// **'Preparing reply…'**
   String get agentPreparing;
-
-  /// No description provided for @agentReading.
-  ///
-  /// In en, this message translates to:
-  /// **'Reading the sample schedule…'**
-  String get agentReading;
 
   /// No description provided for @agentStopping.
   ///
@@ -459,24 +405,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Saved conversation recovered. You can try the question again.'**
   String get agentRecovered;
-
-  /// No description provided for @agentUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'The sample model is unavailable. Your saved conversation is kept.'**
-  String get agentUnavailable;
-
-  /// No description provided for @agentBudget.
-  ///
-  /// In en, this message translates to:
-  /// **'This response reached its limit. You can ask another sample question.'**
-  String get agentBudget;
-
-  /// No description provided for @agentStalled.
-  ///
-  /// In en, this message translates to:
-  /// **'The sample read repeated without progress, so Floe stopped it.'**
-  String get agentStalled;
 
   /// No description provided for @agentReloadNeeded.
   ///
@@ -1831,13 +1759,13 @@ abstract class AppLocalizations {
   /// No description provided for @agentStorageMissing.
   ///
   /// In en, this message translates to:
-  /// **'Floe is preparing your private conversation data. Try again in a moment.'**
+  /// **'Floe is preparing conversation storage. Try again in a moment.'**
   String get agentStorageMissing;
 
   /// No description provided for @agentStorageLocked.
   ///
   /// In en, this message translates to:
-  /// **'Floe is reconnecting to your private conversation data. Try again in a moment.'**
+  /// **'Floe is reconnecting to conversation storage. Try again in a moment.'**
   String get agentStorageLocked;
 
   /// No description provided for @agentStorageUnavailable.
@@ -1845,12 +1773,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.'**
   String get agentStorageUnavailable;
-
-  /// No description provided for @agentSecureSampleBoundary.
-  ///
-  /// In en, this message translates to:
-  /// **'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.'**
-  String get agentSecureSampleBoundary;
 
   /// No description provided for @agentRegistryTitle.
   ///

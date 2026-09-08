@@ -6,7 +6,6 @@ import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_input.dart';
 import '../../app/floe_mascot.dart';
-import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_capability_label.dart';
@@ -36,7 +35,6 @@ class _AgentPanelState extends State<AgentPanel> {
   final _actionFocus = FocusNode();
   final _messageFocus = FocusNode();
   final _composerText = TextEditingController();
-  AgentFixturePrompt _prompt = AgentFixturePrompt.today;
   bool _wasBusy = false;
 
   @override
@@ -117,7 +115,7 @@ class _AgentPanelState extends State<AgentPanel> {
                         ),
                       ),
                       FloeButton.icon(
-                        tooltip: controller.isConnectedConversation
+                        tooltip: controller.isCalendarConversation
                             ? strings.agentConnectedNewConversation
                             : strings.agentNewConversation,
                         onPressed:
@@ -139,24 +137,8 @@ class _AgentPanelState extends State<AgentPanel> {
                   Text(
                     controller.isCalendarConversation
                         ? strings.agentConnectedTitle
-                        : controller.isGeneralConversation
-                        ? strings.agentConversationTitle
-                        : strings.agentSampleTitle,
+                        : strings.agentConversationTitle,
                     style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Text(
-                    controller.usesVault
-                        ? controller.isCalendarConversation
-                              ? strings.agentConnectedBoundary
-                              : controller.isGeneralConversation
-                              ? strings.agentConversationBoundary
-                              : strings.agentSecureSampleBoundary
-                        : strings.agentSampleBoundary,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: FloePalette.neutral600,
-                    ),
                   ),
                 ],
               ),
@@ -174,9 +156,7 @@ class _AgentPanelState extends State<AgentPanel> {
                         child: Text(
                           controller.isCalendarConversation
                               ? strings.agentConnectedEmpty
-                              : controller.isGeneralConversation
-                              ? strings.agentConversationEmpty
-                              : strings.agentEmpty,
+                              : strings.agentConversationEmpty,
                           style: const TextStyle(color: FloePalette.neutral600),
                         ),
                       )
@@ -256,13 +236,13 @@ class _AgentPanelState extends State<AgentPanel> {
       title: Text(
         widget.controller.isCalendarConversation
             ? strings.agentConnectedSource
-            : strings.agentSource,
+            : strings.agentConversationSource,
         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
       ),
       subtitle: Text(
         widget.controller.isCalendarConversation
             ? strings.agentConnectedSourceDetails
-            : strings.agentSourceDetails,
+            : strings.agentConversationSourceDetails,
         style: const TextStyle(fontSize: 12),
       ),
       children: [
@@ -292,7 +272,7 @@ class _AgentPanelState extends State<AgentPanel> {
       return output == null || output.trimLeft().startsWith('{')
           ? widget.controller.isCalendarConversation
                 ? strings.agentConnectedSourceUnavailable
-                : strings.agentSourceUnavailable
+                : strings.agentConversationSourceUnavailable
           : output;
     }
     String clock(DateTime time) =>
@@ -308,7 +288,7 @@ class _AgentPanelState extends State<AgentPanel> {
                     clock(insight.start!),
                     clock(insight.end!),
                   )
-                : strings.agentExpertCommitment(
+                : strings.agentConversationCommitment(
                     insight.title!,
                     clock(insight.start!),
                     clock(insight.end!),
@@ -319,7 +299,7 @@ class _AgentPanelState extends State<AgentPanel> {
                     clock(insight.start!),
                     clock(insight.end!),
                   )
-                : strings.agentExpertFocus(
+                : strings.agentConversationFocusTime(
                     clock(insight.start!),
                     clock(insight.end!),
                   ),
@@ -340,9 +320,7 @@ class _AgentPanelState extends State<AgentPanel> {
         ? strings.agentReload
         : controller.needsRecovery
         ? strings.agentRecover
-        : controller.isConnectedConversation
-        ? strings.agentConnectedSend
-        : strings.agentSend;
+        : strings.agentConnectedSend;
     final VoidCallback? action = storageLocked
         ? controller.busy
               ? null
@@ -357,13 +335,11 @@ class _AgentPanelState extends State<AgentPanel> {
         ? () => controller.load()
         : controller.needsRecovery
         ? () => controller.recover()
-        : controller.canSend
-        ? controller.isConnectedConversation
-              ? () => _sendText(controller)
-              : () => controller.send(_prompt)
+        : controller.canSend && controller.isConnectedConversation
+        ? () => _sendText(controller)
         : null;
     return Padding(
-      padding: const EdgeInsets.all(FloeSpace.base),
+      padding: const EdgeInsets.all(FloeSpace.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -380,53 +356,37 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          if (!storageLocked && controller.isConnectedConversation)
+          if (!storageLocked)
             FloeInput(
               label: controller.isGeneralConversation
                   ? strings.agentConversationPrompt
                   : strings.agentConnectedPrompt,
               controller: _composerText,
               focusNode: _messageFocus,
-              enabled: controller.canSend,
+              enabled: controller.canSend && controller.isConnectedConversation,
               placeholder: controller.isGeneralConversation
                   ? strings.agentConversationEmpty
                   : strings.agentConnectedEmpty,
-              minLines: 2,
-              maxLines: 5,
+              minLines: 1,
+              maxLines: 4,
+              compact: true,
               textInputAction: TextInputAction.newline,
               textCapitalization: TextCapitalization.sentences,
               inputFormatters: [LengthLimitingTextInputFormatter(8192)],
               onChanged: (_) => setState(() {}),
-            )
-          else if (!storageLocked)
-            FloeSelect<AgentFixturePrompt>(
-              label: strings.agentPrompt,
-              value: _prompt,
-              enabled: controller.canSend,
-              options: [
-                FloeSelectOption(
-                  value: AgentFixturePrompt.today,
-                  label: strings.agentBriefing,
-                ),
-                FloeSelectOption(
-                  value: AgentFixturePrompt.followUp,
-                  label: strings.agentFollowUp,
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _prompt = value);
-              },
             ),
-          const SizedBox(height: FloeSpace.md),
+          const SizedBox(height: FloeSpace.sm),
           FloeButton.filled(
             onPressed: action,
             focusNode: _actionFocus,
+            size: FloeButtonSize.compact,
             child: Text(label),
           ),
           if (controller.canRetry) ...[
             const SizedBox(height: FloeSpace.sm),
             FloeButton.text(
               onPressed: controller.retry,
+              size: FloeButtonSize.compact,
               child: Text(strings.agentRetry),
             ),
           ],
@@ -450,7 +410,7 @@ class _AgentPanelState extends State<AgentPanel> {
         AgentProgress.capability =>
           controller.isCalendarConversation
               ? strings.agentConnectedReading
-              : strings.agentReading,
+              : strings.agentPreparing,
         AgentProgress.stopping => strings.agentStopping,
         _ =>
           controller.isCalendarConversation
@@ -475,7 +435,7 @@ class _AgentPanelState extends State<AgentPanel> {
       'model_unavailable' =>
         controller.isConnectedConversation
             ? strings.agentConnectedUnavailable
-            : strings.agentUnavailable,
+            : strings.agentFailure,
       'local_model_unavailable' => strings.agentLocalModelUnavailable,
       'server_model_unavailable' => strings.agentServerModelUnavailable,
       'local_model_invalid_output' => strings.agentLocalModelInvalidOutput,
@@ -488,12 +448,12 @@ class _AgentPanelState extends State<AgentPanel> {
       'stalled' =>
         controller.isCalendarConversation
             ? strings.agentConnectedStalled
-            : strings.agentStalled,
+            : strings.agentFailure,
       'stale_context' => strings.agentConnectedStale,
       'budget_exceeded' || 'deadline_exceeded' =>
         controller.isCalendarConversation
             ? strings.agentConnectedBudget
-            : strings.agentBudget,
+            : strings.agentConversationBudget,
       _ => strings.agentFailure,
     };
   }

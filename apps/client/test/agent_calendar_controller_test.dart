@@ -48,9 +48,7 @@ void main() {
     },
   );
 
-  testWidgets('panel presents connected Calendar requests instead of samples', (
-    tester,
-  ) async {
+  testWidgets('panel presents connected Calendar requests', (tester) async {
     final gateway = _ConnectedCalendarGateway();
     final controller = AgentController(
       gateway: gateway,
@@ -72,7 +70,6 @@ void main() {
 
     expect(find.text('Calendar conversation'), findsOneWidget);
     expect(find.text('Message'), findsOneWidget);
-    expect(find.text('Send sample'), findsNothing);
     await tester.enterText(
       find.byType(TextFormField),
       'What does the rest of my day look like?',

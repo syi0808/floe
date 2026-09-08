@@ -16,37 +16,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentEntryHint => 'Talk through your day';
 
   @override
-  String get agentSampleTitle => 'Sample conversation';
-
-  @override
-  String get agentSampleBoundary =>
-      'Sample data only. Connected information is not used in this conversation.';
-
-  @override
-  String get agentNewConversation => 'New sample conversation';
-
-  @override
-  String get agentEmpty =>
-      'Start with a sample briefing, then ask a follow-up. No connected sources are read.';
-
-  @override
-  String get agentPrompt => 'Sample question';
-
-  @override
-  String get agentBriefing => 'Show a sample briefing';
-
-  @override
-  String get agentFollowUp => 'What can Floe change?';
-
-  @override
-  String get agentSend => 'Send sample';
+  String get agentNewConversation => 'New conversation';
 
   @override
   String get agentConnectedTitle => 'Calendar conversation';
-
-  @override
-  String get agentConnectedBoundary =>
-      'Uses only the Calendar access enabled in Settings. Calendar changes still require Floe\'s review and action policy.';
 
   @override
   String get agentConnectedNewConversation => 'New Calendar conversation';
@@ -67,17 +40,37 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConnectedSend => 'Ask Floe';
 
   @override
-  String get agentConversationTitle => 'Private conversation';
-
-  @override
-  String get agentConversationBoundary =>
-      'Messages are encrypted on this device. Floe routes each turn locally or through your configured server purpose; no model is selected in this conversation.';
+  String get agentConversationTitle => 'Conversation';
 
   @override
   String get agentConversationEmpty => 'Ask Floe anything…';
 
   @override
   String get agentConversationPrompt => 'Message';
+
+  @override
+  String get agentConversationSource => 'Source';
+
+  @override
+  String get agentConversationSourceDetails => 'View source';
+
+  @override
+  String get agentConversationSourceUnavailable =>
+      'This source is unavailable.';
+
+  @override
+  String agentConversationCommitment(String title, String start, String end) {
+    return '$title: $start–$end';
+  }
+
+  @override
+  String agentConversationFocusTime(String start, String end) {
+    return 'Possible focus time: $start–$end';
+  }
+
+  @override
+  String get agentConversationBudget =>
+      'This response reached its limit. You can send another message.';
 
   @override
   String get agentConnectedSource => 'Calendar evidence';
@@ -97,11 +90,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentConnectedUnavailable =>
-      'No local or server route is available. Check Apple Intelligence or configure Everyday assistance in Server settings. Your saved conversation is kept.';
+      'No model is available. Connect a server or check the on-device model, then try again.';
 
   @override
   String get agentRemoteConsentRequired =>
-      'The on-device model is unavailable and the server route needs external-transfer consent. Enable it in Server settings or use a local server model.';
+      'The server needs your approval before it can use the configured model.';
 
   @override
   String get agentRemoteCredentialExpired =>
@@ -113,15 +106,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentLocalModelUnavailable =>
-      'Apple Intelligence reported that its on-device model was available, but local generation could not run. No server fallback was used. Try again after the model finishes downloading or restart Floe.';
+      'The on-device model could not run. Check that it is ready, then try again.';
 
   @override
   String get agentLocalModelInvalidOutput =>
-      'Apple Intelligence generated a response that Floe could not validate. No server fallback was used. Try a shorter request or update macOS.';
+      'The on-device model returned an invalid response. Try a shorter request.';
 
   @override
   String get agentServerModelUnavailable =>
-      'The configured server model could not complete the request. Check the server dashboard and recent privacy activity.';
+      'The configured server model could not complete the request. Check the server dashboard and try again.';
 
   @override
   String get agentServerModelInvalidOutput =>
@@ -129,7 +122,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentModelPolicyDenied =>
-      'The selected model or Floe privacy policy declined this request. No alternate model was used.';
+      'The configured model could not handle this request.';
 
   @override
   String get agentTransportUnavailable =>
@@ -173,27 +166,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentYou => 'You';
 
   @override
-  String get agentSource => 'Sample schedule';
-
-  @override
-  String get agentSourceDetails => 'View sample source';
-
-  @override
-  String get agentSourceUnavailable => 'This sample source is unavailable.';
-
-  @override
   String agentExpertSource(String ability) {
     return 'Provided by $ability';
-  }
-
-  @override
-  String agentExpertCommitment(String title, String start, String end) {
-    return '$title: $start–$end (sample time)';
-  }
-
-  @override
-  String agentExpertFocus(String start, String end) {
-    return 'Possible focus time: $start–$end (sample time)';
   }
 
   @override
@@ -204,10 +178,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentLoading => 'Loading saved conversation…';
 
   @override
-  String get agentPreparing => 'Preparing sample reply…';
-
-  @override
-  String get agentReading => 'Reading the sample schedule…';
+  String get agentPreparing => 'Preparing reply…';
 
   @override
   String get agentStopping => 'Stopping response…';
@@ -222,18 +193,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get agentRecovered =>
       'Saved conversation recovered. You can try the question again.';
-
-  @override
-  String get agentUnavailable =>
-      'The sample model is unavailable. Your saved conversation is kept.';
-
-  @override
-  String get agentBudget =>
-      'This response reached its limit. You can ask another sample question.';
-
-  @override
-  String get agentStalled =>
-      'The sample read repeated without progress, so Floe stopped it.';
 
   @override
   String get agentReloadNeeded =>
@@ -1017,19 +976,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentStorageMissing =>
-      'Floe is preparing your private conversation data. Try again in a moment.';
+      'Floe is preparing conversation storage. Try again in a moment.';
 
   @override
   String get agentStorageLocked =>
-      'Floe is reconnecting to your private conversation data. Try again in a moment.';
+      'Floe is reconnecting to conversation storage. Try again in a moment.';
 
   @override
   String get agentStorageUnavailable =>
       'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.';
-
-  @override
-  String get agentSecureSampleBoundary =>
-      'Sample questions only, saved in encrypted storage. Personal chat, real models and connected sources aren’t enabled yet.';
 
   @override
   String get agentRegistryTitle => 'Conversation abilities';

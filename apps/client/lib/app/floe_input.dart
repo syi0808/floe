@@ -28,6 +28,7 @@ class FloeInput extends StatelessWidget {
     this.onSubmitted,
     this.validator,
     this.autovalidateMode,
+    this.compact = false,
     super.key,
   });
 
@@ -54,6 +55,7 @@ class FloeInput extends StatelessWidget {
   final ValueChanged<String>? onSubmitted;
   final FormFieldValidator<String>? validator;
   final AutovalidateMode? autovalidateMode;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => TextFormField(
@@ -83,6 +85,10 @@ class FloeInput extends StatelessWidget {
       description: description,
       errorText: errorText,
       enabled: enabled,
+      isDense: compact,
+      contentPadding: compact
+          ? const EdgeInsets.symmetric(horizontal: 12, vertical: 10)
+          : null,
     ),
   );
 }

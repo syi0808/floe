@@ -1,8 +1,5 @@
-import 'dart:convert';
-
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
-import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_panel.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
@@ -14,7 +11,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'support/agent_gateway.dart';
 import 'support/agent_vault_gateway.dart';
-import 'support/expert_result.dart';
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,
@@ -30,46 +26,6 @@ Widget app(Widget child, {double scale = 1}) => MaterialApp(
 );
 
 void main() {
-  testWidgets(
-    'structured Expert source is readable at 320 pixels and 200 percent text',
-    (tester) async {
-      tester.view.physicalSize = const Size(320, 780);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final gateway = TestAgentGateway()
-        ..capabilityOutput = jsonEncode(expertResultFixture());
-      final controller = AgentController(gateway: gateway, personId: 'test');
-      addTearDown(controller.dispose);
-      await controller.load();
-      await tester.pumpWidget(
-        app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
-      );
-      await tester.ensureVisible(find.text('Send sample'));
-      await tester.tap(find.text('Send sample'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('View sample source'));
-      await tester.tap(find.text('View sample source'));
-      await tester.pumpAndSettle();
-      expect(
-        find.textContaining('Provided by Schedule planning'),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('Possible focus time: 11:00–12:00'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('"schema_version"'), findsNothing);
-      expect(tester.takeException(), isNull);
-      await expectLater(
-        find.byType(AgentPanel),
-        matchesGoldenFile('goldens/agent_expert_source.png'),
-      );
-    },
-  );
-
   setUpAll(() async {
     final font = FontLoader('Pretendard')
       ..addFont(rootBundle.load('assets/fonts/Pretendard-Regular.otf'))
@@ -100,86 +56,11 @@ void main() {
           app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
         );
         expect(gateway.creates, 1);
-        expect(find.byType(TextField), findsNothing);
+        expect(find.byType(TextField), findsOneWidget);
         expect(controller.canSend, isTrue);
         expect(find.text('Set up secure storage'), findsNothing);
         expect(find.text('Unlock conversation storage'), findsNothing);
         expect(find.byTooltip('Lock conversation storage'), findsNothing);
-        expect(tester.takeException(), isNull);
-      },
-    );
-  }
-
-  testWidgets(
-    'sample panel shows live progress, stops with keyboard and restores composer focus',
-    (tester) async {
-      final gateway = TestAgentGateway()..hold = true;
-      final controller = AgentController(gateway: gateway, personId: 'test');
-      addTearDown(controller.dispose);
-      await controller.load();
-      var closed = false;
-      await tester.pumpWidget(
-        app(AgentPanel(controller: controller, onClose: () => closed = true)),
-      );
-      expect(find.byType(TextField), findsNothing);
-      expect(
-        find.textContaining('Connected information is not used'),
-        findsOneWidget,
-      );
-      await tester.tap(find.text('Send sample'));
-      await tester.pump();
-      expect(find.text('Preparing sample reply…'), findsOneWidget);
-      expect(find.text('Stop response'), findsOneWidget);
-      expect(find.text(AgentFixturePrompt.today.sampleText), findsOneWidget);
-      await tester.tap(find.text('Stop response'));
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Response stopped. Saved messages are kept.'),
-        findsOneWidget,
-      );
-      expect(find.text('Try again'), findsOneWidget);
-      gateway.hold = false;
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pumpAndSettle();
-      expect(gateway.begins, 2);
-      expect(
-        find.textContaining('Sample briefing: Design review'),
-        findsOneWidget,
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      expect(closed, isTrue);
-    },
-  );
-
-  for (final width in [320.0, 390.0]) {
-    testWidgets(
-      'sample panel stays usable at width $width and 200 percent text',
-      (tester) async {
-        tester.view.physicalSize = Size(width, 780);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        final gateway = TestAgentGateway();
-        final controller = AgentController(gateway: gateway, personId: 'test');
-        addTearDown(controller.dispose);
-        await controller.load();
-        await tester.pumpWidget(
-          app(AgentPanel(controller: controller, onClose: () {}), scale: 2),
-        );
-        await tester.ensureVisible(find.text('Send sample'));
-        await tester.tap(find.text('Send sample'));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 200));
-        await tester.pumpAndSettle();
-        expect(tester.takeException(), isNull);
-        await tester.ensureVisible(find.text('View sample source'));
-        await tester.tap(find.text('View sample source'));
-        await tester.pumpAndSettle();
-        expect(find.textContaining('Synthetic timeline:'), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
@@ -206,7 +87,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(gateway.recoveries, 1);
       expect(gateway.begins, 0);
-      expect(find.text('Send sample'), findsOneWidget);
+      expect(find.text('Ask Floe'), findsOneWidget);
     },
   );
 
@@ -278,70 +159,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Floe is here to help'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Send sample'));
-      await tester.pumpAndSettle();
-      expect(find.text(AgentFixturePrompt.today.sampleText), findsOneWidget);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await tester.pumpAndSettle();
-      expect(find.text(AgentFixturePrompt.today.sampleText), findsNothing);
       expect(find.text('Unlock conversation storage'), findsNothing);
       expect(find.text('Reload conversation'), findsOneWidget);
       expect(gateway.locks, 1);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
       expect(gateway.unlocks, 1);
-      expect(find.text(AgentFixturePrompt.today.sampleText), findsOneWidget);
     },
   );
-
-  for (final failure in {
-    'local_model_invalid_output':
-        'Apple Intelligence generated a response that Floe could not validate.',
-    'server_model_unavailable':
-        'The configured server model could not complete the request.',
-  }.entries) {
-    testWidgets('shows a distinct ${failure.key} explanation', (tester) async {
-      final gateway = TestAgentGateway()..responseFailure = failure.key;
-      final controller = AgentController(gateway: gateway, personId: 'test');
-      addTearDown(controller.dispose);
-      await controller.load();
-      await tester.pumpWidget(
-        app(AgentPanel(controller: controller, onClose: () {})),
-      );
-      await tester.tap(find.text('Send sample'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining(failure.value), findsOneWidget);
-      expect(
-        find.text('The response could not finish. Saved messages are kept.'),
-        findsNothing,
-      );
-    });
-  }
-
-  testWidgets('sample assistant panel visual reference', (tester) async {
-    tester.view.physicalSize = const Size(420, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final controller = AgentController(
-      gateway: TestAgentGateway(),
-      personId: 'test',
-    );
-    addTearDown(controller.dispose);
-    await controller.load();
-    await tester.runAsync(() => controller.send(AgentFixturePrompt.today));
-    await tester.pumpWidget(
-      app(
-        RepaintBoundary(
-          key: const ValueKey('panel-golden'),
-          child: AgentPanel(controller: controller, onClose: () {}),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await expectLater(
-      find.byKey(const ValueKey('panel-golden')),
-      matchesGoldenFile('goldens/agent_panel.png'),
-    );
-  });
 }

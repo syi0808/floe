@@ -16,13 +16,13 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.size = FloeButtonSize.standard,
     this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.filled,
        tooltip = null,
        constraints = null,
-       padding = null,
-       size = FloeButtonSize.standard;
+       padding = null;
 
   const FloeButton.outlined({
     required this.onPressed,
@@ -30,13 +30,13 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.size = FloeButtonSize.standard,
     this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.outlined,
        tooltip = null,
        constraints = null,
-       padding = null,
-       size = FloeButtonSize.standard;
+       padding = null;
 
   const FloeButton.text({
     required this.onPressed,
@@ -44,13 +44,13 @@ final class FloeButton extends StatelessWidget {
     this.icon,
     this.style,
     this.focusNode,
+    this.size = FloeButtonSize.standard,
     this.loading = false,
     super.key,
   }) : _kind = _ButtonKind.text,
        tooltip = null,
        constraints = null,
-       padding = null,
-       size = FloeButtonSize.standard;
+       padding = null;
 
   const FloeButton.icon({
     required this.onPressed,
@@ -110,6 +110,19 @@ final class FloeButton extends StatelessWidget {
     ).merge(style);
   }
 
+  ButtonStyle? get _buttonStyle {
+    if (size == FloeButtonSize.standard) return style;
+    return ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(
+        Size(0, FloeControlSize.compact),
+      ),
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: FloeSpace.md, vertical: FloeSpace.sm),
+      ),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ).merge(style);
+  }
+
   @override
   Widget build(BuildContext context) => PressableScale(
     builder: (states) => switch (_kind) {
@@ -117,14 +130,14 @@ final class FloeButton extends StatelessWidget {
         icon == null
             ? FilledButton(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 child: _content,
               )
             : FilledButton.icon(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 icon: Opacity(opacity: loading ? 0 : 1, child: icon),
@@ -134,14 +147,14 @@ final class FloeButton extends StatelessWidget {
         icon == null
             ? OutlinedButton(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 child: _content,
               )
             : OutlinedButton.icon(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 icon: Opacity(opacity: loading ? 0 : 1, child: icon),
@@ -151,14 +164,14 @@ final class FloeButton extends StatelessWidget {
         icon == null
             ? TextButton(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 child: _content,
               )
             : TextButton.icon(
                 onPressed: loading ? null : onPressed,
-                style: style,
+                style: _buttonStyle,
                 focusNode: focusNode,
                 statesController: states,
                 icon: Opacity(opacity: loading ? 0 : 1, child: icon),

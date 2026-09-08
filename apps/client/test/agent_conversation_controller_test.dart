@@ -11,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/agent_vault_gateway.dart';
 
 void main() {
-  testWidgets('encrypted general conversation replaces the sample fallback', (
+  testWidgets('general conversation accepts free-form messages', (
     tester,
   ) async {
     final gateway = _ConversationGateway();
@@ -28,8 +28,12 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Private conversation'), findsOneWidget);
-    expect(find.text('Sample assistant'), findsNothing);
+    expect(find.text('Conversation'), findsOneWidget);
+    expect(
+      tester.getSize(find.byType(TextFormField)).height,
+      lessThanOrEqualTo(50),
+    );
+    expect(tester.getSize(find.byType(FilledButton)).height, 36);
     await tester.enterText(find.byType(TextFormField), 'Hello Floe');
     await tester.tap(find.text('Ask Floe'));
     await tester.pump(const Duration(milliseconds: 500));

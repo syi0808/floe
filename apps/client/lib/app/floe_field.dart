@@ -11,6 +11,8 @@ abstract final class FloeField {
     bool enabled = true,
     Widget? prefixIcon,
     Widget? suffixIcon,
+    bool isDense = false,
+    EdgeInsetsGeometry? contentPadding,
   }) => InputDecoration(
     labelText: label,
     hintText: placeholder,
@@ -19,6 +21,8 @@ abstract final class FloeField {
     enabled: enabled,
     prefixIcon: prefixIcon,
     suffixIcon: suffixIcon,
+    isDense: isDense,
+    contentPadding: contentPadding,
   );
 
   static TextStyle textStyle(BuildContext context) =>
