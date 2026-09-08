@@ -1,8 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, AgentMessage, ModelPlacement, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, SessionProtection,
+    AGENT_VERSION, AgentFailure, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
+    ModelStep, SessionProtection,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -151,11 +151,8 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     }) {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let (conversation_history, current_turn) = request.conversation_messages();
-    if !current_turn
-        .iter()
-        .any(|message| matches!(message, AgentMessage::User { .. }))
-    {
+    let (conversation_history, current_turn) = request.model_conversation();
+    if !current_turn.iter().any(|message| message["role"] == "user") {
         return Err(AgentFailure::InvalidInput);
     }
     let prompt = json!({
@@ -476,7 +473,11 @@ mod tests {
         assert!(prompt.get("scoped").is_some());
         assert!(prompt.get("conversation_history").is_some());
         assert_eq!(prompt["conversation_history"], json!([]));
-        assert_eq!(prompt["current_turn"][0]["kind"], "user");
+        assert_eq!(prompt["current_turn"][0]["role"], "user");
+        assert_eq!(
+            prompt["current_turn"][0]["content"],
+            "Summarize this fixture"
+        );
         assert_eq!(
             prompt["allowed_capabilities"][0]["input_schema"]["type"],
             "object"
@@ -498,6 +499,16 @@ mod tests {
         );
         request.messages.insert(
             0,
+            AgentMessage::Capability {
+                turn_id: previous_turn,
+                call_id: Uuid::new_v4(),
+                capability_id: "fixture.read".into(),
+                input: "old".into(),
+                result: Ok("stale private evidence".into()),
+            },
+        );
+        request.messages.insert(
+            0,
             AgentMessage::User {
                 turn_id: previous_turn,
                 text: "The earlier question".into(),
@@ -513,7 +524,41 @@ mod tests {
             serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
         assert_eq!(prompt["conversation_history"].as_array().unwrap().len(), 2);
         assert_eq!(prompt["current_turn"].as_array().unwrap().len(), 1);
-        assert_eq!(prompt["current_turn"][0]["text"], "Summarize this fixture");
+        assert_eq!(
+            prompt["current_turn"][0]["content"],
+            "Summarize this fixture"
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_results_are_structured_current_evidence_not_escaped_storage_records() {
+        let transport = Mock::new(answer());
+        let mut request = request();
+        request.messages.push(AgentMessage::Capability {
+            turn_id: request.turn_id,
+            call_id: Uuid::new_v4(),
+            capability_id: "fixture.read".into(),
+            input: r#"{"day":"today"}"#.into(),
+            result: Ok(r#"{"summary":"One meeting at 10:00"}"#.into()),
+        });
+
+        generate(&transport, request, SessionProtection::SyntheticOnly)
+            .await
+            .unwrap();
+
+        let calls = transport.calls.lock().unwrap();
+        let prompt: Value =
+            serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
+        let result = &prompt["current_turn"][1];
+        assert_eq!(result["role"], "capability");
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["input"]["day"], "today");
+        assert_eq!(
+            result["untrusted_output"]["summary"],
+            "One meeting at 10:00"
+        );
+        assert!(result.get("turn_id").is_none());
+        assert!(result.get("call_id").is_none());
     }
 
     #[tokio::test]

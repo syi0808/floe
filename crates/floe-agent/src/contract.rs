@@ -317,6 +317,61 @@ impl ModelRequest {
             .iter()
             .partition(|message| message.turn_id() != self.turn_id)
     }
+
+    pub fn model_conversation(&self) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+        let (history, current_turn) = self.conversation_messages();
+        let history = history
+            .into_iter()
+            .filter_map(|message| model_message(message, false))
+            .collect();
+        let current_turn = current_turn
+            .into_iter()
+            .filter_map(|message| model_message(message, true))
+            .collect();
+        (history, current_turn)
+    }
+}
+
+fn model_message(message: &AgentMessage, include_capability: bool) -> Option<serde_json::Value> {
+    match message {
+        AgentMessage::User { text, .. } => Some(serde_json::json!({
+            "role": "user",
+            "content": text,
+        })),
+        AgentMessage::Assistant { text, .. } => Some(serde_json::json!({
+            "role": "assistant",
+            "content": text,
+        })),
+        AgentMessage::Capability {
+            capability_id,
+            input,
+            result,
+            ..
+        } if include_capability => {
+            let input = embedded_json(input);
+            Some(match result {
+                Ok(output) => serde_json::json!({
+                    "role": "capability",
+                    "capability_id": capability_id,
+                    "input": input,
+                    "status": "success",
+                    "untrusted_output": embedded_json(output),
+                }),
+                Err(failure) => serde_json::json!({
+                    "role": "capability",
+                    "capability_id": capability_id,
+                    "input": input,
+                    "status": "error",
+                    "failure": failure,
+                }),
+            })
+        }
+        AgentMessage::Capability { .. } => None,
+    }
+}
+
+fn embedded_json(value: &str) -> serde_json::Value {
+    serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.into()))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

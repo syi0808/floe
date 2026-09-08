@@ -81,11 +81,8 @@ fn output_schema() -> serde_json::Value {
 }
 
 fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
-    let (conversation_history, current_turn) = request.conversation_messages();
-    if !current_turn
-        .iter()
-        .any(|message| matches!(message, floe_agent::AgentMessage::User { .. }))
-    {
+    let (conversation_history, current_turn) = request.model_conversation();
+    if !current_turn.iter().any(|message| message["role"] == "user") {
         return Err(AgentFailure::InvalidInput);
     }
     Ok(json!({
