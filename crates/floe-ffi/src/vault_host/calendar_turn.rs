@@ -310,28 +310,39 @@ impl ModelRunner for DeterministicModel {
         if request.policy.data_classes != [DataClass::Synthetic] {
             return Err(AgentFailure::PolicyDenied);
         }
+        let schedule_expert =
+            request.system_instructions == floe_agent::SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS;
         let step = if request
             .messages
             .iter()
             .any(|message| matches!(message, AgentMessage::Capability { .. }))
         {
             ModelStep::Answer {
-                text: "Synthetic Calendar result recorded. No live personal source was read."
-                    .into(),
+                text: if schedule_expert {
+                    "The deterministic schedule tool found the bounded Calendar result."
+                } else {
+                    "Synthetic Calendar result recorded. No live personal source was read."
+                }
+                .into(),
             }
         } else {
-            let input = match &self.prompt {
-                AgentCalendarPromptDto::Briefing { focus_minutes } => ExpertInput::Briefing {
-                    focus_minutes: *focus_minutes,
-                },
-                AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
-                    ExpertInput::ProposeFocus {
+            let input = if schedule_expert {
+                "{}".into()
+            } else {
+                serde_json::to_string(&match &self.prompt {
+                    AgentCalendarPromptDto::Briefing { focus_minutes } => ExpertInput::Briefing {
                         focus_minutes: *focus_minutes,
+                    },
+                    AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
+                        ExpertInput::ProposeFocus {
+                            focus_minutes: *focus_minutes,
+                        }
                     }
-                }
-                AgentCalendarPromptDto::FreeText { .. } => {
-                    ExpertInput::Briefing { focus_minutes: 60 }
-                }
+                    AgentCalendarPromptDto::FreeText { .. } => {
+                        ExpertInput::Briefing { focus_minutes: 60 }
+                    }
+                })
+                .map_err(|_| AgentFailure::InvalidInput)?
             };
             ModelStep::Call {
                 capability_id: request
@@ -340,7 +351,7 @@ impl ModelRunner for DeterministicModel {
                     .ok_or(AgentFailure::CapabilityDenied)?
                     .id
                     .clone(),
-                input: serde_json::to_string(&input).map_err(|_| AgentFailure::InvalidInput)?,
+                input,
             }
         };
         Ok(ModelResponse {

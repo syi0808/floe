@@ -24,6 +24,8 @@ Map<String, Object?> expertResultFixture() => {
     },
   ],
   'action_proposals': <Object?>[],
+  'summary': 'One commitment is followed by a one-hour focus window.',
+  'model_calls': 2,
   'state_revision': 1,
   'view_calls': 1,
 };

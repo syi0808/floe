@@ -4,6 +4,25 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### Lightweight Schedule Expert subagent — 2026-09-08
+
+- Reframed the built-in Schedule Expert as a bounded domain subagent while keeping
+  Floe's Manager as the only user-facing conversation owner.
+- Calendar turns now give the Schedule Expert a fresh, isolated two-call model loop:
+  first invoke the deterministic `schedule.find_free_windows` Tool, then produce a
+  concise Manager-facing summary. Expert-internal messages are not added to Manager
+  conversation history.
+- Existing exact interval analysis and proposal creation remain deterministic. The
+  Expert derives a `fast` schedule-summary policy from the active placement, data and
+  consent boundary and has separate call/token/cost/output/deadline limits;
+  declarative fixtures remain model-free.
+- Structured results record only the bounded summary and model-call count alongside
+  existing source-backed insights and proposals. Calendar mutation still routes
+  through the existing S3 authority/review/action boundary.
+- [Design](docs/planning/03-intelligence/manager-and-experts.md) and
+  [validation](docs/validation/s4-schedule-subagent.md). Live model/source/privacy
+  gates remain open, so S4 stays 0/14.
+
 ### Unified review and action authority — 2026-09-06
 
 - Reframed Calendar Proposal as an internal action intent projected into shared

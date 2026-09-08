@@ -51,6 +51,7 @@ final class AgentExpertResult {
     this.expert,
     this.version,
     this.source,
+    this.summary,
     this.insights,
     this.proposal,
   );
@@ -58,6 +59,7 @@ final class AgentExpertResult {
   final String expert;
   final String version;
   final String source;
+  final String? summary;
   final List<AgentExpertInsight> insights;
   final AgentExpertInsight? proposal;
 
@@ -71,28 +73,39 @@ final class AgentExpertResult {
     try {
       if (utf8.encode(output).length > 16384) return null;
       final json = jsonDecode(output) as Map<String, dynamic>;
-      _keys(json, {
-        'schema_version',
-        'invocation_id',
-        'instance_id',
-        'person_id',
-        'assignment_id',
-        'package',
-        'view_handle',
-        'source_handle',
-        'data_class',
-        'expires_at_unix_ms',
-        'insights',
-        'action_proposals',
-        'state_revision',
-        'view_calls',
-      });
+      _keysWithOptional(
+        json,
+        {
+          'schema_version',
+          'invocation_id',
+          'instance_id',
+          'person_id',
+          'assignment_id',
+          'package',
+          'view_handle',
+          'source_handle',
+          'data_class',
+          'expires_at_unix_ms',
+          'insights',
+          'action_proposals',
+          'state_revision',
+          'view_calls',
+        },
+        {'summary', 'model_calls'},
+      );
+      final modelCalls = json['model_calls'] as int? ?? 0;
+      final summary = json['summary'] == null
+          ? null
+          : _text(json['summary'], 2048);
       if (json['schema_version'] != 1 ||
           json['invocation_id'] != callId ||
           json['person_id'] != personId ||
           !['synthetic', 'personal'].contains(json['data_class']) ||
           !allowedDataClasses.contains(json['data_class']) ||
           json['view_calls'] != 1 ||
+          modelCalls < 0 ||
+          modelCalls > 2 ||
+          (summary != null) != (modelCalls == 2) ||
           (json['state_revision']! as int) < 1 ||
           (json['expires_at_unix_ms']! as num) < 0) {
         return null;
@@ -133,6 +146,7 @@ final class AgentExpertResult {
         _text(package['id'], 128),
         _text(package['version'], 128),
         _text(json['source_handle'], 128),
+        summary,
         parsed,
         proposal,
       );
@@ -148,6 +162,19 @@ final class AgentExpertResult {
 
 void _keys(Map<String, dynamic> json, Set<String> expected) {
   if (json.length != expected.length || !expected.containsAll(json.keys)) {
+    throw const FormatException('Invalid Expert fields.');
+  }
+}
+
+void _keysWithOptional(
+  Map<String, dynamic> json,
+  Set<String> required,
+  Set<String> optional,
+) {
+  if (!json.keys.toSet().containsAll(required) ||
+      json.keys.any(
+        (key) => !required.contains(key) && !optional.contains(key),
+      )) {
     throw const FormatException('Invalid Expert fields.');
   }
 }

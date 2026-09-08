@@ -17,6 +17,7 @@ void main() {
     final result = parse(expertResultFixture())!;
     expect(result.expert, 'floe.schedule');
     expect(result.source, 'fixture.synthetic.timeline');
+    expect(result.summary, contains('one-hour focus window'));
     expect(result.insights.first.title, 'Design review');
     expect(result.insights.last.start!.hour, 11);
     expect(result.insights.last.end!.hour, 12);
@@ -38,6 +39,9 @@ void main() {
         {'reasoning': 'must not show'},
         {'state_revision': -1},
         {'view_calls': 2},
+        {'summary': 'summary without calls', 'model_calls': 0},
+        {'summary': null, 'model_calls': 2},
+        {'summary': 'x' * 2049, 'model_calls': 2},
         {'insights': <Object?>[]},
         {
           'action_proposals': [

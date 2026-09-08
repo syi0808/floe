@@ -60,6 +60,11 @@ Declarative Expert
 Sandboxed code Expert
 ```
 
+An implementation may use a small domain-specific model loop, but that does not give
+it ambient Manager history or unrestricted recursion. The host supplies a bounded task
+brief, granted Views, an explicit model placement/policy and an invocation budget.
+Deterministic Tools remain the authority for calculations that can be made exact.
+
 ---
 
 # Package vs Installation vs Instance

@@ -107,6 +107,8 @@ impl FloeCore {
             let turn = CalendarTurn {
                 vault,
                 views,
+                model,
+                policy: request.policy,
                 registry: Mutex::new(registry),
                 revision: AtomicU64::new(revision),
                 assignment_id: request.assignment_id,
@@ -120,7 +122,7 @@ impl FloeCore {
                 store: &turn,
                 capabilities: &turn,
                 model: &guarded_model,
-                policy: &request.policy,
+                policy: &turn.policy,
                 budget: request.budget,
             }
             .run_turn(
@@ -214,9 +216,11 @@ impl Drop for CancelTurn {
     }
 }
 
-struct CalendarTurn<'host, Keys, Access, Clock> {
+struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     vault: &'host EncryptedAgentVault<Keys>,
     views: CalendarTimelineViews<'host, Access, Clock>,
+    model: &'host Model,
+    policy: InferencePolicyDecision,
     registry: Mutex<AgentRegistry>,
     revision: AtomicU64,
     assignment_id: Uuid,
@@ -226,8 +230,12 @@ struct CalendarTurn<'host, Keys, Access, Clock> {
     parent: Cancellation,
 }
 
-impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
-    CalendarTurn<'_, Keys, Access, Clock>
+impl<
+    Keys: VaultKeyProvider,
+    Access: CalendarReadAccess,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+    Model: Sync,
+> CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn check_running(&self) -> Result<(), AgentFailure> {
         if self.parent.is_cancelled() {
@@ -262,8 +270,12 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime
     }
 }
 
-impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
-    SessionStore for CalendarTurn<'_, Keys, Access, Clock>
+impl<
+    Keys: VaultKeyProvider,
+    Access: CalendarReadAccess,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+    Model: Sync,
+> SessionStore for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn protection(&self) -> SessionProtection {
         self.vault.protection()
@@ -325,8 +337,12 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime
     }
 }
 
-impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
-    CapabilityHost for CalendarTurn<'_, Keys, Access, Clock>
+impl<
+    Keys: VaultKeyProvider,
+    Access: CalendarReadAccess,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+    Model: ModelRunner + Sync,
+> CapabilityHost for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
         if person_id == self.views.grant().person_id {
@@ -350,30 +366,34 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess, Clock: Fn() -> DateTime
             registry: &self.registry,
             views: &self.views,
         }
-        .invoke(ExpertInvocation {
-            schema_version: invocation.schema_version,
-            invocation_id: invocation.call_id,
-            instance_id: self.vault.registry_instance_id(),
-            person_id: invocation.person_id,
-            assignment_id: self.assignment_id,
-            expected_registry_revision: self.revision.load(Ordering::Acquire),
-            granted_view_handles: vec![self.views.grant().handle],
-            allowed_data_classes: vec![self.descriptor.output_data_class],
-            input,
-            budget: ExpertBudget {
-                max_output_bytes: invocation.max_output_bytes,
-                ..ExpertBudget::default()
+        .invoke_with_model(
+            ExpertInvocation {
+                schema_version: invocation.schema_version,
+                invocation_id: invocation.call_id,
+                instance_id: self.vault.registry_instance_id(),
+                person_id: invocation.person_id,
+                assignment_id: self.assignment_id,
+                expected_registry_revision: self.revision.load(Ordering::Acquire),
+                granted_view_handles: vec![self.views.grant().handle],
+                allowed_data_classes: vec![self.descriptor.output_data_class],
+                input,
+                budget: ExpertBudget {
+                    max_output_bytes: invocation.max_output_bytes,
+                    ..ExpertBudget::default()
+                },
+                deadline: invocation.deadline.min(self.deadline),
+                cancellation: invocation.cancellation,
             },
-            deadline: invocation.deadline.min(self.deadline),
-            cancellation: invocation.cancellation,
-        })
+            self.model,
+            &self.policy,
+        )
         .await?;
         serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)
     }
 }
 
 struct CalendarModel<'model, 'host, Keys, Access, Clock, Model> {
-    turn: &'model CalendarTurn<'host, Keys, Access, Clock>,
+    turn: &'model CalendarTurn<'host, Keys, Access, Clock, Model>,
     model: &'model Model,
 }
 

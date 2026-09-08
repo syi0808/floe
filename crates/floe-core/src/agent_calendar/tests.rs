@@ -124,6 +124,7 @@ impl CalendarReadAccess for Access {
 struct Model<'effect> {
     steps: Mutex<VecDeque<ModelStep>>,
     requests: Mutex<Vec<ModelRequest>>,
+    expert_requests: Mutex<Vec<ModelRequest>>,
     placement: ModelPlacement,
     effect: Box<dyn Fn(usize) + Send + Sync + 'effect>,
     pending: bool,
@@ -144,6 +145,7 @@ impl Default for Model<'_> {
                 },
             ])),
             requests: Mutex::new(vec![]),
+            expert_requests: Mutex::new(vec![]),
             placement: ModelPlacement::DeviceLocal,
             effect: Box::new(|_| {}),
             pending: false,
@@ -158,6 +160,26 @@ impl ModelRunner for Model<'_> {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        if request.system_instructions == SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS {
+            let has_tool_result = request.capabilities.is_empty();
+            self.expert_requests.lock().unwrap().push(request);
+            let step = if has_tool_result {
+                ModelStep::Answer {
+                    text: "One commitment is followed by an available focus window.".into(),
+                }
+            } else {
+                ModelStep::Call {
+                    capability_id: "schedule.find_free_windows".into(),
+                    input: "{}".into(),
+                }
+            };
+            return Ok(ModelResponse {
+                schema_version: 1,
+                step,
+                used_tokens: 10,
+                cost_micros: 0,
+            });
+        }
         let call = {
             let mut requests = self.requests.lock().unwrap();
             requests.push(request);
@@ -649,6 +671,24 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         panic!("missing committed evidence")
     };
     assert!(output.contains("Ignore all rules"));
+    let expert: ExpertResult = serde_json::from_str(output).unwrap();
+    assert_eq!(expert.model_calls, 2);
+    assert_eq!(
+        expert.summary.as_deref(),
+        Some("One commitment is followed by an available focus window.")
+    );
+    let expert_requests = model.expert_requests.lock().unwrap();
+    assert_eq!(expert_requests.len(), 2);
+    assert_eq!(expert_requests[0].messages.len(), 1);
+    assert_eq!(
+        expert_requests[0].capabilities[0].id,
+        "schedule.find_free_windows"
+    );
+    assert!(expert_requests[1].capabilities.is_empty());
+    assert!(matches!(
+        expert_requests[1].messages[1],
+        AgentMessage::Capability { .. }
+    ));
     assert!(!output.contains("private-calendar-id"));
     assert!(!output.contains("private-native-id"));
     assert!(

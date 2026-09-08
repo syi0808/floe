@@ -586,6 +586,16 @@ impl AgentRegistry {
             || result.insights.is_empty()
             || result.insights.len() > 8
             || result.action_proposals.len() > 1
+            || result.model_calls > 2
+            || result
+                .summary
+                .as_ref()
+                .is_some_and(|summary| summary.trim().is_empty() || summary.len() > 2048)
+            || (result.summary.is_some() != (result.model_calls == 2))
+            || (matches!(
+                resolved.package.implementation,
+                PackageImplementation::Declarative { .. }
+            ) && result.model_calls != 0)
             || result.source_handle.trim().is_empty()
             || result.source_handle.len() > 128
             || result.insights.iter().any(|insight| match insight {

@@ -845,3 +845,114 @@ async fn overlapping_unsorted_commitments_are_merged_and_last_invocation_is_not_
         Some(id)
     );
 }
+
+struct ScheduleModel {
+    requests: Mutex<Vec<ModelRequest>>,
+    skip_tool: bool,
+}
+
+impl ModelRunner for ScheduleModel {
+    fn placement(&self) -> ModelPlacement {
+        ModelPlacement::DeviceLocal
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        let has_capability = !request.capabilities.is_empty();
+        self.requests.lock().unwrap().push(request);
+        Ok(ModelResponse {
+            schema_version: AGENT_VERSION,
+            step: if has_capability && !self.skip_tool {
+                ModelStep::Call {
+                    capability_id: "schedule.find_free_windows".into(),
+                    input: "{}".into(),
+                }
+            } else {
+                ModelStep::Answer {
+                    text: "One commitment leaves a bounded focus window.".into(),
+                }
+            },
+            used_tokens: 32,
+            cost_micros: 0,
+        })
+    }
+}
+
+fn synthetic_policy() -> InferencePolicyDecision {
+    InferencePolicyDecision {
+        purpose: "schedule_summary".into(),
+        data_classes: vec![DataClass::Synthetic],
+        allowed_placements: vec![ModelPlacement::DeviceLocal],
+        performance_class: "lightweight".into(),
+        projection_version: 1,
+        external_transfer_consent: TransferConsent::NotGranted,
+        bounded_sensitive_projection: false,
+    }
+}
+
+#[tokio::test]
+async fn built_in_schedule_uses_an_isolated_two_call_model_loop_after_exact_analysis() {
+    let fixture = Fixture::new();
+    let views = Views {
+        view: fixture.view.clone(),
+        reads: AtomicUsize::new(0),
+    };
+    let model = ScheduleModel {
+        requests: Mutex::new(vec![]),
+        skip_tool: false,
+    };
+    let result = ExpertHost {
+        registry: &fixture.registry,
+        views: &views,
+    }
+    .invoke_with_model(
+        fixture.invocation(fixture.schedule),
+        &model,
+        &synthetic_policy(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.model_calls, 2);
+    assert_eq!(
+        result.summary.as_deref(),
+        Some("One commitment leaves a bounded focus window.")
+    );
+    assert!(matches!(
+        result.insights.last(),
+        Some(ExpertInsight::NoFocusWindow | ExpertInsight::FocusWindow { .. })
+    ));
+    {
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].messages.len(), 1);
+        assert_eq!(requests[0].policy.purpose, "schedule-summary");
+        assert_eq!(requests[0].policy.performance_class, "fast");
+        assert_eq!(requests[0].capabilities[0].id, "schedule.find_free_windows");
+        assert_eq!(requests[1].messages.len(), 2);
+        assert!(requests[1].capabilities.is_empty());
+    }
+    assert_eq!(views.reads.load(Ordering::Acquire), 1);
+
+    let invalid = Fixture::new();
+    let invalid_views = Views {
+        view: invalid.view.clone(),
+        reads: AtomicUsize::new(0),
+    };
+    let invalid_model = ScheduleModel {
+        requests: Mutex::new(vec![]),
+        skip_tool: true,
+    };
+    assert_eq!(
+        ExpertHost {
+            registry: &invalid.registry,
+            views: &invalid_views,
+        }
+        .invoke_with_model(
+            invalid.invocation(invalid.schedule),
+            &invalid_model,
+            &synthetic_policy(),
+        )
+        .await,
+        Err(AgentFailure::InvalidModelOutput)
+    );
+    assert_eq!(invalid.state(invalid.schedule).revision, 0);
+}

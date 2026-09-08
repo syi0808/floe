@@ -38,6 +38,7 @@ impl ModelRunner for Model {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        let schedule_expert = request.system_instructions == SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS;
         let step = if request
             .messages
             .iter()
@@ -49,8 +50,11 @@ impl ModelRunner for Model {
         } else {
             ModelStep::Call {
                 capability_id: request.capabilities[0].id.clone(),
-                input: serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 })
-                    .unwrap(),
+                input: if schedule_expert {
+                    "{}".into()
+                } else {
+                    serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 }).unwrap()
+                },
             }
         };
         Ok(ModelResponse {

@@ -24,6 +24,32 @@ intervention 완료를 의미하지 않는다.
 Agent loop, session, registry, budget와 learning port의 구현 계약은
 [Agent Runtime and Governed Learning](agent-runtime-and-learning.md)을 따른다.
 
+### Schedule Expert 실행 모델
+
+Schedule Expert는 단순 API wrapper가 아니라 **bounded domain subagent**로 실행한다.
+Manager는 사용자 conversation history를 유지하고, Schedule Expert에는 현재
+요청에서 파생한 작은 `ScheduleTaskBrief`와 허가된 View만 전달한다. Expert의 내부
+모델 turn은 Manager conversation에 합쳐지지 않는다.
+
+```text
+Manager
+  → ScheduleTaskBrief
+  → lightweight Schedule Expert loop
+      → schedule.find_free_windows       # deterministic Tool
+      → concise domain summary
+  → structured ExpertResult
+  → Manager synthesis
+```
+
+초기 loop는 두 번의 작은 model call로 제한한다. 첫 call은 deterministic scheduling
+Tool을 정확히 한 번 호출하고, 두 번째 call은 그 결과를 Manager용 요약으로 만든다.
+빈 시간 계산, interval 병합과 proposal 후보 생성은 계속 검증 가능한 Rust 로직이
+담당한다. Declarative fixture는 LLM 없이 같은 Tool/output contract를 검증할 수 있다.
+
+Expert는 독립적인 사용자-facing personality, 무제한 recursive agent 또는 Calendar
+writer가 아니다. Model placement, data class, consent, deadline과 token/cost budget은
+호출마다 명시되며, mutation 후보는 계속 Manager와 S3 review/action gate를 통과한다.
+
 ## One Assistant
 
 사용자가 대화하는 주체는 하나다.
