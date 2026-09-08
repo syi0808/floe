@@ -1,4 +1,5 @@
 import 'package:flutter/gestures.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,7 @@ import 'package:floe_client/app/floe_date_picker.dart';
 import 'package:floe_client/app/floe_context_menu.dart';
 import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/app/floe_popover.dart';
+import 'package:floe_client/app/floe_time_picker.dart';
 import 'package:floe_client/features/day_canvas/presentation/calendar_date_time_field.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -148,6 +150,55 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('date-time controls keep compact hover targets', (tester) async {
+    await tester.pumpWidget(
+      host(
+        Center(
+          child: SizedBox(
+            width: 500,
+            child: CalendarDateTimeField(
+              label: 'Ends',
+              value: DateTime(2026, 9, 8, 15, 45),
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final dateButton = find.ancestor(
+      of: find.text('Sep 8, 2026'),
+      matching: find.byType(TextButton),
+    );
+    final field = find.byType(InputDecorator);
+    expect(
+      tester.getSize(dateButton).width,
+      lessThan(tester.getSize(field).width / 2),
+    );
+  });
+
+  testWidgets('time picker overlay keeps selected values visible', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        Center(
+          child: FloeTimePicker(
+            initialTime: const TimeOfDay(hour: 15, minute: 28),
+          ),
+        ),
+      ),
+    );
+
+    final overlays = tester.widgetList<CupertinoPickerDefaultSelectionOverlay>(
+      find.byType(CupertinoPickerDefaultSelectionOverlay),
+    );
+    expect(overlays, isNotEmpty);
+    for (final overlay in overlays) {
+      expect(overlay.background.a, lessThan(1));
+    }
+  });
 
   testWidgets('calendar hover moves without leaving the previous date styled', (
     tester,

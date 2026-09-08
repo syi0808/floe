@@ -83,6 +83,7 @@ abstract final class FloeColor {
   static const neutralPressed = FloePalette.neutral200;
   static const selectionHover = FloePalette.primary50;
   static const selectionPressed = FloePalette.primary100;
+  static const pickerSelectionOverlay = Color(0x14654BE0);
   static const disabledSurface = FloePalette.neutral50;
   static const disabledContent = FloePalette.neutral400;
 }

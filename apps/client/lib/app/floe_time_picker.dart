@@ -97,7 +97,7 @@ class _FloeTimePickerState extends State<FloeTimePicker> {
               selectionOverlayBuilder:
                   (context, {required columnCount, required selectedIndex}) =>
                       CupertinoPickerDefaultSelectionOverlay(
-                        background: FloeColor.selectionHover,
+                        background: FloeColor.pickerSelectionOverlay,
                         capStartEdge: selectedIndex == 0,
                         capEndEdge: selectedIndex == columnCount - 1,
                       ),

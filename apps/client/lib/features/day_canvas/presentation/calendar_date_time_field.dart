@@ -26,7 +26,7 @@ class CalendarDateTimeField extends StatelessWidget {
 
   static final fieldButtonStyle = TextButton.styleFrom(
     alignment: Alignment.centerLeft,
-    padding: EdgeInsets.zero,
+    padding: const EdgeInsets.symmetric(horizontal: FloeSpace.sm),
     minimumSize: const Size(0, 32),
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
@@ -49,34 +49,37 @@ class CalendarDateTimeField extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Builder(
-              builder: (anchorContext) => FloeButton.text(
-                onPressed: !enabled
-                    ? null
-                    : () async {
-                        final date = await showFloeDatePicker(
-                          context: context,
-                          anchor: floeAnchorRect(anchorContext),
-                          initialDate: value,
-                        );
-                        if (date != null && context.mounted) {
-                          final next = DateTime(
-                            date.year,
-                            date.month,
-                            date.day,
-                            value.hour,
-                            value.minute,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Builder(
+                builder: (anchorContext) => FloeButton.text(
+                  onPressed: !enabled
+                      ? null
+                      : () async {
+                          final date = await showFloeDatePicker(
+                            context: context,
+                            anchor: floeAnchorRect(anchorContext),
+                            initialDate: value,
                           );
-                          if (next.hour == value.hour &&
-                              next.minute == value.minute) {
-                            field.didChange(next);
-                            onChanged(next);
+                          if (date != null && context.mounted) {
+                            final next = DateTime(
+                              date.year,
+                              date.month,
+                              date.day,
+                              value.hour,
+                              value.minute,
+                            );
+                            if (next.hour == value.hour &&
+                                next.minute == value.minute) {
+                              field.didChange(next);
+                              onChanged(next);
+                            }
                           }
-                        }
-                      },
-                style: fieldButtonStyle,
-                icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                child: Text(DateFormat.yMMMd().format(value)),
+                        },
+                  style: fieldButtonStyle,
+                  icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                  child: Text(DateFormat.yMMMd().format(value)),
+                ),
               ),
             ),
           ),
