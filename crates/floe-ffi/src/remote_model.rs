@@ -57,6 +57,54 @@ struct RoutingResponse {
     external_transfer: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireStep {
+    kind: String,
+    text: Option<String>,
+    capability_id: Option<String>,
+    input: Option<String>,
+}
+
+fn output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "kind": {"type": "string", "enum": ["answer", "call"]},
+            "text": {"type": ["string", "null"]},
+            "capability_id": {"type": ["string", "null"]},
+            "input": {"type": ["string", "null"]}
+        },
+        "required": ["kind", "text", "capability_id", "input"]
+    })
+}
+
+fn decode_step(output: &str) -> Result<ModelStep, AgentFailure> {
+    let step: WireStep =
+        serde_json::from_str(output).map_err(|_| AgentFailure::InvalidModelOutput)?;
+    match (
+        step.kind.as_str(),
+        step.text,
+        step.capability_id,
+        step.input,
+    ) {
+        ("answer", Some(text), None, None) if !text.trim().is_empty() => {
+            Ok(ModelStep::Answer { text })
+        }
+        ("call", None, Some(capability_id), Some(input))
+            if !capability_id.trim().is_empty()
+                && serde_json::from_str::<serde_json::Value>(&input).is_ok() =>
+        {
+            Ok(ModelStep::Call {
+                capability_id,
+                input,
+            })
+        }
+        _ => Err(AgentFailure::InvalidModelOutput),
+    }
+}
+
 impl ModelRunner for ServerModelRunner {
     fn placement(&self) -> ModelPlacement {
         self.placement
@@ -99,17 +147,7 @@ impl ModelRunner for ServerModelRunner {
                 "allowed_capabilities": request.capabilities,
                 "max_output_bytes": request.max_output_bytes.min(16384),
             },
-            "output_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "kind": {"type": "string", "enum": ["answer", "call"]},
-                    "text": {"type": "string"},
-                    "capability_id": {"type": "string"},
-                    "input": {"type": "string"}
-                },
-                "required": ["kind"]
-            }
+            "output_schema": output_schema()
         });
         let send = client
             .post(format!(
@@ -152,8 +190,7 @@ impl ModelRunner for ServerModelRunner {
         {
             return Err(AgentFailure::InvalidModelOutput);
         }
-        let step: ModelStep =
-            serde_json::from_str(&response.output).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        let step = decode_step(&response.output)?;
         if let ModelStep::Call { capability_id, .. } = &step
             && !request
                 .capabilities
@@ -210,5 +247,47 @@ mod tests {
             candidate.base_url = invalid.into();
             assert!(ServerModelRunner::new(candidate).is_err());
         }
+    }
+
+    #[test]
+    fn remote_output_schema_requires_every_property_for_strict_providers() {
+        let schema = output_schema();
+        assert_eq!(
+            schema["required"],
+            json!(["kind", "text", "capability_id", "input"])
+        );
+        assert_eq!(
+            schema["properties"]["text"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["capability_id"]["type"],
+            json!(["string", "null"])
+        );
+    }
+
+    #[test]
+    fn remote_output_decodes_nullable_strict_envelope() {
+        assert_eq!(
+            decode_step(r#"{"kind":"answer","text":"Hello","capability_id":null,"input":null}"#),
+            Ok(ModelStep::Answer {
+                text: "Hello".into()
+            })
+        );
+        assert_eq!(
+            decode_step(
+                r#"{"kind":"call","text":null,"capability_id":"calendar.read","input":"{}"}"#
+            ),
+            Ok(ModelStep::Call {
+                capability_id: "calendar.read".into(),
+                input: "{}".into()
+            })
+        );
+        assert_eq!(
+            decode_step(
+                r#"{"kind":"answer","text":"Hello","capability_id":"calendar.read","input":null}"#
+            ),
+            Err(AgentFailure::InvalidModelOutput)
+        );
     }
 }
