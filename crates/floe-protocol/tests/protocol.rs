@@ -139,14 +139,14 @@ fn calendar_session_transport_cannot_supply_classification_grants_or_model_input
 }
 
 #[test]
-fn calendar_turn_transport_requires_explicit_bounded_model_and_destination() {
+fn calendar_turn_transport_requires_explicit_inference_route_and_destination() {
     let action = json!({
         "kind": "calendar_turn",
         "request": {
             "session_id": Uuid::new_v4(),
             "expected_revision": 3,
             "prompt": {"kind": "propose_focus", "focus_minutes": 60},
-            "model": "foundation_models",
+            "inference_route": "device_local",
             "day": {
                 "start_date": "2026-09-08",
                 "end_date_exclusive": "2026-09-09",
@@ -186,7 +186,7 @@ fn free_text_calendar_turn_accepts_only_a_redacted_server_route() {
             "session_id": Uuid::new_v4(),
             "expected_revision": 3,
             "prompt": {"kind": "free_text", "text": "What is next?"},
-            "model": "foundation_models",
+            "inference_route": "remote",
             "day": {
                 "start_date": "2026-09-08",
                 "end_date_exclusive": "2026-09-09",

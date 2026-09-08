@@ -37,7 +37,6 @@ void main() {
       expect(gateway.turns.single.day, same(context.day));
       expect(gateway.turns.single.startsAt, context.day.startsAt);
       expect(gateway.turns.single.endsAt, context.day.endsAt);
-      expect(gateway.turns.single.model, AgentCalendarModel.foundationModels);
       expect(gateway.turns.single.destination, isNull);
       expect(controller.messages.last, isA<AgentTextMessage>());
       expect(
@@ -273,23 +272,27 @@ final class _ConnectedCalendarGateway extends TestCalendarExpertGateway
     return _update();
   }
 
-  AgentCalendarTurnUpdate _update() => AgentCalendarTurnUpdate.fromJson({
-    'session_id': _turn!.session.id,
-    'expected_revision': _turn!.session.revision,
-    'next_sequence': 0,
-    'events': <Object?>[],
-    'done': _done,
-    'session': _done ? _session(revision: 3) : null,
-    'failure': null,
-    'calendar_turn': _done
-        ? {
-            'schema_version': 1,
-            'person_id': registryPerson,
-            'session_id': _sessionId,
-            'setup_id': calendarSetupId,
-            'model': _turn!.model.wireName,
-            'proposals': <Object?>[],
-          }
-        : null,
-  }, _turn!);
+  AgentCalendarTurnUpdate _update() => AgentCalendarTurnUpdate.fromJson(
+    {
+      'session_id': _turn!.session.id,
+      'expected_revision': _turn!.session.revision,
+      'next_sequence': 0,
+      'events': <Object?>[],
+      'done': _done,
+      'session': _done ? _session(revision: 3) : null,
+      'failure': null,
+      'calendar_turn': _done
+          ? {
+              'schema_version': 1,
+              'person_id': registryPerson,
+              'session_id': _sessionId,
+              'setup_id': calendarSetupId,
+              'inference_route': 'device_local',
+              'proposals': <Object?>[],
+            }
+          : null,
+    },
+    _turn!,
+    AgentCalendarInferenceRoute.deviceLocal,
+  );
 }

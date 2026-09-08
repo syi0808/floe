@@ -122,7 +122,7 @@ fn fixture() -> Fixture {
         session_id: session.id.to_string(),
         expected_revision: session.revision,
         prompt: AgentCalendarPromptDto::ProposeFocus { focus_minutes: 60 },
-        model: AgentCalendarModelDto::DeterministicFixture,
+        inference_route: AgentCalendarInferenceRouteDto::DeterministicFixture,
         day,
         starts_at,
         ends_at: starts_at + chrono::Duration::hours(8),
@@ -189,7 +189,10 @@ fn calendar_turn_job_streams_and_waits_for_exactly_one_prepared_action() {
     let result = completed.calendar_turn.as_ref().unwrap();
     assert_eq!(result.person_id, fixture.person.to_string());
     assert_eq!(result.session_id, fixture.session.id.to_string());
-    assert_eq!(result.model, AgentCalendarModelDto::DeterministicFixture);
+    assert_eq!(
+        result.inference_route,
+        AgentCalendarInferenceRouteDto::DeterministicFixture
+    );
     assert_eq!(result.proposals.len(), 1);
     assert!(result.proposals[0].action.is_some());
     assert!(result.proposals[0].failure.is_none());
@@ -210,7 +213,6 @@ fn calendar_turn_job_streams_and_waits_for_exactly_one_prepared_action() {
 fn calendar_turn_rejects_invalid_bounds_destination_revision_and_disconnected_source() {
     let fixture = fixture();
     let mut invalid_day = fixture.request.clone();
-    invalid_day.model = AgentCalendarModelDto::FoundationModels;
     invalid_day.day.end_date_exclusive = invalid_day.day.end_date_exclusive.succ_opt().unwrap();
     assert_eq!(
         perform(

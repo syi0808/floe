@@ -36,13 +36,38 @@ AgentCalendarTurnRequest turnRequest() {
     endsAt: DateTime.utc(2026, 9, 8, 12),
     prompt: AgentCalendarPromptKind.proposeFocus,
     focusMinutes: 60,
-    model: AgentCalendarModel.deterministicFixture,
     destination: const AgentCalendarDestination(
       provider: 'fixture',
       calendarId: 'calendar-a',
       connectionRevision: 9,
       timezone: 'Asia/Seoul',
     ),
+  );
+}
+
+AgentCalendarTurnRequest eventKitTurnRequest() {
+  final date = DateTime(2026, 9, 8);
+  final session = sessionJson();
+  session['scope'] = {
+    'kind': 'calendar',
+    'setup_id': setupId,
+    'provider': 'event_kit',
+  };
+  session['data_classes'] = ['personal'];
+  return AgentCalendarTurnRequest(
+    session: AgentSession.fromJson(session),
+    day: DayQuery(
+      personId: personId,
+      date: date,
+      now: DateTime.utc(2026, 9, 8),
+      timezoneOffsetSeconds: 32400,
+      endTimezoneOffsetSeconds: 32400,
+    ),
+    startsAt: DateTime.utc(2026, 9, 8),
+    endsAt: DateTime.utc(2026, 9, 8, 12),
+    prompt: AgentCalendarPromptKind.freeText,
+    focusMinutes: 60,
+    text: 'What is next?',
   );
 }
 
@@ -69,7 +94,7 @@ void main() {
       expect(submitted.single['kind'], 'calendar_turn');
       expect(request['session_id'], sessionId);
       expect(request['expected_revision'], 4);
-      expect(request['model'], 'deterministic_fixture');
+      expect(request['inference_route'], 'deterministic_fixture');
       expect(request['prompt'], {'kind': 'propose_focus', 'focus_minutes': 60});
       expect(request['day'], {
         'start_date': '2026-09-08',
@@ -81,7 +106,10 @@ void main() {
       expect(finished.run.done, true);
       expect(finished.run.session!.revision, 5);
       expect(finished.result!.setupId, setupId);
-      expect(finished.result!.model, AgentCalendarModel.deterministicFixture);
+      expect(
+        finished.result!.inferenceRoute,
+        AgentCalendarInferenceRoute.deterministicFixture,
+      );
       expect(finished.result!.proposals.single.invocationId, invocationId);
       expect(finished.result!.proposals.single.action!.status.name, 'pending');
       expect((await gateway.releaseCalendarTurn(turn)).run.done, true);
@@ -114,7 +142,6 @@ void main() {
         endsAt: turn.endsAt,
         prompt: turn.prompt,
         focusMinutes: 30,
-        model: turn.model,
         destination: turn.destination,
       );
       await expectLater(
@@ -128,6 +155,35 @@ void main() {
       );
     },
   );
+
+  test('Calendar turn serializes the resolved inference route', () async {
+    for (final remote in [false, true]) {
+      Map<String, Object?>? route;
+      final submitted = <Map<String, Object?>>[];
+      final gateway = NativeAgentVaultGateway(
+        (request) async {
+          final operation = request['operation']! as Map;
+          submitted.add(Map<String, Object?>.from(operation['action']! as Map));
+          return response(request['request_id']! as String, complete: false);
+        },
+        resolveRemoteRoute: () async => remote
+            ? route = {
+                'base_url': 'http://127.0.0.1:8431',
+                'bearer_token': 'daily_route_token_that_is_long_enough',
+                'purpose': 'everyday_assistance',
+                'external': false,
+                'allow_external': false,
+              }
+            : null,
+      );
+
+      await gateway.beginCalendarTurn(eventKitTurnRequest());
+
+      final request = submitted.single['request']! as Map;
+      expect(request['inference_route'], remote ? 'remote' : 'device_local');
+      expect(request['remote_route'], remote ? same(route) : isNull);
+    }
+  });
 }
 
 Map<String, dynamic> response(String requestId, {required bool complete}) => {
@@ -144,7 +200,7 @@ Map<String, dynamic> response(String requestId, {required bool complete}) => {
           'person_id': personId,
           'session_id': sessionId,
           'setup_id': setupId,
-          'model': 'deterministic_fixture',
+          'inference_route': 'deterministic_fixture',
           'proposals': [
             {
               'invocation_id': invocationId,

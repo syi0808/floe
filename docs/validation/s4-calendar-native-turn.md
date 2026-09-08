@@ -5,20 +5,20 @@ Date: 2026-09-08. Native/Core integration with synthetic fixtures; S4 remains **
 ## Implemented boundary
 
 - The versioned vault protocol now accepts a distinct `calendar_turn` job with an
-  explicit session revision, bounded Calendar day/window, prompt kind, model choice
+  explicit session revision, bounded Calendar day/window, inference route
   and optional S3 destination.
 - The owned vault worker resolves the encrypted Calendar session, durable Expert
   setup and View binding before constructing a short-lived Core grant from the
   current Calendar connection revision.
 - Destination provider, calendar, revision and timezone are checked before model
   execution. Disconnected or mismatched sources fail closed.
-- `deterministic_fixture` is restricted to Fixture Calendar data. `foundation_models`
-  uses the existing native adapter and never silently falls back to the fixture.
+- `deterministic_fixture` is restricted to Fixture Calendar data. `device_local`
+  uses the native adapter, while `remote` requires an explicit server route.
 - Streaming events remain pollable while the job runs. The job is only marked done
   after Core finishes Manager proposal preparation, and its response identifies the
-  Person, session, setup, selected model and each proposal outcome.
+  Person, session, setup, selected inference route and each proposal outcome.
 - Dart now exposes a separate Calendar-turn streaming gateway with typed prompt,
-  model, day/window and destination inputs. It validates Person/session/setup/model
+  day/window and destination inputs. It validates Person/session/setup/inference-route
   identity on every completed native response and rejects changed retry payloads.
 
 ## Evidence

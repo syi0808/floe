@@ -21,11 +21,12 @@ final class AgentCalendarConversationContext {
 
 enum AgentCalendarPromptKind { briefing, proposeFocus, freeText }
 
-enum AgentCalendarModel {
+enum AgentCalendarInferenceRoute {
   deterministicFixture('deterministic_fixture'),
-  foundationModels('foundation_models');
+  deviceLocal('device_local'),
+  remote('remote');
 
-  const AgentCalendarModel(this.wireName);
+  const AgentCalendarInferenceRoute(this.wireName);
   final String wireName;
 }
 
@@ -58,7 +59,6 @@ final class AgentCalendarTurnRequest {
     required this.endsAt,
     required this.prompt,
     required this.focusMinutes,
-    required this.model,
     this.text,
     this.destination,
   }) : assert(
@@ -72,7 +72,6 @@ final class AgentCalendarTurnRequest {
   final DateTime endsAt;
   final AgentCalendarPromptKind prompt;
   final int focusMinutes;
-  final AgentCalendarModel model;
   final String? text;
   final AgentCalendarDestination? destination;
 
@@ -90,7 +89,6 @@ final class AgentCalendarTurnRequest {
       else
         'focus_minutes': focusMinutes,
     },
-    'model': model.wireName,
     'day': {
       'start_date': _date(day.date),
       'end_date_exclusive': _date(
@@ -125,6 +123,7 @@ final class AgentCalendarTurnUpdate {
   AgentCalendarTurnUpdate.fromJson(
     Map<String, Object?> json,
     AgentCalendarTurnRequest request,
+    AgentCalendarInferenceRoute expectedRoute,
   ) : run = AgentRunUpdate.fromJson(json),
       result = json['calendar_turn'] == null
           ? null
@@ -139,7 +138,7 @@ final class AgentCalendarTurnUpdate {
             (result!.personId != request.session.personId ||
                 result!.sessionId != request.session.id ||
                 result!.setupId != scope.setupId ||
-                result!.model != request.model) ||
+                result!.inferenceRoute != expectedRoute) ||
         run.done && run.failure == null && result == null ||
         !run.done && result != null) {
       throw const FormatException('Calendar turn response mismatch');
@@ -155,8 +154,8 @@ final class AgentCalendarTurnResult {
     : personId = json['person_id']! as String,
       sessionId = json['session_id']! as String,
       setupId = json['setup_id']! as String,
-      model = AgentCalendarModel.values.singleWhere(
-        (value) => value.wireName == json['model'],
+      inferenceRoute = AgentCalendarInferenceRoute.values.singleWhere(
+        (value) => value.wireName == json['inference_route'],
       ),
       proposals = List.unmodifiable(
         (json['proposals']! as List).map(
@@ -173,7 +172,7 @@ final class AgentCalendarTurnResult {
   final String personId;
   final String sessionId;
   final String setupId;
-  final AgentCalendarModel model;
+  final AgentCalendarInferenceRoute inferenceRoute;
   final List<AgentCalendarProposalOutcome> proposals;
 }
 

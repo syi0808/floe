@@ -10,7 +10,7 @@ use floe_core::{
 };
 use floe_domain::{CalendarProvider, PersonId};
 use floe_protocol::{
-    AgentCalendarModelDto, AgentCalendarPromptDto, AgentCalendarProposalOutcomeDto,
+    AgentCalendarInferenceRouteDto, AgentCalendarPromptDto, AgentCalendarProposalOutcomeDto,
     AgentCalendarTurnRequestDto, AgentCalendarTurnResultDto, PROTOCOL_VERSION,
 };
 
@@ -58,9 +58,16 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     {
         return Err(AgentFailure::CapabilityDenied);
     }
-    if request.model == AgentCalendarModelDto::DeterministicFixture
-        && binding.provider != CalendarProvider::Fixture
-    {
+    if !matches!(
+        (binding.provider, request.inference_route),
+        (
+            CalendarProvider::Fixture,
+            AgentCalendarInferenceRouteDto::DeterministicFixture
+        ) | (
+            CalendarProvider::EventKit,
+            AgentCalendarInferenceRouteDto::DeviceLocal | AgentCalendarInferenceRouteDto::Remote
+        )
+    ) {
         return Err(AgentFailure::PolicyDenied);
     }
     if (request.day.end_date_exclusive - request.day.start_date).num_days() != 1
@@ -81,7 +88,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         return Err(AgentFailure::InvalidInput);
     }
     let model = Model::new(
-        request.model,
+        request.inference_route,
         request.prompt.clone(),
         request.remote_route.clone(),
     )?;
@@ -170,7 +177,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         person_id: person_id.to_string(),
         session_id: result.session.id.to_string(),
         setup_id: setup.setup_id.to_string(),
-        model: request.model,
+        inference_route: request.inference_route,
         proposals,
     };
     Ok((result.session, response))
@@ -257,18 +264,21 @@ enum Model {
 
 impl Model {
     fn new(
-        selection: AgentCalendarModelDto,
+        route: AgentCalendarInferenceRouteDto,
         prompt: AgentCalendarPromptDto,
         remote_route: Option<floe_protocol::AgentRemoteRouteDto>,
     ) -> Result<Self, AgentFailure> {
-        match selection {
-            AgentCalendarModelDto::DeterministicFixture => {
+        match (route, remote_route) {
+            (AgentCalendarInferenceRouteDto::DeterministicFixture, None) => {
                 Ok(Self::Deterministic(DeterministicModel { prompt }))
             }
-            AgentCalendarModelDto::FoundationModels => match remote_route {
-                Some(route) => ServerModelRunner::new(route).map(Self::Server),
-                None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
-            },
+            (AgentCalendarInferenceRouteDto::DeviceLocal, None) => {
+                Ok(Self::Foundation(FoundationModelRunner::encrypted()))
+            }
+            (AgentCalendarInferenceRouteDto::Remote, Some(route)) => {
+                ServerModelRunner::new(route).map(Self::Server)
+            }
+            _ => Err(AgentFailure::InvalidInput),
         }
     }
 }
@@ -370,7 +380,7 @@ mod routing_tests {
     #[test]
     fn free_text_calendar_chat_prefers_the_configured_daily_route() {
         let model = Model::new(
-            AgentCalendarModelDto::FoundationModels,
+            AgentCalendarInferenceRouteDto::Remote,
             AgentCalendarPromptDto::FreeText {
                 text: "What is next?".into(),
             },
@@ -384,5 +394,25 @@ mod routing_tests {
         )
         .unwrap();
         assert!(matches!(model, Model::Server(_)));
+    }
+
+    #[test]
+    fn inference_route_requires_its_matching_configuration() {
+        let prompt = AgentCalendarPromptDto::FreeText {
+            text: "What is next?".into(),
+        };
+        assert!(matches!(
+            Model::new(
+                AgentCalendarInferenceRouteDto::DeviceLocal,
+                prompt.clone(),
+                None,
+            )
+            .unwrap(),
+            Model::Foundation(_)
+        ));
+        assert!(matches!(
+            Model::new(AgentCalendarInferenceRouteDto::Remote, prompt, None),
+            Err(AgentFailure::InvalidInput)
+        ));
     }
 }

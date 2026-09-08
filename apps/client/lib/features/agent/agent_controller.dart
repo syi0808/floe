@@ -893,9 +893,6 @@ final class AgentController extends ChangeNotifier {
       prompt: prompt,
       focusMinutes: focusMinutes,
       text: text,
-      model: scope.provider == 'fixture'
-          ? AgentCalendarModel.deterministicFixture
-          : AgentCalendarModel.foundationModels,
       destination: prompt == AgentCalendarPromptKind.proposeFocus
           ? AgentCalendarDestination(
               provider: scope.provider,

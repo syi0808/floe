@@ -40,6 +40,8 @@ final class NativeAgentVaultGateway
   _VaultJob? _pending;
   AgentSession? _run;
   AgentCalendarTurnRequest? _calendarRun;
+  AgentCalendarInferenceRoute? _calendarInferenceRoute;
+  Map<String, Object?>? _calendarRemoteRoute;
   AgentConversationTurnRequest? _conversationRun;
 
   @override
@@ -174,15 +176,27 @@ final class NativeAgentVaultGateway
       throw const AgentVaultException('conflict');
     }
     if (_calendarRun == null) {
+      final remoteRoute = turn.prompt == AgentCalendarPromptKind.freeText
+          ? await resolveRemoteRoute?.call()
+          : null;
+      final inferenceRoute = switch (scope.provider) {
+        'fixture' => AgentCalendarInferenceRoute.deterministicFixture,
+        'event_kit' when remoteRoute != null =>
+          AgentCalendarInferenceRoute.remote,
+        'event_kit' => AgentCalendarInferenceRoute.deviceLocal,
+        _ => throw const FormatException('Unsupported Calendar provider'),
+      };
       if (_pending != null) await _drain();
       _pending = _VaultJob(turn.session.personId, newAgentRequestId());
       _run = turn.session;
       _calendarRun = turn;
+      _calendarRemoteRoute = remoteRoute;
+      _calendarInferenceRoute = inferenceRoute;
     }
     final serialized = turn.toJson();
-    if (turn.prompt == AgentCalendarPromptKind.freeText &&
-        resolveRemoteRoute != null) {
-      serialized['remote_route'] = await resolveRemoteRoute!();
+    serialized['inference_route'] = _calendarInferenceRoute!.wireName;
+    if (_calendarRemoteRoute != null) {
+      serialized['remote_route'] = _calendarRemoteRoute;
     }
     return _calendarUpdate(
       turn,
@@ -212,6 +226,8 @@ final class NativeAgentVaultGateway
     _pending = null;
     _run = null;
     _calendarRun = null;
+    _calendarInferenceRoute = null;
+    _calendarRemoteRoute = null;
     return result;
   }
 
@@ -228,11 +244,15 @@ final class NativeAgentVaultGateway
   AgentCalendarTurnUpdate _calendarUpdate(
     AgentCalendarTurnRequest turn,
     Map<String, dynamic> result,
-  ) => AgentCalendarTurnUpdate.fromJson({
-    ...result,
-    'session_id': turn.session.id,
-    'expected_revision': turn.session.revision,
-  }, turn);
+  ) => AgentCalendarTurnUpdate.fromJson(
+    {
+      ...result,
+      'session_id': turn.session.id,
+      'expected_revision': turn.session.revision,
+    },
+    turn,
+    _calendarInferenceRoute!,
+  );
 
   bool _sameCalendarTurn(
     AgentCalendarTurnRequest left,
@@ -515,6 +535,8 @@ final class NativeAgentVaultGateway
       _pending = null;
       _run = null;
       _calendarRun = null;
+      _calendarInferenceRoute = null;
+      _calendarRemoteRoute = null;
       _conversationRun = null;
     }
   }
@@ -570,6 +592,8 @@ final class NativeAgentVaultGateway
     _pending = null;
     _run = null;
     _calendarRun = null;
+    _calendarInferenceRoute = null;
+    _calendarRemoteRoute = null;
     _conversationRun = null;
     return result;
   }
@@ -617,6 +641,8 @@ final class NativeAgentVaultGateway
     _pending = null;
     _run = null;
     _calendarRun = null;
+    _calendarInferenceRoute = null;
+    _calendarRemoteRoute = null;
     _conversationRun = null;
   }
 

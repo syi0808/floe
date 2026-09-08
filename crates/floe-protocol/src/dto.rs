@@ -107,7 +107,7 @@ pub struct AgentCalendarTurnRequestDto {
     pub session_id: String,
     pub expected_revision: u64,
     pub prompt: AgentCalendarPromptDto,
-    pub model: AgentCalendarModelDto,
+    pub inference_route: AgentCalendarInferenceRouteDto,
     pub day: floe_domain::CalendarRange,
     pub starts_at: chrono::DateTime<chrono::Utc>,
     pub ends_at: chrono::DateTime<chrono::Utc>,
@@ -149,9 +149,10 @@ pub enum AgentCalendarPromptDto {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AgentCalendarModelDto {
+pub enum AgentCalendarInferenceRouteDto {
     DeterministicFixture,
-    FoundationModels,
+    DeviceLocal,
+    Remote,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -170,7 +171,7 @@ pub struct AgentCalendarTurnResultDto {
     pub person_id: String,
     pub session_id: String,
     pub setup_id: String,
-    pub model: AgentCalendarModelDto,
+    pub inference_route: AgentCalendarInferenceRouteDto,
     pub proposals: Vec<AgentCalendarProposalOutcomeDto>,
 }
 
