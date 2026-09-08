@@ -176,6 +176,25 @@ fn free_text_calendar_turn_accepts_only_a_redacted_server_route() {
 }
 
 #[test]
+fn general_conversation_transport_has_no_model_or_capability_selector() {
+    let action = json!({
+        "kind": "conversation_turn",
+        "request": {
+            "session_id": Uuid::new_v4(),
+            "expected_revision": 2,
+            "text": "Help me plan the afternoon"
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    for field in ["model", "inference_class", "capabilities", "policy"] {
+        let mut forged = action.clone();
+        forged["request"][field] = json!("untrusted");
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}
+
+#[test]
 fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     let action = json!({
         "kind": "inspect_proposal",

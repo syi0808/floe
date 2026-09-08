@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'agent_calendar_experts.dart';
 import 'agent_calendar_session_gateway.dart';
 import 'agent_calendar_turn_gateway.dart';
+import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_expert_result.dart';
 import 'agent_proposal.dart';
@@ -36,8 +37,10 @@ final class AgentController extends ChangeNotifier {
   AgentFixturePrompt? _lastPrompt;
   AgentCalendarPromptKind? _lastCalendarPrompt;
   String? _lastCalendarText;
+  String? _lastConversationText;
   int _lastFocusMinutes = 60;
   AgentCalendarTurnRequest? _calendarRun;
+  AgentConversationTurnRequest? _conversationRun;
   AgentCalendarConversationContext? _activeCalendarContext;
   AgentVaultState? vaultState;
   bool _sealed = false;
@@ -389,6 +392,12 @@ final class AgentController extends ChangeNotifier {
 
   bool get usesVault => gateway is AgentVaultGateway;
   bool get isCalendarConversation => session?.scope != null;
+  bool get isGeneralConversation =>
+      usesVault &&
+      session?.scope == null &&
+      session?.dataClasses.singleOrNull == 'personal';
+  bool get isConnectedConversation =>
+      isCalendarConversation || isGeneralConversation;
   bool get isPersonalConversation =>
       isCalendarConversation && session?.dataClasses.singleOrNull == 'personal';
 
@@ -402,6 +411,8 @@ final class AgentController extends ChangeNotifier {
       failure != null &&
       (isCalendarConversation
           ? _lastCalendarPrompt != null
+          : isGeneralConversation
+          ? _lastConversationText != null
           : _lastPrompt != null);
 
   Future<void> load({bool newSession = false}) async {
@@ -444,10 +455,17 @@ final class AgentController extends ChangeNotifier {
         _acceptSession(saved, setupId: setup.setupId);
       } else {
         _activeCalendarContext = null;
-        final result = newSession
-            ? await gateway.startAgentFixture(personId)
-            : await gateway.resumeAgentFixture(personId);
-        _acceptSession(result.session);
+        if (gateway case final AgentConversationGateway conversation) {
+          final saved = newSession
+              ? await conversation.startConversation(personId)
+              : await conversation.resumeConversation(personId);
+          _acceptSession(saved);
+        } else {
+          final result = newSession
+              ? await gateway.startAgentFixture(personId)
+              : await gateway.resumeAgentFixture(personId);
+          _acceptSession(result.session);
+        }
       }
       needsReload = false;
     } on Object catch (error) {
@@ -475,6 +493,10 @@ final class AgentController extends ChangeNotifier {
         final saved = await (gateway as AgentCalendarSessionGateway)
             .recoverCalendarSession(original);
         _acceptSession(saved, setupId: scope.setupId);
+      } else if (isGeneralConversation && gateway is AgentConversationGateway) {
+        final saved = await (gateway as AgentConversationGateway)
+            .recoverConversation(original);
+        _acceptSession(saved);
       } else {
         final result = await gateway.recoverAgentFixture(original);
         _acceptSession(result.session);
@@ -502,8 +524,96 @@ final class AgentController extends ChangeNotifier {
           focusMinutes: _lastFocusMinutes,
         );
       }
+    } else if (isGeneralConversation) {
+      await sendText(_lastConversationText!);
     } else {
       await send(_lastPrompt!);
+    }
+  }
+
+  Future<void> sendText(String text) => isCalendarConversation
+      ? sendCalendarText(text)
+      : _sendConversationText(text);
+
+  Future<void> _sendConversationText(String text) async {
+    final normalized = text.trim();
+    if (!canSend ||
+        _disposed ||
+        !isGeneralConversation ||
+        gateway is! AgentConversationGateway ||
+        normalized.isEmpty ||
+        normalized.length > 8192) {
+      return;
+    }
+    final original = session!;
+    final request = AgentConversationTurnRequest(
+      session: original,
+      text: normalized,
+    );
+    _conversationRun = request;
+    _runSession = original;
+    _lastConversationText = normalized;
+    _begin();
+    _stopRequested = false;
+    failure = null;
+    progress = AgentProgress.model;
+    _notify();
+    var done = false;
+    try {
+      var update = await (gateway as AgentConversationGateway)
+          .beginConversationTurn(request);
+      var sequence = 0;
+      while (true) {
+        _validateUpdate(original, update, sequence);
+        _acceptEvents(update.events);
+        sequence = update.nextSequence;
+        if (_stopRequested) progress = AgentProgress.stopping;
+        _notify();
+        if (update.done) {
+          done = true;
+          _runSession = null;
+          if (update.session case final saved?) {
+            _acceptSession(saved);
+            needsReload = false;
+          } else {
+            _fail(update.failure ?? 'storage_unavailable');
+          }
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        update = await (gateway as AgentConversationGateway)
+            .pollConversationTurn(request, sequence);
+      }
+    } on Object catch (error) {
+      _fail(
+        error is AgentVaultException ? error.failure : 'transport_unavailable',
+      );
+    } finally {
+      try {
+        if (!done) {
+          var update = await (gateway as AgentConversationGateway)
+              .stopConversationTurn(request);
+          for (var attempt = 0; !update.done && attempt < 25; attempt++) {
+            await Future<void>.delayed(const Duration(milliseconds: 80));
+            update = await (gateway as AgentConversationGateway)
+                .pollConversationTurn(request, 0);
+          }
+          done = update.done;
+        }
+        if (done) {
+          await (gateway as AgentConversationGateway).releaseConversationTurn(
+            request,
+          );
+        }
+      } on Object {
+        needsReload = true;
+        failure ??= 'transport_unavailable';
+      }
+      _conversationRun = null;
+      _runSession = null;
+      _end();
+      progress = AgentProgress.idle;
+      _notify();
     }
   }
 
@@ -795,6 +905,10 @@ final class AgentController extends ChangeNotifier {
     try {
       if (_calendarRun case final request?) {
         await (gateway as AgentCalendarTurnGateway).stopCalendarTurn(request);
+      } else if (_conversationRun case final request?) {
+        await (gateway as AgentConversationGateway).stopConversationTurn(
+          request,
+        );
       } else {
         await gateway.stopAgentFixtureRun(original);
       }
@@ -821,9 +935,15 @@ final class AgentController extends ChangeNotifier {
         .where((message) => message.kind == AgentMessageKind.user)
         .lastOrNull;
     if (saved.scope == null) {
-      _lastPrompt = AgentFixturePrompt.values
-          .where((prompt) => prompt.sampleText == lastUser?.text)
-          .firstOrNull;
+      if (saved.dataClasses.singleOrNull == 'personal') {
+        _lastPrompt = null;
+        _lastConversationText = lastUser?.text;
+      } else {
+        _lastPrompt = AgentFixturePrompt.values
+            .where((prompt) => prompt.sampleText == lastUser?.text)
+            .firstOrNull;
+        _lastConversationText = null;
+      }
       _lastCalendarPrompt = null;
       _lastCalendarText = null;
     } else {

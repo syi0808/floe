@@ -48,6 +48,36 @@ pub enum AgentVaultActionDto {
     CalendarTurn {
         request: AgentCalendarTurnRequestDto,
     },
+    ConversationSession {
+        operation: AgentConversationSessionOperationDto,
+    },
+    ConversationTurn {
+        request: AgentConversationTurnRequestDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentConversationSessionOperationDto {
+    Start {},
+    Resume {},
+    Get {
+        session_id: String,
+    },
+    Recover {
+        session_id: String,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentConversationTurnRequestDto {
+    pub session_id: String,
+    pub expected_revision: u64,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_route: Option<AgentRemoteRouteDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

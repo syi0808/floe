@@ -10,6 +10,10 @@ Date: 2026-09-08. Implementation checkpoint; S4 remains **0/14**.
 - The Flutter app has no conversation model picker. It probes purpose availability,
   passes only `everyday_assistance` for general chat and keeps the paired-app token in
   Keychain.
+- When no enabled Calendar setup matches, the app now starts or resumes an encrypted
+  Personal conversation instead of falling back to the synthetic sample session.
+  Calendar-scoped conversations retain their granted source behavior; general
+  conversations advertise no capabilities and therefore cannot invent connector access.
 - The native host selects available Apple Foundation Models first, then the configured
   Go route. A server-local model is treated as local-machine placement. An external
   provider is admitted only when the user has enabled the separate external-transfer

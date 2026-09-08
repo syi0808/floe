@@ -24,6 +24,7 @@ use uuid::Uuid;
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 
 mod calendar_turn;
+mod conversation_turn;
 
 pub(crate) struct VaultBridge {
     root: PathBuf,
@@ -467,6 +468,66 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
             ))
         }
+        AgentVaultActionDto::ConversationSession { operation } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let session = match operation {
+                AgentConversationSessionOperationDto::Start {} => vault.create_session().await?,
+                AgentConversationSessionOperationDto::Resume {} => vault.resume_session().await?,
+                AgentConversationSessionOperationDto::Get { session_id } => {
+                    let session = vault.load(job.person, session_uuid(session_id)?).await?;
+                    if session.scope.is_some()
+                        || session.data_classes != [floe_agent::DataClass::Personal]
+                    {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    session
+                }
+                AgentConversationSessionOperationDto::Recover {
+                    session_id,
+                    expected_revision,
+                } => {
+                    conversation_turn::recover(vault, job.person, session_id, *expected_revision)
+                        .await?
+                }
+            };
+            Ok((
+                AgentVaultStateDto::Ready,
+                Some(session),
+                None,
+                None,
+                None,
+                None,
+            ))
+        }
+        AgentVaultActionDto::ConversationTurn { request } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let session = conversation_turn::run(
+                vault,
+                job.person,
+                request,
+                job.cancellation.clone(),
+                |event| {
+                    if let Ok(mut progress) = job.progress.lock() {
+                        if progress.events.len() < 64 {
+                            progress.events.push(event);
+                        } else {
+                            job.cancellation.cancel();
+                        }
+                    } else {
+                        job.cancellation.cancel();
+                    }
+                },
+            )
+            .await?;
+            Ok((
+                AgentVaultStateDto::Ready,
+                Some(session),
+                None,
+                None,
+                None,
+                None,
+            ))
+        }
         AgentVaultActionDto::InspectProposal {
             session_id,
             invocation_id,
@@ -637,6 +698,46 @@ mod tests {
             .request(person, id, AgentVaultOperationDto::Release {})
             .unwrap();
         result
+    }
+
+    #[test]
+    fn general_conversations_are_encrypted_personal_sessions_not_samples() {
+        let directory = tempfile::tempdir().unwrap();
+        let person = PersonId::new();
+        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+        perform(&worker, person, AgentVaultActionDto::Create {});
+        let created = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::ConversationSession {
+                operation: AgentConversationSessionOperationDto::Start {},
+            },
+        )
+        .session
+        .unwrap();
+        assert!(created.scope.is_none());
+        assert_eq!(created.data_classes, [floe_agent::DataClass::Personal]);
+        let resumed = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::ConversationSession {
+                operation: AgentConversationSessionOperationDto::Resume {},
+            },
+        )
+        .session
+        .unwrap();
+        assert_eq!(resumed.id, created.id);
+        let sample = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Resume {},
+            },
+        )
+        .session
+        .unwrap();
+        assert_ne!(sample.id, created.id);
+        assert_eq!(sample.data_classes, [floe_agent::DataClass::Synthetic]);
     }
 
     #[test]
@@ -841,13 +942,23 @@ mod tests {
                 session_id: session.id.to_string(),
                 expected_revision: session.revision,
             },
-            AgentFixtureOperationDto::Resume {},
         ] {
             let result = perform(&worker, person, AgentVaultActionDto::Session { operation });
             assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
             assert!(result.session.is_none());
             assert!(result.events.is_empty());
         }
+        let sample = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Session {
+                operation: AgentFixtureOperationDto::Resume {},
+            },
+        )
+        .session
+        .unwrap();
+        assert_ne!(sample.id, session.id);
+        assert_eq!(sample.data_classes, [floe_agent::DataClass::Synthetic]);
     }
 
     #[test]

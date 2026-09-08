@@ -66,7 +66,7 @@ class _AgentPanelState extends State<AgentPanel> {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
       if (restoreFocus) {
-        if (widget.controller.isCalendarConversation) {
+        if (widget.controller.isConnectedConversation) {
           _messageFocus.requestFocus();
         } else {
           _actionFocus.requestFocus();
@@ -117,7 +117,7 @@ class _AgentPanelState extends State<AgentPanel> {
                         ),
                       ),
                       FloeButton.icon(
-                        tooltip: controller.isCalendarConversation
+                        tooltip: controller.isConnectedConversation
                             ? strings.agentConnectedNewConversation
                             : strings.agentNewConversation,
                         onPressed:
@@ -139,6 +139,8 @@ class _AgentPanelState extends State<AgentPanel> {
                   Text(
                     controller.isCalendarConversation
                         ? strings.agentConnectedTitle
+                        : controller.isGeneralConversation
+                        ? strings.agentConversationTitle
                         : strings.agentSampleTitle,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
@@ -147,6 +149,8 @@ class _AgentPanelState extends State<AgentPanel> {
                     controller.usesVault
                         ? controller.isCalendarConversation
                               ? strings.agentConnectedBoundary
+                              : controller.isGeneralConversation
+                              ? strings.agentConversationBoundary
                               : strings.agentSecureSampleBoundary
                         : strings.agentSampleBoundary,
                     style: const TextStyle(
@@ -170,6 +174,8 @@ class _AgentPanelState extends State<AgentPanel> {
                         child: Text(
                           controller.isCalendarConversation
                               ? strings.agentConnectedEmpty
+                              : controller.isGeneralConversation
+                              ? strings.agentConversationEmpty
                               : strings.agentEmpty,
                           style: const TextStyle(color: FloePalette.neutral600),
                         ),
@@ -334,7 +340,7 @@ class _AgentPanelState extends State<AgentPanel> {
         ? strings.agentReload
         : controller.needsRecovery
         ? strings.agentRecover
-        : controller.isCalendarConversation
+        : controller.isConnectedConversation
         ? strings.agentConnectedSend
         : strings.agentSend;
     final VoidCallback? action = storageLocked
@@ -352,7 +358,7 @@ class _AgentPanelState extends State<AgentPanel> {
         : controller.needsRecovery
         ? () => controller.recover()
         : controller.canSend
-        ? controller.isCalendarConversation
+        ? controller.isConnectedConversation
               ? () => _sendText(controller)
               : () => controller.send(_prompt)
         : null;
@@ -374,13 +380,17 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          if (!storageLocked && controller.isCalendarConversation)
+          if (!storageLocked && controller.isConnectedConversation)
             FloeInput(
-              label: strings.agentConnectedPrompt,
+              label: controller.isGeneralConversation
+                  ? strings.agentConversationPrompt
+                  : strings.agentConnectedPrompt,
               controller: _composerText,
               focusNode: _messageFocus,
               enabled: controller.canSend,
-              placeholder: strings.agentConnectedEmpty,
+              placeholder: controller.isGeneralConversation
+                  ? strings.agentConversationEmpty
+                  : strings.agentConnectedEmpty,
               minLines: 2,
               maxLines: 5,
               textInputAction: TextInputAction.newline,
@@ -430,7 +440,7 @@ class _AgentPanelState extends State<AgentPanel> {
     if (text.isEmpty || !controller.canSend) return;
     _composerText.clear();
     setState(() {});
-    await controller.sendCalendarText(text);
+    await controller.sendText(text);
   }
 
   String? _status(AppLocalizations strings, AgentController controller) {
@@ -463,7 +473,7 @@ class _AgentPanelState extends State<AgentPanel> {
       'cancelled' => strings.agentStopped,
       'interrupted' => strings.agentRecovered,
       'model_unavailable' =>
-        controller.isCalendarConversation
+        controller.isConnectedConversation
             ? strings.agentConnectedUnavailable
             : strings.agentUnavailable,
       'consent_required' => strings.agentRemoteConsentRequired,

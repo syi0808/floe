@@ -202,6 +202,30 @@ abstract class AppLocalizations {
   /// **'Ask Floe'**
   String get agentConnectedSend;
 
+  /// No description provided for @agentConversationTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Private conversation'**
+  String get agentConversationTitle;
+
+  /// No description provided for @agentConversationBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages are encrypted on this device. Floe routes each turn locally or through your configured server purpose; no model is selected in this conversation.'**
+  String get agentConversationBoundary;
+
+  /// No description provided for @agentConversationEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Ask Floe anything…'**
+  String get agentConversationEmpty;
+
+  /// No description provided for @agentConversationPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Message'**
+  String get agentConversationPrompt;
+
   /// No description provided for @agentConnectedSource.
   ///
   /// In en, this message translates to:

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'agent_calendar_experts.dart';
 import 'agent_calendar_session_gateway.dart';
 import 'agent_calendar_turn_gateway.dart';
+import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
@@ -30,6 +31,7 @@ final class NativeAgentVaultGateway
         AgentProposalGateway,
         AgentCalendarSessionGateway,
         AgentCalendarTurnGateway,
+        AgentConversationGateway,
         AgentCalendarExpertGateway {
   NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
 
@@ -38,6 +40,127 @@ final class NativeAgentVaultGateway
   _VaultJob? _pending;
   AgentSession? _run;
   AgentCalendarTurnRequest? _calendarRun;
+  AgentConversationTurnRequest? _conversationRun;
+
+  @override
+  Future<AgentSession> startConversation(String personId) =>
+      _conversationSession(personId, {'kind': 'start'});
+
+  @override
+  Future<AgentSession> resumeConversation(String personId) =>
+      _conversationSession(personId, {'kind': 'resume'});
+
+  @override
+  Future<AgentSession> loadConversation(String personId, String sessionId) =>
+      _conversationSession(personId, {'kind': 'get', 'session_id': sessionId});
+
+  @override
+  Future<AgentSession> recoverConversation(AgentSession session) =>
+      _conversationSession(session.personId, {
+        'kind': 'recover',
+        'session_id': session.id,
+        'expected_revision': session.revision,
+      });
+
+  Future<AgentSession> _conversationSession(
+    String personId,
+    Map<String, Object?> operation,
+  ) async {
+    final result = await _perform(personId, {
+      'kind': 'conversation_session',
+      'operation': operation,
+    });
+    final session = AgentSession.fromJson(
+      Map<String, Object?>.from(result['session'] as Map),
+    );
+    if (result['state'] != 'ready' ||
+        session.personId != personId ||
+        session.scope != null ||
+        session.dataClasses.singleOrNull != 'personal') {
+      throw const FormatException('Conversation session mismatch');
+    }
+    return session;
+  }
+
+  @override
+  Future<AgentRunUpdate> beginConversationTurn(
+    AgentConversationTurnRequest turn,
+  ) async {
+    if (_conversationRun != null &&
+        !_sameConversationTurn(_conversationRun!, turn)) {
+      throw const AgentVaultException('conflict');
+    }
+    if (_conversationRun == null) {
+      if (_pending != null) await _drain();
+      _pending = _VaultJob(turn.session.personId, newAgentRequestId());
+      _run = turn.session;
+      _conversationRun = turn;
+    }
+    final serialized = turn.toJson();
+    if (resolveRemoteRoute != null) {
+      serialized['remote_route'] = await resolveRemoteRoute!();
+    }
+    return _conversationUpdate(
+      turn,
+      await _call(_pending!, {
+        'kind': 'submit',
+        'action': {'kind': 'conversation_turn', 'request': serialized},
+      }),
+    );
+  }
+
+  @override
+  Future<AgentRunUpdate> pollConversationTurn(
+    AgentConversationTurnRequest turn,
+    int afterSequence,
+  ) => _conversationCall(turn, {
+    'kind': 'poll',
+    'after_sequence': afterSequence,
+  });
+
+  @override
+  Future<AgentRunUpdate> stopConversationTurn(
+    AgentConversationTurnRequest turn,
+  ) => _conversationCall(turn, {'kind': 'stop'});
+
+  @override
+  Future<AgentRunUpdate> releaseConversationTurn(
+    AgentConversationTurnRequest turn,
+  ) async {
+    final result = await _conversationCall(turn, {'kind': 'release'});
+    _pending = null;
+    _run = null;
+    _conversationRun = null;
+    return result;
+  }
+
+  Future<AgentRunUpdate> _conversationCall(
+    AgentConversationTurnRequest turn,
+    Map<String, Object?> operation,
+  ) async {
+    if (_conversationRun == null ||
+        !_sameConversationTurn(_conversationRun!, turn)) {
+      throw const AgentVaultException('conflict');
+    }
+    return _conversationUpdate(turn, await _call(_pending!, operation));
+  }
+
+  AgentRunUpdate _conversationUpdate(
+    AgentConversationTurnRequest turn,
+    Map<String, dynamic> result,
+  ) => AgentRunUpdate.fromJson({
+    ...result,
+    'session_id': turn.session.id,
+    'expected_revision': turn.session.revision,
+  });
+
+  bool _sameConversationTurn(
+    AgentConversationTurnRequest left,
+    AgentConversationTurnRequest right,
+  ) =>
+      identical(left, right) ||
+      left.session.personId == right.session.personId &&
+          jsonEncode(left.toJson()) == jsonEncode(right.toJson());
 
   @override
   Future<AgentCalendarTurnUpdate> beginCalendarTurn(
@@ -381,6 +504,7 @@ final class NativeAgentVaultGateway
       _pending = null;
       _run = null;
       _calendarRun = null;
+      _conversationRun = null;
     }
   }
 
@@ -435,6 +559,7 @@ final class NativeAgentVaultGateway
     _pending = null;
     _run = null;
     _calendarRun = null;
+    _conversationRun = null;
     return result;
   }
 
@@ -481,6 +606,7 @@ final class NativeAgentVaultGateway
     _pending = null;
     _run = null;
     _calendarRun = null;
+    _conversationRun = null;
   }
 
   Map<String, Object?> _turn(AgentSession session, AgentFixturePrompt prompt) =>

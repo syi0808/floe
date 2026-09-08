@@ -67,6 +67,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConnectedSend => 'Ask Floe';
 
   @override
+  String get agentConversationTitle => 'Private conversation';
+
+  @override
+  String get agentConversationBoundary =>
+      'Messages are encrypted on this device. Floe routes each turn locally or through your configured server purpose; no model is selected in this conversation.';
+
+  @override
+  String get agentConversationEmpty => 'Ask Floe anything…';
+
+  @override
+  String get agentConversationPrompt => 'Message';
+
+  @override
   String get agentConnectedSource => 'Calendar evidence';
 
   @override
