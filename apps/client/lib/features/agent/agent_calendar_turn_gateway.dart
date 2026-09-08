@@ -19,7 +19,7 @@ final class AgentCalendarConversationContext {
       connection.selectedCalendarIds.isNotEmpty;
 }
 
-enum AgentCalendarPromptKind { briefing, proposeFocus }
+enum AgentCalendarPromptKind { briefing, proposeFocus, freeText }
 
 enum AgentCalendarModel {
   deterministicFixture('deterministic_fixture'),
@@ -59,8 +59,12 @@ final class AgentCalendarTurnRequest {
     required this.prompt,
     required this.focusMinutes,
     required this.model,
+    this.text,
     this.destination,
-  });
+  }) : assert(
+         prompt != AgentCalendarPromptKind.freeText ||
+             text != null && text.length > 0 && text.length <= 8192,
+       );
 
   final AgentSession session;
   final DayQuery day;
@@ -69,6 +73,7 @@ final class AgentCalendarTurnRequest {
   final AgentCalendarPromptKind prompt;
   final int focusMinutes;
   final AgentCalendarModel model;
+  final String? text;
   final AgentCalendarDestination? destination;
 
   Map<String, Object?> toJson() => {
@@ -78,8 +83,12 @@ final class AgentCalendarTurnRequest {
       'kind': switch (prompt) {
         AgentCalendarPromptKind.briefing => 'briefing',
         AgentCalendarPromptKind.proposeFocus => 'propose_focus',
+        AgentCalendarPromptKind.freeText => 'free_text',
       },
-      'focus_minutes': focusMinutes,
+      if (prompt == AgentCalendarPromptKind.freeText)
+        'text': text
+      else
+        'focus_minutes': focusMinutes,
     },
     'model': model.wireName,
     'day': {

@@ -175,13 +175,13 @@ abstract class AppLocalizations {
   /// No description provided for @agentConnectedEmpty.
   ///
   /// In en, this message translates to:
-  /// **'Ask for a briefing or propose a focus block using your enabled calendars.'**
+  /// **'Ask anything about your day or calendars…'**
   String get agentConnectedEmpty;
 
   /// No description provided for @agentConnectedPrompt.
   ///
   /// In en, this message translates to:
-  /// **'Calendar request'**
+  /// **'Message'**
   String get agentConnectedPrompt;
 
   /// No description provided for @agentConnectedBriefing.
@@ -235,8 +235,26 @@ abstract class AppLocalizations {
   /// No description provided for @agentConnectedUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'The selected on-device model is unavailable. Your saved conversation is kept.'**
+  /// **'No local or server route is available. Check Apple Intelligence or configure Everyday assistance in Server settings. Your saved conversation is kept.'**
   String get agentConnectedUnavailable;
+
+  /// No description provided for @agentRemoteConsentRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'The on-device model is unavailable and the server route needs external-transfer consent. Enable it in Server settings or use a local server model.'**
+  String get agentRemoteConsentRequired;
+
+  /// No description provided for @agentRemoteCredentialExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'The server model credential is unavailable or expired. Reconnect it in the server dashboard.'**
+  String get agentRemoteCredentialExpired;
+
+  /// No description provided for @agentRemoteQuotaExceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured server model is busy or over quota. Try again later or configure another route.'**
+  String get agentRemoteQuotaExceeded;
 
   /// No description provided for @agentConnectedBudget.
   ///

@@ -35,6 +35,7 @@ final class AgentController extends ChangeNotifier {
   AgentSession? _runSession;
   AgentFixturePrompt? _lastPrompt;
   AgentCalendarPromptKind? _lastCalendarPrompt;
+  String? _lastCalendarText;
   int _lastFocusMinutes = 60;
   AgentCalendarTurnRequest? _calendarRun;
   AgentCalendarConversationContext? _activeCalendarContext;
@@ -493,7 +494,14 @@ final class AgentController extends ChangeNotifier {
   Future<void> retry() async {
     if (!canRetry) return;
     if (isCalendarConversation) {
-      await sendCalendar(_lastCalendarPrompt!, focusMinutes: _lastFocusMinutes);
+      if (_lastCalendarPrompt == AgentCalendarPromptKind.freeText) {
+        await sendCalendarText(_lastCalendarText!);
+      } else {
+        await sendCalendar(
+          _lastCalendarPrompt!,
+          focusMinutes: _lastFocusMinutes,
+        );
+      }
     } else {
       await send(_lastPrompt!);
     }
@@ -620,6 +628,18 @@ final class AgentController extends ChangeNotifier {
   Future<void> sendCalendar(
     AgentCalendarPromptKind prompt, {
     int focusMinutes = 60,
+  }) => _sendCalendar(prompt, focusMinutes: focusMinutes);
+
+  Future<void> sendCalendarText(String text) {
+    final normalized = text.trim();
+    if (normalized.isEmpty || normalized.length > 8192) return Future.value();
+    return _sendCalendar(AgentCalendarPromptKind.freeText, text: normalized);
+  }
+
+  Future<void> _sendCalendar(
+    AgentCalendarPromptKind prompt, {
+    int focusMinutes = 60,
+    String? text,
   }) async {
     if (!canSend ||
         _disposed ||
@@ -662,6 +682,7 @@ final class AgentController extends ChangeNotifier {
       endsAt: context.day.endsAt,
       prompt: prompt,
       focusMinutes: focusMinutes,
+      text: text,
       model: scope.provider == 'fixture'
           ? AgentCalendarModel.deterministicFixture
           : AgentCalendarModel.foundationModels,
@@ -678,6 +699,7 @@ final class AgentController extends ChangeNotifier {
     _calendarRun = request;
     _runSession = original;
     _lastCalendarPrompt = prompt;
+    _lastCalendarText = text;
     _lastFocusMinutes = focusMinutes;
     _begin();
     _stopRequested = false;
@@ -803,6 +825,7 @@ final class AgentController extends ChangeNotifier {
           .where((prompt) => prompt.sampleText == lastUser?.text)
           .firstOrNull;
       _lastCalendarPrompt = null;
+      _lastCalendarText = null;
     } else {
       _lastPrompt = null;
       _lastCalendarPrompt = switch (lastUser?.text) {
@@ -810,8 +833,14 @@ final class AgentController extends ChangeNotifier {
           AgentCalendarPromptKind.briefing,
         final text? when text.startsWith('Propose a ') =>
           AgentCalendarPromptKind.proposeFocus,
+        final text? when text.trim().isNotEmpty =>
+          AgentCalendarPromptKind.freeText,
         _ => null,
       };
+      _lastCalendarText =
+          _lastCalendarPrompt == AgentCalendarPromptKind.freeText
+          ? lastUser?.text
+          : null;
     }
   }
 

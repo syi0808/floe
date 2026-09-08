@@ -52,11 +52,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConnectedNewConversation => 'New Calendar conversation';
 
   @override
-  String get agentConnectedEmpty =>
-      'Ask for a briefing or propose a focus block using your enabled calendars.';
+  String get agentConnectedEmpty => 'Ask anything about your day or calendars…';
 
   @override
-  String get agentConnectedPrompt => 'Calendar request';
+  String get agentConnectedPrompt => 'Message';
 
   @override
   String get agentConnectedBriefing => 'Brief my calendar';
@@ -85,7 +84,19 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentConnectedUnavailable =>
-      'The selected on-device model is unavailable. Your saved conversation is kept.';
+      'No local or server route is available. Check Apple Intelligence or configure Everyday assistance in Server settings. Your saved conversation is kept.';
+
+  @override
+  String get agentRemoteConsentRequired =>
+      'The on-device model is unavailable and the server route needs external-transfer consent. Enable it in Server settings or use a local server model.';
+
+  @override
+  String get agentRemoteCredentialExpired =>
+      'The server model credential is unavailable or expired. Reconnect it in the server dashboard.';
+
+  @override
+  String get agentRemoteQuotaExceeded =>
+      'The configured server model is busy or over quota. Try again later or configure another route.';
 
   @override
   String get agentConnectedBudget =>

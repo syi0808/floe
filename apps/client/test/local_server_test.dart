@@ -41,7 +41,17 @@ void main() {
       );
       await client.save(saved);
       final restored = await LocalServerClient(store: store).connection();
-      expect(restored?.toJson().keys, ['base_url', 'token', 'client_id']);
+      expect(restored?.toJson().keys, [
+        'base_url',
+        'token',
+        'client_id',
+        'allow_external',
+      ]);
+      expect(restored?.allowExternal, isFalse);
+      final consented = saved.withExternalConsent(true);
+      expect(consented.allowExternal, isTrue);
+      expect(consented.toJson(), isNot(contains('model')));
+      expect(consented.toJson(), isNot(contains('inference_class')));
       await store.delete();
       expect(await client.connection(), isNull);
     },

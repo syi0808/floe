@@ -79,13 +79,39 @@ pub struct AgentCalendarTurnRequestDto {
     pub starts_at: chrono::DateTime<chrono::Utc>,
     pub ends_at: chrono::DateTime<chrono::Utc>,
     pub destination: Option<AgentCalendarDestinationDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_route: Option<AgentRemoteRouteDto>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRemoteRouteDto {
+    pub base_url: String,
+    pub bearer_token: String,
+    pub purpose: String,
+    pub external: bool,
+    pub allow_external: bool,
+}
+
+impl std::fmt::Debug for AgentRemoteRouteDto {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentRemoteRouteDto")
+            .field("base_url", &self.base_url)
+            .field("bearer_token", &"[REDACTED]")
+            .field("purpose", &self.purpose)
+            .field("external", &self.external)
+            .field("allow_external", &self.allow_external)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentCalendarPromptDto {
     Briefing { focus_minutes: u16 },
     ProposeFocus { focus_minutes: u16 },
+    FreeText { text: String },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -14,7 +14,11 @@ use floe_protocol::{
     AgentCalendarTurnRequestDto, AgentCalendarTurnResultDto, PROTOCOL_VERSION,
 };
 
-use crate::{local_model::FoundationModelRunner, native_calendar::NativeCalendar};
+use crate::{
+    local_model::{FoundationModelRunner, LocalModelAvailability},
+    native_calendar::NativeCalendar,
+    remote_model::ServerModelRunner,
+};
 
 use super::{calendar_action, session_uuid};
 
@@ -60,10 +64,37 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     {
         return Err(AgentFailure::PolicyDenied);
     }
+    if (request.day.end_date_exclusive - request.day.start_date).num_days() != 1
+        || request.starts_at >= request.ends_at
+        || request.ends_at - request.starts_at > chrono::Duration::hours(24)
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let prompt = prompt_text(&request.prompt)?;
     let now = chrono::Utc::now();
     let data_class = match binding.provider {
         CalendarProvider::Fixture => DataClass::Synthetic,
         CalendarProvider::EventKit => DataClass::Personal,
+    };
+    if request.remote_route.is_some()
+        && !matches!(request.prompt, AgentCalendarPromptDto::FreeText { .. })
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let model = Model::new(
+        request.model,
+        request.prompt.clone(),
+        request.remote_route.clone(),
+    )?;
+    let placement = model.placement();
+    let external_consent = if request
+        .remote_route
+        .as_ref()
+        .is_some_and(|route| route.external && route.allow_external)
+    {
+        TransferConsent::Granted
+    } else {
+        TransferConsent::NotGranted
     };
     let turn = CalendarAgentTurnRequest {
         command: AgentCommand {
@@ -71,23 +102,24 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
             person_id,
             session_id,
             expected_revision: request.expected_revision,
-            text: prompt_text(request.prompt),
+            text: prompt,
         },
         context: AgentContext {
             projection_version: 1,
             evidence: vec![],
         },
         policy: InferencePolicyDecision {
-            purpose: match request.prompt {
+            purpose: match &request.prompt {
                 AgentCalendarPromptDto::Briefing { .. } => "calendar-briefing",
                 AgentCalendarPromptDto::ProposeFocus { .. } => "calendar-focus-proposal",
+                AgentCalendarPromptDto::FreeText { .. } => "everyday-assistance",
             }
             .into(),
             data_classes: vec![data_class],
-            allowed_placements: vec![ModelPlacement::DeviceLocal],
+            allowed_placements: vec![placement],
             performance_class: "interactive".into(),
             projection_version: 1,
-            external_transfer_consent: TransferConsent::NotGranted,
+            external_transfer_consent: external_consent,
             bounded_sensitive_projection: false,
         },
         budget: AgentBudget::default(),
@@ -115,7 +147,6 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         cancellation,
     };
     let access = Access::new(binding.provider, binding.calendar_ids.clone());
-    let model = Model::new(request.model, request.prompt);
     let result = core
         .run_calendar_agent_turn(vault, &access, &model, turn, chrono::Utc::now, emit)
         .await?;
@@ -146,14 +177,20 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     Ok((result.session, response))
 }
 
-fn prompt_text(prompt: AgentCalendarPromptDto) -> String {
+fn prompt_text(prompt: &AgentCalendarPromptDto) -> Result<String, AgentFailure> {
     match prompt {
-        AgentCalendarPromptDto::Briefing { focus_minutes } => {
-            format!("Brief today's calendar and find a {focus_minutes}-minute focus window.")
+        AgentCalendarPromptDto::Briefing { focus_minutes } => Ok(format!(
+            "Brief today's calendar and find a {focus_minutes}-minute focus window."
+        )),
+        AgentCalendarPromptDto::ProposeFocus { focus_minutes } => Ok(format!(
+            "Propose a {focus_minutes}-minute focus block from today's calendar."
+        )),
+        AgentCalendarPromptDto::FreeText { text }
+            if !text.trim().is_empty() && text.len() <= 8_192 =>
+        {
+            Ok(text.trim().to_owned())
         }
-        AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
-            format!("Propose a {focus_minutes}-minute focus block from today's calendar.")
-        }
+        AgentCalendarPromptDto::FreeText { .. } => Err(AgentFailure::InvalidInput),
     }
 }
 
@@ -216,16 +253,28 @@ impl CalendarReadAccess for FixtureAccess {
 enum Model {
     Deterministic(DeterministicModel),
     Foundation(FoundationModelRunner),
+    Server(ServerModelRunner),
 }
 
 impl Model {
-    fn new(selection: AgentCalendarModelDto, prompt: AgentCalendarPromptDto) -> Self {
+    fn new(
+        selection: AgentCalendarModelDto,
+        prompt: AgentCalendarPromptDto,
+        remote_route: Option<floe_protocol::AgentRemoteRouteDto>,
+    ) -> Result<Self, AgentFailure> {
         match selection {
             AgentCalendarModelDto::DeterministicFixture => {
-                Self::Deterministic(DeterministicModel { prompt })
+                Ok(Self::Deterministic(DeterministicModel { prompt }))
             }
             AgentCalendarModelDto::FoundationModels => {
-                Self::Foundation(FoundationModelRunner::encrypted())
+                let local = FoundationModelRunner::encrypted();
+                if matches!(local.availability(), Ok(LocalModelAvailability::Available)) {
+                    Ok(Self::Foundation(local))
+                } else if let Some(route) = remote_route {
+                    ServerModelRunner::new(route).map(Self::Server)
+                } else {
+                    Ok(Self::Foundation(local))
+                }
             }
         }
     }
@@ -236,6 +285,7 @@ impl ModelRunner for Model {
         match self {
             Self::Deterministic(model) => model.placement(),
             Self::Foundation(model) => model.placement(),
+            Self::Server(model) => model.placement(),
         }
     }
 
@@ -243,6 +293,7 @@ impl ModelRunner for Model {
         match self {
             Self::Deterministic(model) => model.generate(request).await,
             Self::Foundation(model) => model.generate(request).await,
+            Self::Server(model) => model.generate(request).await,
         }
     }
 }
@@ -276,12 +327,17 @@ impl ModelRunner for DeterministicModel {
                     .into(),
             }
         } else {
-            let input = match self.prompt {
-                AgentCalendarPromptDto::Briefing { focus_minutes } => {
-                    ExpertInput::Briefing { focus_minutes }
-                }
+            let input = match &self.prompt {
+                AgentCalendarPromptDto::Briefing { focus_minutes } => ExpertInput::Briefing {
+                    focus_minutes: *focus_minutes,
+                },
                 AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
-                    ExpertInput::ProposeFocus { focus_minutes }
+                    ExpertInput::ProposeFocus {
+                        focus_minutes: *focus_minutes,
+                    }
+                }
+                AgentCalendarPromptDto::FreeText { .. } => {
+                    ExpertInput::Briefing { focus_minutes: 60 }
                 }
             };
             ModelStep::Call {

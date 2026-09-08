@@ -132,6 +132,7 @@ fn fixture() -> Fixture {
             connection_revision: connection.revision,
             timezone: "UTC".into(),
         }),
+        remote_route: None,
     };
     let worker = Worker::with_core(root, keys, core.clone()).unwrap();
     perform(&worker, person, AgentVaultActionDto::Unlock {});

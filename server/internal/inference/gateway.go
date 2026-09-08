@@ -2,10 +2,12 @@ package inference
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -37,11 +39,13 @@ type CodexClient interface {
 
 type Request struct {
 	SchemaVersion  int             `json:"schema_version"`
-	InferenceClass string          `json:"inference_class"`
+	InferenceClass string          `json:"inference_class,omitempty"`
+	Purpose        string          `json:"purpose,omitempty"`
 	AllowExternal  bool            `json:"allow_external"`
 	Instructions   string          `json:"instructions"`
 	Input          json.RawMessage `json:"input"`
 	OutputSchema   json.RawMessage `json:"output_schema"`
+	ReplayOf       string          `json:"replay_of,omitempty"`
 }
 
 type Gateway struct {
@@ -50,6 +54,7 @@ type Gateway struct {
 	routes    map[string]route
 	active    chan struct{}
 	timeout   time.Duration
+	audit     *auditLog
 }
 
 var targetID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -63,7 +68,7 @@ func New(config Config, token string, lookup func(string) string, codex ...Codex
 	if len(token) < 32 || strings.ContainsAny(token, "\r\n ") || len(config.Targets) > 32 || len(config.Routes) > 8 {
 		return nil, errors.New("invalid inference configuration")
 	}
-	gateway := &Gateway{tokenHash: sha256.Sum256([]byte(token)), targets: make(map[string]*provider), routes: make(map[string]route), active: make(chan struct{}, 4), timeout: 40 * time.Second}
+	gateway := &Gateway{tokenHash: sha256.Sum256([]byte(token)), targets: make(map[string]*provider), routes: make(map[string]route), active: make(chan struct{}, 4), timeout: 40 * time.Second, audit: newAuditLog(256)}
 	var codexClient CodexClient
 	if len(codex) > 0 {
 		codexClient = codex[0]
@@ -96,6 +101,23 @@ func ValidClass(value string) bool {
 	return value == "fast" || value == "balanced" || value == "high_effort"
 }
 
+func ValidPurpose(value string) bool {
+	return value == "quick_response" || value == "everyday_assistance" || value == "deep_work"
+}
+
+func classForPurpose(value string) string {
+	switch value {
+	case "quick_response":
+		return "fast"
+	case "everyday_assistance":
+		return "balanced"
+	case "deep_work":
+		return "high_effort"
+	default:
+		return ""
+	}
+}
+
 func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -118,7 +140,26 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "inference_classes": classes})
 		return
 	}
-	if request.Method != http.MethodPost || request.URL.Path != "/v1/generate" {
+	if request.Method == http.MethodGet && request.URL.Path == "/v2/inference-purposes" {
+		purposes := make(map[string]any, 3)
+		for _, purpose := range []string{"quick_response", "everyday_assistance", "deep_work"} {
+			configured, available := gateway.routes[classForPurpose(purpose)]
+			purposes[purpose] = map[string]any{"available": available, "requires_external_consent": available && configured.provider.external}
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "purposes": purposes})
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v2/traces/") {
+		identifier := strings.TrimPrefix(request.URL.Path, "/v2/traces/")
+		record, exists := gateway.audit.get(identifier)
+		if !exists {
+			writeError(writer, http.StatusNotFound, "trace_not_found")
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "trace": record})
+		return
+	}
+	if request.Method != http.MethodPost || (request.URL.Path != "/v1/generate" && request.URL.Path != "/v2/generate") {
 		writeError(writer, http.StatusNotFound, "not_found")
 		return
 	}
@@ -129,10 +170,21 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, "validation")
 		return
 	}
-	configured, exists := gateway.routes[input.InferenceClass]
+	class := input.InferenceClass
+	if input.SchemaVersion == 2 {
+		class = classForPurpose(input.Purpose)
+	}
+	configured, exists := gateway.routes[class]
 	if !exists {
-		writeError(writer, http.StatusBadRequest, "inference_class_unavailable")
+		writeError(writer, http.StatusBadRequest, "route_unavailable")
 		return
+	}
+	if input.ReplayOf != "" {
+		original, found := gateway.audit.get(input.ReplayOf)
+		if !found || original.Outcome != "completed" || original.RequestDigest != requestDigest(input) {
+			writeError(writer, http.StatusConflict, "replay_mismatch")
+			return
+		}
 	}
 	adapter := configured.provider
 	if adapter.external && !input.AllowExternal {
@@ -149,6 +201,11 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	ctx, cancel := context.WithTimeout(request.Context(), gateway.timeout)
 	defer cancel()
 	output, err := adapter.generate(ctx, input, configured.effort)
+	traceID := newTraceID()
+	placement := "server_local"
+	if adapter.external {
+		placement = "remote"
+	}
 	if err != nil {
 		code := "model_unavailable"
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -156,21 +213,51 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		} else if errors.Is(err, errInvalidOutput) {
 			code = "invalid_proposal"
 		}
-		writeError(writer, http.StatusBadGateway, code)
+		gateway.audit.add(newAuditRecord(traceID, input, placement, code, ""))
+		writeErrorWithTrace(writer, http.StatusBadGateway, code, traceID)
 		return
 	}
-	_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "inference_class": input.InferenceClass, "output": output})
+	gateway.audit.add(newAuditRecord(traceID, input, placement, "completed", output))
+	if input.SchemaVersion == 1 {
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "inference_class": class, "output": output, "trace_id": traceID})
+		return
+	}
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"schema_version": 2,
+		"purpose":        input.Purpose,
+		"output":         output,
+		"routing":        map[string]any{"placement": placement, "external_transfer": adapter.external},
+		"trace_id":       traceID,
+	})
 }
 
 func validRequest(request Request) bool {
 	var schema map[string]any
-	return request.SchemaVersion == 1 && ValidClass(request.InferenceClass) &&
+	validRoute := request.SchemaVersion == 1 && ValidClass(request.InferenceClass) && request.Purpose == "" && request.ReplayOf == "" ||
+		request.SchemaVersion == 2 && request.InferenceClass == "" && ValidPurpose(request.Purpose)
+	validReplay := request.ReplayOf == "" || len(request.ReplayOf) == 32 && strings.IndexFunc(request.ReplayOf, func(value rune) bool {
+		return value < '0' || value > '9' && value < 'a' || value > 'f'
+	}) == -1
+	return validRoute && validReplay &&
 		len(request.Instructions) > 0 && len(request.Instructions) <= 8192 &&
 		len(request.Input) > 0 && len(request.Input) <= 32768 && json.Valid(request.Input) &&
 		len(request.OutputSchema) <= 32768 && json.Unmarshal(request.OutputSchema, &schema) == nil && schema["type"] == "object"
 }
 
+func newTraceID() string {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		panic("crypto/rand unavailable")
+	}
+	return fmt.Sprintf("%x", value)
+}
+
 func writeError(writer http.ResponseWriter, status int, code string) {
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "error": map[string]string{"code": code}})
+}
+
+func writeErrorWithTrace(writer http.ResponseWriter, status int, code, traceID string) {
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "error": map[string]string{"code": code}, "trace_id": traceID})
 }

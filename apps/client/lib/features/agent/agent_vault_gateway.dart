@@ -31,9 +31,10 @@ final class NativeAgentVaultGateway
         AgentCalendarSessionGateway,
         AgentCalendarTurnGateway,
         AgentCalendarExpertGateway {
-  NativeAgentVaultGateway(this.request);
+  NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
+  final Future<Map<String, Object?>?> Function()? resolveRemoteRoute;
   _VaultJob? _pending;
   AgentSession? _run;
   AgentCalendarTurnRequest? _calendarRun;
@@ -55,11 +56,16 @@ final class NativeAgentVaultGateway
       _run = turn.session;
       _calendarRun = turn;
     }
+    final serialized = turn.toJson();
+    if (turn.prompt == AgentCalendarPromptKind.freeText &&
+        resolveRemoteRoute != null) {
+      serialized['remote_route'] = await resolveRemoteRoute!();
+    }
     return _calendarUpdate(
       turn,
       await _call(_pending!, {
         'kind': 'submit',
-        'action': {'kind': 'calendar_turn', 'request': turn.toJson()},
+        'action': {'kind': 'calendar_turn', 'request': serialized},
       }),
     );
   }

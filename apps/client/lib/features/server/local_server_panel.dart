@@ -200,6 +200,28 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
           ),
           const SizedBox(height: 16),
           Semantics(liveRegion: true, child: Text(status)),
+          if (connection case final saved?) ...[
+            const SizedBox(height: 16),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Allow external model transfer'),
+              subtitle: const Text(
+                'When enabled, Floe may send the minimum required conversation context to a remote provider selected by the server. Turn this off to withdraw consent.',
+              ),
+              value: saved.allowExternal,
+              onChanged: busy
+                  ? null
+                  : (value) => _run(() async {
+                      final updated = saved.withExternalConsent(value);
+                      await widget.client.save(updated);
+                      if (!mounted) return;
+                      connection = updated;
+                      status = value
+                          ? 'External transfer consent granted'
+                          : 'External transfer consent withdrawn';
+                    }),
+            ),
+          ],
           if (code != null) ...[
             const SizedBox(height: 16),
             SelectableText(

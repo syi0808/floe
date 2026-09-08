@@ -7,7 +7,7 @@ let polling = false;
 let codexPending = false;
 let editing = false;
 let state = {providers: {}, clients: []};
-let selectedProvider = 'codex_oauth';
+let selectedProvider = 'openai_compatible';
 
 function notice(message) { element('notice').textContent = message; }
 async function api(path, body) {
@@ -55,7 +55,7 @@ function renderProvider() {
   form.elements.provider.value = selectedProvider;
   element('provider-heading').replaceChildren(
     text('h2', isCodex ? 'Codex OAuth' : 'OpenAI-compatible API'),
-    text('p', isCodex ? 'Use a ChatGPT subscription through server-owned OAuth.' : 'Use one compatible endpoint and its server-owned credential.'),
+    text('p', isCodex ? 'Experimental Codex-client login; use an API key for the official production path.' : 'Use one compatible endpoint and its server-owned credential.'),
   );
   element('codex-auth').hidden = !isCodex;
   element('api-connection').hidden = isCodex;

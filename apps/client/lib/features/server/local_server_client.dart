@@ -33,17 +33,58 @@ class ServerConnection {
     required this.address,
     required this.token,
     required this.clientId,
+    this.allowExternal = false,
   });
 
   final String address;
   final String token;
   final String clientId;
+  final bool allowExternal;
 
-  Map<String, String> toJson() => {
+  Map<String, Object> toJson() => {
     'base_url': address,
     'token': token,
     'client_id': clientId,
+    'allow_external': allowExternal,
   };
+
+  ServerConnection withExternalConsent(bool value) => ServerConnection(
+    address: address,
+    token: token,
+    clientId: clientId,
+    allowExternal: value,
+  );
+}
+
+enum InferencePurpose {
+  quickResponse('quick_response'),
+  everydayAssistance('everyday_assistance'),
+  deepWork('deep_work');
+
+  const InferencePurpose(this.wireName);
+  final String wireName;
+}
+
+final class InferencePurposeAvailability {
+  const InferencePurposeAvailability({
+    required this.available,
+    required this.requiresExternalConsent,
+  });
+  final bool available;
+  final bool requiresExternalConsent;
+}
+
+final class RemoteGenerationResult {
+  const RemoteGenerationResult({
+    required this.output,
+    required this.traceId,
+    required this.placement,
+    required this.externalTransfer,
+  });
+  final String output;
+  final String traceId;
+  final String placement;
+  final bool externalTransfer;
 }
 
 class ServerConnectionException implements Exception {
@@ -89,6 +130,7 @@ class LocalServerClient {
         address: address,
         token: token,
         clientId: value['client_id'] as String,
+        allowExternal: value['allow_external'] == true,
       );
     } on Object {
       throw const ServerConnectionException('invalid_saved_connection');
@@ -131,6 +173,7 @@ class LocalServerClient {
         if (response.statusCode != 200) {
           throw ServerConnectionException(switch (response.statusCode) {
             401 => 'authorization_required',
+            403 => 'external_transfer_denied',
             429 => 'pairing_in_progress',
             _ => 'server_rejected',
           });
@@ -149,13 +192,73 @@ class LocalServerClient {
   Future<void> checkConnection(ServerConnection value) async {
     final response = await request(
       value.address,
-      '/v1/inference-classes',
+      '/v2/inference-purposes',
       token: value.token,
     );
-    if (response['schema_version'] != 1 ||
-        response['inference_classes'] is! Map<String, dynamic>) {
+    if (response['schema_version'] != 2 ||
+        response['purposes'] is! Map<String, dynamic>) {
       throw const ServerConnectionException('invalid_response');
     }
+  }
+
+  Future<Map<InferencePurpose, InferencePurposeAvailability>> purposes(
+    ServerConnection connection,
+  ) async {
+    final response = await request(
+      connection.address,
+      '/v2/inference-purposes',
+      token: connection.token,
+    );
+    final values = Map<String, dynamic>.from(response['purposes'] as Map);
+    return {
+      for (final purpose in InferencePurpose.values)
+        purpose: InferencePurposeAvailability(
+          available: (values[purpose.wireName] as Map?)?['available'] == true,
+          requiresExternalConsent:
+              (values[purpose.wireName]
+                  as Map?)?['requires_external_consent'] ==
+              true,
+        ),
+    };
+  }
+
+  Future<RemoteGenerationResult> generate({
+    required ServerConnection connection,
+    required InferencePurpose purpose,
+    required String instructions,
+    required Object input,
+    required Map<String, Object?> outputSchema,
+    String? replayOf,
+  }) async {
+    final response = await request(
+      connection.address,
+      '/v2/generate',
+      token: connection.token,
+      body: {
+        'schema_version': 2,
+        'purpose': purpose.wireName,
+        'allow_external': connection.allowExternal,
+        'instructions': instructions,
+        'input': input,
+        'output_schema': outputSchema,
+        'replay_of': ?replayOf,
+      },
+    );
+    final routing = Map<String, dynamic>.from(response['routing'] as Map);
+    if (response['schema_version'] != 2 ||
+        response['purpose'] != purpose.wireName ||
+        response['output'] is! String ||
+        response['trace_id'] is! String ||
+        routing['placement'] is! String ||
+        routing['external_transfer'] is! bool) {
+      throw const ServerConnectionException('invalid_response');
+    }
+    return RemoteGenerationResult(
+      output: response['output'] as String,
+      traceId: response['trace_id'] as String,
+      placement: routing['placement'] as String,
+      externalTransfer: routing['external_transfer'] as bool,
+    );
   }
 
   Future<void> openDashboard(String address) => KeychainServerCredentialStore

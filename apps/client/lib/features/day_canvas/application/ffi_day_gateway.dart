@@ -60,7 +60,27 @@ final class FfiDayGateway
   bool _closed = false;
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
+    resolveRemoteRoute: _remoteRoute,
   );
+
+  Future<Map<String, Object?>?> _remoteRoute() async {
+    try {
+      final connection = await serverClient.connection();
+      if (connection == null) return null;
+      final availability = await serverClient.purposes(connection);
+      final route = availability[InferencePurpose.everydayAssistance];
+      if (route == null || !route.available) return null;
+      return {
+        'base_url': connection.address,
+        'bearer_token': connection.token,
+        'purpose': InferencePurpose.everydayAssistance.wireName,
+        'external': route.requiresExternalConsent,
+        'allow_external': connection.allowExternal,
+      };
+    } on ServerConnectionException {
+      return null;
+    }
+  }
 
   Future<Map<String, dynamic>> _vaultRequest(
     Map<String, Object?> request,

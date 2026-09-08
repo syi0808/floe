@@ -71,12 +71,20 @@ void main() {
     );
 
     expect(find.text('Calendar conversation'), findsOneWidget);
-    expect(find.text('Brief my calendar'), findsOneWidget);
+    expect(find.text('Message'), findsOneWidget);
     expect(find.text('Send sample'), findsNothing);
+    await tester.enterText(
+      find.byType(TextFormField),
+      'What does the rest of my day look like?',
+    );
     await tester.tap(find.text('Ask Floe'));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    expect(
+      gateway.turns.single.text,
+      'What does the rest of my day look like?',
+    );
     expect(find.text('Your Calendar is clear after 11:00.'), findsOneWidget);
     expect(find.text('View Calendar source'), findsOneWidget);
     expect(tester.takeException(), isNull);

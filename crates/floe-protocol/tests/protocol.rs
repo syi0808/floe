@@ -143,6 +143,39 @@ fn calendar_turn_transport_requires_explicit_bounded_model_and_destination() {
 }
 
 #[test]
+fn free_text_calendar_turn_accepts_only_a_redacted_server_route() {
+    let action = json!({
+        "kind": "calendar_turn",
+        "request": {
+            "session_id": Uuid::new_v4(),
+            "expected_revision": 3,
+            "prompt": {"kind": "free_text", "text": "What is next?"},
+            "model": "foundation_models",
+            "day": {
+                "start_date": "2026-09-08",
+                "end_date_exclusive": "2026-09-09",
+                "timezone_offset_seconds": 32400
+            },
+            "starts_at": "2026-09-08T00:00:00Z",
+            "ends_at": "2026-09-08T12:00:00Z",
+            "destination": null,
+            "remote_route": {
+                "base_url": "http://127.0.0.1:8431",
+                "bearer_token": "secret_token_value_that_is_long_enough",
+                "purpose": "everyday_assistance",
+                "external": true,
+                "allow_external": false
+            }
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), action);
+    let rendered = format!("{parsed:?}");
+    assert!(!rendered.contains("secret_token_value_that_is_long_enough"));
+    assert!(rendered.contains("[REDACTED]"));
+}
+
+#[test]
 fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     let action = json!({
         "kind": "inspect_proposal",

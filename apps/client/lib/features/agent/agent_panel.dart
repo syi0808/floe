@@ -4,12 +4,12 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_input.dart';
 import '../../app/floe_mascot.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_capability_label.dart';
-import 'agent_calendar_turn_gateway.dart';
 import 'agent_controller.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_proposal_card.dart';
@@ -34,8 +34,9 @@ class AgentPanel extends StatefulWidget {
 class _AgentPanelState extends State<AgentPanel> {
   final _scroll = ScrollController();
   final _actionFocus = FocusNode();
+  final _messageFocus = FocusNode();
+  final _composerText = TextEditingController();
   AgentFixturePrompt _prompt = AgentFixturePrompt.today;
-  AgentCalendarPromptKind _calendarPrompt = AgentCalendarPromptKind.briefing;
   bool _wasBusy = false;
 
   @override
@@ -64,7 +65,13 @@ class _AgentPanelState extends State<AgentPanel> {
       if (follow && _scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
       }
-      if (restoreFocus) _actionFocus.requestFocus();
+      if (restoreFocus) {
+        if (widget.controller.isCalendarConversation) {
+          _messageFocus.requestFocus();
+        } else {
+          _actionFocus.requestFocus();
+        }
+      }
     });
   }
 
@@ -73,6 +80,8 @@ class _AgentPanelState extends State<AgentPanel> {
     widget.controller.removeListener(_changed);
     _scroll.dispose();
     _actionFocus.dispose();
+    _messageFocus.dispose();
+    _composerText.dispose();
     super.dispose();
   }
 
@@ -344,7 +353,7 @@ class _AgentPanelState extends State<AgentPanel> {
         ? () => controller.recover()
         : controller.canSend
         ? controller.isCalendarConversation
-              ? () => controller.sendCalendar(_calendarPrompt)
+              ? () => _sendText(controller)
               : () => controller.send(_prompt)
         : null;
     return Padding(
@@ -366,23 +375,18 @@ class _AgentPanelState extends State<AgentPanel> {
             const SizedBox(height: FloeSpace.md),
           ],
           if (!storageLocked && controller.isCalendarConversation)
-            FloeSelect<AgentCalendarPromptKind>(
+            FloeInput(
               label: strings.agentConnectedPrompt,
-              value: _calendarPrompt,
+              controller: _composerText,
+              focusNode: _messageFocus,
               enabled: controller.canSend,
-              options: [
-                FloeSelectOption(
-                  value: AgentCalendarPromptKind.briefing,
-                  label: strings.agentConnectedBriefing,
-                ),
-                FloeSelectOption(
-                  value: AgentCalendarPromptKind.proposeFocus,
-                  label: strings.agentConnectedFocus,
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _calendarPrompt = value);
-              },
+              placeholder: strings.agentConnectedEmpty,
+              minLines: 2,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              textCapitalization: TextCapitalization.sentences,
+              inputFormatters: [LengthLimitingTextInputFormatter(8192)],
+              onChanged: (_) => setState(() {}),
             )
           else if (!storageLocked)
             FloeSelect<AgentFixturePrompt>(
@@ -421,6 +425,14 @@ class _AgentPanelState extends State<AgentPanel> {
     );
   }
 
+  Future<void> _sendText(AgentController controller) async {
+    final text = _composerText.text.trim();
+    if (text.isEmpty || !controller.canSend) return;
+    _composerText.clear();
+    setState(() {});
+    await controller.sendCalendarText(text);
+  }
+
   String? _status(AppLocalizations strings, AgentController controller) {
     if (controller.busy) {
       return switch (controller.progress) {
@@ -454,6 +466,9 @@ class _AgentPanelState extends State<AgentPanel> {
         controller.isCalendarConversation
             ? strings.agentConnectedUnavailable
             : strings.agentUnavailable,
+      'consent_required' => strings.agentRemoteConsentRequired,
+      'credential_expired' => strings.agentRemoteCredentialExpired,
+      'quota_exceeded' => strings.agentRemoteQuotaExceeded,
       'stalled' =>
         controller.isCalendarConversation
             ? strings.agentConnectedStalled

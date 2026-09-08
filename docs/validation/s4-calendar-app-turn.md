@@ -19,12 +19,14 @@ Date: 2026-09-08. App integration with injected Calendar/model evidence; S4 rema
   saved proposal presentation are owned by the controller. Changed or missing context
   fails before dispatch rather than switching to a sample or different provider.
 - The panel labels connected Calendar state and evidence separately from synthetic
-  samples. It intentionally exposes the two bounded prompt kinds supported by the
-  native contract, not arbitrary free text.
+  samples and accepts arbitrary text. Each committed turn reuses the same encrypted,
+  scoped session, so follow-up questions retain normal multi-turn history.
 - Foundation Models accepts Personal-class requests only when the trusted vault host
   constructs it with `SessionProtection::Encrypted`. Synthetic construction still
-  rejects Personal, credential and device-only raw classes. Placement remains
-  device-local and there is no remote fallback.
+  rejects Personal, credential and device-only raw classes. The host probes this local
+  route first; when unavailable, a free-text turn may use the paired Go server's
+  `everyday_assistance` route. External routes require separately stored transfer
+  consent before any provider request.
 
 ## Evidence
 
@@ -59,9 +61,9 @@ Calendar host path.
 
 ## Limits and next work
 
-No test in this checkpoint claims a real EventKit read or Apple Foundation Models
+No test in this checkpoint claims a real EventKit read, Apple Foundation Models
 generation. Availability, signed-app key lifecycle, actual Personal prompt behavior,
 injection/cancellation/deadline evaluation and outbound privacy capture still require
-live validation. The bundled availability smoke was rechecked for this increment and
-reported Apple Intelligence not enabled without personal data. The other S4 connectors
-and S1/S3 acceptance gates also remain open, so no S4 acceptance criterion is promoted.
+live validation. The server trace store is bounded and process-local; durable encrypted
+trace archives and app replay presentation remain open. The other S4 connectors and
+S1/S3 acceptance gates also remain open, so no S4 acceptance criterion is promoted.
