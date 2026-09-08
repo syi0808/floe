@@ -210,6 +210,17 @@ fn halted(session: &AgentSession, reason: AgentFailure) {
     );
 }
 
+#[test]
+fn default_manager_budget_supports_long_running_turns() {
+    let budget = AgentBudget::default();
+    assert_eq!(budget.max_iterations, 100);
+    assert_eq!(budget.max_capability_calls, 100);
+    assert_eq!(budget.max_tokens, 409_600);
+    assert_eq!(budget.max_context_bytes, 1_048_576);
+    assert_eq!(budget.max_session_bytes, 2_097_152);
+    assert_eq!(budget.deadline_ms, 300_000);
+}
+
 #[tokio::test]
 async fn completion_storage_failure_never_emits_a_success_or_loses_recovery_pointer() {
     let store = Store::new();
@@ -728,7 +739,7 @@ async fn capability_failure_is_paired_and_isolated() {
 }
 
 #[tokio::test]
-async fn repeated_read_calls_halt_before_third_dispatch() {
+async fn repeated_read_calls_continue_until_the_model_answers() {
     let store = Store::new();
     let model = Model::new(vec![call(), call(), call(), answer()]);
     let host = Host::default();
@@ -740,15 +751,13 @@ async fn repeated_read_calls_halt_before_third_dispatch() {
         policy: &policy,
         budget: AgentBudget::default(),
     };
-    halted(
-        &runtime
-            .run_turn(store.command(), context(), Cancellation::default(), |_| {})
-            .await
-            .unwrap(),
-        AgentFailure::Stalled,
-    );
-    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(model.calls(), 3);
+    let session = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(session.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(host.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(model.calls(), 4);
 }
 
 #[tokio::test]

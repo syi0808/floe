@@ -203,22 +203,20 @@ pub struct AgentBudget {
     pub max_output_bytes: usize,
     pub max_context_bytes: usize,
     pub max_session_bytes: usize,
-    pub max_repeated_calls: u32,
     pub deadline_ms: u64,
 }
 
 impl Default for AgentBudget {
     fn default() -> Self {
         Self {
-            max_iterations: 8,
-            max_capability_calls: 4,
-            max_tokens: 8_192,
+            max_iterations: 100,
+            max_capability_calls: 100,
+            max_tokens: 409_600,
             max_cost_micros: 50_000,
             max_output_bytes: 16_384,
-            max_context_bytes: 65_536,
-            max_session_bytes: 262_144,
-            max_repeated_calls: 2,
-            deadline_ms: 30_000,
+            max_context_bytes: 1_048_576,
+            max_session_bytes: 2_097_152,
+            deadline_ms: 300_000,
         }
     }
 }

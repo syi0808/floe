@@ -453,7 +453,6 @@ fn validate_budget(budget: AgentBudget) -> Result<(), AgentFailure> {
         || budget.max_output_bytes > maximum.max_output_bytes
         || budget.max_context_bytes > maximum.max_context_bytes
         || budget.max_session_bytes > maximum.max_session_bytes
-        || budget.max_repeated_calls > maximum.max_repeated_calls
     {
         return Err(AgentFailure::BudgetExceeded);
     }

@@ -906,7 +906,7 @@ async fn invalid_scope_registry_class_budget_and_remote_policy_never_dispatch_or
             1 => request.assignment_id = Uuid::new_v4(),
             2 => request.grant.handle = Uuid::new_v4(),
             3 => request.grant.provider = CalendarProvider::EventKit,
-            4 => request.budget.deadline_ms = 30_001,
+            4 => request.budget.deadline_ms = AgentBudget::default().deadline_ms + 1,
             5 => {
                 model.placement = ModelPlacement::Remote;
                 request.policy.allowed_placements = vec![ModelPlacement::Remote];

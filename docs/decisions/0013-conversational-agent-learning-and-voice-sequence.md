@@ -55,7 +55,7 @@ authority or file-backed personal-memory semantics.
 - factual memory distinct from procedural Playbooks;
 - background learning review isolated from the foreground conversation;
 - staged memory/skill writes, mutation ledger, rollback, pin and recoverable archive;
-- cancellation, iteration/resource budgets and repeated-call stall guardrails.
+- cancellation and explicit iteration/resource budgets.
 
 Floe changes the safety defaults: agent-authored Memory and Playbook changes require
 Review initially; background learning cannot invoke external mutation tools; and

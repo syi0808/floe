@@ -79,7 +79,7 @@ Every turn has a child cancellation token. Stop is forwarded to it, and dropping
 turn or finishing it cancels owned model delivery without cancelling the caller's
 parent token. Synchronous parent cancellation is checked at mutation/publication
 boundaries as well, so an immediately returning model cannot outrun Stop. Runtime
-budgets cannot exceed the existing defaults, including the 30-second turn deadline.
+budgets cannot exceed the existing defaults, including the five-minute turn deadline.
 Pending model calls and View checks have explicit deadline/cancellation guards.
 
 Dropping an in-flight turn preserves the existing interrupted-session contract.

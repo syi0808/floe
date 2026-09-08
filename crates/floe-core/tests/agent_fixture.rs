@@ -72,37 +72,37 @@ async fn fixture_conversation_survives_reopen_and_keeps_person_and_revision_boun
 }
 
 #[tokio::test]
-async fn fixture_stall_and_retry_are_durable_without_external_actions() {
+async fn fixture_iteration_limit_and_retry_are_durable_without_external_actions() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("stall.db");
     let person = PersonId::new();
     let core = FloeCore::open(&path).await.unwrap();
     let session = core.start_agent_fixture(person).await.unwrap();
-    let stalled = core
+    let limited = core
         .run_agent_fixture(person, session.id, 0, AgentFixturePrompt::RepeatedCall)
         .await
         .unwrap()
         .session;
     assert_eq!(
-        stalled.last_outcome,
+        limited.last_outcome,
         Some(AgentOutcome::Halted {
-            reason: AgentFailure::Stalled
+            reason: AgentFailure::BudgetExceeded
         })
     );
-    assert_eq!(stalled.messages.len(), 3);
+    assert_eq!(limited.messages.len(), 101);
     drop(core);
     let core = FloeCore::open(&path).await.unwrap();
     assert_eq!(
         core.agent_fixture_session(person, session.id)
             .await
             .unwrap(),
-        stalled
+        limited
     );
     let retry = core
         .run_agent_fixture(
             person,
             session.id,
-            stalled.revision,
+            limited.revision,
             AgentFixturePrompt::Today,
         )
         .await

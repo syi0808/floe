@@ -27,8 +27,8 @@ Gmail request, private source collection or external transfer is introduced.
   adapters receive declared limits, Person/session/turn IDs, a cancellation token
   and a deadline; capabilities receive the corresponding bounded invocation.
 - Turns enforce iteration, capability-call, token, integer-micro-cost, byte and
-  wall-clock budgets. Repeated identical reads stop before a third dispatch with
-  the default budget. This is a conservative guard, not semantic progress scoring.
+  wall-clock budgets. Identical reads are not reused or rejected solely by input;
+  their underlying snapshot may have changed between calls.
 - Capability descriptors are freshly checked, versioned and Person-scoped. Only
   read-only descriptors whose declared output class is authorized are advertised.
   Unknown or mutating calls never dispatch. This is not yet the full

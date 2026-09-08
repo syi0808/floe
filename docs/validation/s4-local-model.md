@@ -52,8 +52,8 @@ The installed macOS 26 SDK has no exact usage counter exposed in this path.
 Each dispatched successful call charges **4096 reserved tokens**, the entire
 documented per-session context window, rather than claiming measured usage.
 The reservation covers instructions, schema, prompt and response. Less than 4096
-remaining tokens fails before dispatch. Default 8192-token turns can therefore
-perform two calls, for example a capability request followed by an answer.
+remaining tokens fails before dispatch. Default 409600-token turns can therefore
+perform up to 100 fully reserved calls when the other turn budgets permit it.
 Local provider monetary cost is zero; this is not a claim of zero energy cost.
 
 This follows Apple's [context-window boundary](https://developer.apple.com/documentation/technotes/tn3193-managing-the-on-device-foundation-model-s-context-window).

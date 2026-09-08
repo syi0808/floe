@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, future::Future, time::SystemTime};
+use std::{future::Future, time::SystemTime};
 
 use tokio::{
     sync::watch,
@@ -239,7 +239,6 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         let mut used_tokens = 0_u64;
         let mut cost_micros = 0_u64;
         let mut capability_calls = 0_u32;
-        let mut repeated = BTreeMap::new();
         for iteration in 0..self.budget.max_iterations {
             check_running(deadline, cancellation)?;
             self.authorize(context)?;
@@ -343,13 +342,6 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     {
                         return Err(AgentFailure::CapabilityUnavailable);
                     }
-                    let repetitions = repeated
-                        .entry((capability_id.clone(), input.clone()))
-                        .or_insert(0_u32);
-                    if *repetitions >= self.budget.max_repeated_calls {
-                        return Err(AgentFailure::Stalled);
-                    }
-                    *repetitions += 1;
                     capability_calls += 1;
                     let call_id = Uuid::new_v4();
                     emit_event(
