@@ -70,12 +70,15 @@ final class FfiDayGateway
       final availability = await serverClient.purposes(connection);
       final route = availability[InferencePurpose.everydayAssistance];
       if (route == null || !route.available) return null;
+      final consentCoversRoute =
+          !route.requiresExternalConsent ||
+          connection.coversExternalRecipient(route.recipient);
       return {
         'base_url': connection.address,
         'bearer_token': connection.token,
         'purpose': InferencePurpose.everydayAssistance.wireName,
         'external': route.requiresExternalConsent,
-        'allow_external': connection.allowExternal,
+        'allow_external': consentCoversRoute,
       };
     } on ServerConnectionException {
       return null;

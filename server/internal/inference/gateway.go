@@ -41,6 +41,7 @@ type Request struct {
 	SchemaVersion  int             `json:"schema_version"`
 	InferenceClass string          `json:"inference_class,omitempty"`
 	Purpose        string          `json:"purpose,omitempty"`
+	DataClasses    []string        `json:"data_classes,omitempty"`
 	AllowExternal  bool            `json:"allow_external"`
 	Instructions   string          `json:"instructions"`
 	Input          json.RawMessage `json:"input"`
@@ -144,9 +145,21 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		purposes := make(map[string]any, 3)
 		for _, purpose := range []string{"quick_response", "everyday_assistance", "deep_work"} {
 			configured, available := gateway.routes[classForPurpose(purpose)]
-			purposes[purpose] = map[string]any{"available": available, "requires_external_consent": available && configured.provider.external}
+			value := map[string]any{"available": available, "requires_external_consent": available && configured.provider.external}
+			if available {
+				placement, recipient := configured.provider.disclosure()
+				value["placement"] = placement
+				if recipient != "" {
+					value["recipient"] = recipient
+				}
+			}
+			purposes[purpose] = value
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "purposes": purposes})
+		return
+	}
+	if request.Method == http.MethodGet && request.URL.Path == "/v2/traces" {
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "traces": gateway.audit.list(20)})
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v2/traces/") {
@@ -233,8 +246,8 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 
 func validRequest(request Request) bool {
 	var schema map[string]any
-	validRoute := request.SchemaVersion == 1 && ValidClass(request.InferenceClass) && request.Purpose == "" && request.ReplayOf == "" ||
-		request.SchemaVersion == 2 && request.InferenceClass == "" && ValidPurpose(request.Purpose)
+	validRoute := request.SchemaVersion == 1 && ValidClass(request.InferenceClass) && request.Purpose == "" && request.ReplayOf == "" && len(request.DataClasses) == 0 ||
+		request.SchemaVersion == 2 && request.InferenceClass == "" && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses)
 	validReplay := request.ReplayOf == "" || len(request.ReplayOf) == 32 && strings.IndexFunc(request.ReplayOf, func(value rune) bool {
 		return value < '0' || value > '9' && value < 'a' || value > 'f'
 	}) == -1
@@ -242,6 +255,20 @@ func validRequest(request Request) bool {
 		len(request.Instructions) > 0 && len(request.Instructions) <= 8192 &&
 		len(request.Input) > 0 && len(request.Input) <= 32768 && json.Valid(request.Input) &&
 		len(request.OutputSchema) <= 32768 && json.Unmarshal(request.OutputSchema, &schema) == nil && schema["type"] == "object"
+}
+
+func validDataClasses(values []string) bool {
+	if len(values) == 0 || len(values) > 4 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, value := range values {
+		if seen[value] || value != "synthetic" && value != "personal" && value != "highly_sensitive" {
+			return false
+		}
+		seen[value] = true
+	}
+	return true
 }
 
 func newTraceID() string {

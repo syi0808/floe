@@ -27,6 +27,17 @@ type provider struct {
 	codex      CodexClient
 }
 
+func (adapter *provider) disclosure() (string, string) {
+	if !adapter.external {
+		return "server_local", ""
+	}
+	if adapter.target.Provider == "codex_oauth" {
+		return "external", "OpenAI (Codex OAuth)"
+	}
+	endpoint, _ := url.Parse(adapter.target.BaseURL)
+	return "external", endpoint.Hostname()
+}
+
 func newProvider(target Target, lookup func(string) string, codex CodexClient) (*provider, error) {
 	if target.Provider == "codex_oauth" {
 		if target.BaseURL != "https://chatgpt.com/backend-api/codex" || target.APIKeyEnv != "" || codex == nil ||

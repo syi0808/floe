@@ -93,6 +93,10 @@ void main() {
       );
       await client.save(connection);
       await client.checkConnection(connection);
+      final purposes = await client.purposes(connection);
+      expect(purposes.keys, InferencePurpose.values);
+      expect(purposes.values.every((purpose) => !purpose.available), true);
+      expect(await client.privacyActivity(connection), isEmpty);
       await manage('client/delete', {'id': connection.clientId});
       await expectLater(
         client.checkConnection(connection),

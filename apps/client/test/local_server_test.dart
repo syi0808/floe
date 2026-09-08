@@ -46,10 +46,22 @@ void main() {
         'token',
         'client_id',
         'allow_external',
+        'external_recipients',
       ]);
       expect(restored?.allowExternal, isFalse);
-      final consented = saved.withExternalConsent(true);
+      final consented = saved.withExternalConsent(
+        true,
+        recipients: ['Example AI'],
+      );
       expect(consented.allowExternal, isTrue);
+      expect(consented.coversExternalRecipient('Example AI'), isTrue);
+      await client.save(consented);
+      final restoredConsent = await client.connection();
+      expect(restoredConsent!.externalRecipients, ['Example AI']);
+      expect(
+        restoredConsent.coversExternalRecipient('Different recipient'),
+        isFalse,
+      );
       expect(consented.toJson(), isNot(contains('model')));
       expect(consented.toJson(), isNot(contains('inference_class')));
       await store.delete();
@@ -68,6 +80,19 @@ void main() {
       LocalServerClient(store: store).connection(),
       throwsA(isA<ServerConnectionException>()),
     );
+  });
+
+  test('legacy unbound external consent is withdrawn during restore', () async {
+    final store = MemoryServerCredentials()
+      ..value = jsonEncode({
+        'base_url': 'http://127.0.0.1:9431',
+        'token': 'a' * 52,
+        'client_id': 'fixture',
+        'allow_external': true,
+      });
+    final restored = await LocalServerClient(store: store).connection();
+    expect(restored!.allowExternal, isFalse);
+    expect(restored.externalRecipients, isEmpty);
   });
 
   testWidgets(

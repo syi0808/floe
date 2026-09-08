@@ -1,7 +1,6 @@
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
-import 'package:floe_client/features/agent/agent_registry_dialog.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
@@ -37,10 +36,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Floe access'), findsNWidgets(2));
-    expect(find.byType(AgentRegistrySettings), findsOneWidget);
-    expect(find.text('Schedule planning'), findsOneWidget);
-    expect(find.text('floe.schedule'), findsNothing);
+    expect(find.text('Data & privacy'), findsNWidgets(2));
+    expect(find.text('AI processing'), findsOneWidget);
+    expect(
+      find.text('No connected data sources are available yet.'),
+      findsOneWidget,
+    );
+    expect(find.text('Schedule planning'), findsNothing);
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -77,17 +79,66 @@ void main() {
 
     expect(find.text('Allow all supported actions'), findsOneWidget);
     expect(find.text('Remote server connection'), findsNothing);
-    expect(find.byType(AgentRegistrySettings), findsNothing);
 
-    await tester.tap(find.byKey(const Key('settings-floeAccess')));
+    await tester.tap(find.byKey(const Key('settings-dataPrivacy')));
     await tester.pumpAndSettle();
-    expect(find.byType(AgentRegistrySettings), findsOneWidget);
+    expect(find.text('AI processing'), findsOneWidget);
     expect(find.text('Allow all supported actions'), findsNothing);
 
     await tester.tap(find.byKey(const Key('settings-remoteServer')));
     await tester.pumpAndSettle();
     expect(find.text('Remote server connection'), findsOneWidget);
-    expect(find.byType(AgentRegistrySettings), findsNothing);
+  });
+
+  testWidgets('external processing consent lives under Data & privacy', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = MemoryServerCredentials();
+    final client = _SettingsServerClient(store);
+    await client.save(
+      ServerConnection(
+        address: 'http://127.0.0.1:8431',
+        token: 'a' * 52,
+        clientId: 'paired-client',
+      ),
+    );
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(client: client, agentController: controller),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Paired'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('external-model-consent')),
+      findsOneWidget,
+    );
+    expect(find.text('Allow external model transfer'), findsNothing);
+    expect(find.text('Needs consent'), findsOneWidget);
+    expect(find.text('Unavailable'), findsOneWidget);
+    expect(find.text('Recent data use'), findsOneWidget);
+    expect(find.text('Completed'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('external-model-consent')));
+    await tester.pumpAndSettle();
+    expect((await client.connection())!.allowExternal, true);
+    expect(find.text('Needs consent'), findsNothing);
   });
 
   for (final width in [390.0, 1200.0]) {
@@ -186,4 +237,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.authority.calendarCreate, ActionAuthorityMode.deny);
   });
+}
+
+final class _SettingsServerClient extends LocalServerClient {
+  _SettingsServerClient(ServerCredentialStore store) : super(store: store);
+
+  @override
+  Future<Map<InferencePurpose, InferencePurposeAvailability>> purposes(
+    ServerConnection connection,
+  ) async => {
+    InferencePurpose.quickResponse: const InferencePurposeAvailability(
+      available: true,
+      requiresExternalConsent: false,
+    ),
+    InferencePurpose.everydayAssistance: const InferencePurposeAvailability(
+      available: true,
+      requiresExternalConsent: true,
+      placement: 'external',
+      recipient: 'Example AI',
+    ),
+    InferencePurpose.deepWork: const InferencePurposeAvailability(
+      available: false,
+      requiresExternalConsent: false,
+    ),
+  };
+
+  @override
+  Future<List<InferenceAuditRecord>> privacyActivity(
+    ServerConnection connection,
+  ) async => [
+    InferenceAuditRecord(
+      traceId: '0123456789abcdef0123456789abcdef',
+      createdAt: DateTime(2026, 9, 8, 12),
+      purpose: 'everyday_assistance',
+      dataClasses: const ['personal'],
+      placement: 'remote',
+      externalTransfer: true,
+      outcome: 'completed',
+    ),
+  ];
 }

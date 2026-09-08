@@ -12,6 +12,7 @@ type AuditRecord struct {
 	TraceID          string    `json:"trace_id"`
 	CreatedAt        time.Time `json:"created_at"`
 	Purpose          string    `json:"purpose"`
+	DataClasses      []string  `json:"data_classes"`
 	Placement        string    `json:"placement"`
 	ExternalTransfer bool      `json:"external_transfer"`
 	RequestDigest    string    `json:"request_digest"`
@@ -49,6 +50,19 @@ func (log *auditLog) get(identifier string) (AuditRecord, bool) {
 	return record, exists
 }
 
+func (log *auditLog) list(limit int) []AuditRecord {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if limit > len(log.order) {
+		limit = len(log.order)
+	}
+	records := make([]AuditRecord, 0, limit)
+	for index := len(log.order) - 1; index >= len(log.order)-limit; index-- {
+		records = append(records, log.records[log.order[index]])
+	}
+	return records
+}
+
 func requestDigest(request Request) string {
 	request.ReplayOf = ""
 	encoded, _ := json.Marshal(request)
@@ -61,6 +75,7 @@ func newAuditRecord(traceID string, request Request, placement, outcome, output 
 		TraceID:          traceID,
 		CreatedAt:        time.Now().UTC(),
 		Purpose:          request.Purpose,
+		DataClasses:      append([]string(nil), request.DataClasses...),
 		Placement:        placement,
 		ExternalTransfer: placement == "remote",
 		RequestDigest:    requestDigest(request),

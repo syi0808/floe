@@ -90,6 +90,7 @@ impl ModelRunner for ServerModelRunner {
         let body = json!({
             "schema_version": 2,
             "purpose": self.route.purpose,
+            "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
             "instructions": request.system_instructions,
             "input": {

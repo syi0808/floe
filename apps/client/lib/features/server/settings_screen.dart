@@ -8,14 +8,13 @@ import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
 import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
-import '../agent/agent_registry_dialog.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
 
-enum _SettingsPage { actions, floeAccess, remoteServer }
+enum _SettingsPage { actions, dataPrivacy, remoteServer }
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -42,7 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
-    if (widget.agentController != null) _SettingsPage.floeAccess,
+    if (widget.agentController != null) _SettingsPage.dataPrivacy,
     _SettingsPage.remoteServer,
   ];
 
@@ -58,8 +57,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _SettingsPage.actions => _ActionPermissions(
       controller: widget.actionController!,
     ),
-    _SettingsPage.floeAccess => _AgentPermissions(
+    _SettingsPage.dataPrivacy => _DataPrivacy(
       controller: widget.agentController!,
+      serverClient: widget.client,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
     ),
@@ -157,22 +157,24 @@ class _RemoteServerSettings extends StatelessWidget {
   );
 }
 
-class _AgentPermissions extends StatefulWidget {
-  const _AgentPermissions({
+class _DataPrivacy extends StatefulWidget {
+  const _DataPrivacy({
     required this.controller,
+    required this.serverClient,
     this.calendarSources,
     this.calendarSourceChanges,
   });
 
   final AgentController controller;
+  final LocalServerClient? serverClient;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
 
   @override
-  State<_AgentPermissions> createState() => _AgentPermissionsState();
+  State<_DataPrivacy> createState() => _DataPrivacyState();
 }
 
-class _AgentPermissionsState extends State<_AgentPermissions> {
+class _DataPrivacyState extends State<_DataPrivacy> {
   bool loading = false;
   bool registryRequested = false;
   bool calendarRequested = false;
@@ -187,7 +189,7 @@ class _AgentPermissionsState extends State<_AgentPermissions> {
   }
 
   @override
-  void didUpdateWidget(_AgentPermissions oldWidget) {
+  void didUpdateWidget(_DataPrivacy oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != controller) {
       oldWidget.controller.removeListener(_controllerChanged);
@@ -227,40 +229,287 @@ class _AgentPermissionsState extends State<_AgentPermissions> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
-    builder: (context, _) => FloeSquircle(
-      padding: const EdgeInsets.all(FloeSpace.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Floe access',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-          ),
+    builder: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Data & privacy',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: FloeSpace.sm),
+        const Text(
+          'Control what Floe may use and where assisted processing may happen.',
+          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+        ),
+        const SizedBox(height: FloeSpace.lg),
+        FloeSquircle(
+          padding: const EdgeInsets.all(FloeSpace.lg),
+          child: controller.hasCalendarExpertManagement
+              ? AgentCalendarSettings(
+                  controller: controller,
+                  sources: widget.calendarSources,
+                  sourceChanges: widget.calendarSourceChanges,
+                )
+              : const Text('No connected data sources are available yet.'),
+        ),
+        const SizedBox(height: FloeSpace.lg),
+        _AiProcessing(client: widget.serverClient),
+        if (controller.vaultState != AgentVaultState.ready) ...[
           const SizedBox(height: FloeSpace.sm),
           const Text(
-            'Choose what Floe can use when helping you. You can change these choices at any time.',
-            style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+            'Data access will appear when your private data is unlocked.',
+            style: TextStyle(color: FloePalette.neutral600, height: 1.4),
           ),
-          const SizedBox(height: FloeSpace.lg),
-          AgentRegistrySettings(controller: controller),
-          if (controller.hasCalendarExpertManagement) ...[
-            const Divider(height: FloeSpace.xxl),
-            AgentCalendarSettings(
-              controller: controller,
-              sources: widget.calendarSources,
-              sourceChanges: widget.calendarSourceChanges,
-            ),
-          ],
-          if (controller.vaultState != AgentVaultState.ready) ...[
-            const SizedBox(height: FloeSpace.sm),
-            const Text(
-              'Floe access will appear automatically when your private data is ready.',
-              style: TextStyle(color: FloePalette.neutral600, height: 1.4),
-            ),
-          ],
         ],
-      ),
+      ],
     ),
+  );
+}
+
+class _AiProcessing extends StatefulWidget {
+  const _AiProcessing({required this.client});
+  final LocalServerClient? client;
+
+  @override
+  State<_AiProcessing> createState() => _AiProcessingState();
+}
+
+class _AiProcessingState extends State<_AiProcessing> {
+  ServerConnection? connection;
+  Map<InferencePurpose, InferencePurposeAvailability>? purposes;
+  List<InferenceAuditRecord>? activity;
+  bool loading = true;
+  String? failure;
+
+  Set<String> get _externalRecipients =>
+      purposes?.values
+          .map((purpose) => purpose.recipient)
+          .whereType<String>()
+          .toSet() ??
+      const {};
+
+  bool get _externalConsentActive {
+    final saved = connection;
+    final recipients = _externalRecipients;
+    return saved != null &&
+        recipients.isNotEmpty &&
+        recipients.every(saved.coversExternalRecipient);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final saved = await widget.client?.connection();
+      if (!mounted) return;
+      Map<InferencePurpose, InferencePurposeAvailability>? availability;
+      List<InferenceAuditRecord>? recentActivity;
+      String? routeFailure;
+      if (saved != null && widget.client != null) {
+        try {
+          availability = await widget.client!.purposes(saved);
+        } on Object {
+          routeFailure = 'Paired, but route availability could not be checked.';
+        }
+        try {
+          recentActivity = await widget.client!.privacyActivity(saved);
+        } on Object {
+          routeFailure ??=
+              'Paired, but recent processing activity is unavailable.';
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        connection = saved;
+        purposes = availability;
+        activity = recentActivity;
+        loading = false;
+        failure = routeFailure;
+      });
+    } on Object {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          failure = 'Processing settings could not be loaded.';
+        });
+      }
+    }
+  }
+
+  Future<void> _setExternal(bool enabled) async {
+    final current = connection;
+    final client = widget.client;
+    if (current == null || client == null) return;
+    setState(() => loading = true);
+    try {
+      final updated = current.withExternalConsent(
+        enabled,
+        recipients: _externalRecipients,
+      );
+      await client.save(updated);
+      if (mounted) {
+        setState(() {
+          connection = updated;
+          failure = null;
+        });
+      }
+    } on Object {
+      if (mounted) {
+        setState(
+          () => failure = 'External processing consent could not be saved.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FloeSquircle(
+    padding: const EdgeInsets.all(FloeSpace.lg),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'AI processing',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: FloeSpace.xs),
+        const Text(
+          'Floe chooses a permitted route for each task. Conversations do not select a model.',
+          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+        ),
+        const SizedBox(height: FloeSpace.base),
+        const _ProcessingRow(
+          title: 'On this device',
+          detail: 'Local data preparation and available local intelligence',
+          status: 'Preferred',
+        ),
+        const SizedBox(height: FloeSpace.sm),
+        _ProcessingRow(
+          title: 'On your Floe Server',
+          detail: connection == null
+              ? 'Pair a server in Floe Server settings to add assisted routes.'
+              : 'Paired server may process only the context required for a task.',
+          status: connection == null ? 'Not paired' : 'Paired',
+        ),
+        if (connection != null && purposes != null) ...[
+          const SizedBox(height: FloeSpace.sm),
+          for (final purpose in InferencePurpose.values)
+            Padding(
+              padding: const EdgeInsets.only(top: FloeSpace.xs),
+              child: _ProcessingRow(
+                title: switch (purpose) {
+                  InferencePurpose.quickResponse => 'Quick responses',
+                  InferencePurpose.everydayAssistance => 'Everyday assistance',
+                  InferencePurpose.deepWork => 'Deep work',
+                },
+                detail: purposes![purpose]!.recipient != null
+                    ? 'External recipient: ${purposes![purpose]!.recipient}. Selected automatically when needed.'
+                    : 'Processed on your Floe Server when selected automatically.',
+                status: !purposes![purpose]!.available
+                    ? 'Unavailable'
+                    : purposes![purpose]!.requiresExternalConsent &&
+                          !connection!.coversExternalRecipient(
+                            purposes![purpose]!.recipient,
+                          )
+                    ? 'Needs consent'
+                    : 'Available',
+              ),
+            ),
+        ],
+        if (connection != null) ...[
+          const Divider(height: FloeSpace.xl),
+          SwitchListTile.adaptive(
+            key: const ValueKey('external-model-consent'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Allow external model providers'),
+            subtitle: const Text(
+              'Allows the paired server to send the minimum required context to a provider it manages. Turn this off to withdraw consent without disconnecting the server.',
+            ),
+            value: _externalConsentActive,
+            onChanged: loading || _externalRecipients.isEmpty
+                ? null
+                : _setExternal,
+          ),
+        ],
+        if (failure case final message?) ...[
+          const SizedBox(height: FloeSpace.sm),
+          Text(message, style: const TextStyle(color: FloePalette.error600)),
+        ],
+        if (connection != null && activity != null) ...[
+          const Divider(height: FloeSpace.xl),
+          const Text(
+            'Recent data use',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: FloeSpace.xs),
+          if (activity!.isEmpty)
+            const Text(
+              'No server model processing has been recorded since the server started.',
+              style: TextStyle(color: FloePalette.neutral600),
+            )
+          else
+            for (final record in activity!.take(5))
+              Padding(
+                padding: const EdgeInsets.only(top: FloeSpace.sm),
+                child: _ProcessingRow(
+                  title: switch (record.purpose) {
+                    'quick_response' => 'Quick response',
+                    'everyday_assistance' => 'Everyday assistance',
+                    'deep_work' => 'Deep work',
+                    _ => 'Assisted processing',
+                  },
+                  detail:
+                      '${record.dataClasses.join(', ')} · ${record.placement == 'remote' ? 'External provider' : 'Floe Server'} · Trace ${record.traceId.substring(0, 8)}',
+                  status: record.outcome == 'completed'
+                      ? 'Completed'
+                      : 'Failed',
+                ),
+              ),
+        ],
+      ],
+    ),
+  );
+}
+
+class _ProcessingRow extends StatelessWidget {
+  const _ProcessingRow({
+    required this.title,
+    required this.detail,
+    required this.status,
+  });
+  final String title;
+  final String detail;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: FloeSpace.xxs),
+            Text(
+              detail,
+              style: const TextStyle(
+                color: FloePalette.neutral600,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(width: FloeSpace.md),
+      Text(status, style: const TextStyle(color: FloePalette.neutral600)),
+    ],
   );
 }
 
@@ -420,12 +669,12 @@ class _SettingsNavigation extends StatelessWidget {
           key: ValueKey('settings-${page.name}'),
           icon: switch (page) {
             _SettingsPage.actions => LucideIcons.slidersHorizontal,
-            _SettingsPage.floeAccess => LucideIcons.sparkles,
+            _SettingsPage.dataPrivacy => LucideIcons.shieldCheck,
             _SettingsPage.remoteServer => LucideIcons.server,
           },
           label: switch (page) {
             _SettingsPage.actions => 'Action permissions',
-            _SettingsPage.floeAccess => 'Floe access',
+            _SettingsPage.dataPrivacy => 'Data & privacy',
             _SettingsPage.remoteServer => 'Remote server',
           },
           selected: page == selected,

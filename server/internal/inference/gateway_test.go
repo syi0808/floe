@@ -238,7 +238,7 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	inventory.Header.Set("Authorization", "Bearer "+testToken)
 	inventoryWriter := httptest.NewRecorder()
 	gateway.ServeHTTP(inventoryWriter, inventory)
-	if inventoryWriter.Code != http.StatusOK || !strings.Contains(inventoryWriter.Body.String(), `"deep_work":{"available":true,"requires_external_consent":true}`) || strings.Contains(inventoryWriter.Body.String(), "fixture-model") {
+	if inventoryWriter.Code != http.StatusOK || !strings.Contains(inventoryWriter.Body.String(), `"deep_work":{"available":true,"placement":"external","recipient":"127.0.0.1","requires_external_consent":true}`) || strings.Contains(inventoryWriter.Body.String(), "fixture-model") {
 		test.Fatal(inventoryWriter.Body.String())
 	}
 
@@ -246,6 +246,7 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	input.SchemaVersion = 2
 	input.InferenceClass = ""
 	input.Purpose = "deep_work"
+	input.DataClasses = []string{"personal"}
 	input.AllowExternal = true
 	body, _ := json.Marshal(input)
 	request := httptest.NewRequest(http.MethodPost, "/v2/generate", bytes.NewReader(body))
@@ -268,6 +269,13 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	trace := traceWriter.Body.String()
 	if traceWriter.Code != http.StatusOK || !strings.Contains(trace, `"placement":"remote"`) || strings.Contains(trace, "Choose one supplied slot") || strings.Contains(trace, candidate) || strings.Contains(trace, "fixture-model") {
 		test.Fatal(trace)
+	}
+	listRequest := httptest.NewRequest(http.MethodGet, "/v2/traces", nil)
+	listRequest.Header.Set("Authorization", "Bearer "+testToken)
+	listWriter := httptest.NewRecorder()
+	gateway.ServeHTTP(listWriter, listRequest)
+	if listWriter.Code != http.StatusOK || !strings.Contains(listWriter.Body.String(), response.TraceID) || strings.Contains(listWriter.Body.String(), candidate) {
+		test.Fatal(listWriter.Body.String())
 	}
 }
 
@@ -298,6 +306,7 @@ func TestReplayRequiresTheExactContentAndRecordsParentTrace(test *testing.T) {
 	input.SchemaVersion = 2
 	input.InferenceClass = ""
 	input.Purpose = "deep_work"
+	input.DataClasses = []string{"personal"}
 	input.AllowExternal = true
 	first := invokePath(gateway, "/v2/generate", input)
 	var generated struct {

@@ -2,6 +2,20 @@
 
 > Status: Product direction and implementation contract
 
+## Implemented slice
+
+The first Calendar slice now uses **Data & privacy**, domain access cards, an
+explicit review action, aggregate pause/resume, immutable scope replacement, and
+tombstoned removal. Runtime Installation, Assignment, and View switches no longer
+appear in the default Settings experience.
+
+External-model consent also lives in **Data & privacy** and is bound to the
+recipient disclosures returned by the paired server. Purpose availability and
+recent content-free server processing records are visible without exposing model
+selection or provider credentials. Generic grants for other domains, third-party
+extension cards, durable server audit storage, and richer trace detail remain
+follow-up work.
+
 ## Problem
 
 The current **Floe access** page combines several different decisions without

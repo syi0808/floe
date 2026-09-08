@@ -29,30 +29,42 @@ class KeychainServerCredentialStore implements ServerCredentialStore {
 }
 
 class ServerConnection {
-  const ServerConnection({
+  ServerConnection({
     required this.address,
     required this.token,
     required this.clientId,
     this.allowExternal = false,
-  });
+    List<String> externalRecipients = const [],
+  }) : externalRecipients = List.unmodifiable(externalRecipients);
 
   final String address;
   final String token;
   final String clientId;
   final bool allowExternal;
+  final List<String> externalRecipients;
 
   Map<String, Object> toJson() => {
     'base_url': address,
     'token': token,
     'client_id': clientId,
     'allow_external': allowExternal,
+    'external_recipients': externalRecipients,
   };
 
-  ServerConnection withExternalConsent(bool value) => ServerConnection(
+  bool coversExternalRecipient(String? recipient) =>
+      allowExternal &&
+      recipient != null &&
+      externalRecipients.contains(recipient);
+
+  ServerConnection withExternalConsent(
+    bool value, {
+    Iterable<String> recipients = const [],
+  }) => ServerConnection(
     address: address,
     token: token,
     clientId: clientId,
-    allowExternal: value,
+    allowExternal: value && recipients.isNotEmpty,
+    externalRecipients: value ? ([...recipients.toSet()]..sort()) : const [],
   );
 }
 
@@ -69,9 +81,33 @@ final class InferencePurposeAvailability {
   const InferencePurposeAvailability({
     required this.available,
     required this.requiresExternalConsent,
+    this.placement,
+    this.recipient,
   });
   final bool available;
   final bool requiresExternalConsent;
+  final String? placement;
+  final String? recipient;
+}
+
+final class InferenceAuditRecord {
+  const InferenceAuditRecord({
+    required this.traceId,
+    required this.createdAt,
+    required this.purpose,
+    required this.dataClasses,
+    required this.placement,
+    required this.externalTransfer,
+    required this.outcome,
+  });
+
+  final String traceId;
+  final DateTime createdAt;
+  final String purpose;
+  final List<String> dataClasses;
+  final String placement;
+  final bool externalTransfer;
+  final String outcome;
 }
 
 final class RemoteGenerationResult {
@@ -126,11 +162,22 @@ class LocalServerClient {
       if (!RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(token)) {
         throw const FormatException();
       }
+      final recipients = value['external_recipients'] == null
+          ? const <String>[]
+          : List<String>.from(value['external_recipients'] as List);
+      if (recipients.length > 16 ||
+          recipients.toSet().length != recipients.length ||
+          recipients.any(
+            (recipient) => recipient.trim().isEmpty || recipient.length > 253,
+          )) {
+        throw const FormatException();
+      }
       return ServerConnection(
         address: address,
         token: token,
         clientId: value['client_id'] as String,
-        allowExternal: value['allow_external'] == true,
+        allowExternal: value['allow_external'] == true && recipients.isNotEmpty,
+        externalRecipients: recipients,
       );
     } on Object {
       throw const ServerConnectionException('invalid_saved_connection');
@@ -209,22 +256,78 @@ class LocalServerClient {
       '/v2/inference-purposes',
       token: connection.token,
     );
+    if (response['schema_version'] != 2 ||
+        response['purposes'] is! Map<String, dynamic>) {
+      throw const ServerConnectionException('invalid_response');
+    }
     final values = Map<String, dynamic>.from(response['purposes'] as Map);
-    return {
-      for (final purpose in InferencePurpose.values)
-        purpose: InferencePurposeAvailability(
-          available: (values[purpose.wireName] as Map?)?['available'] == true,
-          requiresExternalConsent:
-              (values[purpose.wireName]
-                  as Map?)?['requires_external_consent'] ==
-              true,
-        ),
-    };
+    try {
+      return {
+        for (final purpose in InferencePurpose.values)
+          purpose: _purposeAvailability(values[purpose.wireName]),
+      };
+    } on Object {
+      throw const ServerConnectionException('invalid_response');
+    }
+  }
+
+  Future<List<InferenceAuditRecord>> privacyActivity(
+    ServerConnection connection,
+  ) async {
+    final response = await request(
+      connection.address,
+      '/v2/traces',
+      token: connection.token,
+    );
+    if (response['schema_version'] != 2 ||
+        response['traces'] is! List ||
+        (response['traces'] as List).length > 20) {
+      throw const ServerConnectionException('invalid_response');
+    }
+    try {
+      return List.unmodifiable(
+        (response['traces'] as List).map((raw) {
+          final value = Map<String, dynamic>.from(raw as Map);
+          final record = InferenceAuditRecord(
+            traceId: value['trace_id'] as String,
+            createdAt: DateTime.parse(value['created_at'] as String).toLocal(),
+            purpose: value['purpose'] as String,
+            dataClasses: List<String>.from(value['data_classes'] as List),
+            placement: value['placement'] as String,
+            externalTransfer: value['external_transfer'] as bool,
+            outcome: value['outcome'] as String,
+          );
+          if (!RegExp(r'^[0-9a-f]{32}$').hasMatch(record.traceId) ||
+              !InferencePurpose.values.any(
+                (purpose) => purpose.wireName == record.purpose,
+              ) ||
+              record.dataClasses.isEmpty ||
+              record.dataClasses.length > 4 ||
+              record.dataClasses.any(
+                (value) => !const {
+                  'synthetic',
+                  'personal',
+                  'highly_sensitive',
+                }.contains(value),
+              ) ||
+              !const {'server_local', 'remote'}.contains(record.placement) ||
+              record.externalTransfer != (record.placement == 'remote') ||
+              record.outcome.isEmpty ||
+              record.outcome.length > 64) {
+            throw const FormatException();
+          }
+          return record;
+        }),
+      );
+    } on Object {
+      throw const ServerConnectionException('invalid_response');
+    }
   }
 
   Future<RemoteGenerationResult> generate({
     required ServerConnection connection,
     required InferencePurpose purpose,
+    required List<String> dataClasses,
     required String instructions,
     required Object input,
     required Map<String, Object?> outputSchema,
@@ -237,6 +340,7 @@ class LocalServerClient {
       body: {
         'schema_version': 2,
         'purpose': purpose.wireName,
+        'data_classes': dataClasses,
         'allow_external': connection.allowExternal,
         'instructions': instructions,
         'input': input,
@@ -264,4 +368,28 @@ class LocalServerClient {
   Future<void> openDashboard(String address) => KeychainServerCredentialStore
       .channel
       .invokeMethod('open', '${normalizeAddress(address)}/manage/');
+}
+
+InferencePurposeAvailability _purposeAvailability(Object? raw) {
+  final value = Map<String, dynamic>.from(raw as Map);
+  final available = value['available'] as bool;
+  final requiresConsent = value['requires_external_consent'] as bool;
+  final placement = value['placement'] as String?;
+  final recipient = value['recipient'] as String?;
+  if ((!available && (placement != null || recipient != null)) ||
+      (available && !const {'server_local', 'external'}.contains(placement)) ||
+      requiresConsent != (placement == 'external') ||
+      (recipient != null &&
+          (placement != 'external' ||
+              recipient.trim().isEmpty ||
+              recipient.length > 253)) ||
+      (placement == 'external' && recipient == null)) {
+    throw const FormatException();
+  }
+  return InferencePurposeAvailability(
+    available: available,
+    requiresExternalConsent: requiresConsent,
+    placement: placement,
+    recipient: recipient,
+  );
 }
