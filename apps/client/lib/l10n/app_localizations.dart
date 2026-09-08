@@ -304,6 +304,12 @@ abstract class AppLocalizations {
   /// **'This response reached its limit. You can make another Calendar request.'**
   String get agentConnectedBudget;
 
+  /// No description provided for @agentConnectedSoftStop.
+  ///
+  /// In en, this message translates to:
+  /// **'The Manager paused at its execution limit. Progress is saved; Continue resumes this request with a 1.75× larger budget.'**
+  String get agentConnectedSoftStop;
+
   /// No description provided for @agentConnectedStalled.
   ///
   /// In en, this message translates to:
@@ -339,6 +345,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Try again'**
   String get agentRetry;
+
+  /// No description provided for @agentContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue'**
+  String get agentContinue;
 
   /// No description provided for @agentReload.
   ///

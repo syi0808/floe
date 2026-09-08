@@ -79,6 +79,8 @@ pub struct AgentConversationTurnRequestDto {
     pub session_id: String,
     pub expected_revision: u64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_route: Option<AgentRemoteRouteDto>,
 }
@@ -108,6 +110,8 @@ pub struct AgentCalendarTurnRequestDto {
     pub expected_revision: u64,
     pub prompt: AgentCalendarPromptDto,
     pub inference_route: AgentCalendarInferenceRouteDto,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub continuation: bool,
     pub day: floe_domain::CalendarRange,
     pub starts_at: chrono::DateTime<chrono::Utc>,
     pub ends_at: chrono::DateTime<chrono::Utc>,

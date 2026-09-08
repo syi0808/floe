@@ -133,6 +133,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This response reached its limit. You can make another Calendar request.';
 
   @override
+  String get agentConnectedSoftStop =>
+      'The Manager paused at its execution limit. Progress is saved; Continue resumes this request with a 1.75× larger budget.';
+
+  @override
   String get agentConnectedStalled =>
       'The Calendar read repeated without progress, so Floe stopped it.';
 
@@ -155,6 +159,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentRetry => 'Try again';
+
+  @override
+  String get agentContinue => 'Continue';
 
   @override
   String get agentReload => 'Reload conversation';

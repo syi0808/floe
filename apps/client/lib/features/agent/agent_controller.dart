@@ -506,8 +506,15 @@ final class AgentController extends ChangeNotifier {
   bool get needsRecovery => session?.activeTurn != null && !running;
   bool get canSend =>
       !_busy && !needsReload && !needsRecovery && session != null;
+  bool get canContinue =>
+      canSend &&
+      session?.continuation != null &&
+      (isCalendarConversation
+          ? _lastCalendarPrompt != null
+          : isGeneralConversation && _lastConversationText != null);
   bool get canRetry =>
       canSend &&
+      !canContinue &&
       failure != null &&
       (isCalendarConversation
           ? _lastCalendarPrompt != null
@@ -631,11 +638,28 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
+  Future<void> continueTurn() async {
+    if (!canContinue) return;
+    if (isCalendarConversation) {
+      await _sendCalendar(
+        _lastCalendarPrompt!,
+        focusMinutes: _lastFocusMinutes,
+        text: _lastCalendarText,
+        continuation: true,
+      );
+    } else {
+      await _sendConversationText(_lastConversationText!, continuation: true);
+    }
+  }
+
   Future<void> sendText(String text) => isCalendarConversation
       ? sendCalendarText(text)
       : _sendConversationText(text);
 
-  Future<void> _sendConversationText(String text) async {
+  Future<void> _sendConversationText(
+    String text, {
+    bool continuation = false,
+  }) async {
     final normalized = text.trim();
     if (!canSend ||
         _disposed ||
@@ -649,6 +673,7 @@ final class AgentController extends ChangeNotifier {
     final request = AgentConversationTurnRequest(
       session: original,
       text: normalized,
+      continuation: continuation,
     );
     _conversationRun = request;
     _runSession = original;
@@ -850,6 +875,7 @@ final class AgentController extends ChangeNotifier {
     AgentCalendarPromptKind prompt, {
     int focusMinutes = 60,
     String? text,
+    bool continuation = false,
   }) async {
     if (!canSend ||
         _disposed ||
@@ -893,6 +919,7 @@ final class AgentController extends ChangeNotifier {
       prompt: prompt,
       focusMinutes: focusMinutes,
       text: text,
+      continuation: continuation,
       destination: prompt == AgentCalendarPromptKind.proposeFocus
           ? AgentCalendarDestination(
               provider: scope.provider,

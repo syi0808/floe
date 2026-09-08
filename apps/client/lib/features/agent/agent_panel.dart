@@ -380,12 +380,18 @@ class _AgentPanelState extends State<AgentPanel> {
             size: FloeButtonSize.compact,
             child: Text(label),
           ),
-          if (controller.canRetry) ...[
+          if (controller.canContinue || controller.canRetry) ...[
             const SizedBox(height: FloeSpace.sm),
             FloeButton.text(
-              onPressed: controller.retry,
+              onPressed: controller.canContinue
+                  ? controller.continueTurn
+                  : controller.retry,
               size: FloeButtonSize.compact,
-              child: Text(strings.agentRetry),
+              child: Text(
+                controller.canContinue
+                    ? strings.agentContinue
+                    : strings.agentRetry,
+              ),
             ),
           ],
         ],
@@ -426,6 +432,7 @@ class _AgentPanelState extends State<AgentPanel> {
     }
     if (controller.needsReload) return strings.agentReloadNeeded;
     if (controller.needsRecovery) return strings.agentInterrupted;
+    if (controller.canContinue) return strings.agentConnectedSoftStop;
     return switch (controller.failure) {
       null => null,
       'cancelled' => strings.agentStopped,

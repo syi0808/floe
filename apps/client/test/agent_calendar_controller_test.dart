@@ -130,6 +130,28 @@ void main() {
     expect(controller.failure, 'cancelled');
     expect(controller.canRetry, isTrue);
   });
+
+  test(
+    'soft-stopped Calendar turn continues without a new user turn',
+    () async {
+      final gateway = _ConnectedCalendarGateway()..resumeSoftStopped = true;
+      final controller = AgentController(
+        gateway: gateway,
+        personId: registryPerson,
+        calendarContext: _context,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.load();
+      expect(controller.canContinue, isTrue);
+
+      await controller.continueTurn();
+
+      expect(gateway.turns.single.continuation, isTrue);
+      expect(controller.canContinue, isFalse);
+      expect(controller.session!.lastOutcome!.completed, isTrue);
+    },
+  );
 }
 
 AgentCalendarConversationContext _context() {
@@ -171,48 +193,69 @@ final class _ConnectedCalendarGateway extends TestCalendarExpertGateway
   AgentCalendarTurnRequest? _turn;
   bool _done = false;
   bool _halted = false;
+  bool resumeSoftStopped = false;
 
-  Map<String, Object?> _session({int revision = 0}) => {
-    'schema_version': 1,
-    'id': _sessionId,
-    'person_id': registryPerson,
-    'scope': {
-      'kind': 'calendar',
-      'setup_id': calendarSetupId,
-      'provider': 'event_kit',
-    },
-    'revision': revision,
-    'active_turn': null,
-    'last_outcome': revision == 0
-        ? null
-        : _halted
-        ? {'status': 'halted', 'reason': 'cancelled'}
-        : {'status': 'completed'},
-    'data_classes': ['personal'],
-    'messages': revision == 0
-        ? <Object?>[]
-        : [
-            {
-              'kind': 'user',
+  Map<String, Object?> _session({int? revision}) {
+    final softStopped = revision == null && resumeSoftStopped;
+    final effectiveRevision = revision ?? (softStopped ? 2 : 0);
+    return {
+      'schema_version': 1,
+      'id': _sessionId,
+      'person_id': registryPerson,
+      'scope': {
+        'kind': 'calendar',
+        'setup_id': calendarSetupId,
+        'provider': 'event_kit',
+      },
+      'revision': effectiveRevision,
+      'active_turn': null,
+      'last_outcome': softStopped
+          ? {'status': 'halted', 'reason': 'budget_exceeded'}
+          : effectiveRevision == 0
+          ? null
+          : _halted
+          ? {'status': 'halted', 'reason': 'cancelled'}
+          : {'status': 'completed'},
+      'data_classes': ['personal'],
+      'continuation': softStopped
+          ? {
               'turn_id': 'turn-1',
-              'text':
-                  "Brief today's calendar and find a 60-minute focus window.",
-            },
-            {
-              'kind': 'capability',
-              'turn_id': 'turn-1',
-              'call_id': 'call-1',
-              'capability_id': 'calendar.timeline.read',
-              'input': '{"kind":"briefing","focus_minutes":60}',
-              'result': {'Ok': 'Enabled Calendar: Team sync 10:00–11:00.'},
-            },
-            {
-              'kind': 'assistant',
-              'turn_id': 'turn-1',
-              'text': 'Your Calendar is clear after 11:00.',
-            },
-          ],
-  };
+              'level': 0,
+              'usage': {
+                'iterations': 100,
+                'capability_calls': 1,
+                'tokens': 409600,
+                'cost_micros': 0,
+              },
+              'placement': 'device_local',
+            }
+          : null,
+      'messages': effectiveRevision == 0
+          ? <Object?>[]
+          : [
+              {
+                'kind': 'user',
+                'turn_id': 'turn-1',
+                'text':
+                    "Brief today's calendar and find a 60-minute focus window.",
+              },
+              {
+                'kind': 'capability',
+                'turn_id': 'turn-1',
+                'call_id': 'call-1',
+                'capability_id': 'calendar.timeline.read',
+                'input': '{"kind":"briefing","focus_minutes":60}',
+                'result': {'Ok': 'Enabled Calendar: Team sync 10:00–11:00.'},
+              },
+              if (!softStopped)
+                {
+                  'kind': 'assistant',
+                  'turn_id': 'turn-1',
+                  'text': 'Your Calendar is clear after 11:00.',
+                },
+            ],
+    };
+  }
 
   @override
   Future<AgentSession> startCalendarSession(String personId, String setupId) =>

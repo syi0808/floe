@@ -465,7 +465,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 job.cancellation.clone(),
                 |event| {
                     if let Ok(mut progress) = job.progress.lock() {
-                        if progress.events.len() < 64 {
+                        if progress.events.len() < 2048 {
                             progress.events.push(event);
                         } else {
                             job.cancellation.cancel();
@@ -525,7 +525,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 job.cancellation.clone(),
                 |event| {
                     if let Ok(mut progress) = job.progress.lock() {
-                        if progress.events.len() < 64 {
+                        if progress.events.len() < 2048 {
                             progress.events.push(event);
                         } else {
                             job.cancellation.cancel();

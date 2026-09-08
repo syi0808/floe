@@ -164,6 +164,7 @@ async fn seed(
             &Access,
             &Model,
             CalendarAgentTurnRequest {
+                continuation: false,
                 command: AgentCommand {
                     schema_version: 1,
                     person_id: person,

@@ -383,6 +383,7 @@ impl Fixture {
 
     fn request(&self) -> CalendarAgentTurnRequest {
         CalendarAgentTurnRequest {
+            continuation: false,
             command: AgentCommand {
                 schema_version: 1,
                 person_id: self.session.person_id,

@@ -151,6 +151,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
                 timezone: destination.timezone.clone(),
             }),
         cancellation,
+        continuation: request.continuation,
     };
     let access = Access::new(binding.provider, binding.calendar_ids.clone());
     let result = core

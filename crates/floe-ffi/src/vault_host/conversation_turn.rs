@@ -32,29 +32,44 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     }
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
-    AgentRuntime {
+    let runtime = AgentRuntime {
         store: vault,
         model: &model,
         capabilities: &NoCapabilities,
         policy: &policy,
         budget: AgentBudget::default(),
+    };
+    let context = AgentContext {
+        projection_version: 1,
+        evidence: vec![],
+    };
+    if request.continuation {
+        runtime
+            .continue_turn(
+                person_id,
+                session_id,
+                request.expected_revision,
+                context,
+                cancellation,
+                emit,
+            )
+            .await
+    } else {
+        runtime
+            .run_turn(
+                AgentCommand {
+                    schema_version: AGENT_VERSION,
+                    person_id,
+                    session_id,
+                    expected_revision: request.expected_revision,
+                    text: text.into(),
+                },
+                context,
+                cancellation,
+                emit,
+            )
+            .await
     }
-    .run_turn(
-        AgentCommand {
-            schema_version: AGENT_VERSION,
-            person_id,
-            session_id,
-            expected_revision: request.expected_revision,
-            text: text.into(),
-        },
-        AgentContext {
-            projection_version: 1,
-            evidence: vec![],
-        },
-        cancellation,
-        emit,
-    )
-    .await
 }
 
 pub(super) async fn recover<Keys: VaultKeyProvider>(

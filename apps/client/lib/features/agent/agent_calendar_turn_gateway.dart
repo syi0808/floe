@@ -61,6 +61,7 @@ final class AgentCalendarTurnRequest {
     required this.focusMinutes,
     this.text,
     this.destination,
+    this.continuation = false,
   }) : assert(
          prompt != AgentCalendarPromptKind.freeText ||
              text != null && text.length > 0 && text.length <= 8192,
@@ -74,6 +75,7 @@ final class AgentCalendarTurnRequest {
   final int focusMinutes;
   final String? text;
   final AgentCalendarDestination? destination;
+  final bool continuation;
 
   Map<String, Object?> toJson() => {
     'session_id': session.id,
@@ -100,6 +102,7 @@ final class AgentCalendarTurnRequest {
     'starts_at': startsAt.toUtc().toIso8601String(),
     'ends_at': endsAt.toUtc().toIso8601String(),
     'destination': destination?.toJson(),
+    if (continuation) 'continuation': true,
   };
 }
 

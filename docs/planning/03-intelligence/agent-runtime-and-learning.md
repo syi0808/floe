@@ -82,9 +82,18 @@ append UserMessage
 ```
 
 The loop is interruptible between model and capability calls. It enforces iteration,
-wall-clock, model-token/cost, tool-call and output-size budgets. Identical failed
-calls and read-only calls with no progress trigger warnings and then a controlled
-halt. Cancellation never records partial model text as a completed assistant turn.
+wall-clock, model-token/cost, tool-call and output-size budgets. Identical reads are
+not cached or rejected because the underlying snapshot may change between calls.
+Cancellation never records partial model text as a completed assistant turn.
+
+Iteration, wall-clock, token, cost and Tool-call exhaustion is a soft stop at a safe
+boundary. The session persists the stopped turn ID, cumulative usage, placement and
+continuation level. A user-visible Continue action resumes that same turn without
+adding another UserMessage. Each continuation raises the exhausted execution budget
+to 1.75 times the previous ceiling, up to three user-approved continuations. Physical
+model context limits, invalid output, policy/consent failures, cancellation and
+uncertain external mutations remain hard stops. A continuation must preserve the
+recorded placement and pass fresh policy, revision and capability checks.
 
 Parallel calls are allowed only when their descriptors declare them read-only and
 order-independent. Mutations and interactive Review remain sequential.

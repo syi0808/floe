@@ -123,6 +123,7 @@ fn fixture() -> Fixture {
         expected_revision: session.revision,
         prompt: AgentCalendarPromptDto::ProposeFocus { focus_minutes: 60 },
         inference_route: AgentCalendarInferenceRouteDto::DeterministicFixture,
+        continuation: false,
         day,
         starts_at,
         ends_at: starts_at + chrono::Duration::hours(8),

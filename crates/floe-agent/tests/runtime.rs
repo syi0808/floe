@@ -219,6 +219,95 @@ fn default_manager_budget_supports_long_running_turns() {
     assert_eq!(budget.max_context_bytes, 1_048_576);
     assert_eq!(budget.max_session_bytes, 2_097_152);
     assert_eq!(budget.deadline_ms, 300_000);
+    assert_eq!(budget.expanded(1).unwrap().max_iterations, 175);
+    assert_eq!(budget.expanded(2).unwrap().max_iterations, 307);
+    assert_eq!(budget.expanded(3).unwrap().max_iterations, 538);
+    assert!(budget.expanded(4).is_none());
+}
+
+#[tokio::test]
+async fn soft_stop_continues_the_same_turn_with_an_expanded_budget() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget {
+            max_iterations: 1,
+            max_capability_calls: 1,
+            ..AgentBudget::default()
+        },
+    };
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        stopped.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::BudgetExceeded
+        })
+    );
+    let continuation = stopped.continuation.unwrap();
+    assert_eq!(continuation.level, 0);
+    assert_eq!(continuation.usage.iterations, 1);
+    assert_eq!(continuation.usage.capability_calls, 1);
+
+    let completed = runtime
+        .continue_turn(
+            stopped.person_id,
+            stopped.id,
+            stopped.revision,
+            context(),
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(completed.last_outcome, Some(AgentOutcome::Completed));
+    assert!(completed.continuation.is_none());
+    assert_eq!(
+        completed
+            .messages
+            .iter()
+            .filter(|message| matches!(message, AgentMessage::User { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(model.calls(), 2);
+}
+
+#[tokio::test]
+async fn model_context_failure_is_a_hard_stop_without_continuation() {
+    let store = Store::new();
+    let model = Model {
+        placement: ModelPlacement::DeviceLocal,
+        responses: Mutex::new(VecDeque::from([Err(AgentFailure::BudgetExceeded)])),
+        requests: Mutex::new(vec![]),
+        pending: false,
+    };
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+
+    halted(&stopped, AgentFailure::BudgetExceeded);
+    assert!(stopped.continuation.is_none());
 }
 
 #[tokio::test]

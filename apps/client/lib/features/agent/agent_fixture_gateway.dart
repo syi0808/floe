@@ -101,6 +101,9 @@ final class AgentSession {
       lastOutcome = json['last_outcome'] == null
           ? null
           : AgentOutcome.fromJson(_object(json['last_outcome'])),
+      continuation = json['continuation'] == null
+          ? null
+          : AgentContinuation.fromJson(_object(json['continuation'])),
       dataClasses = List.unmodifiable(
         (json['data_classes']! as List).cast<String>(),
       ),
@@ -122,8 +125,24 @@ final class AgentSession {
   final int revision;
   final String? activeTurn;
   final AgentOutcome? lastOutcome;
+  final AgentContinuation? continuation;
   final List<String> dataClasses;
   final List<AgentMessage> messages;
+}
+
+final class AgentContinuation {
+  AgentContinuation.fromJson(Map<String, Object?> json)
+    : turnId = json['turn_id']! as String,
+      level = json['level']! as int,
+      placement = json['placement']! as String {
+    if (level < 0 || level > 3 || json['usage'] is! Map) {
+      throw const FormatException('Invalid Agent continuation.');
+    }
+  }
+
+  final String turnId;
+  final int level;
+  final String placement;
 }
 
 final class AgentSessionScope {

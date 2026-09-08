@@ -4,15 +4,18 @@ final class AgentConversationTurnRequest {
   const AgentConversationTurnRequest({
     required this.session,
     required this.text,
+    this.continuation = false,
   });
 
   final AgentSession session;
   final String text;
+  final bool continuation;
 
   Map<String, Object?> toJson() => {
     'session_id': session.id,
     'expected_revision': session.revision,
     'text': text,
+    if (continuation) 'continuation': true,
   };
 }
 

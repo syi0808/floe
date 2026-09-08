@@ -23,6 +23,7 @@ pub struct CalendarAgentTurnRequest {
     pub assignment_id: Uuid,
     pub destination: Option<ExpertCalendarDestination>,
     pub cancellation: Cancellation,
+    pub continuation: bool,
 }
 
 pub struct CalendarAgentProposal {
@@ -57,14 +58,28 @@ impl FloeCore {
         request.cancellation = child.clone();
         let operation = async {
             validate_budget(request.budget)?;
-            let deadline = Instant::now() + Duration::from_millis(request.budget.deadline_ms);
-            check_running(deadline, &request.cancellation)?;
             if request.command.person_id != request.grant.person_id {
                 return Err(AgentFailure::CapabilityDenied);
             }
             let saved = vault
                 .load(request.command.person_id, request.command.session_id)
                 .await?;
+            let effective_budget = if request.continuation {
+                let level = saved
+                    .continuation
+                    .ok_or(AgentFailure::InvalidInput)?
+                    .level
+                    .checked_add(1)
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                request
+                    .budget
+                    .expanded(level)
+                    .ok_or(AgentFailure::BudgetExceeded)?
+            } else {
+                request.budget
+            };
+            let deadline = Instant::now() + Duration::from_millis(effective_budget.deadline_ms);
+            check_running(deadline, &request.cancellation)?;
             if let Some(scope) = saved.scope {
                 let setup = vault.calendar_session_setup(&saved).await?;
                 if setup.expert_assignment_id != request.assignment_id
@@ -118,20 +133,34 @@ impl FloeCore {
                 parent: parent.clone(),
             };
             let guarded_model = CalendarModel { turn: &turn, model };
-            let session = AgentRuntime {
+            let runtime = AgentRuntime {
                 store: &turn,
                 capabilities: &turn,
                 model: &guarded_model,
                 policy: &turn.policy,
                 budget: request.budget,
-            }
-            .run_turn(
-                request.command,
-                request.context,
-                turn.cancellation.clone(),
-                emit,
-            )
-            .await?;
+            };
+            let session = if request.continuation {
+                runtime
+                    .continue_turn(
+                        request.command.person_id,
+                        request.command.session_id,
+                        request.command.expected_revision,
+                        request.context,
+                        turn.cancellation.clone(),
+                        emit,
+                    )
+                    .await?
+            } else {
+                runtime
+                    .run_turn(
+                        request.command,
+                        request.context,
+                        turn.cancellation.clone(),
+                        emit,
+                    )
+                    .await?
+            };
             let mut proposals = vec![];
             if session.last_outcome == Some(AgentOutcome::Completed)
                 && let Some(destination) = request.destination

@@ -61,7 +61,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             || command.text.len() > self.budget.max_output_bytes
             || self.budget.max_session_bytes < 4096
             || self.budget.deadline_ms == 0
-            || self.budget.deadline_ms > 300_000
+            || self.budget.deadline_ms > AgentBudget::default().expanded(3).unwrap().deadline_ms
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -83,6 +83,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         session.messages.push(user.clone());
         session.active_turn = Some(turn_id);
         session.last_outcome = None;
+        session.continuation = None;
         for class in &self.policy.data_classes {
             if !session.data_classes.contains(class) {
                 session.data_classes.push(*class);
@@ -102,28 +103,146 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             },
             &mut emit,
         );
-        let outcome = match self
+        let mut usage = AgentUsage::default();
+        let (outcome, resumable) = match self
             .drive(
                 &mut session,
                 &context,
                 turn_id,
                 deadline,
                 &cancellation,
+                self.budget,
+                &mut usage,
                 &mut emit,
             )
             .await
         {
-            Ok(()) => AgentOutcome::Completed,
-            Err(reason) => AgentOutcome::Halted { reason },
+            Ok(()) => (AgentOutcome::Completed, false),
+            Err(stop) => (
+                AgentOutcome::Halted {
+                    reason: stop.reason,
+                },
+                stop.resumable,
+            ),
         };
         if outcome != AgentOutcome::Completed {
             session.active_turn = None;
             session.last_outcome = Some(outcome);
+            session.continuation =
+                soft_continuation(resumable, turn_id, 0, usage, self.model.placement());
             self.commit(&mut session).await?;
         }
         emit_event(
             &session,
             turn_id,
+            AgentEventKind::Finished {
+                outcome,
+                revision: session.revision,
+            },
+            &mut emit,
+        );
+        Ok(session)
+    }
+
+    pub async fn continue_turn(
+        &self,
+        person_id: floe_domain::PersonId,
+        session_id: Uuid,
+        expected_revision: u64,
+        context: AgentContext,
+        cancellation: Cancellation,
+        mut emit: impl FnMut(AgentEvent),
+    ) -> Result<AgentSession, AgentFailure> {
+        self.authorize(&context)?;
+        let mut session = self.store.load(person_id, session_id).await?;
+        if session.person_id != person_id
+            || session.id != session_id
+            || session.revision != expected_revision
+            || session.active_turn.is_some()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if session.schema_version != AGENT_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        if session.data_classes.is_empty()
+            || session
+                .data_classes
+                .iter()
+                .any(|class| !self.policy.data_classes.contains(class))
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let continuation = session.continuation.ok_or(AgentFailure::InvalidInput)?;
+        if continuation.placement != self.model.placement()
+            || !matches!(
+                session.last_outcome,
+                Some(AgentOutcome::Halted {
+                    reason: AgentFailure::BudgetExceeded | AgentFailure::DeadlineExceeded
+                })
+            )
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let level = continuation
+            .level
+            .checked_add(1)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        let budget = self
+            .budget
+            .expanded(level)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        let deadline = Instant::now() + Duration::from_millis(budget.deadline_ms);
+        session.active_turn = Some(continuation.turn_id);
+        session.last_outcome = None;
+        session.continuation = None;
+        self.commit(&mut session).await?;
+        emit_event(
+            &session,
+            continuation.turn_id,
+            AgentEventKind::Started,
+            &mut emit,
+        );
+        let mut usage = continuation.usage;
+        let (outcome, resumable) = match self
+            .drive(
+                &mut session,
+                &context,
+                continuation.turn_id,
+                deadline,
+                &cancellation,
+                budget,
+                &mut usage,
+                &mut emit,
+            )
+            .await
+        {
+            Ok(()) => (AgentOutcome::Completed, false),
+            Err(stop) => (
+                AgentOutcome::Halted {
+                    reason: stop.reason,
+                },
+                stop.resumable,
+            ),
+        };
+        if outcome != AgentOutcome::Completed {
+            session.active_turn = None;
+            session.last_outcome = Some(outcome);
+            session.continuation = soft_continuation(
+                resumable,
+                continuation.turn_id,
+                level,
+                usage,
+                self.model.placement(),
+            );
+            self.commit(&mut session).await?;
+        }
+        emit_event(
+            &session,
+            continuation.turn_id,
             AgentEventKind::Finished {
                 outcome,
                 revision: session.revision,
@@ -162,6 +281,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         }
         if session.active_turn.is_some() {
             session.active_turn = None;
+            session.continuation = None;
             session.last_outcome = Some(AgentOutcome::Halted {
                 reason: AgentFailure::Interrupted,
             });
@@ -234,20 +354,20 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         turn_id: Uuid,
         deadline: Instant,
         cancellation: &Cancellation,
+        budget: AgentBudget,
+        usage: &mut AgentUsage,
         emit: &mut impl FnMut(AgentEvent),
-    ) -> Result<(), AgentFailure> {
-        let mut used_tokens = 0_u64;
-        let mut cost_micros = 0_u64;
-        let mut capability_calls = 0_u32;
-        for iteration in 0..self.budget.max_iterations {
-            check_running(deadline, cancellation)?;
+    ) -> Result<(), DriveStop> {
+        for iteration in usage.iterations..budget.max_iterations {
+            check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if encoded_len(context)?.saturating_add(encoded_len(&session.messages)?)
-                > self.budget.max_context_bytes
-                || used_tokens >= self.budget.max_tokens
-                || cost_micros > self.budget.max_cost_micros
+                > budget.max_context_bytes
             {
-                return Err(AgentFailure::BudgetExceeded);
+                return Err(AgentFailure::BudgetExceeded.into());
+            }
+            if usage.tokens >= budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
+                return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
             }
             let descriptors: Vec<_> = self
                 .capabilities
@@ -283,9 +403,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 context: context.clone(),
                 messages: session.messages.clone(),
                 capabilities: descriptors.clone(),
-                remaining_tokens: self.budget.max_tokens - used_tokens,
-                remaining_cost_micros: self.budget.max_cost_micros - cost_micros,
-                max_output_bytes: self.budget.max_output_bytes,
+                remaining_tokens: budget.max_tokens - usage.tokens,
+                remaining_cost_micros: budget.max_cost_micros - usage.cost_micros,
+                max_output_bytes: budget.max_output_bytes,
                 deadline,
                 cancellation: cancellation.clone(),
             };
@@ -293,32 +413,37 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 .saturating_add(encoded_len(context)?)
                 .saturating_add(encoded_len(&session.messages)?)
                 .saturating_add(encoded_len(self.policy)?)
-                > self.budget.max_context_bytes
+                > budget.max_context_bytes
             {
-                return Err(AgentFailure::BudgetExceeded);
+                return Err(AgentFailure::BudgetExceeded.into());
             }
-            let response = bounded(self.model.generate(request), deadline, cancellation).await?;
-            check_running(deadline, cancellation)?;
+            usage.iterations = iteration + 1;
+            let response = bounded(self.model.generate(request), deadline, cancellation)
+                .await
+                .map_err(DriveStop::from_call)?;
+            check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if response.schema_version != AGENT_VERSION {
-                return Err(AgentFailure::InvalidModelOutput);
+                return Err(AgentFailure::InvalidModelOutput.into());
             }
-            used_tokens = used_tokens
+            usage.tokens = usage
+                .tokens
                 .checked_add(response.used_tokens)
                 .ok_or(AgentFailure::BudgetExceeded)?;
-            cost_micros = cost_micros
+            usage.cost_micros = usage
+                .cost_micros
                 .checked_add(response.cost_micros)
                 .ok_or(AgentFailure::BudgetExceeded)?;
-            if used_tokens > self.budget.max_tokens
-                || cost_micros > self.budget.max_cost_micros
-                || encoded_len(&response.step)? > self.budget.max_output_bytes
-            {
-                return Err(AgentFailure::BudgetExceeded);
+            if usage.tokens > budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
+                return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
+            }
+            if encoded_len(&response.step)? > budget.max_output_bytes {
+                return Err(AgentFailure::BudgetExceeded.into());
             }
             let message = match response.step {
                 ModelStep::Answer { text } => {
                     if text.trim().is_empty() {
-                        return Err(AgentFailure::InvalidModelOutput);
+                        return Err(AgentFailure::InvalidModelOutput.into());
                     }
                     AgentMessage::Assistant { turn_id, text }
                 }
@@ -326,23 +451,23 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     capability_id,
                     input,
                 } => {
-                    if capability_calls >= self.budget.max_capability_calls {
-                        return Err(AgentFailure::BudgetExceeded);
+                    if usage.capability_calls >= budget.max_capability_calls {
+                        return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
                     }
                     let Some(descriptor) = descriptors
                         .iter()
                         .find(|descriptor| descriptor.id == capability_id)
                     else {
-                        return Err(AgentFailure::CapabilityDenied);
+                        return Err(AgentFailure::CapabilityDenied.into());
                     };
                     if !self
                         .capabilities
                         .descriptors(session.person_id)
                         .contains(descriptor)
                     {
-                        return Err(AgentFailure::CapabilityUnavailable);
+                        return Err(AgentFailure::CapabilityUnavailable.into());
                     }
-                    capability_calls += 1;
+                    usage.capability_calls += 1;
                     let call_id = Uuid::new_v4();
                     emit_event(
                         session,
@@ -362,7 +487,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             turn_id,
                             capability_id: capability_id.clone(),
                             input: input.clone(),
-                            max_output_bytes: self.budget.max_output_bytes,
+                            max_output_bytes: budget.max_output_bytes,
                             deadline,
                             cancellation: cancellation.clone(),
                         }),
@@ -371,14 +496,14 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     )
                     .await;
                     if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) = &result {
-                        return Err(result.unwrap_err());
+                        return Err(DriveStop::from_call(result.unwrap_err()));
                     }
-                    check_running(deadline, cancellation)?;
+                    check_drive_running(deadline, cancellation)?;
                     if result
                         .as_ref()
-                        .is_ok_and(|text| text.len() > self.budget.max_output_bytes)
+                        .is_ok_and(|text| text.len() > budget.max_output_bytes)
                     {
-                        return Err(AgentFailure::BudgetExceeded);
+                        return Err(AgentFailure::BudgetExceeded.into());
                     }
                     AgentMessage::Capability {
                         turn_id,
@@ -391,9 +516,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             };
             let completed = matches!(message, AgentMessage::Assistant { .. });
             session.messages.push(message.clone());
-            if encoded_len(session)? > self.budget.max_session_bytes.saturating_sub(4096) {
+            if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
                 session.messages.pop();
-                return Err(AgentFailure::BudgetExceeded);
+                return Err(AgentFailure::BudgetExceeded.into());
             }
             if completed {
                 session.active_turn = None;
@@ -401,7 +526,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             }
             if let Err(failure) = self.commit(session).await {
                 session.messages.pop();
-                return Err(failure);
+                return Err(failure.into());
             }
             emit_event(
                 session,
@@ -416,7 +541,39 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 return Ok(());
             }
         }
-        Err(AgentFailure::BudgetExceeded)
+        Err(DriveStop::soft(AgentFailure::BudgetExceeded))
+    }
+}
+
+#[derive(Debug)]
+struct DriveStop {
+    reason: AgentFailure,
+    resumable: bool,
+}
+
+impl DriveStop {
+    fn soft(reason: AgentFailure) -> Self {
+        Self {
+            reason,
+            resumable: true,
+        }
+    }
+
+    fn from_call(reason: AgentFailure) -> Self {
+        if reason == AgentFailure::DeadlineExceeded {
+            Self::soft(reason)
+        } else {
+            Self::from(reason)
+        }
+    }
+}
+
+impl From<AgentFailure> for DriveStop {
+    fn from(reason: AgentFailure) -> Self {
+        Self {
+            reason,
+            resumable: false,
+        }
     }
 }
 
@@ -424,6 +581,25 @@ fn encoded_len(value: &impl serde::Serialize) -> Result<usize, AgentFailure> {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len())
         .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn soft_continuation(
+    resumable: bool,
+    turn_id: Uuid,
+    level: u8,
+    usage: AgentUsage,
+    placement: ModelPlacement,
+) -> Option<AgentContinuation> {
+    (resumable && level < 3).then_some(AgentContinuation {
+        turn_id,
+        level,
+        usage,
+        placement,
+    })
+}
+
+fn check_drive_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), DriveStop> {
+    check_running(deadline, cancellation).map_err(DriveStop::from_call)
 }
 
 fn emit_event(

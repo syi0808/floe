@@ -32,6 +32,8 @@ pub struct AgentSession {
     pub messages: Vec<AgentMessage>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<AgentContinuation>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -70,8 +72,27 @@ impl AgentSession {
             messages: vec![],
             active_turn: None,
             last_outcome: None,
+            continuation: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentUsage {
+    pub iterations: u32,
+    pub capability_calls: u32,
+    pub tokens: u64,
+    pub cost_micros: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentContinuation {
+    pub turn_id: Uuid,
+    pub level: u8,
+    pub usage: AgentUsage,
+    pub placement: ModelPlacement,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -218,6 +239,24 @@ impl Default for AgentBudget {
             max_session_bytes: 2_097_152,
             deadline_ms: 300_000,
         }
+    }
+}
+
+impl AgentBudget {
+    pub fn expanded(self, level: u8) -> Option<Self> {
+        if level > 3 {
+            return None;
+        }
+        let mut expanded = self;
+        for _ in 0..level {
+            expanded.max_iterations = expanded.max_iterations.checked_mul(7)?.div_ceil(4);
+            expanded.max_capability_calls =
+                expanded.max_capability_calls.checked_mul(7)?.div_ceil(4);
+            expanded.max_tokens = expanded.max_tokens.checked_mul(7)?.div_ceil(4);
+            expanded.max_cost_micros = expanded.max_cost_micros.checked_mul(7)?.div_ceil(4);
+            expanded.deadline_ms = expanded.deadline_ms.checked_mul(7)?.div_ceil(4);
+        }
+        Some(expanded)
     }
 }
 
