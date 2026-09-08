@@ -1,0 +1,1 @@
+Show a sample model connection failure.

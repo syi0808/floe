@@ -950,6 +950,12 @@ async fn built_in_schedule_repeats_bounded_range_tools_in_an_isolated_model_loop
     {
         let requests = model.requests.lock().unwrap();
         assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests[0].system_instructions,
+            SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS
+        );
+        assert!(SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS.contains("formal, professional register"));
+        assert!(SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS.contains("do not use emoji"));
         assert_eq!(requests[0].messages.len(), 1);
         assert_eq!(requests[0].policy.purpose, "schedule-summary");
         assert_eq!(requests[0].policy.performance_class, "fast");

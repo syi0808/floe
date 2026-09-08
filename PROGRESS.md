@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### Managed Agent instructions and Markdown chat — 2026-09-08
+
+- Moved Manager/Schedule Expert instructions and product-owned preset turn templates
+  from Rust literals into compile-time text resources, with explicit formal-register
+  and no-emoji rules for generated output.
+- Assistant messages now render selectable GitHub-Flavored Markdown; user messages
+  remain literal text. Model-authored images are reduced to alt text and links remain
+  inert, so presentation cannot initiate external reads or bypass action authority.
+- Added focused Rust and Flutter regression coverage and updated the S4 prompt/chat
+  design contract. [Evidence and limits](docs/validation/s4-agent-prompts-and-markdown.md).
+  Live instruction-following and model/source/privacy gates remain open, so S4 stays
+  0/14.
+
 ### Lightweight Schedule Expert subagent — 2026-09-08
 
 - Reframed the built-in Schedule Expert as a bounded domain subagent while keeping

@@ -6,6 +6,7 @@ import 'package:floe_client/features/agent/agent_panel.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/agent_vault_gateway.dart';
@@ -39,7 +40,27 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(gateway.turns.single.text, 'Hello Floe');
-    expect(find.text('Hello back'), findsOneWidget);
+    final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
+    expect(
+      markdown.data,
+      '**Hello** back\n\n- First item\n- Second item\n\n'
+      '[Details](https://example.com)\n\n'
+      '![Remote diagram](https://example.com/image.png)',
+    );
+    expect(markdown.selectable, isTrue);
+    expect(markdown.imageBuilder, isNotNull);
+    expect(markdown.onTapLink, isNull);
+    expect(find.byType(Image), findsNothing);
+    final renderedBlocks = tester
+        .widgetList<SelectableText>(
+          find.descendant(
+            of: find.byType(MarkdownBody),
+            matching: find.byType(SelectableText),
+          ),
+        )
+        .map((widget) => widget.textSpan?.toPlainText())
+        .whereType<String>();
+    expect(renderedBlocks, contains('Hello back'));
   });
 }
 
@@ -63,7 +84,14 @@ final class _ConversationGateway extends TestVaultGateway
         ? <Object?>[]
         : [
             {'kind': 'user', 'turn_id': 'turn', 'text': active!.text},
-            {'kind': 'assistant', 'turn_id': 'turn', 'text': 'Hello back'},
+            {
+              'kind': 'assistant',
+              'turn_id': 'turn',
+              'text':
+                  '**Hello** back\n\n- First item\n- Second item\n\n'
+                  '[Details](https://example.com)\n\n'
+                  '![Remote diagram](https://example.com/image.png)',
+            },
           ],
     'active_turn': null,
     'last_outcome': revision == 0 ? null : {'status': 'completed'},

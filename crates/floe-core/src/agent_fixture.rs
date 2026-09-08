@@ -20,10 +20,10 @@ pub enum AgentFixturePrompt {
 impl AgentFixturePrompt {
     fn text(self) -> &'static str {
         match self {
-            Self::Today => "Show the sample day briefing.",
-            Self::FollowUp => "What can the sample assistant change?",
-            Self::RepeatedCall => "Repeat the sample read without progress.",
-            Self::Unavailable => "Show a sample model connection failure.",
+            Self::Today => fixture_today_prompt(),
+            Self::FollowUp => fixture_follow_up_prompt(),
+            Self::RepeatedCall => fixture_repeated_call_prompt(),
+            Self::Unavailable => fixture_unavailable_prompt(),
         }
     }
 }

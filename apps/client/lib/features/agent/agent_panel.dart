@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
@@ -223,10 +224,13 @@ class _AgentPanelState extends State<AgentPanel> {
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: FloeSpace.sm),
-          SelectableText(
-            text,
-            style: const TextStyle(fontSize: 14, height: 1.5),
-          ),
+          if (kind == AgentMessageKind.assistant)
+            _AgentMarkdown(data: text)
+          else
+            SelectableText(
+              text,
+              style: const TextStyle(fontSize: 14, height: 1.5),
+            ),
         ],
       ),
     ),
@@ -456,5 +460,59 @@ class _AgentPanelState extends State<AgentPanel> {
             : strings.agentConversationBudget,
       _ => strings.agentFailure,
     };
+  }
+}
+
+class _AgentMarkdown extends StatelessWidget {
+  const _AgentMarkdown({required this.data});
+
+  final String data;
+
+  @override
+  Widget build(BuildContext context) {
+    final body = const TextStyle(
+      fontSize: 14,
+      height: 1.5,
+      color: FloePalette.neutral950,
+    );
+    return MarkdownBody(
+      data: data,
+      selectable: true,
+      fitContent: true,
+      imageBuilder: (_, _, alt) => Text(
+        alt?.trim().isNotEmpty == true ? alt! : '[image]',
+        style: body.copyWith(
+          color: FloePalette.neutral600,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+      styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+        a: body.copyWith(
+          color: FloePalette.primary700,
+          decoration: TextDecoration.underline,
+        ),
+        p: body,
+        code: body.copyWith(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          backgroundColor: FloePalette.neutral100,
+        ),
+        h1: body.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+        h2: body.copyWith(fontSize: 16, fontWeight: FontWeight.w600),
+        h3: body.copyWith(fontWeight: FontWeight.w600),
+        blockSpacing: FloeSpace.md,
+        listIndent: FloeSpace.lg,
+        blockquoteDecoration: const BoxDecoration(
+          border: Border(
+            left: BorderSide(color: FloePalette.primary300, width: 3),
+          ),
+        ),
+        codeblockPadding: const EdgeInsets.all(FloeSpace.md),
+        codeblockDecoration: BoxDecoration(
+          color: FloePalette.neutral100,
+          borderRadius: BorderRadius.circular(FloeRadius.xs),
+        ),
+      ),
+    );
   }
 }

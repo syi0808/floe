@@ -368,6 +368,8 @@ async fn multi_turn_messages_and_events_are_ordered_and_atomic() {
     assert_eq!(&second.messages[..3], first.messages.as_slice());
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests[0].system_instructions, AGENT_SYSTEM_INSTRUCTIONS);
+    assert!(AGENT_SYSTEM_INSTRUCTIONS.contains("formal, respectful tone"));
+    assert!(AGENT_SYSTEM_INSTRUCTIONS.contains("Do not use emoji"));
     assert_eq!(requests[2].messages.len(), 4);
     assert_eq!(requests[0].policy, policy);
 }

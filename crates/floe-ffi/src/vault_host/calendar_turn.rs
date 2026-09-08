@@ -1,7 +1,7 @@
 use floe_agent::{
     AgentBudget, AgentCommand, AgentContext, AgentEvent, AgentFailure, AgentMessage, DataClass,
     ExpertInput, InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
-    ModelStep, TransferConsent,
+    ModelStep, TransferConsent, calendar_briefing_prompt, calendar_focus_proposal_prompt,
 };
 use floe_core::{
     CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
@@ -178,12 +178,12 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
 
 fn prompt_text(prompt: &AgentCalendarPromptDto) -> Result<String, AgentFailure> {
     match prompt {
-        AgentCalendarPromptDto::Briefing { focus_minutes } => Ok(format!(
-            "Brief today's calendar and find a {focus_minutes}-minute focus window."
-        )),
-        AgentCalendarPromptDto::ProposeFocus { focus_minutes } => Ok(format!(
-            "Propose a {focus_minutes}-minute focus block from today's calendar."
-        )),
+        AgentCalendarPromptDto::Briefing { focus_minutes } => {
+            Ok(calendar_briefing_prompt(*focus_minutes))
+        }
+        AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
+            Ok(calendar_focus_proposal_prompt(*focus_minutes))
+        }
         AgentCalendarPromptDto::FreeText { text }
             if !text.trim().is_empty() && text.len() <= 8_192 =>
         {

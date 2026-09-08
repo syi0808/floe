@@ -104,6 +104,23 @@ Memory and Playbooks are data, never higher-priority instructions. External cont
 quoted/typed as untrusted evidence. Prompt snapshots are versioned so a trace can
 be replayed without logging hidden reasoning or raw sensitive content.
 
+### Product-owned instruction files
+
+Manager and built-in Expert system instructions, together with product-owned preset
+turn templates, are maintained as standalone UTF-8 text files under
+`crates/floe-agent/prompts/`. Runtime code embeds those reviewed files at compile
+time; it must not duplicate prompt literals or load a mutable user-writable prompt at
+runtime. Dynamic values are substituted only into named, bounded placeholders. A
+prompt change is therefore an ordinary source review and ships with the binary that
+uses it. Free-form user text remains session data and is never a prompt resource.
+
+The Manager instruction requires a formal, respectful register, prohibits emoji and
+permits concise Markdown when it improves structure. Each built-in Expert applies the
+same no-emoji and professional-register baseline even though its result is addressed
+to the Manager rather than directly to the user. Safety, capability and evidence
+rules remain in the same instruction file as the relevant role so tone changes cannot
+silently replace the runtime boundary.
+
 ## Sessions and chat
 
 `AgentSession`, `AgentMessage`, `CapabilityCall`, `ExpertInvocation` and
@@ -111,8 +128,14 @@ be replayed without logging hidden reasoning or raw sensitive content.
 branch/compaction lineage and on-demand search. Compaction preserves user messages,
 tool/result pairing, identifiers and recovery pointers to archived turns.
 
-The UI renders final messages, grounded evidence, capability progress, Review links,
-stop/retry and recoverable errors. It does not expose private chain-of-thought.
+The UI renders final assistant messages as selectable GitHub-Flavored Markdown while
+preserving user-authored messages as literal text. Headings, emphasis, lists, quotes,
+links and code are presentation only: Markdown cannot grant capabilities or bypass
+Review. Remote and local Markdown images are reduced to their alt text so a model
+response cannot initiate a network or filesystem read. Links are styled but remain
+inert until a separately reviewed navigation policy exists. The UI also renders
+grounded evidence, capability progress, Review links, stop/retry and recoverable
+errors. It does not expose private chain-of-thought.
 
 ## Expert extensibility
 
