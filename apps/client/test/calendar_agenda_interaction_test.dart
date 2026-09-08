@@ -6,6 +6,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('current time label replaces an overlapping hour label', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final date = DateTime(2026, 9, 8);
+    final snapshot = DaySnapshot(
+      personId: 'person',
+      date: date,
+      generatedAt: DateTime(2026, 9, 8, 10, 5),
+      timezoneOffsetSeconds: date.timeZoneOffset.inSeconds,
+      items: const [],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: CalendarAgenda(snapshot: snapshot, onConnections: () {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('calendar-current-time-label')),
+      findsOneWidget,
+    );
+    expect(find.text('10:05'), findsOneWidget);
+    expect(find.byKey(const Key('calendar-hour-label-10')), findsNothing);
+    expect(find.byKey(const Key('calendar-hour-label-9')), findsOneWidget);
+    expect(find.byKey(const Key('calendar-hour-label-11')), findsOneWidget);
+  });
+
   testWidgets(
     'empty day keeps its grid active and supports double-click create',
     (tester) async {

@@ -19,6 +19,8 @@ import 'calendar_event_actions.dart';
 import 'calendar_layout.dart';
 import 'day_appearance.dart';
 
+const _timeLabelCollisionDistance = 16.0;
+
 class CalendarAgenda extends StatefulWidget {
   const CalendarAgenda({
     super.key,
@@ -465,18 +467,27 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                             hour <= axis.minutes / 60;
                                             hour++
                                           )
-                                            Positioned(
-                                              top: 16 + hour * 60 * zoom - 6,
-                                              left: 16,
-                                              child: Text(
-                                                axis.hourLabel(hour),
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  height: 1.2,
-                                                  color: FloePalette.neutral600,
+                                            if (!sameDay ||
+                                                ((hour * 60 - currentMinute)
+                                                            .abs() *
+                                                        zoom) >=
+                                                    _timeLabelCollisionDistance)
+                                              Positioned(
+                                                top: 16 + hour * 60 * zoom - 6,
+                                                left: 16,
+                                                child: Text(
+                                                  axis.hourLabel(hour),
+                                                  key: ValueKey(
+                                                    'calendar-hour-label-$hour',
+                                                  ),
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    height: 1.2,
+                                                    color:
+                                                        FloePalette.neutral600,
+                                                  ),
                                                 ),
                                               ),
-                                            ),
                                           for (final placement in placements)
                                             Positioned(
                                               top: 16 + placement.start * zoom,
@@ -623,6 +634,9 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                     child: Text(
                                                       axis.time(
                                                         snapshot.generatedAt,
+                                                      ),
+                                                      key: const Key(
+                                                        'calendar-current-time-label',
                                                       ),
                                                       style: TextStyle(
                                                         fontSize: 10,
