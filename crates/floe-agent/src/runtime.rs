@@ -374,10 +374,28 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 .descriptors(session.person_id)
                 .into_iter()
                 .filter(|descriptor| {
+                    let successful_calls = session
+                        .messages
+                        .iter()
+                        .filter(|message| {
+                            matches!(
+                                message,
+                                AgentMessage::Capability {
+                                    turn_id: message_turn,
+                                    capability_id,
+                                    result: Ok(_),
+                                    ..
+                                } if *message_turn == turn_id && capability_id == &descriptor.id
+                            )
+                        })
+                        .count();
                     descriptor.schema_version == AGENT_VERSION
                         && descriptor.read_only
                         && !descriptor.id.trim().is_empty()
                         && !descriptor.version.trim().is_empty()
+                        && descriptor
+                            .max_successful_calls_per_turn
+                            .is_none_or(|limit| successful_calls < limit as usize)
                         && self
                             .policy
                             .data_classes

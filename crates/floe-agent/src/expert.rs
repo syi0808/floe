@@ -379,6 +379,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
         version: "1.0.0".into(),
         read_only: true,
         output_data_class: data_class,
+        max_successful_calls_per_turn: None,
         input_schema: Some(serde_json::json!({
             "type": "object",
             "properties": {

@@ -709,6 +709,11 @@ impl AgentRegistry {
             version: resolved.package.reference.version,
             read_only: true,
             output_data_class: resolved.data_class,
+            max_successful_calls_per_turn: matches!(
+                &resolved.package.implementation,
+                PackageImplementation::Schedule
+            )
+            .then_some(1),
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
