@@ -17,6 +17,18 @@ API/Ollama와 Codex 모두 bounded structured-output 호출이며 도구는 전�
 실제 Codex consent/refresh·native adapter·일반 streaming·사용량 집계는 검증된
 것으로 보지 않는다.
 
+일반 대화의 primary route는 Go gateway의 `everyday_assistance` purpose다. 연결되어
+사용 가능한 route가 있으면 해당 route를 먼저 선택하고, 실행 실패 후 다른 모델로
+자동 fallback하지 않는다. 서버 연결 또는 해당 purpose route가 없을 때만 client의
+device-local model을 primary로 선택한다. macOS에서는 Foundation Models를 사용하고,
+그 외 지원 client에서는 서명·해시 검증된 sLLM artifact를 명시적 다운로드한 뒤
+device-local runtime으로 사용한다.
+
+민감 입력의 정제·요약은 일반 대화를 대신 처리하는 global route가 아니다. Manager가
+필요한 경우에만 제한된 local subagent task로 요청하고, 그 결과만 primary model의
+context로 전달한다. 민감도 판정과 projection 범위는 Manager/domain이 소유하며
+gateway나 공통 router가 prompt 내용을 보고 추측하지 않는다.
+
 S4는 이 미검증 경계를 제품 flow에서 앞당겨 검증한다. fixture, 하나의 device-local
 Foundation Model/sLLM과 하나의 supported remote adapter가 같은 bounded contract를
 사용해야 한다. Codex browser authentication은 별도 feasibility gate이며, 공개적으로

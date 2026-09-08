@@ -15,8 +15,7 @@ use floe_protocol::{
 };
 
 use crate::{
-    local_model::{FoundationModelRunner, LocalModelAvailability},
-    native_calendar::NativeCalendar,
+    local_model::FoundationModelRunner, native_calendar::NativeCalendar,
     remote_model::ServerModelRunner,
 };
 
@@ -266,16 +265,10 @@ impl Model {
             AgentCalendarModelDto::DeterministicFixture => {
                 Ok(Self::Deterministic(DeterministicModel { prompt }))
             }
-            AgentCalendarModelDto::FoundationModels => {
-                let local = FoundationModelRunner::encrypted();
-                if matches!(local.availability(), Ok(LocalModelAvailability::Available)) {
-                    Ok(Self::Foundation(local))
-                } else if let Some(route) = remote_route {
-                    ServerModelRunner::new(route).map(Self::Server)
-                } else {
-                    Ok(Self::Foundation(local))
-                }
-            }
+            AgentCalendarModelDto::FoundationModels => match remote_route {
+                Some(route) => ServerModelRunner::new(route).map(Self::Server),
+                None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
+            },
         }
     }
 }
@@ -356,5 +349,29 @@ impl ModelRunner for DeterministicModel {
             used_tokens: 32,
             cost_micros: 0,
         })
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    #[test]
+    fn free_text_calendar_chat_prefers_the_configured_daily_route() {
+        let model = Model::new(
+            AgentCalendarModelDto::FoundationModels,
+            AgentCalendarPromptDto::FreeText {
+                text: "What is next?".into(),
+            },
+            Some(floe_protocol::AgentRemoteRouteDto {
+                base_url: "http://127.0.0.1:8431".into(),
+                bearer_token: "daily_route_token_that_is_long_enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+            }),
+        )
+        .unwrap();
+        assert!(matches!(model, Model::Server(_)));
     }
 }

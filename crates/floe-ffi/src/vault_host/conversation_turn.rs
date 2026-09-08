@@ -7,10 +7,7 @@ use floe_core::{EncryptedAgentVault, VaultKeyProvider};
 use floe_domain::PersonId;
 use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
-use crate::{
-    local_model::{FoundationModelRunner, LocalModelAvailability},
-    remote_model::ServerModelRunner,
-};
+use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner};
 
 use super::session_uuid;
 
@@ -109,13 +106,9 @@ enum Model {
 
 impl Model {
     fn new(route: Option<AgentRemoteRouteDto>) -> Result<Self, AgentFailure> {
-        let local = FoundationModelRunner::encrypted();
-        if matches!(local.availability(), Ok(LocalModelAvailability::Available)) {
-            Ok(Self::Foundation(local))
-        } else if let Some(route) = route {
-            ServerModelRunner::new(route).map(Self::Server)
-        } else {
-            Ok(Self::Foundation(local))
+        match route {
+            Some(route) => ServerModelRunner::new(route).map(Self::Server),
+            None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
         }
     }
 }
@@ -145,5 +138,28 @@ impl CapabilityHost for NoCapabilities {
 
     async fn invoke(&self, _: CapabilityInvocation) -> Result<String, AgentFailure> {
         Err(AgentFailure::CapabilityDenied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_daily_route_takes_priority_over_the_device_model() {
+        let model = Model::new(Some(AgentRemoteRouteDto {
+            base_url: "http://127.0.0.1:8431".into(),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        }))
+        .unwrap();
+        assert!(matches!(model, Model::Server(_)));
+    }
+
+    #[test]
+    fn missing_daily_route_uses_the_device_model() {
+        assert!(matches!(Model::new(None).unwrap(), Model::Foundation(_)));
     }
 }
