@@ -399,10 +399,8 @@ class _ToastCard extends StatelessWidget {
                             children: [
                               Text(
                                 entry.title,
-                                style: TextStyle(
-                                  fontSize: 13,
+                                style: FloeType.controlLabel.copyWith(
                                   height: 1.6,
-                                  fontWeight: FontWeight.w600,
                                   color: FloePalette.neutral950,
                                 ),
                               ),
@@ -410,9 +408,8 @@ class _ToastCard extends StatelessWidget {
                                 SizedBox(height: 3),
                                 Text(
                                   entry.description!,
-                                  style: TextStyle(
+                                  style: FloeType.bodySmall.copyWith(
                                     fontSize: 12,
-                                    height: 1.5,
                                     color: FloePalette.neutral600,
                                   ),
                                 ),
@@ -438,11 +435,7 @@ class _ToastCard extends StatelessWidget {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        textStyle: TextStyle(
-                          fontFamily: 'Pretendard',
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        textStyle: FloeType.label,
                       ),
                       onPressed: () {
                         if (entry.leaving) return;

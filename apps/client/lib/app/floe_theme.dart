@@ -70,11 +70,7 @@ abstract final class FloeTheme {
             titleLarge: FloeType.headline,
             bodyLarge: FloeType.bodyLarge,
             bodyMedium: FloeType.body,
-            labelLarge: TextStyle(
-              fontSize: 14,
-              height: 1.35,
-              fontWeight: FontWeight.w600,
-            ),
+            labelLarge: FloeType.button,
             labelMedium: FloeType.label,
           ).apply(
             fontFamily: 'Pretendard',
@@ -97,13 +93,7 @@ abstract final class FloeTheme {
         style: ButtonStyle(
           mouseCursor: WidgetStateMouseCursor.clickable,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          textStyle: const WidgetStatePropertyAll(
-            TextStyle(
-              fontFamily: 'Pretendard',
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          textStyle: const WidgetStatePropertyAll(FloeType.button),
           animationDuration: FloeMotion.hoverDuration,
           backgroundColor: WidgetStateProperty.resolveWith(
             FloeStates.filledBackground,
@@ -124,13 +114,7 @@ abstract final class FloeTheme {
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
           mouseCursor: WidgetStateMouseCursor.clickable,
-          textStyle: const WidgetStatePropertyAll(
-            TextStyle(
-              fontFamily: 'Pretendard',
-              fontSize: 14,
-              fontWeight: FontWeight.w400,
-            ),
-          ),
+          textStyle: const WidgetStatePropertyAll(FloeType.button),
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(
             FloeStates.quietForeground,
@@ -171,13 +155,7 @@ abstract final class FloeTheme {
         style: ButtonStyle(
           mouseCursor: WidgetStateMouseCursor.clickable,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          textStyle: const WidgetStatePropertyAll(
-            TextStyle(
-              fontFamily: 'Pretendard',
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          textStyle: const WidgetStatePropertyAll(FloeType.button),
           animationDuration: FloeMotion.hoverDuration,
           foregroundColor: WidgetStateProperty.resolveWith(
             FloeStates.quietForeground,

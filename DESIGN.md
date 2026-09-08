@@ -63,6 +63,12 @@ colors:
   warning: "{colors.amber-700}"
   error: "{colors.coral-700}"
 typography:
+  display-hero:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 48px
+    fontWeight: 700
+    lineHeight: 1.12
+    letterSpacing: -0.033em
   display-lg:
     fontFamily: Inter, Pretendard, system-ui, sans-serif
     fontSize: 40px
@@ -87,6 +93,17 @@ typography:
     fontWeight: 620
     lineHeight: 1.3
     letterSpacing: -0.012em
+  title-lg:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 18px
+    fontWeight: 600
+    lineHeight: 1.3
+    letterSpacing: -0.006em
+  title-md:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 16px
+    fontWeight: 600
+    lineHeight: 1.35
   body-lg:
     fontFamily: Inter, Pretendard, system-ui, sans-serif
     fontSize: 16px
@@ -99,6 +116,16 @@ typography:
     fontWeight: 400
     lineHeight: 1.5
     letterSpacing: -0.003em
+  body-sm:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 13px
+    fontWeight: 400
+    lineHeight: 1.5
+  control-label:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 13px
+    fontWeight: 500
+    lineHeight: 1.5
   label-lg:
     fontFamily: Inter, Pretendard, system-ui, sans-serif
     fontSize: 14px
@@ -111,6 +138,16 @@ typography:
     fontWeight: 560
     lineHeight: 1.35
     letterSpacing: 0.01em
+  caption:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 11px
+    fontWeight: 500
+    lineHeight: 1.4
+  micro:
+    fontFamily: Inter, Pretendard, system-ui, sans-serif
+    fontSize: 10px
+    fontWeight: 500
+    lineHeight: 1.4
   numeric:
     fontFamily: Inter, Pretendard, system-ui, sans-serif
     fontSize: 13px
@@ -174,6 +211,14 @@ components:
     borderColor: "{colors.border}"
     rounded: "{rounded.sq-xl}"
     padding: 28px
+  badge:
+    typography: "{typography.label-md}"
+    rounded: "{rounded.sq-xs}"
+    padding: 4px 10px
+  checkbox:
+    size: 20px
+    rounded: "{rounded.sq-xs}"
+    typography: "{typography.control-label}"
   focus-ring:
     color: "{colors.focus}"
     width: 2px

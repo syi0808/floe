@@ -35,7 +35,7 @@ class CalendarEventDetails extends StatelessWidget {
           Expanded(
             child: Text(
               event.calendarName ?? AppLocalizations.of(context).savedInFloe,
-              style: TextStyle(color: FloePalette.neutral600),
+              style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
           ),
           if (event.externalId != null && !event.canModify) FloeReadOnlyPill(),
@@ -62,9 +62,7 @@ class CalendarEventDetails extends StatelessWidget {
                       snapshot.timezoneOffsetSeconds,
                       date: snapshot.date,
                     ),
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
+                    style: FloeType.titleLarge.copyWith(
                       color: FloePalette.primary700,
                     ),
                   ),
@@ -72,7 +70,7 @@ class CalendarEventDetails extends StatelessWidget {
                   Text(
                     DateFormat.yMMMd(AppLocalizations.of(context).localeName)
                         .format(snapshot.date),
-                    style: TextStyle(
+                    style: FloeType.bodySmall.copyWith(
                       fontSize: 12,
                       color: FloePalette.primary700,
                     ),
@@ -105,11 +103,17 @@ class CalendarEventDetails extends StatelessWidget {
               Expanded(
                 child: Text(
                   entry.key,
-                  style: TextStyle(fontSize: 12, color: FloePalette.neutral600),
+                  style: FloeType.bodySmall.copyWith(
+                    fontSize: 12,
+                    color: FloePalette.neutral600,
+                  ),
                 ),
               ),
               Expanded(
-                child: Text(entry.value, style: TextStyle(fontSize: 12)),
+                child: Text(
+                  entry.value,
+                  style: FloeType.bodySmall.copyWith(fontSize: 12),
+                ),
               ),
             ],
           ),
@@ -128,7 +132,7 @@ class CalendarEventDetails extends StatelessWidget {
             tilePadding: EdgeInsets.zero,
             title: Text(
               AppLocalizations.of(context).sourceDetails,
-              style: TextStyle(fontSize: 12),
+              style: FloeType.bodySmall.copyWith(fontSize: 12),
             ),
             children: [
               FloeSquircle(
@@ -163,16 +167,14 @@ class CalendarEventDetails extends StatelessWidget {
                           children: [
                             Text(
                               entry.key,
-                              style: TextStyle(
-                                fontSize: 11,
+                              style: FloeType.caption.copyWith(
                                 color: FloePalette.neutral600,
                               ),
                             ),
                             SizedBox(height: 5),
                             Text(
                               entry.value,
-                              style: TextStyle(
-                                fontSize: 10,
+                              style: FloeType.micro.copyWith(
                                 fontFamily: 'monospace',
                               ),
                             ),

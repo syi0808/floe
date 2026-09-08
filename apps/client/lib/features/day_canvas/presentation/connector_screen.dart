@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_primitives.dart';
 import '../../../app/floe_squircle.dart';
 import '../application/calendar_gateway.dart';
 import '../domain/day_models.dart';
@@ -96,76 +97,61 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       children: [
         Text(
           AppLocalizations.of(context).connections,
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -1,
-          ),
+          style: FloeType.pageTitle,
         ),
         SizedBox(height: FloeSpace.md),
         Text(
           AppLocalizations.of(context).manageTheServicesThatBringContextTo,
-          style: TextStyle(color: FloePalette.neutral600),
+          style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         SizedBox(height: 36),
         Text(
           widget.connection == null
               ? AppLocalizations.of(context).availableServices
               : AppLocalizations.of(context).connectedServicesCount(1),
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: FloeType.title,
         ),
         SizedBox(height: FloeSpace.base),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: 280),
-          child: Material(
-            color: FloePalette.neutral0,
-            shape: floeSquircleBorder(
-              FloeSquircleSize.lg,
-              borderColor: FloePalette.neutral200,
-              borderWidth: 1,
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              mouseCursor: WidgetStateMouseCursor.clickable,
-              customBorder: floeSquircleBorder(FloeSquircleSize.lg),
-              onTap: () => setState(() => detail = true),
-              hoverColor: FloePalette.primary50,
-              child: Padding(
-                padding: EdgeInsets.all(FloeSpace.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    FloeSquircle(
-                      size: FloeSquircleSize.md,
-                      fill: FloePalette.primary50,
-                      borderWidth: 0,
-                      padding: EdgeInsets.all(14),
-                      child: Icon(
-                        LucideIcons.calendarDays,
-                        size: 26,
-                        color: FloePalette.primary600,
-                      ),
+          child: FloePressable(
+            size: FloeSquircleSize.lg,
+            fill: FloePalette.neutral0,
+            borderColor: FloePalette.neutral200,
+            borderWidth: 1,
+            onPressed: () => setState(() => detail = true),
+            hoverFill: FloePalette.primary50,
+            child: Padding(
+              padding: EdgeInsets.all(FloeSpace.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  FloeSquircle(
+                    size: FloeSquircleSize.md,
+                    fill: FloePalette.primary50,
+                    borderWidth: 0,
+                    padding: EdgeInsets.all(14),
+                    child: Icon(
+                      LucideIcons.calendarDays,
+                      size: 26,
+                      color: FloePalette.primary600,
                     ),
-                    SizedBox(height: 20),
-                    Text(
-                      AppLocalizations.of(context).macosCalendar,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  ),
+                  SizedBox(height: 20),
+                  Text(
+                    AppLocalizations.of(context).macosCalendar,
+                    style: FloeType.title,
+                  ),
+                  SizedBox(height: FloeSpace.md),
+                  Text(
+                    AppLocalizations.of(context).bringEventsFromYourMacIntoYour,
+                    style: FloeType.bodySmall.copyWith(
+                      fontSize: 12,
+                      height: 1.6,
+                      color: FloePalette.neutral600,
                     ),
-                    SizedBox(height: FloeSpace.md),
-                    Text(
-                      AppLocalizations.of(context)
-                          .bringEventsFromYourMacIntoYour,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.6,
-                        color: FloePalette.neutral600,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -194,15 +180,11 @@ class _InfoCard extends StatelessWidget {
       children: [
         Icon(icon, color: FloePalette.primary600, size: 23),
         SizedBox(height: 20),
-        Text(
-          title,
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
+        Text(title, style: FloeType.title),
         SizedBox(height: FloeSpace.base),
         Text(
           text,
-          style: TextStyle(
-            fontSize: 13,
+          style: FloeType.bodySmall.copyWith(
             height: 1.8,
             color: FloePalette.neutral600,
           ),

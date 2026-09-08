@@ -134,7 +134,18 @@ abstract final class FloeControlInsets {
 }
 
 abstract final class FloeType {
+  static const fontFamily = 'Pretendard';
+
+  static const hero = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 48,
+    fontWeight: FontWeight.w700,
+    height: 1.12,
+    letterSpacing: -1.6,
+    color: FloePalette.neutral950,
+  );
   static const displayLarge = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 40,
     fontWeight: FontWeight.w600,
     height: 1.12,
@@ -142,13 +153,23 @@ abstract final class FloeType {
     color: FloePalette.neutral950,
   );
   static const display = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 32,
     fontWeight: FontWeight.w600,
     height: 1.16,
     letterSpacing: -0.8,
     color: FloePalette.neutral950,
   );
+  static const pageTitle = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 28,
+    fontWeight: FontWeight.w700,
+    height: 1.2,
+    letterSpacing: -1,
+    color: FloePalette.neutral950,
+  );
   static const headlineLarge = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 24,
     fontWeight: FontWeight.w600,
     height: 1.25,
@@ -156,37 +177,106 @@ abstract final class FloeType {
     color: FloePalette.neutral950,
   );
   static const headline = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 20,
     fontWeight: FontWeight.w600,
     height: 1.3,
     letterSpacing: -0.24,
     color: FloePalette.neutral950,
   );
+  static const titleLarge = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 18,
+    fontWeight: FontWeight.w600,
+    height: 1.3,
+    letterSpacing: -0.1,
+    color: FloePalette.neutral950,
+  );
+  static const title = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+    height: 1.35,
+    color: FloePalette.neutral950,
+  );
   static const bodyLarge = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 16,
     height: 1.55,
     letterSpacing: -0.1,
     color: FloePalette.neutral950,
   );
   static const body = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 14,
     letterSpacing: 0,
     height: 1.5,
     color: FloePalette.neutral600,
   );
+  static const bodySmall = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 13,
+    height: 1.5,
+    color: FloePalette.neutral600,
+  );
+  static const controlLabel = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 13,
+    fontWeight: FontWeight.w500,
+    height: 1.5,
+    color: FloePalette.neutral950,
+  );
+  static const button = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    height: 1.35,
+    color: FloePalette.neutral950,
+  );
   static const label = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 12,
     fontWeight: FontWeight.w600,
     height: 1.35,
     letterSpacing: 0,
     color: FloePalette.neutral600,
   );
+  static const caption = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 11,
+    fontWeight: FontWeight.w500,
+    height: 1.4,
+    color: FloePalette.neutral600,
+  );
+  static const micro = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 10,
+    fontWeight: FontWeight.w500,
+    height: 1.4,
+    color: FloePalette.neutral600,
+  );
   static const numeric = TextStyle(
+    fontFamily: fontFamily,
     fontSize: 13,
     letterSpacing: 0,
     fontWeight: FontWeight.w500,
     height: 1.35,
     color: FloePalette.neutral600,
     fontFeatures: [FontFeature.tabularFigures()],
+  );
+  static const numericLarge = TextStyle(
+    fontFamily: fontFamily,
+    fontSize: 21,
+    letterSpacing: 0,
+    fontWeight: FontWeight.w500,
+    height: 1.35,
+    color: FloePalette.neutral950,
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
+  static const code = TextStyle(
+    fontFamily: 'monospace',
+    fontSize: 12,
+    height: 1.5,
+    color: FloePalette.neutral700,
   );
 }

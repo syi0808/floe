@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
+import '../../app/floe_badge.dart';
+import '../../app/floe_primitives.dart';
 import '../../app/floe_loading.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
@@ -70,18 +72,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      const Text(
-        'Settings',
-        style: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -1,
-        ),
-      ),
+      Text('Settings', style: FloeType.pageTitle),
       const SizedBox(height: 10),
-      const Text(
+      Text(
         'Manage Floe on this device.',
-        style: TextStyle(color: FloePalette.neutral600),
+        style: FloeType.body.copyWith(color: FloePalette.neutral600),
       ),
       const SizedBox(height: 36),
       LayoutBuilder(
@@ -136,19 +131,16 @@ class _RemoteServerSettings extends StatelessWidget {
           ),
         ),
       const SizedBox(height: FloeSpace.lg),
-      const Padding(
+      Padding(
         padding: EdgeInsets.symmetric(horizontal: 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Connection boundary',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text('Connection boundary', style: FloeType.controlLabel),
             SizedBox(height: 6),
             Text(
               'Pairing authorizes this app to use assisted features on your server. Sensitive context is still approved per request, and service credentials remain on the server.',
-              style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+              style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
           ],
         ),
@@ -232,14 +224,14 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     builder: (context, _) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
+        Text(
           'Data & privacy',
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+          style: FloeType.headlineLarge.copyWith(fontSize: 22),
         ),
         const SizedBox(height: FloeSpace.sm),
-        const Text(
+        Text(
           'Control what Floe may use and where assisted processing may happen.',
-          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+          style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         const SizedBox(height: FloeSpace.lg),
         FloeSquircle(
@@ -256,9 +248,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         _AiProcessing(client: widget.serverClient),
         if (controller.vaultState != AgentVaultState.ready) ...[
           const SizedBox(height: FloeSpace.sm),
-          const Text(
+          Text(
             'Data access will appear when your private data is unlocked.',
-            style: TextStyle(color: FloePalette.neutral600, height: 1.4),
+            style: FloeType.body.copyWith(
+              color: FloePalette.neutral600,
+              height: 1.4,
+            ),
           ),
         ],
       ],
@@ -374,14 +369,11 @@ class _AiProcessingState extends State<_AiProcessing> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          'AI processing',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
+        const Text('AI processing', style: FloeType.title),
         const SizedBox(height: FloeSpace.xs),
-        const Text(
+        Text(
           'Floe chooses a permitted route for each task. Conversations do not select a model.',
-          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+          style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         const SizedBox(height: FloeSpace.base),
         const _ProcessingRow(
@@ -423,14 +415,11 @@ class _AiProcessingState extends State<_AiProcessing> {
             ),
         ],
         if (connection != null) ...[
-          const Divider(height: FloeSpace.xl),
-          SwitchListTile.adaptive(
+          const FloeDivider(height: FloeSpace.xl),
+          FloeSwitchTile(
             key: const ValueKey('external-model-consent'),
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Allow external model providers'),
-            subtitle: const Text(
-              'Allows the paired server to send the minimum required context to a provider it manages. Turn this off to withdraw consent without disconnecting the server.',
-            ),
+            title: 'Allow external model providers',
+            subtitle: 'Allows the paired server to send the minimum required context to a provider it manages. Turn this off to withdraw consent without disconnecting the server.',
             value: _externalConsentActive,
             onChanged: loading || _externalRecipients.isEmpty
                 ? null
@@ -439,19 +428,19 @@ class _AiProcessingState extends State<_AiProcessing> {
         ],
         if (failure case final message?) ...[
           const SizedBox(height: FloeSpace.sm),
-          Text(message, style: const TextStyle(color: FloePalette.error600)),
+          Text(
+            message,
+            style: FloeType.body.copyWith(color: FloePalette.error600),
+          ),
         ],
         if (connection != null && activity != null) ...[
-          const Divider(height: FloeSpace.xl),
-          const Text(
-            'Recent data use',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
+          const FloeDivider(height: FloeSpace.xl),
+          const Text('Recent data use', style: FloeType.controlLabel),
           const SizedBox(height: FloeSpace.xs),
           if (activity!.isEmpty)
-            const Text(
+            Text(
               'No server model processing has been recorded since the server started.',
-              style: TextStyle(color: FloePalette.neutral600),
+              style: FloeType.body.copyWith(color: FloePalette.neutral600),
             )
           else
             for (final record in activity!.take(5))
@@ -495,11 +484,11 @@ class _ProcessingRow extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(title, style: FloeType.controlLabel),
             const SizedBox(height: FloeSpace.xxs),
             Text(
               detail,
-              style: const TextStyle(
+              style: FloeType.body.copyWith(
                 color: FloePalette.neutral600,
                 height: 1.4,
               ),
@@ -508,7 +497,7 @@ class _ProcessingRow extends StatelessWidget {
         ),
       ),
       const SizedBox(width: FloeSpace.md),
-      Text(status, style: const TextStyle(color: FloePalette.neutral600)),
+      FloeBadge(label: status, tone: _statusTone(status)),
     ],
   );
 }
@@ -569,18 +558,15 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Action permissions',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
+            const Text('Action permissions', style: FloeType.titleLarge),
             const SizedBox(height: FloeSpace.sm),
-            const Text(
+            Text(
               'Choose when Floe must ask before changing an external service. OS and connector permissions still apply.',
-              style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+              style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
             const SizedBox(height: 20),
-            RadioGroup<_ActionPermissionPreset>(
-              groupValue: preset,
+            FloeRadioGroup<_ActionPermissionPreset>(
+              value: preset,
               onChanged: selectPreset,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -626,16 +612,19 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
               },
             ),
             const SizedBox(height: FloeSpace.sm),
-            const Text(
+            Text(
               'Currently this preset covers Calendar event creation only. It never bypasses macOS permission or safety checks.',
-              style: TextStyle(color: FloePalette.neutral600, height: 1.4),
+              style: FloeType.body.copyWith(
+                color: FloePalette.neutral600,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: FloeSpace.md),
             Text(
               controller.writesEnabled
                   ? 'Calendar writing is available in this build.'
                   : 'Calendar writing is unavailable in this build.',
-              style: const TextStyle(color: FloePalette.neutral600),
+              style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
             if (controller.failed) ...[
               const SizedBox(height: FloeSpace.sm),
@@ -647,6 +636,16 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
     ),
   );
 }
+
+FloeBadgeTone _statusTone(String status) => switch (status) {
+  'Paired' ||
+  'Available' ||
+  'Completed' ||
+  'Preferred' => FloeBadgeTone.success,
+  'Needs consent' || 'Not paired' || 'Unavailable' => FloeBadgeTone.warning,
+  'Failed' => FloeBadgeTone.danger,
+  _ => FloeBadgeTone.neutral,
+};
 
 class _SettingsNavigation extends StatelessWidget {
   const _SettingsNavigation({
@@ -714,8 +713,9 @@ class _SettingsSection extends StatelessWidget {
       size: FloeSquircleSize.md,
       fill: selected ? FloePalette.primary100 : Colors.transparent,
       borderWidth: 0,
-      child: InkWell(
-        onTap: onPressed,
+      child: FloePressable(
+        size: FloeSquircleSize.md,
+        onPressed: onPressed,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
@@ -733,7 +733,7 @@ class _SettingsSection extends StatelessWidget {
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: FloeType.body.copyWith(
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                     color: selected
                         ? FloePalette.primary700

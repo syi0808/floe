@@ -1,5 +1,6 @@
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/connector_screen.dart';
@@ -38,8 +39,12 @@ void main() {
     final strings = AppLocalizations.of(
       tester.element(find.byType(ConnectorScreen)),
     );
-    expect(find.byType(FloeSquircle), findsOneWidget);
-    final iconSurface = tester.widget<FloeSquircle>(find.byType(FloeSquircle));
+    expect(find.byType(FloePressable), findsOneWidget);
+    final iconSurface = tester.widget<FloeSquircle>(
+      find.byWidgetPredicate(
+        (widget) => widget is FloeSquircle && widget.child is Icon,
+      ),
+    );
     expect(iconSurface.child, isA<Icon>());
     expect(iconSurface.borderWidth, 0);
     final serviceMaterial = tester.widget<Material>(

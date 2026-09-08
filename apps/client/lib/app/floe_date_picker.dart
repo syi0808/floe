@@ -6,6 +6,7 @@ import 'design_tokens.dart';
 import 'floe_button.dart';
 import 'floe_motion.dart';
 import 'floe_popover.dart';
+import 'floe_primitives.dart';
 
 Future<DateTime?> showFloeDatePicker({
   required BuildContext context,
@@ -100,8 +101,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                     liveRegion: true,
                     child: Text(
                       DateFormat.yMMMM(locale).format(month),
-                      style: const TextStyle(
-                        fontSize: 14,
+                      style: FloeType.body.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -134,8 +134,7 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
                       child: Text(
                         localizations.narrowWeekdays[(weekday + firstWeekday) %
                             7],
-                        style: const TextStyle(
-                          fontSize: 11,
+                        style: FloeType.caption.copyWith(
                           color: FloePalette.neutral500,
                         ),
                       ),
@@ -222,15 +221,14 @@ class _FloeDatePickerState extends State<FloeDatePicker> {
               ),
             ),
             const SizedBox(height: FloeSpace.sm),
-            const Divider(height: 1, color: FloePalette.neutral100),
+            const FloeDivider(height: 1, color: FloePalette.neutral100),
             const SizedBox(height: 6),
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     '↑↓←→ to navigate',
-                    style: TextStyle(
-                      fontSize: 10,
+                    style: FloeType.micro.copyWith(
                       color: FloePalette.neutral500,
                     ),
                   ),
@@ -303,7 +301,7 @@ class _DateCell extends StatelessWidget {
             child: Center(
               child: Text(
                 '${date.day}',
-                style: TextStyle(
+                style: FloeType.bodySmall.copyWith(
                   fontSize: 12,
                   fontWeight: active || today
                       ? FontWeight.w600

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_feedback.dart';
+import '../../app/floe_primitives.dart';
+import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import 'agent_calendar_experts.dart';
@@ -129,9 +132,9 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   }
 
   Future<void> _remove(AgentCalendarSetupReceipt setup) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
+    final confirmed = await showFloeDialog<bool>(
+      context,
+      (context) => FloeDialog(
         title: const Text('Remove Calendar access?'),
         content: const Text(
           'Floe will stop using these calendars in new conversations. The source connection and action history are not deleted.',
@@ -169,14 +172,11 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          'Data Floe can use',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
+        const Text('Data Floe can use', style: FloeType.title),
         const SizedBox(height: FloeSpace.xs),
-        const Text(
+        Text(
           'Access is granted to a specific source and scope. It does not allow Floe to change external data automatically.',
-          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
+          style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         const SizedBox(height: FloeSpace.base),
         if (!ready)
@@ -253,13 +253,16 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('Calendars', style: TextStyle(fontWeight: FontWeight.w600)),
+        const Text('Calendars', style: FloeType.controlLabel),
         const SizedBox(height: FloeSpace.xs),
         Text(
           sources == null
               ? 'Connect and choose calendars in Connections first.'
               : '${sources.provider == 'event_kit' ? 'Apple Calendar' : 'Demo Calendar'} is connected. Let Floe read selected event details and prepare scheduling suggestions.',
-          style: const TextStyle(color: FloePalette.neutral600, height: 1.4),
+          style: FloeType.body.copyWith(
+            color: FloePalette.neutral600,
+            height: 1.4,
+          ),
         ),
         const SizedBox(height: FloeSpace.md),
         Align(
@@ -288,7 +291,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
       children: [
         const Text(
           'Calendar access needs attention',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: FloeType.controlLabel,
         ),
         const SizedBox(height: FloeSpace.xs),
         const Text(
@@ -350,21 +353,18 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
           Row(
             children: [
               const Expanded(
-                child: Text(
-                  'Calendars',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
+                child: Text('Calendars', style: FloeType.controlLabel),
               ),
               Text(
                 status,
-                style: const TextStyle(color: FloePalette.neutral600),
+                style: FloeType.body.copyWith(color: FloePalette.neutral600),
               ),
             ],
           ),
           const SizedBox(height: FloeSpace.xs),
           Text(
             _scopeSummary(sources, view),
-            style: const TextStyle(color: FloePalette.neutral600),
+            style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
           const SizedBox(height: FloeSpace.xs),
           const Text('Read event details and prepare suggestions.'),
@@ -407,15 +407,13 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     children: [
       Text(
         _editingSetupId == null ? 'Choose calendars' : 'Change Calendar scope',
-        style: const TextStyle(fontWeight: FontWeight.w600),
+        style: FloeType.controlLabel,
       ),
       const SizedBox(height: FloeSpace.sm),
       if (sources != null)
         for (final source in sources.calendars)
-          CheckboxListTile(
+          FloeCheckboxTile(
             key: ValueKey('calendar-choice-${source.id}'),
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
             title: Text(source.name),
             subtitle: source.error == null
                 ? null
@@ -439,14 +437,14 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
           ),
       Text('${_selected.length} of 4 selected'),
       const SizedBox(height: FloeSpace.md),
-      const FloeSquircle(
+      FloeSquircle(
         size: FloeSquircleSize.md,
         fill: FloePalette.primary50,
         borderWidth: 0,
         padding: EdgeInsets.all(FloeSpace.base),
         child: Text(
           'Floe may read event details from only these calendars and prepare suggestions. Calendar changes remain controlled separately in Action permissions.',
-          style: TextStyle(height: 1.4),
+          style: FloeType.body.copyWith(height: 1.4),
         ),
       ),
       const SizedBox(height: FloeSpace.md),

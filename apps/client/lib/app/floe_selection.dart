@@ -408,11 +408,13 @@ class _FloeSelectionAnchorState<T> extends State<_FloeSelectionAnchor<T>>
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(5),
                       child: widget.options.isEmpty
-                          ? const Padding(
+                          ? Padding(
                               padding: EdgeInsets.all(7),
                               child: Text(
                                 'No options available',
-                                style: TextStyle(color: FloePalette.neutral600),
+                                style: FloeType.body.copyWith(
+                                  color: FloePalette.neutral600,
+                                ),
                               ),
                             )
                           : Column(
@@ -528,11 +530,10 @@ class _FloeSelectionOptionRow<T> extends StatelessWidget {
                   children: [
                     Text(
                       option.label,
-                      style: TextStyle(
+                      style: FloeType.body.copyWith(
                         color: option.enabled
                             ? FloePalette.neutral950
                             : FloePalette.neutral400,
-                        fontSize: 14,
                         height: 1.35,
                       ),
                     ),
@@ -540,7 +541,7 @@ class _FloeSelectionOptionRow<T> extends StatelessWidget {
                       const SizedBox(height: 3),
                       Text(
                         option.description!,
-                        style: const TextStyle(
+                        style: FloeType.bodySmall.copyWith(
                           color: FloePalette.neutral600,
                           fontSize: 12,
                           height: 1.4,
@@ -758,11 +759,13 @@ class FloeCheckboxTile extends StatelessWidget {
     required this.value,
     required this.title,
     required this.onChanged,
+    this.subtitle,
     super.key,
   });
 
   final bool value;
   final Widget title;
+  final Widget? subtitle;
   final ValueChanged<bool?>? onChanged;
 
   @override
@@ -770,8 +773,26 @@ class FloeCheckboxTile extends StatelessWidget {
     selected: value,
     enabled: onChanged != null,
     title: title,
+    subtitle: subtitle,
     onActivate: onChanged == null ? null : () => onChanged!(!value),
   );
+}
+
+class FloeRadioGroup<T> extends StatelessWidget {
+  const FloeRadioGroup({
+    required this.value,
+    required this.onChanged,
+    required this.child,
+    super.key,
+  });
+
+  final T? value;
+  final ValueChanged<T?> onChanged;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      RadioGroup<T>(groupValue: value, onChanged: onChanged, child: child);
 }
 
 class FloeRadioTile<T> extends StatefulWidget {
@@ -835,6 +856,7 @@ class _FloeChoice extends StatefulWidget {
     required this.enabled,
     this.onActivate,
     this.title,
+    this.subtitle,
     this.semanticLabel,
     this.focusNode,
     this.radio = false,
@@ -844,6 +866,7 @@ class _FloeChoice extends StatefulWidget {
   final bool enabled;
   final VoidCallback? onActivate;
   final Widget? title;
+  final Widget? subtitle;
   final String? semanticLabel;
   final FocusNode? focusNode;
   final bool radio;
@@ -925,16 +948,29 @@ class _FloeChoiceState extends State<_FloeChoice> {
                   visual,
                   const SizedBox(width: FloeSpace.md),
                   Expanded(
-                    child: DefaultTextStyle.merge(
-                      style: TextStyle(
-                        color: widget.enabled
-                            ? FloePalette.neutral950
-                            : FloePalette.neutral500,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        height: 1.5,
-                      ),
-                      child: widget.title!,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        DefaultTextStyle.merge(
+                          style: FloeType.controlLabel.copyWith(
+                            color: widget.enabled
+                                ? FloePalette.neutral950
+                                : FloePalette.neutral500,
+                          ),
+                          child: widget.title!,
+                        ),
+                        if (widget.subtitle != null) ...[
+                          const SizedBox(height: FloeSpace.xxs),
+                          DefaultTextStyle.merge(
+                            style: FloeType.bodySmall.copyWith(
+                              color: widget.enabled
+                                  ? FloePalette.neutral600
+                                  : FloePalette.neutral400,
+                            ),
+                            child: widget.subtitle!,
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ],
@@ -1049,7 +1085,7 @@ class _FloeChoiceVisual extends StatelessWidget {
                           ),
                         )
                       : floeSquircleBorder(
-                          FloeSquircleSize.sm,
+                          FloeSquircleSize.xs,
                           borderColor: FloePalette.primary600,
                           borderWidth: 2,
                         ),
@@ -1081,7 +1117,7 @@ class _FloeChoiceVisual extends StatelessWidget {
                       side: BorderSide(color: borderColor, width: 1.5),
                     )
                   : floeSquircleBorder(
-                      FloeSquircleSize.sm,
+                      FloeSquircleSize.xs,
                       borderColor: borderColor,
                       borderWidth: 1.5,
                     ),

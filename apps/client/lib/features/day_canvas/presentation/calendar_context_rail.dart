@@ -36,13 +36,15 @@ class CalendarContextRail extends StatelessWidget {
             children: [
               Text(
                 AppLocalizations.of(context).yourOwnRhythm,
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: FloeType.title,
               ),
               SizedBox(height: 20),
               if (tasks.isEmpty)
                 Text(
                   AppLocalizations.of(context).noTasksForSelectedDay,
-                  style: TextStyle(fontSize: 13, color: FloePalette.neutral600),
+                  style: FloeType.bodySmall.copyWith(
+                    color: FloePalette.neutral600,
+                  ),
                 ),
               for (final task in tasks.take(3))
                 Row(
@@ -61,8 +63,7 @@ class CalendarContextRail extends StatelessWidget {
                           onTap: () => onOpenTask(task),
                           child: Text(
                             task.title,
-                            style: TextStyle(
-                              fontSize: 13,
+                            style: FloeType.bodySmall.copyWith(
                               decoration: task.isCompleted
                                   ? TextDecoration.lineThrough
                                   : null,
@@ -89,7 +90,7 @@ class CalendarContextRail extends StatelessWidget {
             children: [
               Text(
                 AppLocalizations.of(context).aNoteToSelf,
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: FloeType.title,
               ),
               SizedBox(height: 20),
               Text(
@@ -98,8 +99,7 @@ class CalendarContextRail extends StatelessWidget {
                         ? AppLocalizations.of(context)
                               .leaveALittleRoomBetweenThingsNot
                         : notes.first.title),
-                style: TextStyle(
-                  fontSize: 14,
+                style: FloeType.body.copyWith(
                   height: 1.9,
                   color: FloePalette.neutral600,
                 ),
@@ -119,8 +119,7 @@ class CalendarContextRail extends StatelessWidget {
             gap: 10,
             text: AppLocalizations.of(context)
                 .wonderingWhereAnEventCameFromOpen,
-            style: TextStyle(
-              fontSize: 11,
+            style: FloeType.caption.copyWith(
               height: 1.8,
               color: FloePalette.neutral600,
             ),

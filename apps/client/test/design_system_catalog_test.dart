@@ -22,6 +22,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Interaction colors'), findsOneWidget);
+    expect(find.text('Typography'), findsOneWidget);
+    expect(find.text('Status badges'), findsOneWidget);
     expect(find.text('Buttons'), findsOneWidget);
     expect(find.text('Fields'), findsOneWidget);
     expect(find.text('Selection'), findsOneWidget);

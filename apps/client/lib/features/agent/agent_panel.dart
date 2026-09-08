@@ -5,6 +5,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_badge.dart';
+import '../../app/floe_primitives.dart';
 import '../../app/floe_input.dart';
 import '../../app/floe_mascot.dart';
 import '../../app/floe_squircle.dart';
@@ -107,13 +109,7 @@ class _AgentPanelState extends State<AgentPanel> {
                       const FloeMascot(size: 32),
                       const SizedBox(width: FloeSpace.sm),
                       const Expanded(
-                        child: Text(
-                          'Floe',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                        child: Text('Floe', style: FloeType.titleLarge),
                       ),
                       FloeButton.icon(
                         tooltip: controller.isCalendarConversation
@@ -139,7 +135,7 @@ class _AgentPanelState extends State<AgentPanel> {
                     controller.isCalendarConversation
                         ? strings.agentConnectedTitle
                         : strings.agentConversationTitle,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: FloeType.controlLabel,
                   ),
                 ],
               ),
@@ -158,7 +154,9 @@ class _AgentPanelState extends State<AgentPanel> {
                           controller.isCalendarConversation
                               ? strings.agentConnectedEmpty
                               : strings.agentConversationEmpty,
-                          style: const TextStyle(color: FloePalette.neutral600),
+                          style: FloeType.body.copyWith(
+                            color: FloePalette.neutral600,
+                          ),
                         ),
                       )
                     : ListView.separated(
@@ -179,12 +177,7 @@ class _AgentPanelState extends State<AgentPanel> {
                     controller: _scroll,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        header,
-                        const Divider(height: 1),
-                        content,
-                        footer,
-                      ],
+                      children: [header, const FloeDivider(), content, footer],
                     ),
                   );
                 }
@@ -192,7 +185,7 @@ class _AgentPanelState extends State<AgentPanel> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     header,
-                    const Divider(height: 1),
+                    const FloeDivider(),
                     Expanded(child: content),
                     footer,
                   ],
@@ -205,69 +198,66 @@ class _AgentPanelState extends State<AgentPanel> {
     ),
   );
 
-  Widget _message(
-    AppLocalizations strings,
-    AgentMessage message,
-  ) => switch (message) {
-    AgentTextMessage(:final kind, :final text) => FloeSquircle(
-      size: FloeSquircleSize.md,
-      fill: kind == AgentMessageKind.assistant
-          ? FloePalette.primary50
-          : FloePalette.neutral50,
-      borderWidth: 0,
-      padding: const EdgeInsets.all(FloeSpace.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            kind == AgentMessageKind.assistant ? 'Floe' : strings.agentYou,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          if (kind == AgentMessageKind.assistant)
-            _AgentMarkdown(data: text)
-          else
-            SelectableText(
-              text,
-              style: const TextStyle(fontSize: 14, height: 1.5),
-            ),
-        ],
-      ),
-    ),
-    AgentCapabilityMessage() => ExpansionTile(
-      tilePadding: EdgeInsets.zero,
-      childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
-      title: Text(
-        widget.controller.isCalendarConversation
-            ? strings.agentConnectedSource
-            : strings.agentConversationSource,
-        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        widget.controller.isCalendarConversation
-            ? strings.agentConnectedSourceDetails
-            : strings.agentConversationSourceDetails,
-        style: const TextStyle(fontSize: 12),
-      ),
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: SelectableText(
-            _sourceText(strings, message),
-            style: const TextStyle(fontSize: 13, color: FloePalette.neutral600),
+  Widget _message(AppLocalizations strings, AgentMessage message) =>
+      switch (message) {
+        AgentTextMessage(:final kind, :final text) => FloeSquircle(
+          size: FloeSquircleSize.md,
+          fill: kind == AgentMessageKind.assistant
+              ? FloePalette.primary50
+              : FloePalette.neutral50,
+          borderWidth: 0,
+          padding: const EdgeInsets.all(FloeSpace.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                kind == AgentMessageKind.assistant ? 'Floe' : strings.agentYou,
+                style: FloeType.label,
+              ),
+              const SizedBox(height: FloeSpace.sm),
+              if (kind == AgentMessageKind.assistant)
+                _AgentMarkdown(data: text)
+              else
+                SelectableText(text, style: FloeType.body),
+            ],
           ),
         ),
-        if (widget.controller.expertResult(message)?.proposal != null) ...[
-          const SizedBox(height: FloeSpace.md),
-          AgentProposalCard(
-            controller: widget.controller,
-            message: message,
-            onOpenAction: widget.onOpenAction,
+        AgentCapabilityMessage() => ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
+          title: Text(
+            widget.controller.isCalendarConversation
+                ? strings.agentConnectedSource
+                : strings.agentConversationSource,
+            style: FloeType.controlLabel,
           ),
-        ],
-      ],
-    ),
-  };
+          subtitle: Text(
+            widget.controller.isCalendarConversation
+                ? strings.agentConnectedSourceDetails
+                : strings.agentConversationSourceDetails,
+            style: FloeType.bodySmall.copyWith(fontSize: 12),
+          ),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                _sourceText(strings, message),
+                style: FloeType.bodySmall.copyWith(
+                  color: FloePalette.neutral600,
+                ),
+              ),
+            ),
+            if (widget.controller.expertResult(message)?.proposal != null) ...[
+              const SizedBox(height: FloeSpace.md),
+              AgentProposalCard(
+                controller: widget.controller,
+                message: message,
+                onOpenAction: widget.onOpenAction,
+              ),
+            ],
+          ],
+        ),
+      };
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
     final result = widget.controller.expertResult(message);
@@ -350,11 +340,15 @@ class _AgentPanelState extends State<AgentPanel> {
           if (status != null) ...[
             Semantics(
               liveRegion: true,
-              child: Text(
-                status,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: FloePalette.neutral600,
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: FloeBadge(
+                  label: status,
+                  tone: controller.failure != null
+                      ? FloeBadgeTone.danger
+                      : controller.busy
+                      ? FloeBadgeTone.info
+                      : FloeBadgeTone.neutral,
                 ),
               ),
             ),
@@ -470,11 +464,7 @@ class _AgentMarkdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final body = const TextStyle(
-      fontSize: 14,
-      height: 1.5,
-      color: FloePalette.neutral950,
-    );
+    final body = FloeType.body.copyWith(color: FloePalette.neutral950);
     return MarkdownBody(
       data: data,
       selectable: true,

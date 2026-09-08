@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_badge.dart';
 import '../../../app/floe_loading.dart';
+import '../../../app/floe_primitives.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_button.dart';
@@ -31,7 +33,7 @@ class _ConnectedCalendars extends StatelessWidget {
       children: [
         Text(
           strings.connectedCalendarCount(calendars.length),
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          style: FloeType.titleLarge,
         ),
         SizedBox(height: FloeSpace.lg),
         LayoutBuilder(
@@ -53,10 +55,8 @@ class _ConnectedCalendars extends StatelessWidget {
                       children: [
                         Text(
                           '${account.key ?? strings.calendarAccountFallback} · ${account.value.length}',
-                          style: TextStyle(
-                            fontSize: 12,
+                          style: FloeType.label.copyWith(
                             height: 1.7,
-                            fontWeight: FontWeight.w600,
                             color: FloePalette.neutral600,
                           ),
                         ),
@@ -75,7 +75,7 @@ class _ConnectedCalendars extends StatelessWidget {
                               text:
                                   '${calendar.title}${calendar.error == null ? '' : '\n${strings.couldNotCollectEventsShowingTheLast}'}${calendar.lastSuccessAt == null ? '' : '\n${formatTimestamp(context, calendar.lastSuccessAt!)}'}',
                               gap: 10,
-                              style: TextStyle(fontSize: 13, height: 1.7),
+                              style: FloeType.bodySmall.copyWith(height: 1.7),
                             ),
                           ),
                       ],
@@ -136,7 +136,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
     final strings = AppLocalizations.of(context);
     final confirmed = await showFloeDialog<bool>(
       context,
-      (context) => AlertDialog(
+      (context) => FloeDialog(
         title: Text(strings.disconnectCalendar),
         content: Text(strings.disconnectCalendarExplanation),
         actions: [
@@ -159,7 +159,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
   Future<void> _connect() => _run(() async {
     final confirmed = await showFloeDialog<bool>(
       context,
-      (context) => AlertDialog(
+      (context) => FloeDialog(
         title: Text(AppLocalizations.of(context).connectCalendar),
         content: Text(
           AppLocalizations.of(context).eventsFromTheSelectedCalendarAreSaved,
@@ -193,7 +193,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
     final choices = await showFloeDialog<List<CalendarChoice>>(
       context,
       (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => FloeDialog(
           title: Text(AppLocalizations.of(context).chooseACalendar),
           content: SizedBox(
             width: 420,
@@ -201,8 +201,8 @@ class _CalendarPanelState extends State<CalendarPanel> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RadioGroup<bool>(
-                    groupValue: includeAll,
+                  FloeRadioGroup<bool>(
+                    value: includeAll,
                     onChanged: (value) =>
                         setDialogState(() => includeAll = value ?? false),
                     child: Column(
@@ -330,16 +330,12 @@ class _CalendarPanelState extends State<CalendarPanel> {
                     children: [
                       Text(
                         AppLocalizations.of(context).macosCalendar,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: FloeType.titleLarge,
                       ),
                       SizedBox(height: 6),
                       Text(
                         AppLocalizations.of(context).calendarsAlreadyOnThisMac,
-                        style: TextStyle(
-                          fontSize: 13,
+                        style: FloeType.bodySmall.copyWith(
                           color: FloePalette.neutral600,
                         ),
                       ),
@@ -352,19 +348,17 @@ class _CalendarPanelState extends State<CalendarPanel> {
             SizedBox(height: FloeSpace.lg),
             Text(
               AppLocalizations.of(context).bringYourCalendarIntoOneDayFloe,
-              style: TextStyle(
-                fontSize: 14,
+              style: FloeType.body.copyWith(
                 height: 1.7,
                 color: FloePalette.neutral600,
               ),
             ),
             SizedBox(height: 28),
-            Divider(height: 1),
+            FloeDivider(),
             SizedBox(height: 28),
             Text(
               AppLocalizations.of(context).connectedCalendar,
-              style: TextStyle(
-                fontSize: 11,
+              style: FloeType.caption.copyWith(
                 letterSpacing: 1,
                 color: FloePalette.neutral600,
               ),
@@ -373,25 +367,28 @@ class _CalendarPanelState extends State<CalendarPanel> {
             if (connection == null)
               Text(
                 AppLocalizations.of(context).makeRoomForYourDay,
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+                style: FloeType.headlineLarge.copyWith(fontSize: 22),
               )
             else
               _ConnectedCalendars(calendars: connection.connectedCalendars),
             SizedBox(height: FloeSpace.md),
-            Text(
-              connection == null
-                  ? AppLocalizations.of(context)
-                        .chooseACalendarToStartThisClient
-                  : status,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.7,
-                color: FloePalette.neutral600,
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FloeBadge(
+                label: connection == null
+                    ? AppLocalizations.of(context)
+                          .chooseACalendarToStartThisClient
+                    : status,
+                tone: connection == null
+                    ? FloeBadgeTone.neutral
+                    : failure == null
+                    ? FloeBadgeTone.success
+                    : FloeBadgeTone.warning,
               ),
             ),
             if (connection != null) ...[
               SizedBox(height: 28),
-              Divider(height: 1),
+              FloeDivider(),
               SizedBox(height: 20),
               for (final entry in <String, String>{
                 AppLocalizations.of(context)
@@ -425,17 +422,13 @@ class _CalendarPanelState extends State<CalendarPanel> {
                       Expanded(
                         child: Text(
                           entry.key,
-                          style: TextStyle(
-                            fontSize: 13,
+                          style: FloeType.bodySmall.copyWith(
                             color: FloePalette.neutral600,
                           ),
                         ),
                       ),
                       Expanded(
-                        child: Text(
-                          entry.value,
-                          style: TextStyle(fontSize: 13),
-                        ),
+                        child: Text(entry.value, style: FloeType.bodySmall),
                       ),
                     ],
                   ),
@@ -446,7 +439,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
                 padding: EdgeInsets.only(top: 16),
                 child: Text(
                   error!,
-                  style: TextStyle(color: FloePalette.coral700),
+                  style: FloeType.body.copyWith(color: FloePalette.coral700),
                 ),
               ),
             SizedBox(height: FloeSpace.lg),

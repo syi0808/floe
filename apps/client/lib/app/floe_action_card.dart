@@ -62,17 +62,15 @@ final class FloeActionCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         DefaultTextStyle.merge(
-                          style: const TextStyle(
+                          style: FloeType.title.copyWith(
                             color: FloePalette.neutral900,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
                             height: 1.3,
                           ),
                           child: title,
                         ),
                         const SizedBox(height: FloeSpace.xxs),
                         DefaultTextStyle.merge(
-                          style: const TextStyle(
+                          style: FloeType.bodySmall.copyWith(
                             color: FloePalette.neutral600,
                             fontSize: 12,
                             height: 1.4,

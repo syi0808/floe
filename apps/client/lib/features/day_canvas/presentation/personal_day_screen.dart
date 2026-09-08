@@ -14,6 +14,7 @@ import '../../../app/floe_input.dart';
 import '../../../app/floe_mascot.dart';
 import '../../../app/floe_loading.dart';
 import '../../../app/floe_motion.dart';
+import '../../../app/floe_primitives.dart';
 import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
 import '../../../app/floe_toast.dart';
@@ -187,7 +188,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth <= 780;
-        return Scaffold(
+        return FloeScaffold(
           backgroundColor: FloePalette.neutral25,
           body: SafeArea(
             child: Stack(
@@ -319,8 +320,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                                   : AppLocalizations.of(
                                       context,
                                     ).showingSavedEventsCalendarChangesCouldNot,
-                              style: TextStyle(
-                                fontSize: 13,
+                              style: FloeType.bodySmall.copyWith(
                                 color: FloePalette.neutral600,
                               ),
                             ),
@@ -480,12 +480,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       setState(() => assistantOpen = true);
       return;
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => SizedBox(
+    await showFloeSheet<void>(
+      context,
+      (context) => SizedBox(
         height: MediaQuery.sizeOf(context).height * .88,
         child: AgentPanel(
           controller: agent,
@@ -806,17 +803,16 @@ class _DestinationButtonState extends State<_DestinationButton> {
             : Colors.transparent,
         borderColor: focused ? FloePalette.primary600 : Colors.transparent,
         borderWidth: focused ? 2 : 0,
-        child: InkWell(
+        child: FloePressable(
+          size: FloeSquircleSize.md,
           statesController: states,
-          mouseCursor: WidgetStateMouseCursor.clickable,
-          onTap: widget.onPressed,
+          onPressed: widget.onPressed,
           onHover: (value) => setState(() => hovered = value),
           onFocusChange: (value) => setState(() => focused = value),
-          customBorder: floeSquircleBorder(FloeSquircleSize.md),
           child: SizedBox(
             width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
             height: 40 + MediaQuery.textScalerOf(context).scale(20),
-            child: Tooltip(
+            child: FloeTooltip(
               message: label,
               child: Center(
                 child: Icon(
@@ -882,14 +878,12 @@ class _DayToolbar extends StatelessWidget {
         ),
         SizedBox(width: narrow ? 8 : 12),
         FloeButton.text(
-          style: TextButton.styleFrom(
-            padding: EdgeInsets.zero,
-            minimumSize: Size(0, 40),
+          style: ButtonStyle(
+            padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+            minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: TextStyle(
-              fontFamily: 'Pretendard',
-              fontSize: compact ? 12 : 16,
-              fontWeight: FontWeight.w400,
+            textStyle: WidgetStatePropertyAll(
+              FloeType.body.copyWith(fontSize: compact ? 12 : 16),
             ),
           ),
           onPressed:
@@ -1014,7 +1008,7 @@ class _TasksScreen extends StatelessWidget {
                         onOpen: () => onOpen(task),
                       ),
                       if (index < tasks.length - 1)
-                        Divider(height: 1, indent: 56),
+                        FloeDivider(height: 1, indent: 56),
                     ],
                   ],
                 ),
@@ -1079,7 +1073,7 @@ class _NotesScreenState extends State<_NotesScreen> {
     }).toList();
     final heading = Text(
       AppLocalizations.of(context).notesCount(widget.notes.length),
-      style: TextStyle(fontSize: 18, height: 1.2, fontWeight: FontWeight.w600),
+      style: FloeType.titleLarge.copyWith(height: 1.2),
     );
     final searchField = FloeSquircle(
       size: FloeSquircleSize.md,
@@ -1091,18 +1085,10 @@ class _NotesScreenState extends State<_NotesScreen> {
             Icon(LucideIcons.search, size: 19, color: FloePalette.neutral600),
             SizedBox(width: 10),
             Expanded(
-              child: TextField(
+              child: FloeSearchInput(
                 controller: search,
+                placeholder: AppLocalizations.of(context).searchNotes,
                 onChanged: (_) => setState(() {}),
-                style: TextStyle(fontSize: 16),
-                decoration: InputDecoration(
-                  hintText: AppLocalizations.of(context).searchNotes,
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.zero,
-                ),
               ),
             ),
           ],
@@ -1110,11 +1096,13 @@ class _NotesScreenState extends State<_NotesScreen> {
       ),
     );
     final filter = FloeButton.outlined(
-      style: OutlinedButton.styleFrom(
-        backgroundColor: personalOnly
-            ? FloePalette.primary100
-            : FloePalette.neutral0,
-        side: BorderSide(color: FloePalette.neutral200),
+      style: ButtonStyle(
+        backgroundColor: WidgetStatePropertyAll(
+          personalOnly ? FloePalette.primary100 : FloePalette.neutral0,
+        ),
+        side: const WidgetStatePropertyAll(
+          BorderSide(color: FloePalette.neutral200),
+        ),
       ),
       onPressed: () => setState(() => personalOnly = !personalOnly),
       icon: Icon(LucideIcons.filter, size: 18),
@@ -1260,7 +1248,7 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !pending,
-    child: AlertDialog(
+    child: FloeDialog(
       title: Text(AppLocalizations.of(context).newNote),
       content: SizedBox(
         width: 420,
@@ -1305,10 +1293,9 @@ class _NotePreviewCard extends StatelessWidget {
     return FloeSquircle(
       fill: Color.lerp(Colors.white, tone.fill, .4)!,
       borderColor: tone.border,
-      child: InkWell(
-        mouseCursor: WidgetStateMouseCursor.clickable,
-        onTap: onOpen,
-        customBorder: floeSquircleBorder(FloeSquircleSize.lg),
+      child: FloePressable(
+        size: FloeSquircleSize.lg,
+        onPressed: onOpen,
         child: Padding(
           padding: EdgeInsets.all(mobile ? 25 : 29),
           child: IntrinsicHeight(
@@ -1324,10 +1311,8 @@ class _NotePreviewCard extends StatelessWidget {
                       Text(
                         appearance?.category ??
                             AppLocalizations.of(context).personal,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: FloeType.label.copyWith(
                           height: 1.2,
-                          fontWeight: FontWeight.w600,
                           color: FloePalette.neutral600,
                         ),
                       ),
@@ -1350,7 +1335,7 @@ class _NotePreviewCard extends StatelessWidget {
                   SizedBox(height: FloeSpace.lg),
                   Text(
                     appearance?.timestamp ?? _date(context, note.createdAt),
-                    style: TextStyle(
+                    style: FloeType.bodySmall.copyWith(
                       fontSize: 12,
                       height: 1.2,
                       color: FloePalette.neutral500,
@@ -1413,12 +1398,9 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
             SizedBox(height: 18),
             Text(
               widget.task.title,
-              style: TextStyle(
+              style: FloeType.hero.copyWith(
                 fontSize: widget.narrow ? 39 : 48,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -1.6,
                 height: 1.2,
-                color: FloePalette.neutral950,
               ),
             ),
             SizedBox(height: FloeSpace.lg),
@@ -1450,15 +1432,11 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               color: FloePalette.mint700,
             ),
             SizedBox(height: FloeSpace.xl),
-            Divider(height: 1, color: FloePalette.neutral200),
+            FloeDivider(),
             SizedBox(height: 26),
             Text(
               AppLocalizations.of(context).subtasks,
-              style: TextStyle(
-                fontSize: 17,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
-              ),
+              style: FloeType.title.copyWith(fontSize: 17, height: 1.2),
             ),
             SizedBox(height: 10),
             if (appearance == null || appearance.subtasks.isEmpty)
@@ -1508,8 +1486,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     SizedBox(width: FloeSpace.sm),
                     Text(
                       subtask.duration,
-                      style: TextStyle(
-                        fontSize: 13,
+                      style: FloeType.bodySmall.copyWith(
                         color: FloePalette.neutral600,
                       ),
                     ),
@@ -1521,9 +1498,11 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               alignment: Alignment.centerLeft,
               child: FloeButton.text(
                 onPressed: () => _showComingSoon(context),
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  foregroundColor: FloePalette.primary600,
+                style: const ButtonStyle(
+                  padding: WidgetStatePropertyAll(EdgeInsets.zero),
+                  foregroundColor: WidgetStatePropertyAll(
+                    FloePalette.primary600,
+                  ),
                 ),
                 icon: Icon(LucideIcons.plus, size: 18),
                 child: Text(AppLocalizations.of(context).addASubtask),
@@ -1549,10 +1528,8 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                     Expanded(
                       child: Text(
                         AppLocalizations.of(context).floeSuggests,
-                        style: TextStyle(
-                          fontSize: 13,
+                        style: FloeType.controlLabel.copyWith(
                           color: FloePalette.primary600,
-                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -1586,14 +1563,13 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                       child: Text(AppLocalizations.of(context).reviewNow),
                     ),
                     FloeButton.text(
-                      style: TextButton.styleFrom(
-                        minimumSize: Size(0, 40),
-                        padding: EdgeInsets.symmetric(horizontal: FloeSpace.md),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        textStyle: TextStyle(
-                          fontFamily: 'Pretendard',
-                          fontSize: 13,
+                      style: const ButtonStyle(
+                        minimumSize: WidgetStatePropertyAll(Size(0, 40)),
+                        padding: WidgetStatePropertyAll(
+                          EdgeInsets.symmetric(horizontal: FloeSpace.md),
                         ),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: WidgetStatePropertyAll(FloeType.bodySmall),
                       ),
                       onPressed: () =>
                           setState(() => suggestionVisible = false),
@@ -1617,7 +1593,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               children: [
                 Text(
                   AppLocalizations.of(context).notes,
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                  style: FloeType.title.copyWith(fontSize: 17),
                 ),
                 SizedBox(height: 18),
                 Text(
@@ -1628,7 +1604,10 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                 SizedBox(height: 20),
                 Text(
                   AppLocalizations.of(context).updatedThisMorning,
-                  style: TextStyle(fontSize: 12, color: FloePalette.neutral500),
+                  style: FloeType.bodySmall.copyWith(
+                    fontSize: 12,
+                    color: FloePalette.neutral500,
+                  ),
                 ),
               ],
             ),
@@ -1728,15 +1707,12 @@ class _LabeledValue extends StatelessWidget {
 Future<void> _openNote(BuildContext context, NoteItem note, bool narrow) async {
   final detail = _NoteDetail(note: note);
   if (narrow) {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => detail,
-    );
+    await showFloeSheet<void>(context, (context) => detail);
   } else {
-    await showFloeDialog<void>(context, (context) => Dialog(child: detail));
+    await showFloeDialog<void>(
+      context,
+      (context) => FloeDialogSurface(maxWidth: 640, child: detail),
+    );
   }
 }
 
@@ -1834,68 +1810,70 @@ class _DayRow extends StatelessWidget {
       TaskItem() => AppLocalizations.of(context).task,
       NoteItem() => AppLocalizations.of(context).note,
     };
-    return ListTile(
-      onTap: onOpen,
-      minTileHeight: 72,
-      contentPadding: EdgeInsets.zero,
-      leading: SizedBox.square(
-        dimension: 44,
-        child: Center(
-          child: task != null
-              ? FloeCheckbox(
-                  semanticLabel: task.title,
-                  value: task.isCompleted,
-                  onChanged: disabled
-                      ? null
-                      : (value) => complete(task, value ?? false),
-                )
-              : Icon(
-                  item is EventItem
-                      ? Icons.calendar_today_outlined
-                      : Icons.notes_outlined,
-                  color: item is EventItem
-                      ? FloePalette.blue500
-                      : FloePalette.mint700,
-                  size: 20,
-                ),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 72),
+      child: FloeListRow(
+        onPressed: onOpen,
+        leading: SizedBox.square(
+          dimension: 44,
+          child: Center(
+            child: task != null
+                ? FloeCheckbox(
+                    semanticLabel: task.title,
+                    value: task.isCompleted,
+                    onChanged: disabled
+                        ? null
+                        : (value) => complete(task, value ?? false),
+                  )
+                : Icon(
+                    item is EventItem
+                        ? Icons.calendar_today_outlined
+                        : Icons.notes_outlined,
+                    color: item is EventItem
+                        ? FloePalette.blue500
+                        : FloePalette.mint700,
+                    size: 20,
+                  ),
+          ),
         ),
-      ),
-      title: Text(
-        item.title,
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-        style: FloeType.bodyLarge.copyWith(
-          decoration: task?.isCompleted == true
-              ? TextDecoration.lineThrough
-              : null,
+        title: Text(
+          item.title,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: FloeType.bodyLarge.copyWith(
+            decoration: task?.isCompleted == true
+                ? TextDecoration.lineThrough
+                : null,
+          ),
         ),
-      ),
-      subtitle: Text(
-        overdue
-            ? AppLocalizations.of(context).overdueItem(label, subtitle)
-            : '$label · $subtitle',
-        style: FloeType.body.copyWith(
-          color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
+        subtitle: Text(
+          overdue
+              ? AppLocalizations.of(context).overdueItem(label, subtitle)
+              : '$label · $subtitle',
+          style: FloeType.body.copyWith(
+            color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
+          ),
         ),
+        trailing: item is EventItem && (item as EventItem).externalId != null
+            ? FloeTooltip(
+                message: AppLocalizations.of(context)
+                    .readOnlyEventManagedInItsOriginal,
+                child: Icon(Icons.lock_outline, size: 18),
+              )
+            : FloeButton.icon(
+                tooltip: AppLocalizations.of(context)
+                    .deleteItemLabel(item.title),
+                onPressed: disabled ? null : () => _confirmDelete(context),
+                icon: Icon(Icons.more_horiz, size: 20),
+              ),
       ),
-      trailing: item is EventItem && (item as EventItem).externalId != null
-          ? Tooltip(
-              message: AppLocalizations.of(context)
-                  .readOnlyEventManagedInItsOriginal,
-              child: Icon(Icons.lock_outline, size: 18),
-            )
-          : FloeButton.icon(
-              tooltip: AppLocalizations.of(context).deleteItemLabel(item.title),
-              onPressed: disabled ? null : () => _confirmDelete(context),
-              icon: Icon(Icons.more_horiz, size: 20),
-            ),
     );
   }
 
   Future<void> _confirmDelete(BuildContext context) async {
     final confirmed = await showFloeDialog<bool>(
       context,
-      (context) => AlertDialog(
+      (context) => FloeDialog(
         title: Text(AppLocalizations.of(context).deleteThisItem),
         content: Text(
           AppLocalizations.of(context).deleteItemMessage(item.title),

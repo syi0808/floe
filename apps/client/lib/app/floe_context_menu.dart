@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'design_tokens.dart';
 import 'floe_motion.dart';
+import 'floe_primitives.dart';
 import 'floe_popover.dart';
 
 class FloeMenuEntry<T> {
@@ -104,7 +105,7 @@ class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
             if (widget.entries[index].separator)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                child: Divider(height: 1, color: FloePalette.neutral100),
+                child: FloeDivider(height: 1, color: FloePalette.neutral100),
               ),
             Builder(
               builder: (context) {
@@ -160,7 +161,7 @@ class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
                               Expanded(
                                 child: Text(
                                   entry.label,
-                                  style: TextStyle(
+                                  style: FloeType.bodySmall.copyWith(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w500,
                                     color: foreground,
@@ -182,11 +183,7 @@ class _FloeContextMenuState<T> extends State<FloeContextMenu<T>> {
               padding: const EdgeInsets.fromLTRB(10, 7, 10, 3),
               child: Text(
                 widget.explanation!,
-                style: const TextStyle(
-                  fontSize: 10,
-                  height: 1.4,
-                  color: FloePalette.neutral500,
-                ),
+                style: FloeType.micro.copyWith(color: FloePalette.neutral500),
               ),
             ),
         ],

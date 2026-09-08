@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app/floe_app.dart';
+import 'app/design_tokens.dart';
+import 'app/floe_primitives.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
 import 'preview/design_feedback_overlay.dart';
@@ -37,7 +39,7 @@ class _StartupErrorApp extends StatelessWidget {
     supportedLocales: AppLocalizations.supportedLocales,
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     home: Builder(
-      builder: (context) => Scaffold(
+      builder: (context) => FloeScaffold(
         body: Center(
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: 480),
@@ -48,9 +50,16 @@ class _StartupErrorApp extends StatelessWidget {
                 children: [
                   Icon(Icons.error_outline, size: 32),
                   SizedBox(height: 16),
-                  Text(AppLocalizations.of(context).couldNotStartFloeCore),
+                  Text(
+                    AppLocalizations.of(context).couldNotStartFloeCore,
+                    style: FloeType.title,
+                  ),
                   SizedBox(height: 8),
-                  SelectableText(message, textAlign: TextAlign.center),
+                  SelectableText(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: FloeType.body,
+                  ),
                 ],
               ),
             ),

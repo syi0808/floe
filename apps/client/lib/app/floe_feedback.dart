@@ -36,9 +36,7 @@ class FloeTextLink extends StatelessWidget {
       backgroundColor: WidgetStatePropertyAll(Colors.transparent),
       foregroundColor: WidgetStatePropertyAll(color),
       textStyle: WidgetStateProperty.resolveWith(
-        (states) => TextStyle(
-          fontFamily: 'Pretendard',
-          fontSize: 13,
+        (states) => FloeType.bodySmall.copyWith(
           decoration:
               states.contains(WidgetState.hovered) ||
                   states.contains(WidgetState.focused)
@@ -131,7 +129,7 @@ class FloeDetailDialog extends StatelessWidget {
             builder: (context, constraints) {
               final heading = Text(
                 title,
-                style: TextStyle(
+                style: FloeType.headlineLarge.copyWith(
                   fontSize: 26,
                   fontWeight: FontWeight.w700,
                   letterSpacing: -1,
@@ -234,8 +232,7 @@ class FloeInfoNote extends StatelessWidget {
     child: FloeIconText(
       icon: Icon(icon, size: 18, color: FloePalette.primary600),
       text: text,
-      style: TextStyle(
-        fontSize: 13,
+      style: FloeType.bodySmall.copyWith(
         height: 1.7,
         color: FloePalette.neutral600,
       ),
@@ -256,10 +253,7 @@ class FloeReadOnlyPill extends StatelessWidget {
       children: [
         Icon(LucideIcons.lockKeyhole, size: 12),
         SizedBox(width: FloeSpace.xs),
-        Text(
-          AppLocalizations.of(context).readOnly,
-          style: TextStyle(fontSize: 10),
-        ),
+        Text(AppLocalizations.of(context).readOnly, style: FloeType.micro),
       ],
     ),
   );

@@ -5,6 +5,8 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../app/design_tokens.dart';
+import '../../../app/floe_badge.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_loading.dart';
@@ -25,6 +27,16 @@ String _status(AppLocalizations strings, CalendarActionStatus status) =>
       CalendarActionStatus.unknown => strings.actionUnknown,
       CalendarActionStatus.succeeded => strings.actionSucceeded,
     };
+
+FloeBadgeTone _statusTone(CalendarActionStatus status) => switch (status) {
+  CalendarActionStatus.succeeded ||
+  CalendarActionStatus.approved => FloeBadgeTone.success,
+  CalendarActionStatus.rejected ||
+  CalendarActionStatus.blocked => FloeBadgeTone.danger,
+  CalendarActionStatus.pending ||
+  CalendarActionStatus.executing ||
+  CalendarActionStatus.unknown => FloeBadgeTone.info,
+};
 
 class ReviewRequestPanel extends StatelessWidget {
   const ReviewRequestPanel({
@@ -52,13 +64,7 @@ class ReviewRequestPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                strings.calendarProposals,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              Text(strings.calendarProposals, style: FloeType.title),
               const SizedBox(height: 12),
               if (controller.failed) Text(strings.actionReloadRequired),
               if (!controller.busy && !controller.failed && requests.isEmpty)
@@ -70,7 +76,13 @@ class ReviewRequestPanel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(action.title),
-                      Text(_status(strings, action.status)),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: FloeBadge(
+                          label: _status(strings, action.status),
+                          tone: _statusTone(action.status),
+                        ),
+                      ),
                       FloeButton.text(
                         onPressed: () {
                           controller.load();
@@ -127,12 +139,7 @@ class ActivityPanel extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Expanded(
-                  child: Text(
-                    'Activity',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
-                  ),
-                ),
+                Expanded(child: Text('Activity', style: FloeType.pageTitle)),
                 FloeButton.icon(
                   tooltip: 'Reload activity',
                   onPressed: controller.busy ? null : controller.load,
@@ -159,19 +166,16 @@ class ActivityPanel extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              action.title,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            Text(action.title, style: FloeType.controlLabel),
                             const SizedBox(height: 4),
-                            Text(
-                              action.direct &&
+                            FloeBadge(
+                              label:
+                                  action.direct &&
                                       action.status ==
                                           CalendarActionStatus.succeeded
                                   ? '${action.operation} · By you'
                                   : _status(strings, action.status),
+                              tone: _statusTone(action.status),
                             ),
                           ],
                         ),
@@ -261,25 +265,16 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
           if (action == null)
             Text(strings.actionMissing)
           else ...[
-            Text(
-              action.title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
+            Text(action.title, style: FloeType.titleLarge),
             if (action.agentOrigin != null) ...[
               const SizedBox(height: 8),
               Text(strings.actionSuggestedByFloe),
             ],
             const SizedBox(height: 16),
-            Text(
-              strings.actionDestination,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text(strings.actionDestination, style: FloeType.controlLabel),
             Text(action.calendarName),
             const SizedBox(height: 12),
-            Text(
-              strings.actionWhen,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text(strings.actionWhen, style: FloeType.controlLabel),
             Text(localInterval(action)),
             const SizedBox(height: 12),
             Text(
@@ -291,7 +286,13 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
             if (!action.status.canDecide)
               Semantics(
                 liveRegion: true,
-                child: Text(_status(strings, action.status)),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: FloeBadge(
+                    label: _status(strings, action.status),
+                    tone: _statusTone(action.status),
+                  ),
+                ),
               ),
             if (action.status == CalendarActionStatus.blocked)
               Text(switch (action.reason) {
@@ -431,10 +432,7 @@ class _ActionReviewDialogState extends State<ActionReviewDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          entry.key,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
+                        Text(entry.key, style: FloeType.controlLabel),
                         SelectableText(entry.value),
                       ],
                     ),

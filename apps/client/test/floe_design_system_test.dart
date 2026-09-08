@@ -1,4 +1,5 @@
 import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_selection.dart';
@@ -40,6 +41,25 @@ void main() {
       FloeStates.outlinedSide({WidgetState.focused}).color,
       FloeColor.focus,
     );
+    expect(FloeType.controlLabel.fontSize, 13);
+    expect(FloeType.controlLabel.fontWeight, FontWeight.w500);
+    expect(FloeType.button.fontWeight, FontWeight.w600);
+  });
+
+  testWidgets('status is rendered by the semantic badge component', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: const Scaffold(
+          body: FloeBadge(label: 'Connected', tone: FloeBadgeTone.success),
+        ),
+      ),
+    );
+
+    expect(find.text('Connected'), findsOneWidget);
+    expect(tester.getSemantics(find.byType(FloeBadge)).label, 'Connected');
   });
 
   testWidgets('related controls enforce the shared size contract', (

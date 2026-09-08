@@ -30,6 +30,24 @@ Feature code does not instantiate Material button classes directly. Compact icon
 buttons use `FloeButtonSize.compact`; arbitrary per-screen constraints are reserved
 for controls embedded inside a larger accessible target.
 
+## Typography
+
+Feature code uses semantic `FloeType` roles rather than constructing `TextStyle`
+directly. Display and headline roles establish page hierarchy; title roles label
+surfaces; body roles carry prose; `controlLabel` is shared by buttons, checkbox
+and radio labels, menus, and compact rows; label, caption, micro, numeric, and
+code roles cover metadata without inventing local sizes or weights.
+
+Color, truncation, and exceptional responsive sizing may use `copyWith`, but the
+underlying family, weight, line height, and role always come from `FloeType`.
+
+## Status badges
+
+Statuses use `FloeBadge` instead of unadorned text. Neutral, info, success,
+warning, and danger tones combine a label with background and border contrast;
+color is supplemental to the status wording. Badges wrap on narrow surfaces and
+remain one semantic announcement.
+
 ## Segmented controls
 
 Use for mutually exclusive local views such as `Day / Week / Month`. The group uses `sq-md`; items use `sq-sm`. Selection receives a subtle primary tint and primary text, not a pill sliding across unrelated screens.
@@ -104,6 +122,11 @@ Each region uses the same `sq-lg` card system. Floe does not receive floating ge
 - Desktop dialogs are reserved for focused confirmation or short workflows.
 - Narrow layouts use a bottom sheet or full-height panel with the same information and action order.
 - Opening a dialog preserves the underlying context; closing restores focus to the trigger.
+
+Feature surfaces use the `FloeDialog`, `FloeDialogSurface`, `FloeScaffold`,
+`FloePressable`, `FloeDivider`, `FloeTooltip`, `FloeSlider`, `FloeSwitchTile`,
+and `FloeListRow` primitives. Material widgets remain implementation details of
+the design-system layer rather than screen-level dependencies.
 
 ## Floe mascot
 

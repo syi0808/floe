@@ -12,6 +12,7 @@ import '../../../app/design_tokens.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_loading.dart';
+import '../../../app/floe_primitives.dart';
 import '../../../app/floe_squircle.dart';
 import '../domain/day_models.dart';
 import 'calendar_event_details.dart';
@@ -295,8 +296,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                 padding: EdgeInsets.only(top: 8),
                                 child: Text(
                                   AppLocalizations.of(context).allDay,
-                                  style: TextStyle(
-                                    fontSize: 11,
+                                  style: FloeType.caption.copyWith(
                                     color: FloePalette.neutral600,
                                   ),
                                 ),
@@ -344,7 +344,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         ),
                       ),
                     ),
-                    Divider(height: 1),
+                    FloeDivider(),
                     Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: 20,
@@ -375,7 +375,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                           if (MediaQuery.sizeOf(context).width > 780)
                             SizedBox(
                               width: 150,
-                              child: Slider(
+                              child: FloeSlider(
                                 semanticFormatterCallback: (value) =>
                                     AppLocalizations.of(context)
                                         .zoomTimes(value.round()),
@@ -398,7 +398,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                             child: Text(
                               '${zoom.round()}×',
                               textAlign: TextAlign.end,
-                              style: TextStyle(fontSize: 11),
+                              style: FloeType.caption,
                             ),
                           ),
                         ],
@@ -480,12 +480,12 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                   key: ValueKey(
                                                     'calendar-hour-label-$hour',
                                                   ),
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    height: 1.2,
-                                                    color:
-                                                        FloePalette.neutral600,
-                                                  ),
+                                                  style: FloeType.micro
+                                                      .copyWith(
+                                                        height: 1.2,
+                                                        color: FloePalette
+                                                            .neutral600,
+                                                      ),
                                                 ),
                                               ),
                                           for (final placement in placements)
@@ -560,11 +560,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                       maxLines: 1,
                                                       overflow:
                                                           TextOverflow.ellipsis,
-                                                      style: const TextStyle(
-                                                        fontSize: 12,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                      ),
+                                                      style: FloeType.label,
                                                     ),
                                                   ),
                                                 ),
@@ -608,13 +604,11 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                         AppLocalizations.of(
                                                           context,
                                                         ).newEvent,
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          color: FloePalette
-                                                              .primary700,
-                                                        ),
+                                                        style: FloeType.label
+                                                            .copyWith(
+                                                              color: FloePalette
+                                                                  .primary700,
+                                                            ),
                                                       ),
                                                     ),
                                                   ),
@@ -638,11 +632,11 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                       key: const Key(
                                                         'calendar-current-time-label',
                                                       ),
-                                                      style: TextStyle(
-                                                        fontSize: 10,
-                                                        color: FloePalette
-                                                            .primary600,
-                                                      ),
+                                                      style: FloeType.micro
+                                                          .copyWith(
+                                                            color: FloePalette
+                                                                .primary600,
+                                                          ),
                                                     ),
                                                   ),
                                                   Container(
@@ -655,7 +649,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                     ),
                                                   ),
                                                   Expanded(
-                                                    child: Divider(
+                                                    child: FloeDivider(
                                                       color: FloePalette
                                                           .primary500,
                                                       height: 1,
@@ -714,12 +708,12 @@ class _EmptyDayStatus extends StatelessWidget {
                 children: [
                   Text(
                     strings.yourDayIsStillEmpty,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: FloeType.controlLabel,
                   ),
                   const SizedBox(height: FloeSpace.xxs),
                   Text(
                     strings.emptyDayConnectHint,
-                    style: const TextStyle(
+                    style: FloeType.bodySmall.copyWith(
                       fontSize: 12,
                       color: FloePalette.neutral600,
                     ),
@@ -769,8 +763,7 @@ class _EmptyDayBanner extends StatelessWidget {
                   Text(
                     strings.aLittleBreathingRoom,
                     maxLines: 1,
-                    style: const TextStyle(
-                      fontSize: 11,
+                    style: FloeType.caption.copyWith(
                       height: 1.3,
                       fontWeight: FontWeight.w600,
                       color: FloePalette.neutral950,
@@ -783,8 +776,7 @@ class _EmptyDayBanner extends StatelessWidget {
                         strings.emptyDayCreateHint,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
+                        style: FloeType.caption.copyWith(
                           height: 1.3,
                           color: FloePalette.neutral600,
                         ),
@@ -817,98 +809,88 @@ class CalendarEventCard extends StatelessWidget {
     final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
     final label =
         '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds, date: snapshot.date)}';
-    return Tooltip(
+    return FloeTooltip(
       message: label,
       triggerMode: TooltipTriggerMode.manual,
       child: Semantics(
         label: label,
         button: true,
-        child: Material(
-          color: tone.fill,
-          borderRadius: BorderRadius.circular(height < 24 ? 3 : 16),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            mouseCursor: WidgetStateMouseCursor.clickable,
-            onTap: () => openCalendarEvent(context, event, snapshot),
-            onDoubleTap: () => openCalendarEvent(context, event, snapshot),
-            hoverColor: tone.border,
-            child: height < 24 * textScale
-                ? Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      margin: EdgeInsets.only(left: 4),
-                      width: 3,
-                      height: height * .7,
-                      color: tone.accent,
-                    ),
-                  )
-                : Padding(
-                    padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: tone.accent,
-                            shape: BoxShape.circle,
-                          ),
+        child: FloePressable(
+          fill: tone.fill,
+          size: height < 24 ? FloeSquircleSize.xs : FloeSquircleSize.md,
+          onPressed: () => openCalendarEvent(context, event, snapshot),
+          onDoubleTap: () => openCalendarEvent(context, event, snapshot),
+          hoverFill: tone.border,
+          child: height < 24 * textScale
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: EdgeInsets.only(left: 4),
+                    width: 3,
+                    height: height * .7,
+                    color: tone.accent,
+                  ),
+                )
+              : Padding(
+                  padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: tone.accent,
+                          shape: BoxShape.circle,
                         ),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              event.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: FloeType.label.copyWith(height: 1.2),
+                            ),
+                            if (height >= 42 * textScale) ...[
+                              SizedBox(height: 3),
                               Text(
-                                event.title,
+                                calendarRange(
+                                  context,
+                                  event,
+                                  snapshot.timezoneOffsetSeconds,
+                                  date: snapshot.date,
+                                ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 12,
+                                style: FloeType.caption.copyWith(
                                   height: 1.2,
-                                  fontWeight: FontWeight.w600,
+                                  color: FloePalette.neutral600,
                                 ),
                               ),
-                              if (height >= 42 * textScale) ...[
-                                SizedBox(height: 3),
-                                Text(
-                                  calendarRange(
-                                    context,
-                                    event,
-                                    snapshot.timezoneOffsetSeconds,
-                                    date: snapshot.date,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    height: 1.2,
-                                    color: FloePalette.neutral600,
-                                  ),
-                                ),
-                              ],
-                              if (height >= 58 * textScale &&
-                                  event.calendarName != null) ...[
-                                SizedBox(height: 3),
-                                Text(
-                                  event.calendarName!,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    height: 1.2,
-                                    color: FloePalette.neutral600,
-                                  ),
-                                ),
-                              ],
                             ],
-                          ),
+                            if (height >= 58 * textScale &&
+                                event.calendarName != null) ...[
+                              SizedBox(height: 3),
+                              Text(
+                                event.calendarName!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: FloeType.micro.copyWith(
+                                  height: 1.2,
+                                  color: FloePalette.neutral600,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-          ),
+                ),
         ),
       ),
     );

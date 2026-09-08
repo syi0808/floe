@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_calendar_sources.dart';
@@ -215,7 +216,7 @@ void main() {
     }
     expect(
       tester
-          .widget<CheckboxListTile>(
+          .widget<FloeCheckboxTile>(
             find.byKey(const ValueKey('calendar-choice-fifth')),
           )
           .onChanged,

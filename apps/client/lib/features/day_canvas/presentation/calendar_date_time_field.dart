@@ -24,10 +24,12 @@ class CalendarDateTimeField extends StatelessWidget {
   final bool enabled;
   final FormFieldValidator<DateTime>? validator;
 
-  static final fieldButtonStyle = TextButton.styleFrom(
+  static const fieldButtonStyle = ButtonStyle(
     alignment: Alignment.centerLeft,
-    padding: const EdgeInsets.symmetric(horizontal: FloeSpace.sm),
-    minimumSize: const Size(0, 32),
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: FloeSpace.sm),
+    ),
+    minimumSize: WidgetStatePropertyAll(Size(0, 32)),
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
 

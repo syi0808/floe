@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_badge.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_input.dart';
 import '../../app/floe_loading.dart';
@@ -181,10 +183,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Remote server connection',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-          ),
+          const Text('Remote server connection', style: FloeType.headline),
           const SizedBox(height: 12),
           const Text(
             'Connect Floe to your server for assisted features. Service credentials stay on the server; app access is saved in Keychain.',
@@ -199,16 +198,26 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
             enableSuggestions: false,
           ),
           const SizedBox(height: 16),
-          Semantics(liveRegion: true, child: Text(status)),
+          Semantics(
+            liveRegion: true,
+            child: FloeBadge(
+              label: status,
+              tone: connection != null
+                  ? FloeBadgeTone.success
+                  : proof != null
+                  ? FloeBadgeTone.info
+                  : status.contains('Loading')
+                  ? FloeBadgeTone.neutral
+                  : status.contains('Not connected')
+                  ? FloeBadgeTone.warning
+                  : FloeBadgeTone.danger,
+            ),
+          ),
           if (code != null) ...[
             const SizedBox(height: 16),
             SelectableText(
               code!,
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 4,
-              ),
+              style: FloeType.display.copyWith(fontSize: 28, letterSpacing: 4),
             ),
             const SizedBox(height: 12),
             const FloeInfoNote(

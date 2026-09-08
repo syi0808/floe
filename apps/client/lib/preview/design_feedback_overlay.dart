@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
+import '../app/design_tokens.dart';
 import '../app/floe_input.dart';
 
 class DesignFeedbackOverlay extends StatefulWidget {
@@ -836,10 +837,7 @@ class _FeedbackPin extends StatelessWidget {
             child: Center(
               child: Text(
                 '${index + 1}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: FloeType.label.copyWith(color: Colors.white),
               ),
             ),
           ),

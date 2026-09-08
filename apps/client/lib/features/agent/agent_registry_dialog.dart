@@ -25,14 +25,11 @@ class AgentRegistrySettings extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            strings.agentRegistryTitle,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
+          Text(strings.agentRegistryTitle, style: FloeType.title),
           const SizedBox(height: FloeSpace.xs),
           Text(
             strings.agentRegistryBoundary,
-            style: const TextStyle(color: FloePalette.neutral600, height: 1.5),
+            style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
           const SizedBox(height: FloeSpace.base),
           if (!ready)
@@ -116,7 +113,7 @@ class _CapabilityPermission extends StatelessWidget {
                 installation.packageId,
                 kind: installation.kind,
               ),
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: FloeType.controlLabel,
             ),
             const SizedBox(height: FloeSpace.xxs),
             Text(
@@ -124,7 +121,7 @@ class _CapabilityPermission extends StatelessWidget {
                 installation.packageId,
                 kind: installation.kind,
               ),
-              style: const TextStyle(
+              style: FloeType.bodySmall.copyWith(
                 color: FloePalette.neutral600,
                 fontSize: 12,
                 height: 1.4,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'floe_field.dart';
+import 'design_tokens.dart';
 
 class FloeInput extends StatelessWidget {
   const FloeInput({
@@ -89,6 +90,37 @@ class FloeInput extends StatelessWidget {
       contentPadding: compact
           ? const EdgeInsets.symmetric(horizontal: 12, vertical: 10)
           : null,
+    ),
+  );
+}
+
+final class FloeSearchInput extends StatelessWidget {
+  const FloeSearchInput({
+    required this.controller,
+    required this.placeholder,
+    this.onChanged,
+    this.icon,
+    super.key,
+  });
+
+  final TextEditingController controller;
+  final String placeholder;
+  final ValueChanged<String>? onChanged;
+  final Widget? icon;
+
+  @override
+  Widget build(BuildContext context) => TextFormField(
+    controller: controller,
+    onChanged: onChanged,
+    style: FloeType.bodyLarge,
+    decoration: InputDecoration(
+      hintText: placeholder,
+      prefixIcon: icon,
+      filled: false,
+      border: InputBorder.none,
+      enabledBorder: InputBorder.none,
+      focusedBorder: InputBorder.none,
+      contentPadding: EdgeInsets.zero,
     ),
   );
 }

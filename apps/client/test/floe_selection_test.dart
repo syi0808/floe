@@ -59,8 +59,8 @@ void main() {
         theme: FloeTheme.light,
         home: Scaffold(
           body: StatefulBuilder(
-            builder: (context, setState) => RadioGroup<bool>(
-              groupValue: all,
+            builder: (context, setState) => FloeRadioGroup<bool>(
+              value: all,
               onChanged: (value) => setState(() => all = value!),
               child: const Column(
                 children: [
@@ -102,6 +102,23 @@ void main() {
     await gesture.up();
     await tester.pumpAndSettle();
     expect(tester.getSize(visual), originalSize);
+  });
+
+  testWidgets('checkbox uses a rounded squircle rather than a circle', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(body: FloeCheckbox(value: true, onChanged: (_) {})),
+      ),
+    );
+
+    final visual = tester.widget<AnimatedContainer>(
+      find.byKey(const ValueKey('floe-choice-visual')),
+    );
+    final decoration = visual.decoration! as ShapeDecoration;
+    expect(decoration.shape, isNot(isA<CircleBorder>()));
   });
 
   testWidgets('pointer focus and hover move off the previous choice', (

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'design_tokens.dart';
 import 'floe_button.dart';
 import 'floe_popover.dart';
+import 'floe_primitives.dart';
 
 Future<TimeOfDay?> showFloeTimePicker({
   required BuildContext context,
@@ -53,10 +54,8 @@ class _FloeTimePickerState extends State<FloeTimePicker> {
                       alwaysUse24HourFormat: use24HourFormat,
                     ),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 13,
+                    style: FloeType.numeric.copyWith(
                       fontWeight: FontWeight.w600,
-                      fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),
                 ),
@@ -68,17 +67,12 @@ class _FloeTimePickerState extends State<FloeTimePicker> {
             ],
           ),
         ),
-        const Divider(height: 1, color: FloePalette.neutral100),
+        const FloeDivider(height: 1, color: FloePalette.neutral100),
         Expanded(
           child: CupertinoTheme(
             data: CupertinoTheme.of(context).copyWith(
               textTheme: const CupertinoTextThemeData(
-                dateTimePickerTextStyle: TextStyle(
-                  color: FloePalette.neutral950,
-                  fontSize: 21,
-                  fontWeight: FontWeight.w500,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
+                dateTimePickerTextStyle: FloeType.numericLarge,
               ),
             ),
             child: CupertinoDatePicker(
@@ -167,12 +161,7 @@ class FloeTimePickerButton extends StatelessWidget {
                   },
             style: style,
             icon: const Icon(CupertinoIcons.clock, size: 17),
-            child: Text(
-              formatted,
-              style: const TextStyle(
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
-            ),
+            child: Text(formatted, style: FloeType.numeric),
           ),
         ),
       ),

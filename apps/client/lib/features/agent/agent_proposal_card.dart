@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
+import '../../app/floe_badge.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -48,10 +50,7 @@ class AgentProposalCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            strings.agentProposalTitle,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
+          Text(strings.agentProposalTitle, style: FloeType.controlLabel),
           const SizedBox(height: 8),
           Text(
             strings.agentProposalInterval(
@@ -62,20 +61,31 @@ class AgentProposalCard extends StatelessWidget {
           const SizedBox(height: 8),
           Semantics(
             liveRegion: true,
-            child: Text(
-              failed
-                  ? strings.agentProposalFailed
-                  : inspection == null
-                  ? strings.agentProposalUnchecked
-                  : status == null
-                  ? strings.agentProposalUnprepared
-                  : strings.agentProposalRecorded(status),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: FloeBadge(
+                label: failed
+                    ? strings.agentProposalFailed
+                    : inspection == null
+                    ? strings.agentProposalUnchecked
+                    : status == null
+                    ? strings.agentProposalUnprepared
+                    : strings.agentProposalRecorded(status),
+                tone: failed
+                    ? FloeBadgeTone.danger
+                    : action?.status == CalendarActionStatus.succeeded
+                    ? FloeBadgeTone.success
+                    : action?.status == CalendarActionStatus.rejected ||
+                          action?.status == CalendarActionStatus.blocked
+                    ? FloeBadgeTone.danger
+                    : FloeBadgeTone.info,
+              ),
             ),
           ),
           const SizedBox(height: 8),
           Text(
             strings.agentProposalReadOnly,
-            style: const TextStyle(fontSize: 12),
+            style: FloeType.bodySmall.copyWith(fontSize: 12),
           ),
           const SizedBox(height: 8),
           Wrap(
