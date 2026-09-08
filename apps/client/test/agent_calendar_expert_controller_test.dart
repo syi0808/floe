@@ -34,9 +34,15 @@ void main() {
     expect(gateway.requests, hasLength(1));
     gateway.gate!.complete();
     await operation;
-    expect(controller.calendarExperts!.views.single.enabled, false);
+    expect(controller.calendarExperts!.views.single.enabled, true);
+    expect(
+      controller.calendarExperts!.accessEnabled(
+        controller.calendarExperts!.setups.single,
+      ),
+      true,
+    );
     expect(controller.pendingCalendarSetup, isNull);
-    expect(controller.registry!.revision, 1);
+    expect(controller.registry!.revision, 2);
     expect(controller.canSend, true);
   });
 
@@ -107,33 +113,43 @@ void main() {
     expect(gateway.transport.installations, 0);
   });
 
-  test('scope enablement waits for confirmed reread and lost response never replays the toggle', () async {
-    final gateway = TestCalendarExpertGateway();
-    final controller = AgentController(
-      gateway: gateway,
-      personId: registryPerson,
-    );
-    addTearDown(controller.dispose);
-    await controller.load();
-    await controller.loadCalendarExperts();
-    await controller.installCalendarExpert(
-      provider: 'event_kit',
-      calendarIds: ['home', 'work'],
-    );
-    gateway.gate = Completer<void>();
-    final operation = controller.configureCalendarView(calendarViewId, true);
-    expect(controller.calendarExperts!.views.single.enabled, false);
-    expect(controller.busy, true);
-    gateway.gate!.complete();
-    await operation;
-    expect(controller.calendarExperts!.views.single.enabled, true);
-    gateway.transport.loss = 'release_after';
-    await controller.configureCalendarView(calendarViewId, false);
-    expect(controller.calendarExperts, isNull);
-    await controller.loadCalendarExperts();
-    expect(controller.calendarExperts!.views.single.enabled, false);
-    expect(controller.calendarExperts!.registry.revision, 3);
-  });
+  test(
+    'access pause is atomic and a lost response never replays the change',
+    () async {
+      final gateway = TestCalendarExpertGateway();
+      final controller = AgentController(
+        gateway: gateway,
+        personId: registryPerson,
+      );
+      addTearDown(controller.dispose);
+      await controller.load();
+      await controller.loadCalendarExperts();
+      await controller.installCalendarExpert(
+        provider: 'event_kit',
+        calendarIds: ['home', 'work'],
+      );
+      final setupId = controller.calendarExperts!.setups.single.setupId;
+      gateway.gate = Completer<void>();
+      final operation = controller.setCalendarAccessEnabled(setupId, false);
+      expect(controller.calendarExperts!.views.single.enabled, true);
+      expect(controller.busy, true);
+      gateway.gate!.complete();
+      await operation;
+      expect(controller.calendarExperts!.views.single.enabled, false);
+      expect(
+        controller.calendarExperts!.registry.installations.every(
+          (entry) => !entry.enabled,
+        ),
+        true,
+      );
+      gateway.transport.loss = 'release_after';
+      await controller.setCalendarAccessEnabled(setupId, true);
+      expect(controller.calendarExperts, isNull);
+      await controller.loadCalendarExperts();
+      expect(controller.calendarExperts!.views.single.enabled, true);
+      expect(controller.calendarExperts!.registry.revision, 4);
+    },
+  );
 
   test('lock clears source scope and pending intent immediately and ignores late results', () async {
     for (final operationKind in ['read', 'install', 'configure']) {
@@ -150,6 +166,9 @@ void main() {
           calendarIds: ['home', 'work'],
         );
       }
+      final setupId = operationKind == 'configure'
+          ? controller.calendarExperts!.setups.single.setupId
+          : null;
       gateway.gate = Completer<void>();
       final operation = switch (operationKind) {
         'read' => controller.loadCalendarExperts(),
@@ -157,7 +176,7 @@ void main() {
           provider: 'event_kit',
           calendarIds: ['home', 'work'],
         ),
-        _ => controller.configureCalendarView(calendarViewId, true),
+        _ => controller.setCalendarAccessEnabled(setupId!, false),
       };
       final closing = controller.closeView();
       expect(controller.calendarExperts, isNull);

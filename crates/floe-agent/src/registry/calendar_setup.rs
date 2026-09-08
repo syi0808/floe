@@ -34,6 +34,29 @@ pub struct CalendarExpertSetupResult {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct CalendarAccessConfiguration {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub setup_id: Uuid,
+    pub change: CalendarAccessChange,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CalendarAccessChange {
+    SetEnabled {
+        enabled: bool,
+    },
+    SetScope {
+        replacement_setup_id: Uuid,
+        provider: CalendarProvider,
+        calendar_ids: Vec<String>,
+    },
+    Remove {},
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarExpertOverview {
     pub registry: RegistryOverview,
     pub views: Vec<CalendarViewBinding>,
@@ -42,22 +65,59 @@ pub struct CalendarExpertOverview {
 
 impl AgentRegistry {
     pub fn calendar_expert_overview(&self, person_id: PersonId) -> CalendarExpertOverview {
+        let active: Vec<_> = self
+            .snapshot
+            .calendar_setups
+            .iter()
+            .filter(|setup| {
+                setup.person_id == person_id
+                    && !self
+                        .snapshot
+                        .revoked_calendar_setups
+                        .contains(&setup.setup_id)
+            })
+            .cloned()
+            .collect();
+        let active_views: Vec<_> = active.iter().map(|setup| setup.view_handle).collect();
+        let revoked: Vec<_> = self
+            .snapshot
+            .calendar_setups
+            .iter()
+            .filter(|setup| {
+                setup.person_id == person_id
+                    && self
+                        .snapshot
+                        .revoked_calendar_setups
+                        .contains(&setup.setup_id)
+            })
+            .collect();
+        let revoked_installations: Vec<_> = revoked
+            .iter()
+            .flat_map(|setup| [setup.tool_installation_id, setup.expert_installation_id])
+            .collect();
+        let revoked_assignments: Vec<_> = revoked
+            .iter()
+            .flat_map(|setup| [setup.tool_assignment_id, setup.expert_assignment_id])
+            .collect();
+        let mut overview = self.overview(person_id);
+        overview
+            .installations
+            .retain(|entry| !revoked_installations.contains(&entry.id));
+        overview
+            .assignments
+            .retain(|entry| !revoked_assignments.contains(&entry.id));
         CalendarExpertOverview {
-            registry: self.overview(person_id),
+            registry: overview,
             views: self
                 .snapshot
                 .calendar_views
                 .iter()
-                .filter(|binding| binding.person_id == person_id)
+                .filter(|binding| {
+                    binding.person_id == person_id && active_views.contains(&binding.handle)
+                })
                 .cloned()
                 .collect(),
-            setups: self
-                .snapshot
-                .calendar_setups
-                .iter()
-                .filter(|setup| setup.person_id == person_id)
-                .cloned()
-                .collect(),
+            setups: active,
         }
     }
 
@@ -170,6 +230,94 @@ impl AgentRegistry {
         Ok(receipt)
     }
 
+    pub fn configure_calendar_access(
+        &mut self,
+        person_id: PersonId,
+        configuration: &CalendarAccessConfiguration,
+    ) -> Result<(), AgentFailure> {
+        if configuration.instance_id != self.instance_id() {
+            return Err(AgentFailure::NotFound);
+        }
+        self.check_revision(configuration.expected_revision)?;
+        let receipt = self
+            .snapshot
+            .calendar_setups
+            .iter()
+            .find(|entry| entry.setup_id == configuration.setup_id)
+            .filter(|entry| entry.person_id == person_id)
+            .cloned()
+            .ok_or(AgentFailure::NotFound)?;
+        if self
+            .snapshot
+            .revoked_calendar_setups
+            .contains(&receipt.setup_id)
+        {
+            return Err(AgentFailure::NotFound);
+        }
+        let mut next = self.snapshot();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        match &configuration.change {
+            CalendarAccessChange::SetEnabled { enabled } => {
+                next.calendar_views
+                    .iter_mut()
+                    .find(|entry| entry.handle == receipt.view_handle)
+                    .ok_or(AgentFailure::NotFound)?
+                    .enabled = *enabled;
+                for identifier in [receipt.tool_installation_id, receipt.expert_installation_id] {
+                    next.installations
+                        .iter_mut()
+                        .find(|entry| entry.id == identifier)
+                        .ok_or(AgentFailure::NotFound)?
+                        .enabled = *enabled;
+                }
+                for identifier in [receipt.tool_assignment_id, receipt.expert_assignment_id] {
+                    let assignment = next
+                        .assignments
+                        .iter_mut()
+                        .find(|entry| entry.id == identifier && entry.person_id == person_id)
+                        .ok_or(AgentFailure::NotFound)?;
+                    assignment.enabled = *enabled;
+                }
+            }
+            CalendarAccessChange::SetScope {
+                replacement_setup_id,
+                provider,
+                calendar_ids,
+            } => {
+                if replacement_setup_id.is_nil()
+                    || *replacement_setup_id == receipt.setup_id
+                    || next
+                        .calendar_setups
+                        .iter()
+                        .any(|entry| entry.setup_id == *replacement_setup_id)
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let replacement = CalendarExpertSetup {
+                    instance_id: configuration.instance_id,
+                    expected_revision: configuration.expected_revision,
+                    setup_id: *replacement_setup_id,
+                    provider: *provider,
+                    calendar_ids: calendar_ids.clone(),
+                };
+                let mut staged = Self::restore(self.snapshot(), self.instance_id())?;
+                staged.install_calendar_expert(person_id, &replacement)?;
+                next = staged.snapshot();
+                disable_setup(&mut next, &receipt, person_id)?;
+                next.revoked_calendar_setups.push(receipt.setup_id);
+            }
+            CalendarAccessChange::Remove {} => {
+                disable_setup(&mut next, &receipt, person_id)?;
+                next.revoked_calendar_setups.push(receipt.setup_id);
+            }
+        }
+        *self = Self::restore(next, self.instance_id())?;
+        Ok(())
+    }
+
     pub(super) fn validate_calendar_setups(&self) -> Result<(), AgentFailure> {
         for (index, receipt) in self.snapshot.calendar_setups.iter().enumerate() {
             if receipt.setup_id.is_nil()
@@ -227,6 +375,36 @@ impl AgentRegistry {
         }
         Ok(())
     }
+}
+
+fn disable_setup(
+    snapshot: &mut RegistrySnapshot,
+    receipt: &CalendarExpertSetupReceipt,
+    person_id: PersonId,
+) -> Result<(), AgentFailure> {
+    snapshot
+        .calendar_views
+        .iter_mut()
+        .find(|entry| entry.handle == receipt.view_handle && entry.person_id == person_id)
+        .ok_or(AgentFailure::NotFound)?
+        .enabled = false;
+    for identifier in [receipt.tool_installation_id, receipt.expert_installation_id] {
+        snapshot
+            .installations
+            .iter_mut()
+            .find(|entry| entry.id == identifier)
+            .ok_or(AgentFailure::NotFound)?
+            .enabled = false;
+    }
+    for identifier in [receipt.tool_assignment_id, receipt.expert_assignment_id] {
+        snapshot
+            .assignments
+            .iter_mut()
+            .find(|entry| entry.id == identifier && entry.person_id == person_id)
+            .ok_or(AgentFailure::NotFound)?
+            .enabled = false;
+    }
+    Ok(())
 }
 
 fn setup_binding(

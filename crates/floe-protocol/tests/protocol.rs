@@ -52,6 +52,42 @@ fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_
 }
 
 #[test]
+fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
+    for change in [
+        serde_json::json!({"kind": "set_enabled", "enabled": true}),
+        serde_json::json!({
+            "kind": "set_scope",
+            "replacement_setup_id": "00000000-0000-4000-8000-000000000003",
+            "provider": "event_kit",
+            "calendar_ids": ["home", "work"]
+        }),
+        serde_json::json!({"kind": "remove"}),
+    ] {
+        let action = serde_json::json!({
+            "kind": "calendar_access",
+            "change": {
+                "instance_id": "00000000-0000-4000-8000-000000000001",
+                "expected_revision": 4,
+                "setup_id": "00000000-0000-4000-8000-000000000002",
+                "change": change
+            }
+        });
+        let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    }
+    let forged = serde_json::json!({
+        "kind": "calendar_access",
+        "change": {
+            "instance_id": "00000000-0000-4000-8000-000000000001",
+            "expected_revision": 4,
+            "setup_id": "00000000-0000-4000-8000-000000000002",
+            "change": {"kind": "remove", "keep_assignments": true}
+        }
+    });
+    assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+}
+
+#[test]
 fn registry_configuration_transport_rejects_raw_grants_state_and_unknown_operations() {
     let change = serde_json::json!({
         "instance_id": "00000000-0000-4000-8000-000000000001",

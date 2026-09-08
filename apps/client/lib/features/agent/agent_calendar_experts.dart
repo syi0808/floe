@@ -7,6 +7,75 @@ abstract interface class AgentCalendarExpertGateway {
   Future<AgentCalendarExperts> installCalendarExpert(
     AgentCalendarSetup request,
   );
+  Future<AgentCalendarExperts> configureCalendarAccess(
+    AgentCalendarAccessRequest request,
+  );
+}
+
+enum AgentCalendarAccessOperation { setEnabled, setScope, remove }
+
+final class AgentCalendarAccessRequest {
+  AgentCalendarAccessRequest({
+    required String personId,
+    required String instanceId,
+    required int expectedRevision,
+    required String setupId,
+    required this.operation,
+    this.enabled,
+    this.provider,
+    String? replacementSetupId,
+    List<String>? calendarIds,
+  }) : personId = _identifier(personId),
+       instanceId = _identifier(instanceId),
+       expectedRevision = _counter(expectedRevision),
+       setupId = _identifier(setupId),
+       replacementSetupId = replacementSetupId == null
+           ? null
+           : _identifier(replacementSetupId),
+       calendarIds = calendarIds == null
+           ? null
+           : _scope(calendarIds, canonical: false) {
+    if ((operation == AgentCalendarAccessOperation.setEnabled &&
+            enabled == null) ||
+        (operation == AgentCalendarAccessOperation.setScope &&
+            (provider == null ||
+                this.calendarIds == null ||
+                this.replacementSetupId == null)) ||
+        (operation == AgentCalendarAccessOperation.remove &&
+            (enabled != null || provider != null || calendarIds != null))) {
+      throw const FormatException('Invalid Calendar access change');
+    }
+    if (provider != null) _provider(provider);
+  }
+
+  final String personId;
+  final String instanceId;
+  final int expectedRevision;
+  final String setupId;
+  final AgentCalendarAccessOperation operation;
+  final bool? enabled;
+  final String? provider;
+  final String? replacementSetupId;
+  final List<String>? calendarIds;
+
+  Map<String, Object> toJson() => {
+    'instance_id': instanceId,
+    'expected_revision': expectedRevision,
+    'setup_id': setupId,
+    'change': switch (operation) {
+      AgentCalendarAccessOperation.setEnabled => {
+        'kind': 'set_enabled',
+        'enabled': enabled!,
+      },
+      AgentCalendarAccessOperation.setScope => {
+        'kind': 'set_scope',
+        'replacement_setup_id': replacementSetupId!,
+        'provider': provider!,
+        'calendar_ids': calendarIds!,
+      },
+      AgentCalendarAccessOperation.remove => {'kind': 'remove'},
+    },
+  };
 }
 
 final class AgentCalendarSetup {
@@ -115,6 +184,22 @@ final class AgentCalendarExperts {
   final AgentRegistryView registry;
   final List<AgentCalendarView> views;
   final List<AgentCalendarSetupReceipt> setups;
+
+  bool accessEnabled(AgentCalendarSetupReceipt setup) {
+    final view = views.singleWhere((entry) => entry.handle == setup.viewHandle);
+    final installationIds = {
+      setup.toolInstallationId,
+      setup.expertInstallationId,
+    };
+    final assignmentIds = {setup.toolAssignmentId, setup.expertAssignmentId};
+    return view.enabled &&
+        registry.installations
+            .where((entry) => installationIds.contains(entry.id))
+            .every((entry) => entry.enabled) &&
+        registry.assignments
+            .where((entry) => assignmentIds.contains(entry.id))
+            .every((entry) => entry.enabled);
+  }
 
   AgentCalendarSetupReceipt? receiptFor(AgentCalendarSetup request) {
     if (registry.personId != request.personId ||

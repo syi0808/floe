@@ -149,6 +149,42 @@ final class CalendarExpertTransport {
         (snapshot['registry'] as Map)['revision'] =
             (change['expected_revision'] as int) + 1;
       }
+      if (action['kind'] == 'calendar_access') {
+        final request = action['change'] as Map;
+        if (request['expected_revision'] !=
+                (snapshot['registry'] as Map)['revision'] ||
+            request['setup_id'] !=
+                ((snapshot['setups'] as List).single as Map)['setup_id']) {
+          throw const AgentVaultException('conflict');
+        }
+        final change = request['change'] as Map;
+        switch (change['kind']) {
+          case 'set_enabled':
+            ((snapshot['views'] as List).single as Map)['enabled'] =
+                change['enabled'];
+            for (final installation in snapshot['registry']['installations']) {
+              installation['enabled'] = change['enabled'];
+            }
+            for (final assignment in snapshot['registry']['assignments']) {
+              assignment['enabled'] = change['enabled'];
+            }
+          case 'set_scope':
+            ((snapshot['setups'] as List).single as Map)['setup_id'] =
+                change['replacement_setup_id'];
+            ((snapshot['views'] as List).single as Map)['calendar_ids'] = [
+              ...change['calendar_ids'] as List,
+            ]..sort();
+          case 'remove':
+            (snapshot['setups'] as List).clear();
+            (snapshot['views'] as List).clear();
+            (snapshot['registry']['installations'] as List).clear();
+            (snapshot['registry']['assignments'] as List).clear();
+          default:
+            throw const AgentVaultException('invalid_input');
+        }
+        (snapshot['registry'] as Map)['revision'] =
+            (request['expected_revision'] as int) + 1;
+      }
       pending = {
         'request_id': request['request_id'],
         'events': <Object>[],
@@ -157,6 +193,8 @@ final class CalendarExpertTransport {
         'state': failure == null ? 'ready' : 'unavailable',
         'failure': failure,
         if (action['kind'] == 'calendar_experts')
+          'calendar_experts': jsonDecode(jsonEncode(snapshot)),
+        if (action['kind'] == 'calendar_access')
           'calendar_experts': jsonDecode(jsonEncode(snapshot)),
         if (action['kind'] == 'registry')
           'registry': jsonDecode(jsonEncode(snapshot['registry'])),
@@ -222,6 +260,14 @@ class TestCalendarExpertGateway extends TestVaultGateway
     requests.add(request);
     await _wait();
     return native.installCalendarExpert(request);
+  }
+
+  @override
+  Future<AgentCalendarExperts> configureCalendarAccess(
+    AgentCalendarAccessRequest request,
+  ) async {
+    await _wait();
+    return native.configureCalendarAccess(request);
   }
 
   @override

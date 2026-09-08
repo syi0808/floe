@@ -61,6 +61,42 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
+    pub async fn configure_calendar_access(
+        &self,
+        configuration: floe_agent::CalendarAccessConfiguration,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::CalendarExpertOverview, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if configuration.instance_id != self.vault_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let snapshot = self
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+        registry.configure_calendar_access(self.person_id, &configuration)?;
+        self.save_expert_registry_checked(
+            configuration.expected_revision,
+            &registry.snapshot(),
+            || {
+                if cancellation.is_cancelled() {
+                    Err(AgentFailure::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .await?;
+        self.check_access()?;
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        Ok(registry.calendar_expert_overview(self.person_id))
+    }
+
     pub async fn registry_overview(
         &self,
     ) -> Result<Option<floe_agent::RegistryOverview>, AgentFailure> {
@@ -219,6 +255,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .calendar_setups
                 .iter()
                 .any(|receipt| !snapshot.calendar_setups.contains(receipt))
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            if previous
+                .revoked_calendar_setups
+                .iter()
+                .any(|setup_id| !snapshot.revoked_calendar_setups.contains(setup_id))
+                || snapshot.revoked_calendar_setups.iter().any(|setup_id| {
+                    !previous.revoked_calendar_setups.contains(setup_id)
+                        && !previous
+                            .calendar_setups
+                            .iter()
+                            .any(|setup| setup.setup_id == *setup_id)
+                })
             {
                 return Err(AgentFailure::Conflict);
             }

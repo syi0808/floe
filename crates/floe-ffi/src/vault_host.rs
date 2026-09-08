@@ -397,6 +397,23 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
             ))
         }
+        AgentVaultActionDto::CalendarAccess { change } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let overview = vault
+                .configure_calendar_access(change.clone(), job.cancellation.clone())
+                .await?;
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                Some(overview),
+                None,
+                None,
+            ))
+        }
         AgentVaultActionDto::CalendarSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = match operation {

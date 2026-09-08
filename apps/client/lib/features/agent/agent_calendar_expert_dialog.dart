@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../../app/design_tokens.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_squircle.dart';
-import '../../app/floe_switch.dart';
 import '../../l10n/app_localizations.dart';
+import 'agent_calendar_experts.dart';
 import 'agent_calendar_sources.dart';
 import 'agent_controller.dart';
 import 'agent_vault_gateway.dart';
@@ -16,6 +16,7 @@ class AgentCalendarSettings extends StatefulWidget {
     this.sources,
     this.sourceChanges,
   });
+
   final AgentController controller;
   final AgentCalendarSources? Function()? sources;
   final Listenable? sourceChanges;
@@ -28,10 +29,12 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   late Listenable _changes;
   final Set<String> _selected = {};
   String? _fingerprint;
-  bool _confirmed = false;
+  String? _editingSetupId;
+  bool _editing = false;
   bool _connectionChanged = false;
 
   AgentController get controller => widget.controller;
+
   AgentCalendarSources? get _sources {
     if (controller.vaultState != AgentVaultState.ready) return null;
     final sources = widget.sources?.call();
@@ -56,8 +59,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   void didUpdateWidget(AgentCalendarSettings oldWidget) {
     super.didUpdateWidget(oldWidget);
     _changes.removeListener(_changed);
-    _selected.clear();
-    _confirmed = false;
+    _resetEditor();
     _listen();
   }
 
@@ -67,16 +69,15 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         controller.vaultState != AgentVaultState.ready) {
       _connectionChanged = _fingerprint != null;
       _fingerprint = current;
-      _selected.clear();
-      _confirmed = false;
+      _resetEditor();
     }
     if (mounted) setState(() {});
   }
 
-  @override
-  void dispose() {
-    _changes.removeListener(_changed);
-    super.dispose();
+  void _resetEditor() {
+    _selected.clear();
+    _editingSetupId = null;
+    _editing = false;
   }
 
   bool _fresh() {
@@ -85,39 +86,76 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     return false;
   }
 
-  bool _alreadyInstalled(AgentCalendarSources sources) =>
-      controller.calendarExperts?.views.any(
-        (view) =>
-            view.provider == sources.provider &&
-            view.calendarIds.length == _selected.length &&
-            view.calendarIds.every(_selected.contains) &&
-            controller.calendarExperts!.setups.any(
-              (setup) => setup.viewHandle == view.handle,
-            ),
-      ) ??
-      false;
+  void _startSetup() => setState(() {
+    _selected.clear();
+    _editingSetupId = null;
+    _editing = true;
+  });
 
-  Future<void> _install() async {
+  void _startChange(AgentCalendarSetupReceipt setup, AgentCalendarView view) =>
+      setState(() {
+        _selected
+          ..clear()
+          ..addAll(view.calendarIds);
+        _editingSetupId = setup.setupId;
+        _editing = true;
+      });
+
+  Future<void> _save() async {
     final sources = _sources;
     if (!_fresh() ||
         sources == null ||
-        !_confirmed ||
         _selected.isEmpty ||
         _selected.length > 4 ||
-        !sources.containsScope(sources.provider, _selected) ||
-        _alreadyInstalled(sources)) {
+        !sources.containsScope(sources.provider, _selected)) {
       return;
     }
-    await controller.installCalendarExpert(
-      provider: sources.provider,
-      calendarIds: _selected.toList(),
-    );
-    if (mounted && controller.pendingCalendarSetup == null) {
-      setState(() {
-        _selected.clear();
-        _confirmed = false;
-      });
+    final setupId = _editingSetupId;
+    if (setupId == null) {
+      await controller.installCalendarExpert(
+        provider: sources.provider,
+        calendarIds: _selected.toList(),
+      );
+    } else {
+      await controller.changeCalendarAccessScope(
+        setupId: setupId,
+        provider: sources.provider,
+        calendarIds: _selected.toList(),
+      );
     }
+    if (mounted && controller.calendarExpertFailure == null) {
+      setState(_resetEditor);
+    }
+  }
+
+  Future<void> _remove(AgentCalendarSetupReceipt setup) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove Calendar access?'),
+        content: const Text(
+          'Floe will stop using these calendars in new conversations. The source connection and action history are not deleted.',
+        ),
+        actions: [
+          FloeButton.text(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FloeButton.filled(
+            key: const ValueKey('calendar-access-remove-confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove access'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.removeCalendarAccess(setup.setupId);
+  }
+
+  @override
+  void dispose() {
+    _changes.removeListener(_changed);
+    super.dispose();
   }
 
   @override
@@ -125,20 +163,20 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     final strings = AppLocalizations.of(context);
     final ready = controller.vaultState == AgentVaultState.ready;
     final current = controller.calendarExperts;
-    final sources = _sources;
     final pending = controller.pendingCalendarSetup;
+    final sources = _sources;
     final canManage = controller.canManageCalendarExperts;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          strings.agentCalendarTitle,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        const Text(
+          'Data Floe can use',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: FloeSpace.xs),
-        Text(
-          strings.agentCalendarBoundary,
-          style: const TextStyle(color: FloePalette.neutral600, height: 1.5),
+        const Text(
+          'Access is granted to a specific source and scope. It does not allow Floe to change external data automatically.',
+          style: TextStyle(color: FloePalette.neutral600, height: 1.5),
         ),
         const SizedBox(height: FloeSpace.base),
         if (!ready)
@@ -151,228 +189,298 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
           if (controller.calendarExpertFailure != null)
             Semantics(
               liveRegion: true,
-              child: Text(strings.agentRegistryFailure),
+              child: Text(
+                'Floe could not confirm this access change. Refresh before trying again.',
+              ),
             ),
           if (_connectionChanged)
-            Semantics(
-              liveRegion: true,
-              child: Text(strings.agentCalendarChanged),
+            const Text(
+              'Your Calendar connection changed. Review its scope before making another change.',
             ),
-          if (sources == null) Text(strings.agentCalendarConnect),
-          if (pending != null) ...[
-            Text(
-              strings.agentCalendarPending,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            ..._scopeLabels(
-              strings,
-              sources,
-              pending.provider,
-              pending.calendarIds,
-            ),
-            _consent(
-              strings,
-              canManage &&
-                  (sources?.containsScope(
-                        pending.provider,
-                        pending.calendarIds,
-                      ) ??
-                      false),
-            ),
-            FloeButton.outlined(
-              key: const ValueKey('calendar-setup-retry'),
-              onPressed:
-                  canManage &&
-                      _confirmed &&
-                      (sources?.containsScope(
-                            pending.provider,
-                            pending.calendarIds,
-                          ) ??
-                          false)
-                  ? () {
-                      if (_fresh() &&
-                          (_sources?.containsScope(
-                                pending.provider,
-                                pending.calendarIds,
-                              ) ??
-                              false)) {
-                        controller.retryCalendarSetup();
-                      }
-                    }
-                  : null,
-              child: Text(strings.agentCalendarRetry),
-            ),
-            if (current != null)
-              FloeButton.text(
-                key: const ValueKey('calendar-setup-discard'),
-                onPressed: canManage
-                    ? controller.discardUncommittedCalendarSetup
-                    : null,
-                child: Text(strings.agentCalendarDiscard),
-              ),
-          ] else if (sources != null && current != null) ...[
-            Text(
-              sources.provider == 'event_kit'
-                  ? strings.agentCalendarApple
-                  : strings.agentCalendarFixture,
-            ),
-            Text(
-              strings.agentCalendarChoose,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            for (final source in sources.calendars)
-              CheckboxListTile(
-                key: ValueKey('calendar-choice-${source.id}'),
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: Text(source.name),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (source.error != null)
-                      Text(strings.agentCalendarSourceUnavailable),
-                  ],
-                ),
-                value: _selected.contains(source.id),
-                onChanged:
-                    canManage &&
-                        (_selected.contains(source.id) || _selected.length < 4)
-                    ? (selected) {
-                        if (!_fresh()) return;
-                        setState(() {
-                          if (selected == true) {
-                            _selected.add(source.id);
-                          } else {
-                            _selected.remove(source.id);
-                          }
-                          _confirmed = false;
-                        });
-                      }
-                    : null,
-              ),
-            Text(strings.agentCalendarSelected(_selected.length)),
-            _consent(strings, canManage && _selected.isNotEmpty),
-            if (_alreadyInstalled(sources) && _selected.isNotEmpty)
-              Text(strings.agentCalendarExists),
-            FloeButton.filled(
-              key: const ValueKey('calendar-setup-install'),
-              onPressed:
-                  canManage &&
-                      _confirmed &&
-                      _selected.isNotEmpty &&
-                      !_alreadyInstalled(sources)
-                  ? _install
-                  : null,
-              child: Text(strings.agentCalendarInstall),
-            ),
-          ],
-          if (current != null && current.views.isNotEmpty) ...[
-            const SizedBox(height: FloeSpace.lg),
-            Text(
-              strings.agentCalendarInstalled,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            for (final view in current.views)
+          if (pending != null) _pendingChange(pending, sources, canManage),
+          if (pending == null && current != null)
+            for (final setup in current.setups)
               Padding(
-                padding: const EdgeInsets.only(top: FloeSpace.md),
-                child: FloeSquircle(
-                  size: FloeSquircleSize.md,
-                  padding: const EdgeInsets.all(FloeSpace.md),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      ..._scopeLabels(
-                        strings,
-                        sources,
-                        view.provider,
-                        view.calendarIds,
-                      ),
-                      if (!(sources?.containsScope(
-                            view.provider,
-                            view.calendarIds,
-                          ) ??
-                          false))
-                        Text(strings.agentCalendarScopeUnavailable),
-                      FloeSwitch(
-                        key: ValueKey('calendar-scope-${view.handle}'),
-                        label: Text(strings.agentCalendarScopeEnabled),
-                        value: view.enabled,
-                        onChanged:
-                            canManage &&
-                                pending == null &&
-                                (view.enabled ||
-                                    (sources?.containsScope(
-                                          view.provider,
-                                          view.calendarIds,
-                                        ) ??
-                                        false))
-                            ? (enabled) {
-                                if (!enabled ||
-                                    (_fresh() &&
-                                        (_sources?.containsScope(
-                                              view.provider,
-                                              view.calendarIds,
-                                            ) ??
-                                            false))) {
-                                  controller.configureCalendarView(
-                                    view.handle,
-                                    enabled,
-                                  );
-                                }
-                              }
-                            : null,
-                      ),
-                      Text(strings.agentCalendarSeparateEnablement),
-                    ],
+                padding: const EdgeInsets.only(bottom: FloeSpace.md),
+                child: _accessCard(
+                  setup,
+                  current.views.singleWhere(
+                    (entry) => entry.handle == setup.viewHandle,
                   ),
+                  current,
+                  sources,
+                  canManage,
                 ),
               ),
+          if (pending == null && !_editing && (current?.setups.isEmpty ?? true))
+            _emptyCalendarCard(sources, canManage),
+          if (pending == null && _editing) _editor(sources, canManage),
+          if (pending == null &&
+              !_editing &&
+              (current?.setups.isNotEmpty ?? false))
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FloeButton.outlined(
+                key: const ValueKey('calendar-access-add'),
+                onPressed: canManage && sources != null ? _startSetup : null,
+                child: const Text('Add another Calendar scope'),
+              ),
+            ),
+          if (pending != null || controller.calendarExpertFailure != null) ...[
+            const SizedBox(height: FloeSpace.sm),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FloeButton.text(
+                key: const ValueKey('calendar-access-refresh'),
+                onPressed: canManage ? controller.loadCalendarExperts : null,
+                child: const Text('Refresh access'),
+              ),
+            ),
           ],
-          const SizedBox(height: FloeSpace.base),
-          FloeButton.outlined(
-            key: const ValueKey('calendar-setup-refresh'),
-            onPressed: canManage ? controller.loadCalendarExperts : null,
-            child: Text(strings.agentRegistryRefresh),
-          ),
         ],
       ],
     );
   }
 
-  Widget _consent(AppLocalizations strings, bool enabled) => CheckboxListTile(
-    key: const ValueKey('calendar-setup-consent'),
-    contentPadding: EdgeInsets.zero,
-    controlAffinity: ListTileControlAffinity.leading,
-    title: Text(strings.agentCalendarConsent),
-    value: _confirmed,
-    onChanged: enabled
-        ? (value) {
-            if (_fresh()) setState(() => _confirmed = value == true);
-          }
-        : null,
+  Widget _emptyCalendarCard(
+    AgentCalendarSources? sources,
+    bool canManage,
+  ) => FloeSquircle(
+    size: FloeSquircleSize.md,
+    fill: FloePalette.neutral50,
+    borderWidth: 0,
+    padding: const EdgeInsets.all(FloeSpace.base),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Calendars', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: FloeSpace.xs),
+        Text(
+          sources == null
+              ? 'Connect and choose calendars in Connections first.'
+              : '${sources.provider == 'event_kit' ? 'Apple Calendar' : 'Demo Calendar'} is connected. Let Floe read selected event details and prepare scheduling suggestions.',
+          style: const TextStyle(color: FloePalette.neutral600, height: 1.4),
+        ),
+        const SizedBox(height: FloeSpace.md),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FloeButton.filled(
+            key: const ValueKey('calendar-access-setup'),
+            onPressed: canManage && sources != null ? _startSetup : null,
+            child: const Text('Set up Calendar access'),
+          ),
+        ),
+      ],
+    ),
   );
 
-  List<Widget> _scopeLabels(
-    AppLocalizations strings,
+  Widget _pendingChange(
+    AgentCalendarSetup pending,
     AgentCalendarSources? sources,
-    String provider,
-    List<String> identifiers,
-  ) => [
-    Text(
-      provider == 'event_kit'
-          ? strings.agentCalendarApple
-          : strings.agentCalendarFixture,
+    bool canManage,
+  ) => FloeSquircle(
+    size: FloeSquircleSize.md,
+    fill: FloePalette.warning50,
+    borderWidth: 0,
+    padding: const EdgeInsets.all(FloeSpace.base),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Calendar access needs attention',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: FloeSpace.xs),
+        const Text(
+          'Floe could not confirm whether the requested access was saved. Refresh first, or retry only this exact request.',
+        ),
+        const SizedBox(height: FloeSpace.md),
+        Wrap(
+          spacing: FloeSpace.sm,
+          children: [
+            FloeButton.outlined(
+              key: const ValueKey('calendar-access-retry'),
+              onPressed:
+                  canManage &&
+                      (sources?.containsScope(
+                            pending.provider,
+                            pending.calendarIds,
+                          ) ??
+                          false)
+                  ? controller.retryCalendarSetup
+                  : null,
+              child: const Text('Try exact request again'),
+            ),
+            FloeButton.text(
+              key: const ValueKey('calendar-access-discard'),
+              onPressed: canManage
+                  ? controller.discardUncommittedCalendarSetup
+                  : null,
+              child: const Text('Cancel unconfirmed change'),
+            ),
+          ],
+        ),
+      ],
     ),
-    for (final identifier in identifiers) ...[
+  );
+
+  Widget _accessCard(
+    AgentCalendarSetupReceipt setup,
+    AgentCalendarView view,
+    AgentCalendarExperts current,
+    AgentCalendarSources? sources,
+    bool canManage,
+  ) {
+    final connected =
+        sources?.containsScope(view.provider, view.calendarIds) ?? false;
+    final active = current.accessEnabled(setup);
+    final status = !connected
+        ? 'Needs attention'
+        : active
+        ? 'Active'
+        : 'Paused';
+    return FloeSquircle(
+      size: FloeSquircleSize.md,
+      fill: FloePalette.neutral50,
+      borderWidth: 0,
+      padding: const EdgeInsets.all(FloeSpace.base),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Calendars',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Text(
+                status,
+                style: const TextStyle(color: FloePalette.neutral600),
+              ),
+            ],
+          ),
+          const SizedBox(height: FloeSpace.xs),
+          Text(
+            _scopeSummary(sources, view),
+            style: const TextStyle(color: FloePalette.neutral600),
+          ),
+          const SizedBox(height: FloeSpace.xs),
+          const Text('Read event details and prepare suggestions.'),
+          const SizedBox(height: FloeSpace.md),
+          Wrap(
+            spacing: FloeSpace.sm,
+            runSpacing: FloeSpace.sm,
+            children: [
+              FloeButton.outlined(
+                key: ValueKey('calendar-access-change-${setup.setupId}'),
+                onPressed: canManage && connected
+                    ? () => _startChange(setup, view)
+                    : null,
+                child: const Text('Change'),
+              ),
+              FloeButton.outlined(
+                key: ValueKey('calendar-access-toggle-${setup.setupId}'),
+                onPressed: canManage && (active || connected)
+                    ? () => controller.setCalendarAccessEnabled(
+                        setup.setupId,
+                        !active,
+                      )
+                    : null,
+                child: Text(active ? 'Pause' : 'Resume'),
+              ),
+              FloeButton.text(
+                key: ValueKey('calendar-access-remove-${setup.setupId}'),
+                onPressed: canManage ? () => _remove(setup) : null,
+                child: const Text('Remove access'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editor(AgentCalendarSources? sources, bool canManage) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
       Text(
-        sources?.provider == provider
+        _editingSetupId == null ? 'Choose calendars' : 'Change Calendar scope',
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: FloeSpace.sm),
+      if (sources != null)
+        for (final source in sources.calendars)
+          CheckboxListTile(
+            key: ValueKey('calendar-choice-${source.id}'),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: Text(source.name),
+            subtitle: source.error == null
+                ? null
+                : const Text('This calendar is temporarily unavailable.'),
+            value: _selected.contains(source.id),
+            onChanged:
+                canManage &&
+                    source.error == null &&
+                    (_selected.contains(source.id) || _selected.length < 4)
+                ? (selected) {
+                    if (!_fresh()) return;
+                    setState(() {
+                      if (selected == true) {
+                        _selected.add(source.id);
+                      } else {
+                        _selected.remove(source.id);
+                      }
+                    });
+                  }
+                : null,
+          ),
+      Text('${_selected.length} of 4 selected'),
+      const SizedBox(height: FloeSpace.md),
+      const FloeSquircle(
+        size: FloeSquircleSize.md,
+        fill: FloePalette.primary50,
+        borderWidth: 0,
+        padding: EdgeInsets.all(FloeSpace.base),
+        child: Text(
+          'Floe may read event details from only these calendars and prepare suggestions. Calendar changes remain controlled separately in Action permissions.',
+          style: TextStyle(height: 1.4),
+        ),
+      ),
+      const SizedBox(height: FloeSpace.md),
+      Wrap(
+        spacing: FloeSpace.sm,
+        children: [
+          FloeButton.filled(
+            key: const ValueKey('calendar-access-save'),
+            onPressed: canManage && _selected.isNotEmpty ? _save : null,
+            child: Text(
+              _editingSetupId == null ? 'Allow access' : 'Save changes',
+            ),
+          ),
+          FloeButton.text(
+            key: const ValueKey('calendar-access-cancel'),
+            onPressed: canManage ? () => setState(_resetEditor) : null,
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  String _scopeSummary(AgentCalendarSources? sources, AgentCalendarView view) {
+    final names = [
+      for (final identifier in view.calendarIds)
+        sources?.provider == view.provider
             ? sources!.calendars
                       .where((entry) => entry.id == identifier)
                       .singleOrNull
                       ?.name ??
-                  strings.agentCalendarMissingName
-            : strings.agentCalendarMissingName,
-      ),
-    ],
-  ];
+                  'Unavailable calendar'
+            : 'Unavailable calendar',
+    ];
+    return '${names.join(', ')} — ${names.length} ${names.length == 1 ? 'calendar' : 'calendars'}';
+  }
 }

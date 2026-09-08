@@ -76,6 +76,109 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
 }
 
 #[test]
+fn calendar_access_changes_scope_enablement_and_removal_atomically() {
+    let person = PersonId::new();
+    let mut registry = AgentRegistry::new(Uuid::new_v4());
+    let request = request(&registry, CalendarProvider::EventKit);
+    let setup = registry.install_calendar_expert(person, &request).unwrap();
+
+    let configure = |registry: &AgentRegistry, setup_id, change| CalendarAccessConfiguration {
+        instance_id: registry.instance_id(),
+        expected_revision: registry.revision(),
+        setup_id,
+        change,
+    };
+    registry
+        .configure_calendar_access(
+            person,
+            &configure(
+                &registry,
+                setup.setup_id,
+                CalendarAccessChange::SetEnabled { enabled: true },
+            ),
+        )
+        .unwrap();
+    let enabled = registry.snapshot();
+    assert!(enabled.calendar_views[0].enabled);
+    assert!(enabled.installations.iter().all(|entry| entry.enabled));
+    assert!(enabled.assignments.iter().all(|entry| entry.enabled));
+    assert_eq!(enabled.revision, 2);
+
+    let replacement_setup_id = Uuid::new_v4();
+    registry
+        .configure_calendar_access(
+            person,
+            &configure(
+                &registry,
+                setup.setup_id,
+                CalendarAccessChange::SetScope {
+                    replacement_setup_id,
+                    provider: CalendarProvider::EventKit,
+                    calendar_ids: vec!["shared".into(), "home".into()],
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.calendar_expert_overview(person).views[0].calendar_ids,
+        ["home", "shared"]
+    );
+    assert_eq!(
+        registry.snapshot().calendar_views[0].calendar_ids,
+        ["home", "work"]
+    );
+    assert_eq!(
+        registry.snapshot().revoked_calendar_setups,
+        [setup.setup_id]
+    );
+
+    let before = registry.snapshot();
+    let mut invalid = configure(
+        &registry,
+        replacement_setup_id,
+        CalendarAccessChange::SetScope {
+            replacement_setup_id,
+            provider: CalendarProvider::Fixture,
+            calendar_ids: vec!["other".into()],
+        },
+    );
+    assert_eq!(
+        registry.configure_calendar_access(person, &invalid),
+        Err(AgentFailure::InvalidInput)
+    );
+    assert_eq!(registry.snapshot(), before);
+    invalid.instance_id = Uuid::new_v4();
+    assert_eq!(
+        registry.configure_calendar_access(person, &invalid),
+        Err(AgentFailure::NotFound)
+    );
+    assert_eq!(registry.snapshot(), before);
+
+    registry
+        .configure_calendar_access(
+            person,
+            &configure(
+                &registry,
+                replacement_setup_id,
+                CalendarAccessChange::Remove {},
+            ),
+        )
+        .unwrap();
+    let removed = registry.snapshot();
+    assert_eq!(removed.calendar_setups.len(), 2);
+    assert_eq!(removed.calendar_views.len(), 2);
+    assert_eq!(removed.installations.len(), 4);
+    assert_eq!(removed.assignments.len(), 4);
+    assert_eq!(removed.revoked_calendar_setups.len(), 2);
+    let overview = registry.calendar_expert_overview(person);
+    assert!(overview.setups.is_empty());
+    assert!(overview.views.is_empty());
+    assert!(overview.registry.installations.is_empty());
+    assert!(overview.registry.assignments.is_empty());
+    assert_eq!(removed.revision, before.revision + 1);
+}
+
+#[test]
 fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());

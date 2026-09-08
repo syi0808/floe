@@ -11,6 +11,87 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
 }
 
 #[tokio::test]
+async fn aggregate_calendar_access_changes_persist_as_one_revision() {
+    let fixture = Fixture::new().await;
+    let installed = fixture
+        .vault
+        .install_calendar_expert(setup_request(&fixture, 0), Cancellation::default())
+        .await
+        .unwrap();
+    let configuration = |revision, setup_id, change| CalendarAccessConfiguration {
+        instance_id: fixture.vault.registry_instance_id(),
+        expected_revision: revision,
+        setup_id,
+        change,
+    };
+    let active = fixture
+        .vault
+        .configure_calendar_access(
+            configuration(
+                1,
+                installed.setup.setup_id,
+                CalendarAccessChange::SetEnabled { enabled: true },
+            ),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.registry.revision, 2);
+    assert!(active.views[0].enabled);
+    assert!(
+        active
+            .registry
+            .installations
+            .iter()
+            .all(|entry| entry.enabled)
+    );
+    assert!(
+        active
+            .registry
+            .assignments
+            .iter()
+            .all(|entry| entry.enabled)
+    );
+
+    let replacement_setup_id = Uuid::new_v4();
+    let changed = fixture
+        .vault
+        .configure_calendar_access(
+            configuration(
+                2,
+                installed.setup.setup_id,
+                CalendarAccessChange::SetScope {
+                    replacement_setup_id,
+                    provider: floe_domain::CalendarProvider::EventKit,
+                    calendar_ids: vec!["work".into(), "home".into()],
+                },
+            ),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.views[0].calendar_ids, ["home", "work"]);
+
+    let removed = fixture
+        .vault
+        .configure_calendar_access(
+            configuration(3, replacement_setup_id, CalendarAccessChange::Remove {}),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.registry.revision, 4);
+    assert!(removed.views.is_empty());
+    assert!(removed.setups.is_empty());
+    assert!(removed.registry.installations.is_empty());
+    assert!(removed.registry.assignments.is_empty());
+    assert_eq!(
+        fixture.vault.calendar_expert_overview().await.unwrap(),
+        removed
+    );
+}
+
+#[tokio::test]
 async fn management_overview_is_read_only_and_view_configuration_is_scoped_revision_checked() {
     let fixture = Fixture::new().await;
     let empty = fixture.vault.calendar_expert_overview().await.unwrap();

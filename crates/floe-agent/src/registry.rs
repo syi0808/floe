@@ -151,6 +151,8 @@ pub struct RegistrySnapshot {
     pub calendar_views: Vec<CalendarViewBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendar_setups: Vec<CalendarExpertSetupReceipt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revoked_calendar_setups: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -275,6 +277,7 @@ impl AgentRegistry {
                 assignments: vec![],
                 calendar_views: vec![],
                 calendar_setups: vec![],
+                revoked_calendar_setups: vec![],
             },
         }
     }
@@ -303,6 +306,7 @@ impl AgentRegistry {
             || snapshot.assignments.len() > 256
             || snapshot.calendar_views.len() > 256
             || snapshot.calendar_setups.len() > 64
+            || snapshot.revoked_calendar_setups.len() > 64
         {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -352,6 +356,18 @@ impl AgentRegistry {
             }
         }
         registry.validate_calendar_setups()?;
+        for (index, setup_id) in registry.snapshot.revoked_calendar_setups.iter().enumerate() {
+            if setup_id.is_nil()
+                || registry.snapshot.revoked_calendar_setups[..index].contains(setup_id)
+                || !registry
+                    .snapshot
+                    .calendar_setups
+                    .iter()
+                    .any(|setup| setup.setup_id == *setup_id)
+            {
+                return Err(AgentFailure::Conflict);
+            }
+        }
         Ok(registry)
     }
 

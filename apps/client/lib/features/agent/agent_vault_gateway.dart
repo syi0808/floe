@@ -356,6 +356,17 @@ final class NativeAgentVaultGateway
     return overview;
   }
 
+  @override
+  Future<AgentCalendarExperts> configureCalendarAccess(
+    AgentCalendarAccessRequest request,
+  ) async {
+    final result = await _perform(request.personId, {
+      'kind': 'calendar_access',
+      'change': request.toJson(),
+    });
+    return _calendarExperts(request.personId, result);
+  }
+
   AgentCalendarExperts _calendarExperts(
     String personId,
     Map<String, dynamic> result,

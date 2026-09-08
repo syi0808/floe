@@ -38,6 +38,9 @@ pub enum AgentVaultActionDto {
     CalendarExperts {
         setup: Option<floe_agent::CalendarExpertSetup>,
     },
+    CalendarAccess {
+        change: floe_agent::CalendarAccessConfiguration,
+    },
     InspectProposal {
         session_id: String,
         invocation_id: String,

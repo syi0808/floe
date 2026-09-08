@@ -181,6 +181,9 @@ final class AgentController extends ChangeNotifier {
       ),
       submitted: pending,
     );
+    if (_pendingCalendarSetup == null && calendarExperts != null) {
+      await setCalendarAccessEnabled(pending.setupId, true);
+    }
   }
 
   void discardUncommittedCalendarSetup() {
@@ -226,6 +229,103 @@ final class AgentController extends ChangeNotifier {
           updated.provider != before.provider ||
           !listEquals(updated.calendarIds, before.calendarIds)) {
         throw const FormatException('Calendar configuration mismatch');
+      }
+      return next;
+    });
+  }
+
+  Future<void> setCalendarAccessEnabled(String setupId, bool enabled) =>
+      _configureCalendarAccess(
+        setupId,
+        operation: AgentCalendarAccessOperation.setEnabled,
+        enabled: enabled,
+      );
+
+  Future<void> changeCalendarAccessScope({
+    required String setupId,
+    required String provider,
+    required List<String> calendarIds,
+  }) async {
+    final replacementSetupId = newAgentRequestId();
+    await _configureCalendarAccess(
+      setupId,
+      operation: AgentCalendarAccessOperation.setScope,
+      provider: provider,
+      replacementSetupId: replacementSetupId,
+      calendarIds: calendarIds,
+    );
+    if (calendarExperts?.setups.any(
+          (entry) => entry.setupId == replacementSetupId,
+        ) ??
+        false) {
+      await setCalendarAccessEnabled(replacementSetupId, true);
+    }
+  }
+
+  Future<void> removeCalendarAccess(String setupId) => _configureCalendarAccess(
+    setupId,
+    operation: AgentCalendarAccessOperation.remove,
+  );
+
+  Future<void> _configureCalendarAccess(
+    String setupId, {
+    required AgentCalendarAccessOperation operation,
+    bool? enabled,
+    String? provider,
+    String? replacementSetupId,
+    List<String>? calendarIds,
+  }) async {
+    final current = calendarExperts;
+    if (current == null ||
+        _pendingCalendarSetup != null ||
+        !current.setups.any((entry) => entry.setupId == setupId)) {
+      return;
+    }
+    final request = AgentCalendarAccessRequest(
+      personId: personId,
+      instanceId: current.registry.instanceId,
+      expectedRevision: current.registry.revision,
+      setupId: setupId,
+      operation: operation,
+      enabled: enabled,
+      provider: provider,
+      replacementSetupId: replacementSetupId,
+      calendarIds: calendarIds,
+    );
+    await _calendarOperation(() async {
+      final next = await (gateway as AgentCalendarExpertGateway)
+          .configureCalendarAccess(request);
+      if (next.registry.instanceId != current.registry.instanceId ||
+          next.registry.revision != current.registry.revision + 1) {
+        throw const FormatException('Calendar access configuration mismatch');
+      }
+      final setup = next.setups
+          .where((entry) => entry.setupId == setupId)
+          .singleOrNull;
+      switch (operation) {
+        case AgentCalendarAccessOperation.setEnabled:
+          if (setup == null || next.accessEnabled(setup) != enabled) {
+            throw const FormatException('Calendar access state mismatch');
+          }
+        case AgentCalendarAccessOperation.setScope:
+          final replacement = next.setups
+              .where((entry) => entry.setupId == replacementSetupId)
+              .singleOrNull;
+          final view = replacement == null
+              ? null
+              : next.views
+                    .where((entry) => entry.handle == replacement.viewHandle)
+                    .singleOrNull;
+          if (setup != null ||
+              view == null ||
+              view.provider != provider ||
+              !listEquals(view.calendarIds, [...calendarIds!]..sort())) {
+            throw const FormatException('Calendar access scope mismatch');
+          }
+        case AgentCalendarAccessOperation.remove:
+          if (setup != null) {
+            throw const FormatException('Calendar access removal mismatch');
+          }
       }
       return next;
     });
