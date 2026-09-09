@@ -42,6 +42,8 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late _SettingsPage selectedPage = _availablePages.first;
+  final navigationScrollController = ScrollController();
+  final contentScrollController = ScrollController();
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
@@ -55,6 +57,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!_availablePages.contains(selectedPage)) {
       selectedPage = _availablePages.first;
     }
+  }
+
+  @override
+  void dispose() {
+    navigationScrollController.dispose();
+    contentScrollController.dispose();
+    super.dispose();
   }
 
   Widget _content() => switch (selectedPage) {
@@ -71,47 +80,103 @@ class _SettingsScreenState extends State<SettingsScreen> {
   };
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text('Settings', style: FloeType.pageTitle),
-      const SizedBox(height: 10),
-      Text(
-        'Manage Floe on this device.',
-        style: FloeType.body.copyWith(color: FloePalette.neutral600),
-      ),
-      const SizedBox(height: 36),
-      LayoutBuilder(
-        builder: (context, constraints) {
-          final narrow = constraints.maxWidth < 720;
-          final navigation = _SettingsNavigation(
-            horizontal: narrow,
-            pages: _availablePages,
-            selected: selectedPage,
-            onSelected: (page) => setState(() => selectedPage = page),
-          );
-          final content = AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            child: KeyedSubtree(key: ValueKey(selectedPage), child: _content()),
-          );
-          if (narrow) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [navigation, const SizedBox(height: 28), content],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: 244, child: navigation),
-              const SizedBox(width: 44),
-              Expanded(child: content),
-            ],
-          );
-        },
-      ),
-    ],
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final body = LayoutBuilder(
+        builder: (context, bodyConstraints) => _buildBody(
+          bodyConstraints,
+          independentlyScrollable: constraints.hasBoundedHeight,
+        ),
+      );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Settings', style: FloeType.pageTitle),
+          const SizedBox(height: 10),
+          Text(
+            'Manage Floe on this device.',
+            style: FloeType.body.copyWith(color: FloePalette.neutral600),
+          ),
+          const SizedBox(height: 36),
+          if (constraints.hasBoundedHeight) Expanded(child: body) else body,
+        ],
+      );
+    },
   );
+
+  Widget _buildBody(
+    BoxConstraints constraints, {
+    required bool independentlyScrollable,
+  }) {
+    final narrow = constraints.maxWidth < 720;
+    final navigation = _SettingsNavigation(
+      horizontal: narrow,
+      controller: narrow ? navigationScrollController : null,
+      pages: _availablePages,
+      selected: selectedPage,
+      onSelected: (page) => setState(() => selectedPage = page),
+    );
+    final content = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      child: KeyedSubtree(key: ValueKey(selectedPage), child: _content()),
+    );
+
+    if (!independentlyScrollable) {
+      if (narrow) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [navigation, const SizedBox(height: 28), content],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 244, child: navigation),
+          const SizedBox(width: 44),
+          Expanded(child: content),
+        ],
+      );
+    }
+
+    final contentScrollView = Scrollbar(
+      controller: contentScrollController,
+      child: SingleChildScrollView(
+        key: const ValueKey('settings-content-scroll'),
+        controller: contentScrollController,
+        primary: false,
+        child: content,
+      ),
+    );
+    if (narrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          navigation,
+          const SizedBox(height: 28),
+          Expanded(child: contentScrollView),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          width: 244,
+          child: Scrollbar(
+            controller: navigationScrollController,
+            child: SingleChildScrollView(
+              key: const ValueKey('settings-navigation-scroll'),
+              controller: navigationScrollController,
+              primary: false,
+              child: navigation,
+            ),
+          ),
+        ),
+        const SizedBox(width: 44),
+        Expanded(child: contentScrollView),
+      ],
+    );
+  }
 }
 
 class _RemoteServerSettings extends StatelessWidget {
@@ -729,12 +794,14 @@ FloeBadgeTone _statusTone(String status) => switch (status) {
 class _SettingsNavigation extends StatelessWidget {
   const _SettingsNavigation({
     required this.horizontal,
+    required this.controller,
     required this.pages,
     required this.selected,
     required this.onSelected,
   });
 
   final bool horizontal;
+  final ScrollController? controller;
   final List<_SettingsPage> pages;
   final _SettingsPage selected;
   final ValueChanged<_SettingsPage> onSelected;
@@ -761,6 +828,9 @@ class _SettingsNavigation extends StatelessWidget {
     ];
     return horizontal
         ? SingleChildScrollView(
+            key: const ValueKey('settings-navigation-scroll'),
+            controller: controller,
+            primary: false,
             scrollDirection: Axis.horizontal,
             child: Row(children: sections),
           )

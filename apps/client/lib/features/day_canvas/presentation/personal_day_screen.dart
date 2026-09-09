@@ -223,6 +223,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       identity: selectedTaskId ?? destination,
       child: _workspace(narrow),
     );
+    if (destination == _DestinationView.settings) {
+      return Padding(padding: padding, child: workspace);
+    }
     if (destination != _DestinationView.today || selectedTaskId != null) {
       return SingleChildScrollView(padding: padding, child: workspace);
     }

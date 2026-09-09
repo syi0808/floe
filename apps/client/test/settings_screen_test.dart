@@ -99,6 +99,33 @@ void main() {
     expect(find.text('Remote server connection'), findsOneWidget);
   });
 
+  testWidgets('desktop navigation and content scroll independently', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(
+          body: const SettingsScreen(client: null),
+        ),
+      ),
+    );
+
+    final navigation = tester.widget<SingleChildScrollView>(
+      find.byKey(const ValueKey('settings-navigation-scroll')),
+    );
+    final content = tester.widget<SingleChildScrollView>(
+      find.byKey(const ValueKey('settings-content-scroll')),
+    );
+    expect(navigation.scrollDirection, Axis.vertical);
+    expect(content.scrollDirection, Axis.vertical);
+    expect(navigation.controller, isNot(same(content.controller)));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('external processing consent lives under Data & privacy', (
     tester,
   ) async {
