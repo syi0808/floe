@@ -549,16 +549,19 @@ mod tests {
         let calls = transport.calls.lock().unwrap();
         let prompt: Value =
             serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
-        let result = &prompt["current_turn"][1];
-        assert_eq!(result["role"], "capability");
-        assert_eq!(result["status"], "success");
-        assert_eq!(result["input"]["day"], "today");
+        let call = &prompt["current_turn"][1];
+        let result = &prompt["current_turn"][2];
+        assert_eq!(call["role"], "assistant");
+        assert_eq!(call["tool_calls"][0]["id"], result["tool_call_id"]);
+        assert_eq!(call["tool_calls"][0]["function"]["name"], "fixture.read");
         assert_eq!(
-            result["untrusted_output"]["summary"],
-            "One meeting at 10:00"
+            call["tool_calls"][0]["function"]["arguments"]["day"],
+            "today"
         );
+        assert_eq!(result["role"], "tool");
+        assert_eq!(result["status"], "success");
+        assert_eq!(result["content"]["summary"], "One meeting at 10:00");
         assert!(result.get("turn_id").is_none());
-        assert!(result.get("call_id").is_none());
     }
 
     #[tokio::test]

@@ -87,10 +87,11 @@ not cached or rejected because the underlying snapshot may change between calls.
 Cancellation never records partial model text as a completed assistant turn.
 
 Durable messages are not sent to models in their storage representation. The model
-projection removes transport IDs, omits historical Tool evidence, parses JSON Tool
-inputs and outputs into objects, and labels current results explicitly as `success`
-or `error`. This keeps fresh evidence legible and avoids nested escaped JSON such as
-`Result<String, Failure>` being mistaken for an absent or incomplete Tool result.
+projection omits historical Tool evidence and reconstructs every current result as an
+ordered `assistant.tool_calls` and `tool.tool_call_id` pair. JSON arguments and output
+are structured values, while success and failure are explicit Tool states. This keeps
+the causal call/result transition intact instead of presenting persisted
+`Result<String, Failure>` records as ordinary prompt data.
 
 Iteration, wall-clock, token, cost and Tool-call exhaustion is a soft stop at a safe
 boundary. The session persists the stopped turn ID, cumulative usage, placement and

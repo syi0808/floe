@@ -322,51 +322,63 @@ impl ModelRequest {
         let (history, current_turn) = self.conversation_messages();
         let history = history
             .into_iter()
-            .filter_map(|message| model_message(message, false))
+            .flat_map(|message| model_messages(message, false))
             .collect();
         let current_turn = current_turn
             .into_iter()
-            .filter_map(|message| model_message(message, true))
+            .flat_map(|message| model_messages(message, true))
             .collect();
         (history, current_turn)
     }
 }
 
-fn model_message(message: &AgentMessage, include_capability: bool) -> Option<serde_json::Value> {
+fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde_json::Value> {
     match message {
-        AgentMessage::User { text, .. } => Some(serde_json::json!({
+        AgentMessage::User { text, .. } => vec![serde_json::json!({
             "role": "user",
             "content": text,
-        })),
-        AgentMessage::Assistant { text, .. } => Some(serde_json::json!({
+        })],
+        AgentMessage::Assistant { text, .. } => vec![serde_json::json!({
             "role": "assistant",
             "content": text,
-        })),
+        })],
         AgentMessage::Capability {
+            call_id,
             capability_id,
             input,
             result,
             ..
         } if include_capability => {
-            let input = embedded_json(input);
-            Some(match result {
+            let call = serde_json::json!({
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": capability_id,
+                        "arguments": embedded_json(input),
+                    }
+                }]
+            });
+            let output = match result {
                 Ok(output) => serde_json::json!({
-                    "role": "capability",
+                    "role": "tool",
+                    "tool_call_id": call_id,
                     "capability_id": capability_id,
-                    "input": input,
                     "status": "success",
-                    "untrusted_output": embedded_json(output),
+                    "content": embedded_json(output),
                 }),
                 Err(failure) => serde_json::json!({
-                    "role": "capability",
+                    "role": "tool",
+                    "tool_call_id": call_id,
                     "capability_id": capability_id,
-                    "input": input,
                     "status": "error",
                     "failure": failure,
                 }),
-            })
+            };
+            vec![call, output]
         }
-        AgentMessage::Capability { .. } => None,
+        AgentMessage::Capability { .. } => vec![],
     }
 }
 
