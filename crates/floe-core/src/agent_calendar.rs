@@ -397,6 +397,7 @@ impl<
         }
         .invoke_with_model(
             ExpertInvocation {
+                usage: invocation.usage.clone(),
                 schema_version: invocation.schema_version,
                 invocation_id: invocation.call_id,
                 instance_id: self.vault.registry_instance_id(),

@@ -1,7 +1,7 @@
 # ADR 0016: Native agent model protocol and shared correction boundary
 
 - Date: 2026-09-09
-- Status: accepted; native transport, v1 contracts and durable Manager replay implemented
+- Status: accepted; native transport, durable Manager replay and shared usage accounting implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
 ## Decision
@@ -53,10 +53,26 @@ correction boundary. Output and usage limits are enforced before correction;
 budget violations are not retried. Authorization failures, network failures, cancellation and deadline
 expiry are not correction-retried. Go adapters do not independently retry.
 
-The deadline and cancellation token are unchanged across attempts. Reported usage
-for schema-rejected responses is added to the successful response; when an adapter
-returns only an error, 4096 tokens are reserved as an estimate. This is not exact
-billing: typed failure usage and durable attempt accounting remain follow-up work.
+The deadline and cancellation token are unchanged across attempts. Manager and
+Expert share one host-owned usage ledger through capability invocation, not through
+model-written Expert results. Every attempt reserves up to 4096 tokens before
+dispatch; reported usage replaces that reservation even when validation rejects the
+response. Errors, cancellation and dropped model futures retain the estimate.
+The ledger tracks attempts and estimated tokens separately from total tokens.
+
+Both child-local limits and the parent's remaining tokens/cost constrain each
+request. Usage from failed Experts is charged even if no ExpertResult is returned.
+The current sequential runtime permits only one outstanding model attempt per
+ledger. A second concurrent attempt fails before dispatch rather than overspending.
+Continuation seeds the ledger from the preceding turn checkpoint, so completed
+child work is neither rerun nor counted twice.
+
+AgentSession.usage contains the current/last turn totals at normal message,
+capability and termination commits. It is not a lifetime session total or exact
+provider billing. Unknown monetary cost remains zero; adapters may also supply
+their own token estimates without an estimate marker. Abrupt process termination
+between checkpoints still needs a durable per-attempt reservation journal; this
+increment does not claim crash-exact accounting.
 
 ## Durable capability dispatch
 
@@ -99,7 +115,7 @@ This increment is not the entire agent-runtime redesign:
 - Introduce ordered multi-item ModelResponse, then support multiple independent
   read calls without discarding preambles.
 - Unify the remaining Manager/Expert loop mechanics without merging their contexts
-  or authority; aggregate child usage into the parent ledger.
+  or authority; extend the shared usage ledger into durable per-attempt records.
 - Expose model-attempt IDs, validation stages, correction events and settled outcomes
   through FFI/UI, distinguishing model synthesis from source execution failures.
 - Add real-provider
@@ -115,7 +131,8 @@ Offline tests cover native request projection, plain answers, call normalization
 malformed input rejection, terminal stream completion, opaque replay preservation,
 one correction attempt, argument schema validation, preservation of completed tool
 results, replay across session reload, encrypted WAL/checkpoint persistence,
-route/account-switch rejection and existing authorization/cancellation behavior. Live Calendar/provider
+route/account-switch rejection, parent/child budget enforcement, failed-attempt
+accounting, continuation without double charging and authorization/cancellation behavior. Live Calendar/provider
 acceptance is a separate gate, not implied by fixture tests.
 
 ## References

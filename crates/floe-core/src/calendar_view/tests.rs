@@ -687,6 +687,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         views: &views,
     }
     .invoke(ExpertInvocation {
+        usage: Default::default(),
         schema_version: 1,
         invocation_id,
         instance_id: vault.registry_instance_id(),

@@ -39,6 +39,7 @@ async fn main() -> std::process::ExitCode {
     }
     let turn_id = Uuid::new_v4();
     let request = ModelRequest {
+        usage: Default::default(),
         replay: vec![],
         schema_version: 1,
         system_instructions: AGENT_SYSTEM_INSTRUCTIONS,

@@ -430,6 +430,7 @@ impl Fixture {
         let capabilities = FixtureCapabilities::from_snapshot(self.person, snapshot).unwrap();
         let output = capabilities
             .invoke(CapabilityInvocation {
+                usage: Default::default(),
                 schema_version: 1,
                 call_id,
                 person_id: self.person,

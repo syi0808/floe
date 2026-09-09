@@ -396,6 +396,7 @@ mod tests {
     fn request() -> ModelRequest {
         let turn_id = Uuid::new_v4();
         ModelRequest {
+            usage: Default::default(),
             replay: vec![],
             schema_version: 1,
             system_instructions: AGENT_SYSTEM_INSTRUCTIONS,

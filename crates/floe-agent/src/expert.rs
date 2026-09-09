@@ -88,6 +88,7 @@ impl Default for ExpertBudget {
 }
 
 pub struct ExpertInvocation {
+    pub usage: crate::UsageLedger,
     pub schema_version: u32,
     pub invocation_id: Uuid,
     pub instance_id: Uuid,
@@ -551,6 +552,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
     let response = crate::generate_with_recovery(
         model,
         ModelRequest {
+            usage: invocation.usage.clone(),
             replay: replay.to_vec(),
             schema_version: AGENT_VERSION,
             system_instructions: SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS,

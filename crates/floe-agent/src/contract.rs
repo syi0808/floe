@@ -31,6 +31,8 @@ pub struct AgentSession {
     pub data_classes: Vec<crate::DataClass>,
     pub messages: Vec<AgentMessage>,
     #[serde(default)]
+    pub usage: AgentUsage,
+    #[serde(default)]
     pub capability_executions: Vec<CapabilityExecution>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
@@ -72,6 +74,7 @@ impl AgentSession {
             revision: 0,
             data_classes: vec![crate::DataClass::Personal],
             messages: vec![],
+            usage: AgentUsage::default(),
             capability_executions: vec![],
             active_turn: None,
             last_outcome: None,
@@ -120,6 +123,10 @@ pub enum CapabilityExecutionState {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentUsage {
+    #[serde(default)]
+    pub model_attempts: u32,
+    #[serde(default)]
+    pub estimated_tokens: u64,
     pub iterations: u32,
     pub capability_calls: u32,
     pub tokens: u64,
@@ -313,6 +320,7 @@ pub struct CapabilityDescriptor {
 }
 
 pub struct CapabilityInvocation {
+    pub usage: crate::UsageLedger,
     pub schema_version: u32,
     pub call_id: Uuid,
     pub person_id: PersonId,
@@ -336,6 +344,7 @@ pub trait CapabilityHost {
 
 #[derive(Clone)]
 pub struct ModelRequest {
+    pub usage: crate::UsageLedger,
     pub replay: Vec<ModelReplay>,
     pub schema_version: u32,
     pub system_instructions: &'static str,

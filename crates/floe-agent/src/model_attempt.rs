@@ -25,6 +25,10 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
+        let accounting = request.usage.begin(
+            &mut request.remaining_tokens,
+            &mut request.remaining_cost_micros,
+        )?;
         let result = tokio::select! {
             biased;
             _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
@@ -36,6 +40,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         let result = result.and_then(|response| {
             consumed_tokens = response.used_tokens;
             consumed_cost = response.cost_micros;
+            accounting.settle(consumed_tokens, consumed_cost)?;
             if response.used_tokens > request.remaining_tokens
                 || response.cost_micros > request.remaining_cost_micros
                 || serde_json::to_vec(&response.step)

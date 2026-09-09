@@ -81,6 +81,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             text: command.text,
         };
         session.messages.push(user.clone());
+        session.usage = AgentUsage::default();
         session.active_turn = Some(turn_id);
         session.last_outcome = None;
         session.continuation = None;
@@ -104,6 +105,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             &mut emit,
         );
         let mut usage = AgentUsage::default();
+        let ledger = UsageLedger::new(self.budget.max_tokens, self.budget.max_cost_micros, usage);
         let (outcome, resumable) = match self
             .drive(
                 &mut session,
@@ -113,6 +115,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 &cancellation,
                 self.budget,
                 &mut usage,
+                &ledger,
                 &mut emit,
             )
             .await
@@ -125,6 +128,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 stop.resumable,
             ),
         };
+        ledger.sync(&mut usage);
+        session.usage = usage;
         if outcome != AgentOutcome::Completed {
             let interrupted = interrupt_executions(&mut session);
             session.active_turn = None;
@@ -213,6 +218,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             &mut emit,
         );
         let mut usage = continuation.usage;
+        let ledger = UsageLedger::new(budget.max_tokens, budget.max_cost_micros, usage);
         let (outcome, resumable) = match self
             .drive(
                 &mut session,
@@ -222,6 +228,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 &cancellation,
                 budget,
                 &mut usage,
+                &ledger,
                 &mut emit,
             )
             .await
@@ -234,6 +241,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 stop.resumable,
             ),
         };
+        ledger.sync(&mut usage);
+        session.usage = usage;
         if outcome != AgentOutcome::Completed {
             let interrupted = interrupt_executions(&mut session);
             session.active_turn = None;
@@ -364,9 +373,11 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         cancellation: &Cancellation,
         budget: AgentBudget,
         usage: &mut AgentUsage,
+        ledger: &UsageLedger,
         emit: &mut impl FnMut(AgentEvent),
     ) -> Result<(), DriveStop> {
         for iteration in usage.iterations..budget.max_iterations {
+            ledger.sync(usage);
             check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if encoded_len(context)?.saturating_add(encoded_len(&session.messages)?)
@@ -402,6 +413,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 emit,
             );
             let request = ModelRequest {
+                usage: ledger.clone(),
                 replay: session
                     .capability_executions
                     .iter()
@@ -452,14 +464,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if response.schema_version != AGENT_VERSION {
                 return Err(AgentFailure::InvalidModelOutput.into());
             }
-            usage.tokens = usage
-                .tokens
-                .checked_add(response.used_tokens)
-                .ok_or(AgentFailure::BudgetExceeded)?;
-            usage.cost_micros = usage
-                .cost_micros
-                .checked_add(response.cost_micros)
-                .ok_or(AgentFailure::BudgetExceeded)?;
+            ledger.sync(usage);
+            session.usage = *usage;
             if usage.tokens > budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
                 return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
             }
@@ -495,6 +501,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     }
                     usage.capability_calls += 1;
                     let call_id = Uuid::new_v4();
+                    session.usage = *usage;
                     session.capability_executions.push(CapabilityExecution {
                         turn_id,
                         call_id,
@@ -524,6 +531,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     );
                     let result = bounded(
                         self.capabilities.invoke(CapabilityInvocation {
+                            usage: ledger.clone(),
                             schema_version: AGENT_VERSION,
                             call_id,
                             person_id: session.person_id,
@@ -558,6 +566,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     }
                 }
             };
+            ledger.sync(usage);
+            session.usage = *usage;
             let completed = matches!(message, AgentMessage::Assistant { .. });
             session.messages.push(message.clone());
             if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {

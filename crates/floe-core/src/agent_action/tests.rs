@@ -171,6 +171,7 @@ impl Fixture {
             views: &views,
         }
         .invoke(ExpertInvocation {
+            usage: Default::default(),
             schema_version: 1,
             invocation_id,
             instance_id: vault.registry_instance_id(),

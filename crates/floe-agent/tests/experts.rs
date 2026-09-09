@@ -298,6 +298,7 @@ impl Fixture {
 
     fn invocation(&self, assignment_id: Uuid) -> ExpertInvocation {
         ExpertInvocation {
+            usage: Default::default(),
             schema_version: 1,
             invocation_id: Uuid::new_v4(),
             instance_id: self.instance,

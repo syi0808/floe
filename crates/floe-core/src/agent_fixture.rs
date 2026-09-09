@@ -655,6 +655,7 @@ impl CapabilityHost for FixtureCapabilities {
             views: self,
         }
         .invoke(ExpertInvocation {
+            usage: Default::default(),
             schema_version: invocation.schema_version,
             invocation_id: invocation.call_id,
             instance_id: self.instance_id,

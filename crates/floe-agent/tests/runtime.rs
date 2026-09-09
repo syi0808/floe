@@ -47,6 +47,12 @@ async fn malformed_model_output_is_corrected_once_without_reexecuting_tools() {
                 .await
                 .unwrap();
             assert_eq!(model.calls(), 2);
+            assert_eq!(result.usage.model_attempts, 2);
+            assert_eq!(result.usage.tokens, if recover { 4106 } else { 8192 });
+            assert_eq!(
+                result.usage.estimated_tokens,
+                if recover { 4096 } else { 8192 }
+            );
             assert_eq!(host.calls.load(Ordering::SeqCst), 0);
             if recover {
                 assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
@@ -260,6 +266,127 @@ impl CapabilityHost for Host {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.output.clone()
     }
+}
+
+struct NestedModelHost<'model> {
+    model: &'model Model,
+}
+
+impl CapabilityHost for NestedModelHost<'_> {
+    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+        Host::default().descriptors(person_id)
+    }
+
+    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
+        generate_with_recovery(
+            self.model,
+            ModelRequest {
+                usage: invocation.usage,
+                replay: vec![],
+                schema_version: AGENT_VERSION,
+                system_instructions: SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS,
+                person_id: invocation.person_id,
+                session_id: invocation.call_id,
+                turn_id: invocation.call_id,
+                policy: policy(),
+                context: context(),
+                messages: vec![AgentMessage::User {
+                    turn_id: invocation.call_id,
+                    text: "Isolated child task".into(),
+                }],
+                capabilities: vec![],
+                remaining_tokens: 40_960,
+                remaining_cost_micros: 50_000,
+                max_output_bytes: invocation.max_output_bytes,
+                deadline: invocation.deadline,
+                cancellation: invocation.cancellation,
+            },
+        )
+        .await?;
+        Ok("Child observation".into())
+    }
+}
+
+#[tokio::test]
+async fn child_usage_limits_parent_and_survives_continuation_without_double_charging() {
+    let store = Store::new();
+    let manager = Model::new(vec![call(), answer()]);
+    let child = Model::new(vec![answer()]);
+    let host = NestedModelHost { model: &child };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &manager,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget {
+            max_tokens: 20,
+            ..AgentBudget::default()
+        },
+    };
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    halted(&stopped, AgentFailure::BudgetExceeded);
+    assert_eq!(stopped.usage.tokens, 20);
+    assert_eq!(stopped.usage.model_attempts, 2);
+    assert_eq!(child.requests.lock().unwrap()[0].remaining_tokens, 10);
+    assert_eq!(manager.calls(), 1);
+    let completed = runtime
+        .continue_turn(
+            stopped.person_id,
+            stopped.id,
+            stopped.revision,
+            context(),
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(completed.usage.tokens, 30);
+    assert_eq!(completed.usage.model_attempts, 3);
+    assert_eq!(completed.usage.estimated_tokens, 0);
+    assert_eq!(child.calls(), 1);
+}
+
+#[tokio::test]
+async fn failed_child_attempts_are_charged_even_without_an_expert_result() {
+    let store = Store::new();
+    let manager = Model::new(vec![call(), answer()]);
+    let child = Model::new(vec![]);
+    child.responses.lock().unwrap().extend([
+        Err(AgentFailure::ServerModelInvalidOutput),
+        Err(AgentFailure::ServerModelInvalidOutput),
+    ]);
+    let host = NestedModelHost { model: &child };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &manager,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let completed = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(completed.usage.tokens, 8212);
+    assert_eq!(completed.usage.estimated_tokens, 8192);
+    assert_eq!(completed.usage.model_attempts, 4);
+    assert_eq!(
+        manager.requests.lock().unwrap()[1].remaining_tokens,
+        AgentBudget::default().max_tokens - 8202
+    );
+    assert!(matches!(
+        completed.messages[1],
+        AgentMessage::Capability {
+            result: Err(AgentFailure::ServerModelInvalidOutput),
+            ..
+        }
+    ));
 }
 
 struct DurableHost<'store> {
@@ -530,6 +657,7 @@ async fn tool_schema_validation_recovers_before_dispatch() {
     ]);
     let turn_id = Uuid::new_v4();
     let request = ModelRequest {
+        usage: Default::default(),
         replay: vec![],
         schema_version: AGENT_VERSION,
         system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
@@ -1425,8 +1553,12 @@ async fn stop_and_deadline_drop_pending_model_without_final_text() {
             }
         };
         let (session, ()) = tokio::join!(turn, stop);
+        let session = session.unwrap();
+        assert_eq!(session.usage.model_attempts, 1);
+        assert_eq!(session.usage.estimated_tokens, 4096);
+        assert_eq!(session.usage.tokens, 4096);
         halted(
-            &session.unwrap(),
+            &session,
             if cancel {
                 AgentFailure::Cancelled
             } else {

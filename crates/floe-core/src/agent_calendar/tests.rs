@@ -650,6 +650,9 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(result.session.revision, 4);
+    assert_eq!(result.session.usage.tokens, 40);
+    assert_eq!(result.session.usage.model_attempts, 4);
+    assert_eq!(result.session.usage.estimated_tokens, 0);
     assert_eq!(
         fixture
             .vault
