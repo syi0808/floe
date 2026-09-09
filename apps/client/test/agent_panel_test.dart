@@ -132,41 +132,44 @@ void main() {
     );
   }
 
-  testWidgets(
-    'Today seals secure conversations when the app becomes inactive',
-    (tester) async {
-      tester.view.physicalSize = const Size(1280, 900);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final gateway = TestVaultGateway();
-      await gateway.createVault('test');
-      final date = DateTime(2026, 9, 7, 9);
-      await tester.pumpWidget(
-        app(
-          PersonalDayScreen(
-            gateway: FakeDayGateway(),
-            agentGateway: gateway,
-            query: DayQuery(
-              personId: 'test',
-              date: date,
-              now: date,
-              timezoneOffsetSeconds: 0,
-            ),
+  testWidgets('Today keeps turns across focus changes and seals when hidden', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final gateway = TestVaultGateway();
+    await gateway.createVault('test');
+    final date = DateTime(2026, 9, 7, 9);
+    await tester.pumpWidget(
+      app(
+        PersonalDayScreen(
+          gateway: FakeDayGateway(),
+          agentGateway: gateway,
+          query: DayQuery(
+            personId: 'test',
+            date: date,
+            now: date,
+            timezoneOffsetSeconds: 0,
           ),
         ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Floe is here to help'));
-      await tester.pumpAndSettle();
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      await tester.pumpAndSettle();
-      expect(find.text('Unlock conversation storage'), findsNothing);
-      expect(find.text('Reload conversation'), findsOneWidget);
-      expect(gateway.locks, 1);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pumpAndSettle();
-      expect(gateway.unlocks, 1);
-    },
-  );
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Floe is here to help'));
+    await tester.pumpAndSettle();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pumpAndSettle();
+    expect(gateway.locks, 0);
+    expect(find.text('Reload conversation'), findsNothing);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pumpAndSettle();
+    expect(gateway.locks, 1);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(gateway.unlocks, 1);
+    expect(find.text('Reload conversation'), findsNothing);
+  });
 }

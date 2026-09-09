@@ -121,12 +121,17 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      if (assistantOpen || destination == _DestinationView.settings) {
-        unawaited(agentController?.load());
-      }
-    } else {
-      unawaited(agentController?.closeView());
+    switch (state) {
+      case AppLifecycleState.resumed:
+        if (assistantOpen || destination == _DestinationView.settings) {
+          unawaited(agentController?.load());
+        }
+      case AppLifecycleState.hidden ||
+          AppLifecycleState.paused ||
+          AppLifecycleState.detached:
+        unawaited(agentController?.closeView());
+      case AppLifecycleState.inactive:
+        break;
     }
   }
 
