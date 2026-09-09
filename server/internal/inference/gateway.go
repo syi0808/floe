@@ -233,6 +233,12 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			code = "model_timeout"
 		} else if errors.Is(err, errInvalidOutput) {
 			code = "invalid_proposal"
+		} else if errors.Is(err, errCredentialExpired) {
+			code = "credential_expired"
+		} else if errors.Is(err, errQuotaExceeded) {
+			code = "quota_exceeded"
+		} else if errors.Is(err, errRequestRejected) {
+			code = "request_rejected"
 		}
 		gateway.audit.add(newAuditRecord(traceID, input, placement, code, ""))
 		writeErrorWithTrace(writer, http.StatusBadGateway, code, traceID)

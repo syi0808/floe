@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -163,6 +164,36 @@ func TestRefreshAndCodexInferenceUseServerOwnedCredential(test *testing.T) {
 	}
 	if strings.Contains(store.values[credentialName], "old-access") {
 		test.Fatal("refreshed credential was not persisted")
+	}
+}
+
+func TestInferenceClassifiesProviderStatusWithoutReadingPrivateBodies(test *testing.T) {
+	for status, expected := range map[int]error{
+		http.StatusUnauthorized:        ErrCredentialExpired,
+		http.StatusForbidden:           ErrCredentialExpired,
+		http.StatusTooManyRequests:     ErrQuotaExceeded,
+		http.StatusBadRequest:          ErrRequestRejected,
+		http.StatusNotFound:            ErrRequestRejected,
+		http.StatusUnprocessableEntity: ErrRequestRejected,
+		http.StatusServiceUnavailable:  unavailable,
+	} {
+		test.Run(http.StatusText(status), func(test *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(status)
+				_, _ = writer.Write([]byte(`{"private":"must not be parsed"}`))
+			}))
+			defer upstream.Close()
+			store := &memoryStore{values: map[string]string{}}
+			runtime := New(store)
+			runtime.endpoint = upstream.URL
+			if err := runtime.save(&tokenBundle{AccessToken: "access", RefreshToken: "refresh", IDToken: fixtureIDToken("account"), AccountID: "account", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+				test.Fatal(err)
+			}
+			_, err := runtime.Generate(context.Background(), "fixture", "medium", "Answer", json.RawMessage(`{"test":true}`), json.RawMessage(`{"type":"object"}`))
+			if !errors.Is(err, expected) {
+				test.Fatalf("status %d mapped to %v", status, err)
+			}
+		})
 	}
 }
 

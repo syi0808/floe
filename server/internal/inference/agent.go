@@ -244,15 +244,27 @@ func normalizeAgentMessage(message map[string]any, usage uint64) (string, error)
 	return string(encoded), nil
 }
 
+func classifyCodexError(err error) error {
+	switch {
+	case errors.Is(err, codexauth.ErrInvalidOutput):
+		return errInvalidOutput
+	case errors.Is(err, codexauth.ErrCredentialExpired):
+		return errCredentialExpired
+	case errors.Is(err, codexauth.ErrQuotaExceeded):
+		return errQuotaExceeded
+	case errors.Is(err, codexauth.ErrRequestRejected):
+		return errRequestRejected
+	default:
+		return err
+	}
+}
+
 func (adapter *provider) agent(ctx context.Context, request Request, effort string) (string, error) {
 	if adapter.target.Provider == "codex_oauth" {
 		ctx = codexauth.WithAccountIdentity(ctx, request.ProviderIdentity)
 		output, err := adapter.codex.Generate(ctx, adapter.target.Model, effort, request.Instructions, request.Input, nil)
 		if err != nil {
-			if errors.Is(err, codexauth.ErrInvalidOutput) {
-				return "", errInvalidOutput
-			}
-			return "", err
+			return "", classifyCodexError(err)
 		}
 		var message map[string]any
 		if json.Unmarshal([]byte(output), &message) != nil {

@@ -22,6 +22,27 @@ type memoryVault struct {
 
 type fakeAuthRuntime struct{ ready bool }
 
+type blockingAuthRuntime struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (runtime *blockingAuthRuntime) Action(context.Context, string) (any, error) {
+	return nil, errors.New("unavailable")
+}
+
+func (runtime *blockingAuthRuntime) Ready() bool {
+	close(runtime.started)
+	<-runtime.release
+	return true
+}
+
+func (*blockingAuthRuntime) ReplayIdentity() string { return "fixture-account" }
+
+func (*blockingAuthRuntime) Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error) {
+	return `{"ok":true}`, nil
+}
+
 func (runtime *fakeAuthRuntime) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "inference_enabled": runtime.ready}, nil
 }
@@ -69,6 +90,47 @@ func setup(test *testing.T) *fixture {
 	state := fixture.value(fixture.call("GET", "/manage/api/state", nil, ""))
 	fixture.csrf = state["csrf"].(string)
 	return fixture
+}
+
+func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testing.T) {
+	runtime := &blockingAuthRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	management, err := New(filepath.Join(test.TempDir(), "node"), "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, runtime)
+	if err != nil {
+		test.Fatal(err)
+	}
+	management.mu.Lock()
+	management.state.Providers["codex_oauth"] = providerProfile{BaseURL: codexEndpoint, Classes: map[string]classProfile{"balanced": {Model: "fixture"}}}
+	management.state.Clients["fixture"] = digest("app-token")
+	management.mu.Unlock()
+	stateDone := make(chan struct{})
+	go func() {
+		management.writeState(httptest.NewRecorder(), session{csrf: "csrf"})
+		close(stateDone)
+	}()
+	select {
+	case <-runtime.started:
+	case <-time.After(time.Second):
+		test.Fatal("credential status was not checked")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/inference-purposes", nil)
+	request.Host = "127.0.0.1:8431"
+	request.Header.Set("Authorization", "Bearer app-token")
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		management.ServeHTTP(response, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+		if response.Code != http.StatusOK {
+			test.Fatal(response.Body.String())
+		}
+	case <-time.After(time.Second):
+		test.Fatal("credential status held the console mutex")
+	}
+	close(runtime.release)
+	<-stateDone
 }
 
 func (fixture *fixture) call(method, path string, body any, token string) *httptest.ResponseRecorder {

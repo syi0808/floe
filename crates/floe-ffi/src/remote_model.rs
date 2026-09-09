@@ -69,6 +69,15 @@ struct AgentOutput {
     call_ids: Vec<String>,
 }
 
+fn gateway_failure(error: &serde_json::Value) -> AgentFailure {
+    match error["error"]["code"].as_str() {
+        Some("invalid_proposal") => AgentFailure::ServerModelInvalidOutput,
+        Some("credential_expired") => AgentFailure::CredentialExpired,
+        Some("quota_exceeded") => AgentFailure::QuotaExceeded,
+        _ => AgentFailure::ServerModelUnavailable,
+    }
+}
+
 fn tool_name(identifier: &str) -> String {
     let hash = identifier
         .bytes()
@@ -294,11 +303,7 @@ impl ModelRunner for ServerModelRunner {
                     .json()
                     .await
                     .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-                return Err(if error["error"]["code"] == "invalid_proposal" {
-                    AgentFailure::ServerModelInvalidOutput
-                } else {
-                    AgentFailure::ServerModelUnavailable
-                });
+                return Err(gateway_failure(&error));
             }
             status if !status.is_success() => return Err(AgentFailure::ServerModelUnavailable),
             _ => {}
@@ -553,5 +558,18 @@ mod tests {
         assert!(decode_output(r#"{"output":[{"kind":"call","capability_id":"floe_read","input":"null"}],"used_tokens":12}"#).is_err());
         assert_ne!(tool_name("a.b"), tool_name("a_b"));
         assert_eq!(tool_name("hello"), "floe_a430d84680aabd0b");
+    }
+
+    #[test]
+    fn gateway_failures_preserve_actionable_categories() {
+        for (code, failure) in [
+            ("invalid_proposal", AgentFailure::ServerModelInvalidOutput),
+            ("credential_expired", AgentFailure::CredentialExpired),
+            ("quota_exceeded", AgentFailure::QuotaExceeded),
+            ("request_rejected", AgentFailure::ServerModelUnavailable),
+            ("model_unavailable", AgentFailure::ServerModelUnavailable),
+        ] {
+            assert_eq!(gateway_failure(&json!({"error":{"code":code}})), failure);
+        }
     }
 }

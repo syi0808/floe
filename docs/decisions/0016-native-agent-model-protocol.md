@@ -53,7 +53,12 @@ across tools.
 Device-local Foundation Models still emit one item through their adapter.
 Preambles stream as committed v1 message events and Flutter renders them without
 ending the running turn. This is item-level progress, not token streaming.
-Codex output is accepted only on terminal response.completed, never output_text.done.
+Codex output is accepted only after terminal response.completed, never
+output_text.done. Completed output items are accumulated in order from
+response.output_item.done because the production Codex stream may leave the
+terminal response.output array empty. When both representations are present they
+must be semantically identical. A terminal event without either representation is
+invalid. Only completed items are retained for replay; partial deltas are ignored.
 Opaque Codex output items, including encrypted reasoning and assistant phase, and
 provider call IDs are returned as typed replay metadata rather than cached in a
 model adapter. Manager persists accepted call replay alongside encrypted execution
@@ -184,8 +189,8 @@ operational or optional extensions are:
   restart is required; interrupted Expert conversations are not automatically resumed.
 - Extend committed-item progress into token-level streaming and more detailed
   validation stages without exposing private reasoning.
-- Add real-provider
-  acceptance captures for the native transport.
+- Add hermetic redacted real-provider capture fixtures for the native transport;
+  the production-shaped incremental stream is covered by a synthetic fixture.
 
 Native function calling is not authority: fresh grants, Person isolation, view
 expiry, consent, encrypted session storage and Review/Action Authority still apply.
@@ -204,6 +209,15 @@ Scoped execution tests cover pre-dispatch/result acknowledgment failures, oversi
 result rejection, dropped tool futures, recovery across parent and child scopes,
 Expert replay exclusion from Manager requests, atomic parent settlement after child
 reads, and encrypted child result persistence through WAL/checkpoint reopen.
+
+Manual synthetic acceptance against the configured Codex OAuth route verified a
+complete native call, opaque replay, tool result and final answer round trip from
+incremental output-item streams, with completed content-free traces. Provider HTTP
+failures are classified as credential, quota,
+request rejection or availability failures without recording response bodies.
+Dashboard state exposes the last 20 content-free traces. Credential readiness is
+checked outside the console mutex so a blocked Keychain lookup cannot stall paired
+inference authentication.
 
 Offline tests cover native request projection, plain answers, call normalization,
 malformed input rejection, terminal stream completion, opaque replay preservation,

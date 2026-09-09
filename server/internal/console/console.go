@@ -341,33 +341,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateProvider(writer, request)
 		return
 	}
-	console.mu.Lock()
-	defer console.mu.Unlock()
 	if request.URL.Path == "/manage/api/state" && request.Method == "GET" {
-		clients := []string{}
-		for identifier := range console.state.Clients {
-			clients = append(clients, identifier)
-		}
-		var pending *pairing
-		if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
-			pending = console.pair
-		}
-		providers := map[string]any{}
-		for provider, profile := range console.state.Providers {
-			classes := map[string]any{}
-			for class, configured := range profile.Classes {
-				identifier := profileTargetID(provider, class)
-				available := !console.unavailable[identifier]
-				if provider == "codex_oauth" {
-					available = available && console.runtime != nil && console.runtime.Ready()
-				}
-				classes[class] = map[string]any{"model": configured.Model, "reasoning_effort": configured.ReasoningEffort, "active": console.state.Routes[class].Target == identifier, "available": available}
-			}
-			providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
-		}
-		reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "clients": clients, "pairing": pending, "address": "http://" + console.address})
+		console.writeState(writer, current)
 		return
 	}
+	console.mu.Lock()
+	defer console.mu.Unlock()
 	if request.Method != "POST" {
 		failure(writer, 404, "not_found")
 		return
@@ -441,6 +420,41 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+func (console *Console) writeState(writer http.ResponseWriter, current session) {
+	console.mu.Lock()
+	state := cloneState(console.state)
+	unavailable := make(map[string]bool, len(console.unavailable))
+	for identifier, value := range console.unavailable {
+		unavailable[identifier] = value
+	}
+	clients := make([]string, 0, len(state.Clients))
+	for identifier := range state.Clients {
+		clients = append(clients, identifier)
+	}
+	var pending *pairing
+	if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
+		copy := *console.pair
+		pending = &copy
+	}
+	runtime, gateway, address := console.runtime, console.gateway, console.address
+	console.mu.Unlock()
+
+	providers := map[string]any{}
+	for provider, profile := range state.Providers {
+		classes := map[string]any{}
+		for class, configured := range profile.Classes {
+			identifier := profileTargetID(provider, class)
+			available := !unavailable[identifier]
+			if provider == "codex_oauth" {
+				available = available && runtime != nil && runtime.Ready()
+			}
+			classes[class] = map[string]any{"model": configured.Model, "reasoning_effort": configured.ReasoningEffort, "active": state.Routes[class].Target == identifier, "available": available}
+		}
+		providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
+	}
+	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }
 
 func (console *Console) updateRoute(writer http.ResponseWriter, request *http.Request) {

@@ -436,6 +436,30 @@ func TestConcurrencyIsBounded(test *testing.T) {
 	}
 }
 
+func TestProviderStatusFailuresRemainTypedInContentFreeTraces(test *testing.T) {
+	for status, code := range map[int]string{
+		http.StatusUnauthorized:    "credential_expired",
+		http.StatusTooManyRequests: "quota_exceeded",
+		http.StatusBadRequest:      "request_rejected",
+	} {
+		upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(status)
+		}))
+		gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
+		request := fixtureRequest()
+		request.AllowExternal = true
+		response := invoke(gateway, request)
+		upstream.Close()
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), code) {
+			test.Fatalf("status %d: %s", status, response.Body.String())
+		}
+		traces := gateway.Traces(1)
+		if len(traces) != 1 || traces[0].Outcome != code {
+			test.Fatal(traces)
+		}
+	}
+}
+
 func TestConfigurationRejectsUnsafeDestinationsAndMissingKeys(test *testing.T) {
 	for _, target := range []Target{
 		{Provider: "openai_compatible", BaseURL: "http://example.com/v1", Model: "model"},

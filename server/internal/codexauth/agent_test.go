@@ -50,6 +50,22 @@ func TestNativeResponseRequiresTerminalCompletion(test *testing.T) {
 	if err != nil || !strings.Contains(output, "call_1") {
 		test.Fatal(output, err)
 	}
+	streamed := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"opaque"}}`,
+		`data: {"type":"response.output_item.done","item":{"type":"function_call","name":"read","call_id":"call_streamed","arguments":"{}"}}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"total_tokens":37}}}`,
+	}, "\n\n") + "\n\n"
+	output, err = readNativeResponse(strings.NewReader(streamed))
+	if err != nil || !strings.Contains(output, "call_streamed") || !strings.Contains(output, `"used_tokens":37`) || !strings.Contains(output, "opaque") {
+		test.Fatal(output, err)
+	}
+	mismatched := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"type":"function_call","name":"read","call_id":"streamed","arguments":"{}"}}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","name":"read","call_id":"different","arguments":"{}"}]}}`,
+	}, "\n\n") + "\n\n"
+	if _, err := readNativeResponse(strings.NewReader(mismatched)); err == nil {
+		test.Fatal("accepted mismatched terminal output")
+	}
 }
 
 func TestNativeReplayPreservesReasoningAndCallIdentity(test *testing.T) {

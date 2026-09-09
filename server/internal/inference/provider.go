@@ -17,6 +17,9 @@ import (
 
 var errInvalidOutput = errors.New("invalid model output")
 var errProvider = errors.New("model unavailable")
+var errCredentialExpired = errors.New("provider credential expired")
+var errQuotaExceeded = errors.New("provider quota exceeded")
+var errRequestRejected = errors.New("provider request rejected")
 var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type provider struct {
@@ -95,7 +98,7 @@ func (adapter *provider) generate(ctx context.Context, request Request, reasonin
 	if adapter.target.Provider == "codex_oauth" {
 		output, err := adapter.codex.Generate(ctx, adapter.target.Model, reasoningEffort, request.Instructions, request.Input, request.OutputSchema)
 		if err != nil {
-			return "", errProvider
+			return "", classifyCodexError(err)
 		}
 		if !validOutput(output) {
 			return "", errInvalidOutput
@@ -130,7 +133,16 @@ func (adapter *provider) post(ctx context.Context, path string, payload any, out
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return errProvider
+		switch response.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return errCredentialExpired
+		case http.StatusTooManyRequests:
+			return errQuotaExceeded
+		case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+			return errRequestRejected
+		default:
+			return errProvider
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1048577))
 	if err != nil {

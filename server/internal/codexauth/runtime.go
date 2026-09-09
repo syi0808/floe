@@ -32,6 +32,9 @@ const (
 var unavailable = errors.New("Codex authentication unavailable")
 var invalidOutput = errors.New("invalid Codex output")
 var ErrInvalidOutput = invalidOutput
+var ErrCredentialExpired = errors.New("Codex credential expired")
+var ErrQuotaExceeded = errors.New("Codex quota exceeded")
+var ErrRequestRejected = errors.New("Codex request rejected")
 
 type Store interface {
 	Get(string) (string, error)
@@ -443,7 +446,16 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", unavailable
+		switch response.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return "", ErrCredentialExpired
+		case http.StatusTooManyRequests:
+			return "", ErrQuotaExceeded
+		case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+			return "", ErrRequestRejected
+		default:
+			return "", unavailable
+		}
 	}
 	if len(schema) == 0 {
 		return readNativeResponse(response.Body)

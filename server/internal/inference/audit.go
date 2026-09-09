@@ -63,6 +63,13 @@ func (log *auditLog) list(limit int) []AuditRecord {
 	return records
 }
 
+func (gateway *Gateway) Traces(limit int) []AuditRecord {
+	if limit < 0 || limit > 20 {
+		limit = 20
+	}
+	return gateway.audit.list(limit)
+}
+
 func requestDigest(request Request) string {
 	request.ReplayOf = ""
 	encoded, _ := json.Marshal(request)
