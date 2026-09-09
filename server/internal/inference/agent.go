@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -69,7 +70,7 @@ func validAgentInput(raw json.RawMessage) bool {
 		}
 		if rawCalls, exists := message["tool_calls"]; exists {
 			calls, ok := rawCalls.([]any)
-			if !ok || role != "assistant" || len(calls) != 1 {
+			if !ok || role != "assistant" || (len(calls) == 0 || len(calls) > 8) {
 				return false
 			}
 			for _, value := range calls {
@@ -114,10 +115,10 @@ func (gateway *Gateway) replaySource(configured route, purpose, identity string)
 }
 
 type AgentOutput struct {
-	Step       map[string]any `json:"step"`
-	UsedTokens uint64         `json:"used_tokens"`
-	Replay     any            `json:"replay,omitempty"`
-	CallID     string         `json:"call_id,omitempty"`
+	Output     []map[string]any `json:"output"`
+	UsedTokens uint64           `json:"used_tokens"`
+	Replay     any              `json:"replay,omitempty"`
+	CallIDs    []string         `json:"call_ids,omitempty"`
 }
 
 func normalizeAgentMessage(message map[string]any, usage uint64) (string, error) {
@@ -128,16 +129,17 @@ func normalizeAgentMessage(message map[string]any, usage uint64) (string, error)
 		usage = 4096
 	}
 	calls, _ := message["tool_calls"].([]any)
-	if value := message["tool_calls"]; value != nil && calls == nil {
+	if message["tool_calls"] != nil && calls == nil || len(calls) > 8 {
 		return "", errInvalidOutput
 	}
-	output := AgentOutput{UsedTokens: usage, Replay: message["provider_items"]}
-	if len(calls) > 1 {
-		return "", errInvalidOutput
-	}
-	if len(calls) == 1 {
-		call, ok := calls[0].(map[string]any)
+	output := AgentOutput{UsedTokens: usage, Replay: message["provider_items"], Output: []map[string]any{}}
+	steps := map[string]map[string]any{}
+	for _, value := range calls {
+		call, ok := value.(map[string]any)
 		if !ok {
+			return "", errInvalidOutput
+		}
+		if call["type"] != nil && call["type"] != "function" {
 			return "", errInvalidOutput
 		}
 		function, ok := call["function"].(map[string]any)
@@ -145,7 +147,14 @@ func normalizeAgentMessage(message map[string]any, usage uint64) (string, error)
 			return "", errInvalidOutput
 		}
 		name, _ := function["name"].(string)
-		output.CallID, _ = call["id"].(string)
+		identifier, _ := call["id"].(string)
+		if identifier == "" {
+			var random [16]byte
+			if _, err := rand.Read(random[:]); err != nil {
+				return "", errProvider
+			}
+			identifier = hex.EncodeToString(random[:])
+		}
 		arguments, ok := function["arguments"].(string)
 		if !ok {
 			encoded, err := json.Marshal(function["arguments"])
@@ -155,16 +164,78 @@ func normalizeAgentMessage(message map[string]any, usage uint64) (string, error)
 			arguments = string(encoded)
 		}
 		var object map[string]any
-		if name == "" || json.Unmarshal([]byte(arguments), &object) != nil || object == nil {
+		if !targetID.MatchString(name) || len(identifier) > 128 || steps[identifier] != nil ||
+			json.Unmarshal([]byte(arguments), &object) != nil || object == nil {
 			return "", errInvalidOutput
 		}
-		output.Step = map[string]any{"kind": "call", "capability_id": name, "input": arguments}
+		steps[identifier] = map[string]any{"kind": "call", "capability_id": name, "input": arguments}
+		output.CallIDs = append(output.CallIDs, identifier)
+	}
+	appendText := func(content string) {
+		if strings.TrimSpace(content) != "" {
+			output.Output = append(output.Output, map[string]any{"kind": "preamble", "text": content})
+		}
+	}
+	if items, ok := message["provider_items"].([]any); ok {
+		orderedIDs := []string{}
+		for _, value := range items {
+			item, ok := value.(map[string]any)
+			if !ok {
+				return "", errInvalidOutput
+			}
+			switch item["type"] {
+			case "function_call":
+				identifier, _ := item["call_id"].(string)
+				step := steps[identifier]
+				if step == nil {
+					return "", errInvalidOutput
+				}
+				delete(steps, identifier)
+				orderedIDs = append(orderedIDs, identifier)
+				output.Output = append(output.Output, step)
+			case "message":
+				content, ok := item["content"].([]any)
+				if !ok || item["role"] != "assistant" {
+					return "", errInvalidOutput
+				}
+				for _, part := range content {
+					part, ok := part.(map[string]any)
+					if !ok {
+						return "", errInvalidOutput
+					}
+					if part["type"] == "refusal" {
+						return "", errProvider
+					}
+					if part["type"] == "output_text" {
+						text, ok := part["text"].(string)
+						if !ok {
+							return "", errInvalidOutput
+						}
+						appendText(text)
+					}
+				}
+			case "reasoning":
+			default:
+				return "", errInvalidOutput
+			}
+		}
+		if len(steps) != 0 {
+			return "", errInvalidOutput
+		}
+		output.CallIDs = orderedIDs
 	} else {
 		content, _ := message["content"].(string)
-		if strings.TrimSpace(content) == "" || message["refusal"] != nil {
-			return "", errInvalidOutput
+		appendText(content)
+		for _, identifier := range output.CallIDs {
+			output.Output = append(output.Output, steps[identifier])
 		}
-		output.Step = map[string]any{"kind": "answer", "text": content}
+	}
+	if len(output.Output) == 0 || len(output.Output) > 16 {
+		return "", errInvalidOutput
+	}
+	if len(calls) == 0 {
+		output.Output[len(output.Output)-1]["kind"] = "answer"
+		output.Replay = nil
 	}
 	encoded, err := json.Marshal(output)
 	if err != nil || len(encoded) > 32768 {
@@ -239,7 +310,7 @@ func (adapter *provider) agent(ctx context.Context, request Request, effort stri
 		}
 		return normalizeAgentMessage(response.Message, response.PromptCount+response.Count)
 	}
-	payload["parallel_tool_calls"] = false
+	payload["parallel_tool_calls"] = true
 	if effort != "" {
 		payload["reasoning_effort"] = effort
 	}

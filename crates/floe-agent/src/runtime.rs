@@ -612,126 +612,185 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if usage.tokens > budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
                 return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
             }
-            if encoded_len(&response.step)? > budget.max_output_bytes {
+            if encoded_len(&response.output)? > budget.max_output_bytes {
                 return Err(AgentFailure::BudgetExceeded.into());
             }
-            let message = match response.step {
-                ModelStep::Answer { text } => {
-                    if text.trim().is_empty() {
-                        return Err(AgentFailure::InvalidModelOutput.into());
-                    }
-                    AgentMessage::Assistant { turn_id, text }
+            if response.call_count()
+                > budget
+                    .max_capability_calls
+                    .saturating_sub(usage.capability_calls) as usize
+            {
+                return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
+            }
+            let grouped = response.output.len() > 1;
+            if grouped {
+                session.pending_output = Some(response.output.clone());
+                let commit =
+                    if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
+                        Err(AgentFailure::BudgetExceeded)
+                    } else {
+                        self.commit(session).await
+                    };
+                if let Err(failure) = commit {
+                    session.pending_output = None;
+                    return Err(failure.into());
                 }
-                ModelStep::Call {
-                    capability_id,
-                    input,
-                } => {
-                    if usage.capability_calls >= budget.max_capability_calls {
-                        return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
+            }
+            let mut call_index = 0;
+            for step in response.output.clone() {
+                check_drive_running(deadline, cancellation)?;
+                self.authorize(context)?;
+                let message = match step {
+                    ModelStep::Preamble { text } => {
+                        let message = AgentMessage::Preamble { turn_id, text };
+                        session.messages.push(message.clone());
+                        let commit = if encoded_len(session)?
+                            > budget.max_session_bytes.saturating_sub(4096)
+                        {
+                            Err(AgentFailure::BudgetExceeded)
+                        } else {
+                            self.commit(session).await
+                        };
+                        if let Err(failure) = commit {
+                            session.messages.pop();
+                            return Err(failure.into());
+                        }
+                        emit_event(
+                            session,
+                            turn_id,
+                            AgentEventKind::MessageCommitted {
+                                message,
+                                revision: session.revision,
+                            },
+                            emit,
+                        );
+                        continue;
                     }
-                    let Some(descriptor) = descriptors
-                        .iter()
-                        .find(|descriptor| descriptor.id == capability_id)
-                    else {
-                        return Err(AgentFailure::CapabilityDenied.into());
-                    };
-                    if !self
-                        .capabilities
-                        .descriptors(session.person_id)
-                        .contains(descriptor)
-                    {
-                        return Err(AgentFailure::CapabilityUnavailable.into());
+                    ModelStep::Answer { text } => {
+                        if text.trim().is_empty() {
+                            return Err(AgentFailure::InvalidModelOutput.into());
+                        }
+                        AgentMessage::Assistant { turn_id, text }
                     }
-                    usage.capability_calls += 1;
-                    let call_id = Uuid::new_v4();
-                    session.usage = *usage;
-                    let execution = CapabilityExecution {
-                        scope_id: session.id,
-                        result: None,
-                        turn_id,
-                        call_id,
-                        capability_id: capability_id.clone(),
-                        input: input.clone(),
-                        state: CapabilityExecutionState::Started,
-                        replay: response.replay.clone(),
-                    };
-                    let invocation = CapabilityInvocation {
-                        usage: ledger.clone(),
-                        schema_version: AGENT_VERSION,
-                        call_id,
-                        person_id: session.person_id,
-                        session_id: session.id,
-                        turn_id,
-                        capability_id: capability_id.clone(),
-                        input: input.clone(),
-                        max_output_bytes: budget.max_output_bytes,
-                        deadline,
-                        cancellation: cancellation.clone(),
-                    };
-                    let result = self
-                        .recorded(
-                            crate::capability_execution::execute_recorded(
+                    ModelStep::Call {
+                        capability_id,
+                        input,
+                    } => {
+                        if usage.capability_calls >= budget.max_capability_calls {
+                            return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
+                        }
+                        let Some(descriptor) = descriptors
+                            .iter()
+                            .find(|descriptor| descriptor.id == capability_id)
+                        else {
+                            return Err(AgentFailure::CapabilityDenied.into());
+                        };
+                        if !self
+                            .capabilities
+                            .descriptors(session.person_id)
+                            .contains(descriptor)
+                        {
+                            return Err(AgentFailure::CapabilityUnavailable.into());
+                        }
+                        usage.capability_calls += 1;
+                        let call_id = Uuid::new_v4();
+                        session.usage = *usage;
+                        let execution = CapabilityExecution {
+                            scope_id: session.id,
+                            result: None,
+                            turn_id,
+                            call_id,
+                            capability_id: capability_id.clone(),
+                            input: input.clone(),
+                            state: CapabilityExecutionState::Started,
+                            replay: response.replay_for(call_index)?,
+                        };
+                        call_index += 1;
+                        let invocation = CapabilityInvocation {
+                            usage: ledger.clone(),
+                            schema_version: AGENT_VERSION,
+                            call_id,
+                            person_id: session.person_id,
+                            session_id: session.id,
+                            turn_id,
+                            capability_id: capability_id.clone(),
+                            input: input.clone(),
+                            max_output_bytes: budget.max_output_bytes,
+                            deadline,
+                            cancellation: cancellation.clone(),
+                        };
+                        let result = self
+                            .recorded(
+                                crate::capability_execution::execute_recorded(
+                                    &ledger,
+                                    execution,
+                                    deadline,
+                                    cancellation,
+                                    budget.max_output_bytes,
+                                    Box::pin(async {
+                                        self.authorize(context)?;
+                                        if !self
+                                            .capabilities
+                                            .descriptors(invocation.person_id)
+                                            .contains(descriptor)
+                                        {
+                                            return Err(AgentFailure::CapabilityUnavailable);
+                                        }
+                                        self.capabilities.invoke(invocation).await
+                                    }),
+                                ),
+                                session,
+                                usage,
                                 &ledger,
-                                execution,
+                                &mut journal,
+                                turn_id,
+                                emit,
                                 deadline,
                                 cancellation,
-                                budget.max_output_bytes,
-                                Box::pin(async {
-                                    self.authorize(context)?;
-                                    if !self
-                                        .capabilities
-                                        .descriptors(invocation.person_id)
-                                        .contains(descriptor)
-                                    {
-                                        return Err(AgentFailure::CapabilityUnavailable);
-                                    }
-                                    self.capabilities.invoke(invocation).await
-                                }),
-                            ),
-                            session,
-                            usage,
-                            &ledger,
-                            &mut journal,
-                            turn_id,
-                            emit,
-                            deadline,
-                            cancellation,
-                        )
-                        .await
-                        .map_err(DriveStop::from_call)?;
-                    if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) = &result {
-                        return Err(DriveStop::from_call(result.unwrap_err()));
+                            )
+                            .await
+                            .map_err(DriveStop::from_call)?;
+                        if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) =
+                            &result
+                        {
+                            return Err(DriveStop::from_call(result.unwrap_err()));
+                        }
+                        check_drive_running(deadline, cancellation)?;
+                        continue;
                     }
-                    check_drive_running(deadline, cancellation)?;
-                    continue;
+                };
+                ledger.sync(usage);
+                session.usage = *usage;
+                session.messages.push(message.clone());
+                if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
+                    session.messages.pop();
+                    return Err(AgentFailure::BudgetExceeded.into());
                 }
-            };
-            ledger.sync(usage);
-            session.usage = *usage;
-            session.messages.push(message.clone());
-            if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
-                session.messages.pop();
-                return Err(AgentFailure::BudgetExceeded.into());
+                session.pending_output = None;
+                session.active_turn = None;
+                session.last_outcome = Some(AgentOutcome::Completed);
+                for execution in &mut session.capability_executions {
+                    execution.replay = None;
+                }
+                if let Err(failure) = self.commit(session).await {
+                    session.messages.pop();
+                    return Err(failure.into());
+                }
+                emit_event(
+                    session,
+                    turn_id,
+                    AgentEventKind::MessageCommitted {
+                        message,
+                        revision: session.revision,
+                    },
+                    emit,
+                );
+                return Ok(());
             }
-            session.active_turn = None;
-            session.last_outcome = Some(AgentOutcome::Completed);
-            for execution in &mut session.capability_executions {
-                execution.replay = None;
+            if grouped {
+                session.pending_output = None;
+                self.commit(session).await.map_err(DriveStop::from_call)?;
             }
-            if let Err(failure) = self.commit(session).await {
-                session.messages.pop();
-                return Err(failure.into());
-            }
-            emit_event(
-                session,
-                turn_id,
-                AgentEventKind::MessageCommitted {
-                    message,
-                    revision: session.revision,
-                },
-                emit,
-            );
-            return Ok(());
         }
         Err(DriveStop::soft(AgentFailure::BudgetExceeded))
     }
@@ -749,7 +808,7 @@ fn interrupt_executions(
             attempts.push(record.clone());
         }
     }
-    let mut interrupted = false;
+    let mut interrupted = session.pending_output.take().is_some();
     for execution in &mut session.capability_executions {
         if execution.state == CapabilityExecutionState::Started {
             execution.state = CapabilityExecutionState::Interrupted;

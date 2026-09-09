@@ -8,6 +8,75 @@ import (
 	"testing"
 )
 
+func TestOrderedNativeOutputPreservesPreamblesAndMultipleCalls(test *testing.T) {
+	var message map[string]any
+	raw := `{"content":"Checking both.","tool_calls":[
+        {"id":"first","type":"function","function":{"name":"read","arguments":"{}"}},
+        {"id":"second","type":"function","function":{"name":"read","arguments":"{\"day\":2}"}}
+    ]}`
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		test.Fatal(err)
+	}
+	encoded, err := normalizeAgentMessage(message, 20)
+	if err != nil {
+		test.Fatal(err)
+	}
+	var output AgentOutput
+	if err := json.Unmarshal([]byte(encoded), &output); err != nil {
+		test.Fatal(err)
+	}
+	if len(output.Output) != 3 || output.Output[0]["kind"] != "preamble" ||
+		output.Output[1]["kind"] != "call" || output.Output[2]["kind"] != "call" ||
+		strings.Join(output.CallIDs, ",") != "first,second" {
+		test.Fatal(encoded)
+	}
+	message["provider_items"] = []any{
+		map[string]any{"type": "reasoning", "encrypted_content": "opaque"},
+		map[string]any{"type": "function_call", "call_id": "first"},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Checking another source."}}},
+		map[string]any{"type": "function_call", "call_id": "second"},
+	}
+	encoded, err = normalizeAgentMessage(message, 20)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(encoded), &output); err != nil {
+		test.Fatal(err)
+	}
+	if len(output.Output) != 3 || output.Output[0]["kind"] != "call" ||
+		output.Output[1]["kind"] != "preamble" || output.Output[2]["kind"] != "call" {
+		test.Fatal(encoded)
+	}
+	calls := message["tool_calls"].([]any)
+	calls[1].(map[string]any)["function"].(map[string]any)["arguments"] = "null"
+	if _, err := normalizeAgentMessage(message, 20); err != errInvalidOutput {
+		test.Fatal("malformed second call was accepted", err)
+	}
+}
+
+func TestBatchTranscriptRequiresEveryUniqueResult(test *testing.T) {
+	raw := `{"messages":[
+        {"role":"assistant","tool_calls":[
+            {"id":"first","type":"function","function":{"name":"read","arguments":"{}"}},
+            {"id":"second","type":"function","function":{"name":"read","arguments":"{}"}}
+        ]},
+        {"role":"tool","tool_call_id":"first","content":"one"},
+        {"role":"tool","tool_call_id":"second","content":"two"}
+    ],"tools":[]}`
+	if !validAgentInput(json.RawMessage(raw)) {
+		test.Fatal("valid group rejected")
+	}
+	for _, invalid := range []string{
+		strings.Replace(raw, `,"content":"two"`, "", 1),
+		strings.Replace(raw, `"tool_call_id":"second"`, `"tool_call_id":"first"`, 1),
+		strings.Replace(raw, `"id":"second"`, `"id":"first"`, 1),
+	} {
+		if validAgentInput(json.RawMessage(invalid)) {
+			test.Fatal("invalid group accepted", invalid)
+		}
+	}
+}
+
 func TestOnlyV1ContractsAreAccepted(test *testing.T) {
 	gateway := fixtureGateway(test, "ollama", "http://127.0.0.1:1")
 	for _, path := range []string{"/v2/generate", "/v3/agent"} {
@@ -44,7 +113,7 @@ func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
 			if json.NewDecoder(request.Body).Decode(&payload) != nil {
 				test.Fatal("invalid body")
 			}
-			if payload["response_format"] != nil || payload["parallel_tool_calls"] != false || len(payload["tools"].([]any)) != 1 {
+			if payload["response_format"] != nil || payload["parallel_tool_calls"] != true || len(payload["tools"].([]any)) != 1 {
 				test.Error("not a native tool request")
 			}
 			messages := payload["messages"].([]any)
@@ -67,7 +136,7 @@ func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
 		_ = json.Unmarshal(response.Body.Bytes(), &decoded)
 		var output AgentOutput
 		_ = json.Unmarshal([]byte(decoded.Output), &output)
-		if output.UsedTokens != 42 || output.Step == nil {
+		if output.UsedTokens != 42 || len(output.Output) == 0 {
 			test.Fatal(decoded.Output)
 		}
 	}

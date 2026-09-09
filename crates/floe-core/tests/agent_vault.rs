@@ -100,6 +100,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
         "synthetic-answer-111f4",
         "synthetic-provider-replay-c914e",
         "synthetic-expert-private-result-632ba",
+        "synthetic-pending-output-882fb",
     ];
     session.messages = vec![
         AgentMessage::User {
@@ -134,6 +135,8 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
             purpose: "everyday_assistance".into(),
             external: true,
             source: "a".repeat(64),
+            call_ids: vec!["provider-original".into()],
+            preamble: String::new(),
             provider_call_id: "provider-original".into(),
             items: serde_json::json!([{"type":"reasoning","encrypted_content":markers[4]}]),
         }),
@@ -145,6 +148,10 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     child.capability_id = "schedule.find_free_windows".into();
     child.result = Some(Ok(markers[5].into()));
     session.capability_executions.push(child);
+    session.active_turn = Some(turn);
+    session.pending_output = Some(vec![floe_agent::ModelStep::Preamble {
+        text: markers[6].into(),
+    }]);
     let attempt_id = Uuid::new_v4();
     session.model_attempts.push(ModelAttemptRecord {
         id: attempt_id,
@@ -154,9 +161,17 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
         placement: ModelPlacement::DeviceLocal,
         state: ModelAttemptState::Accepted,
         failure: None,
-        usage: ModelUsage { attempts: 1, tokens: 10, ..ModelUsage::default() },
+        usage: ModelUsage {
+            attempts: 1,
+            tokens: 10,
+            ..ModelUsage::default()
+        },
     });
-    session.usage = AgentUsage { model_attempts: 1, tokens: 10, ..AgentUsage::default() };
+    session.usage = AgentUsage {
+        model_attempts: 1,
+        tokens: 10,
+        ..AgentUsage::default()
+    };
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
     vault.compare_and_swap(&session, 0).await.unwrap();
@@ -534,9 +549,9 @@ impl ModelRunner for LocalModel {
         Ok(ModelResponse {
             replay: None,
             schema_version: AGENT_VERSION,
-            step: ModelStep::Answer {
+            output: vec![ModelStep::Answer {
                 text: "synthetic-private-answer".into(),
-            },
+            }],
             used_tokens: 10,
             cost_micros: 0,
         })

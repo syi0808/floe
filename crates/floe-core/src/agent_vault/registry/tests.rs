@@ -437,7 +437,7 @@ impl Fixture {
                 session_id: previous.id,
                 turn_id,
                 capability_id: "fixture.schedule.read".into(),
-                input: "sample-day".into(),
+                input: r#"{"scope":"sample-day"}"#.into(),
                 max_output_bytes: 16384,
                 deadline: Instant::now() + Duration::from_secs(1),
                 cancellation: Cancellation::default(),
@@ -449,7 +449,7 @@ impl Fixture {
             turn_id,
             call_id,
             capability_id: "fixture.schedule.read".into(),
-            input: "sample-day".into(),
+            input: r#"{"scope":"sample-day"}"#.into(),
             result: Ok(output),
         });
         next.revision += 1;

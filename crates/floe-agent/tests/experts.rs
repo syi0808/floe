@@ -22,6 +22,90 @@ struct Fixture {
     view: ExpertTimelineView,
 }
 
+#[derive(Default)]
+struct BatchScheduleModel {
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
+impl ModelRunner for BatchScheduleModel {
+    fn placement(&self) -> ModelPlacement {
+        ModelPlacement::DeviceLocal
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        let first = self.requests.lock().unwrap().is_empty();
+        self.requests.lock().unwrap().push(request);
+        Ok(ModelResponse {
+            schema_version: AGENT_VERSION,
+            replay: None,
+            output: if first {
+                vec![
+                    ModelStep::Preamble {
+                        text: "Comparing authorized windows.".into(),
+                    },
+                    ModelStep::Call {
+                        capability_id: "schedule.find_free_windows".into(),
+                        input: "{}".into(),
+                    },
+                    ModelStep::Call {
+                        capability_id: "schedule.find_free_windows".into(),
+                        input: "{}".into(),
+                    },
+                ]
+            } else {
+                vec![ModelStep::Answer {
+                    text: "The authorized windows are available.".into(),
+                }]
+            },
+            used_tokens: 32,
+            cost_micros: 0,
+        })
+    }
+}
+
+#[tokio::test]
+async fn expert_executes_whole_read_batches_with_its_own_budget_and_transcript() {
+    for exhausted in [false, true] {
+        let fixture = Fixture::new();
+        let views = Views {
+            view: fixture.view.clone(),
+            reads: AtomicUsize::new(0),
+        };
+        let model = BatchScheduleModel::default();
+        let mut invocation = fixture.invocation(fixture.schedule);
+        if exhausted {
+            invocation.budget.max_tool_calls = 1;
+        }
+        let result = ExpertHost {
+            registry: &fixture.registry,
+            views: &views,
+        }
+        .invoke_with_model(invocation, &model, &synthetic_policy())
+        .await;
+        let requests = model.requests.lock().unwrap();
+        if exhausted {
+            assert_eq!(result, Err(AgentFailure::BudgetExceeded));
+            assert_eq!(requests.len(), 1);
+        } else {
+            assert_eq!(result.unwrap().model_calls, 2);
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1].messages.len(), 4);
+            assert!(matches!(
+                requests[1].messages[1],
+                AgentMessage::Preamble { .. }
+            ));
+            assert!(matches!(
+                requests[1].messages[2],
+                AgentMessage::Capability { .. }
+            ));
+            assert!(matches!(
+                requests[1].messages[3],
+                AgentMessage::Capability { .. }
+            ));
+        }
+    }
+}
+
 #[test]
 fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
     let fixture = Fixture::new();
@@ -886,7 +970,7 @@ impl ModelRunner for ScheduleModel {
         Ok(ModelResponse {
             replay: None,
             schema_version: AGENT_VERSION,
-            step: if has_capability && !self.skip_tool && call <= 3 {
+            output: vec![if has_capability && !self.skip_tool && call <= 3 {
                 ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
                     input,
@@ -895,7 +979,7 @@ impl ModelRunner for ScheduleModel {
                 ModelStep::Answer {
                     text: "One commitment leaves a bounded focus window.".into(),
                 }
-            },
+            }],
             used_tokens: 32,
             cost_micros: 0,
         })

@@ -71,7 +71,7 @@ async fn main() -> std::process::ExitCode {
         Ok(response) => {
             println!(
                 "{}",
-                json!({"schema_version":1,"status":"passed","step":response.step,
+                json!({"schema_version":1,"status":"passed","output":response.output,
                 "reserved_tokens":response.used_tokens,"cost_micros":response.cost_micros,"personal_data":false})
             );
             std::process::ExitCode::SUCCESS

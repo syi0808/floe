@@ -421,7 +421,7 @@ impl ModelRunner for FixtureModel {
         {
             ModelStep::Call {
                 capability_id: "fixture.schedule.read".into(),
-                input: "sample-day".into(),
+                input: r#"{"scope":"sample-day"}"#.into(),
             }
         } else {
             let Some(AgentMessage::Capability {
@@ -429,7 +429,7 @@ impl ModelRunner for FixtureModel {
             }) = request.messages.last()
             else {
                 return Ok(ModelResponse { replay: None, schema_version: AGENT_VERSION,
-                    step: ModelStep::Answer { text: "The sample Schedule Expert is unavailable. No connected sources were read or changed.".into() },
+                    output: vec![ ModelStep::Answer { text: "The sample Schedule Expert is unavailable. No connected sources were read or changed.".into() }],
                     used_tokens: 32, cost_micros: 0 });
             };
             let result: ExpertResult =
@@ -447,7 +447,7 @@ impl ModelRunner for FixtureModel {
         Ok(ModelResponse {
             replay: None,
             schema_version: AGENT_VERSION,
-            step,
+            output: vec![step],
             used_tokens: 32,
             cost_micros: 0,
         })
@@ -634,14 +634,20 @@ impl CapabilityHost for FixtureCapabilities {
             version: "1.0.0".into(),
             read_only: true,
             output_data_class: DataClass::Synthetic,
-            input_schema: None,
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {"scope": {"const": "sample-day"}},
+                "required": ["scope"],
+                "additionalProperties": false
+            })),
         }]
     }
 
     async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
         if invocation.person_id != self.person_id
             || invocation.capability_id != "fixture.schedule.read"
-            || invocation.input != "sample-day"
+            || serde_json::from_str::<serde_json::Value>(&invocation.input).ok()
+                != Some(serde_json::json!({"scope":"sample-day"}))
         {
             return Err(AgentFailure::CapabilityDenied);
         }

@@ -6,6 +6,37 @@ import 'support/agent_gateway.dart';
 
 void main() {
   test(
+    'preambles remain ordered progress messages rather than final answers',
+    () async {
+      final gateway = TestAgentGateway()..hold = true;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      final run = controller.send(AgentFixturePrompt.today);
+      await Future<void>.delayed(Duration.zero);
+      gateway.appendProgress({
+        'kind': 'message_committed',
+        'revision': 2,
+        'message': {
+          'kind': 'preamble',
+          'turn_id': gateway.saved!['active_turn'],
+          'text': 'Checking both sources.',
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(controller.running, isTrue);
+      expect(controller.messages, hasLength(2));
+      expect(controller.messages.last.kind, AgentMessageKind.preamble);
+      expect(
+        (controller.messages.last as AgentTextMessage).text,
+        'Checking both sources.',
+      );
+      await controller.stop();
+      await run;
+    },
+  );
+
+  test(
     'durable attempt events distinguish Expert reasoning and correction',
     () async {
       final gateway = TestAgentGateway()..hold = true;

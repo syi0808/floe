@@ -60,7 +60,7 @@ impl ModelRunner for Model {
         Ok(ModelResponse {
             replay: None,
             schema_version: 1,
-            step,
+            output: vec![step],
             used_tokens: 10,
             cost_micros: 0,
         })

@@ -417,7 +417,7 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 		requestBody["input"] = native
 		requestBody["tools"] = tools
 		requestBody["tool_choice"] = "auto"
-		requestBody["parallel_tool_calls"] = false
+		requestBody["parallel_tool_calls"] = true
 		delete(requestBody, "text")
 	}
 	payload, err := json.Marshal(requestBody)

@@ -31,16 +31,20 @@ func nativeInput(raw json.RawMessage) ([]any, []any, error) {
 				return nil, nil, invalidOutput
 			}
 			calls, ok := message["tool_calls"].([]any)
-			if !ok || len(calls) != 1 {
+			if !ok || len(calls) == 0 || len(calls) > 8 {
 				return nil, nil, invalidOutput
 			}
-			call, ok := calls[0].(map[string]any)
-			if !ok {
-				return nil, nil, invalidOutput
-			}
-			function, ok := call["function"].(map[string]any)
-			if !ok {
-				return nil, nil, invalidOutput
+			identifiers := map[string]bool{}
+			for _, value := range calls {
+				call, ok := value.(map[string]any)
+				if !ok {
+					return nil, nil, invalidOutput
+				}
+				identifier, ok := call["id"].(string)
+				if !ok || identifier == "" || len(identifier) > 128 || identifiers[identifier] {
+					return nil, nil, invalidOutput
+				}
+				identifiers[identifier] = true
 			}
 			callCount := 0
 			for _, value := range replay {
@@ -53,6 +57,17 @@ func nativeInput(raw json.RawMessage) ([]any, []any, error) {
 					return nil, nil, invalidOutput
 				}
 				if kind == "function_call" {
+					if callCount >= len(calls) {
+						return nil, nil, invalidOutput
+					}
+					call, ok := calls[callCount].(map[string]any)
+					if !ok {
+						return nil, nil, invalidOutput
+					}
+					function, ok := call["function"].(map[string]any)
+					if !ok {
+						return nil, nil, invalidOutput
+					}
 					callCount++
 					original, originalOK := item["arguments"].(string)
 					canonical, canonicalOK := function["arguments"].(string)
@@ -67,7 +82,7 @@ func nativeInput(raw json.RawMessage) ([]any, []any, error) {
 				}
 				items = append(items, item)
 			}
-			if callCount != 1 {
+			if callCount != len(calls) {
 				return nil, nil, invalidOutput
 			}
 			continue

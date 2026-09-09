@@ -182,11 +182,13 @@ impl ModelRunner for Model<'_> {
                     purpose: "everyday_assistance".into(),
                     external: false,
                     source: "a".repeat(64),
+                    call_ids: vec!["expert-only-call".into()],
+                    preamble: String::new(),
                     provider_call_id: "expert-only-call".into(),
                     items: serde_json::json!([{"type": "reasoning", "encrypted_content": "expert-only-replay"}]),
                 }),
                 schema_version: 1,
-                step,
+                output: vec![step],
                 used_tokens: 10,
                 cost_micros: 0,
             });
@@ -204,12 +206,13 @@ impl ModelRunner for Model<'_> {
         Ok(ModelResponse {
             replay: None,
             schema_version: 1,
-            step: self
-                .steps
-                .lock()
-                .unwrap()
-                .pop_front()
-                .ok_or(AgentFailure::ModelUnavailable)?,
+            output: vec![
+                self.steps
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .ok_or(AgentFailure::ModelUnavailable)?,
+            ],
             used_tokens: 10,
             cost_micros: 0,
         })
@@ -667,11 +670,37 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(executions[2].capability_id, "schedule.find_free_windows");
     assert_eq!(executions[1].scope_id, executions[2].scope_id);
     assert_ne!(executions[1].scope_id, result.session.id);
-    assert!(executions.iter().all(|execution| execution.state == floe_agent::CapabilityExecutionState::Settled));
-    assert!(executions.iter().all(|execution| matches!(execution.result, Some(Ok(_)))));
-    assert!(executions.iter().all(|execution| execution.replay.is_none()));
-    assert_eq!(result.session.model_attempts.iter().filter(|record| record.scope_id == result.session.id).count(), 2);
-    assert!(result.session.model_attempts.iter().all(|record| record.state == ModelAttemptState::Accepted));
+    assert!(
+        executions
+            .iter()
+            .all(|execution| execution.state == floe_agent::CapabilityExecutionState::Settled)
+    );
+    assert!(
+        executions
+            .iter()
+            .all(|execution| matches!(execution.result, Some(Ok(_))))
+    );
+    assert!(
+        executions
+            .iter()
+            .all(|execution| execution.replay.is_none())
+    );
+    assert_eq!(
+        result
+            .session
+            .model_attempts
+            .iter()
+            .filter(|record| record.scope_id == result.session.id)
+            .count(),
+        2
+    );
+    assert!(
+        result
+            .session
+            .model_attempts
+            .iter()
+            .all(|record| record.state == ModelAttemptState::Accepted)
+    );
     assert_eq!(result.session.usage.estimated_tokens, 0);
     assert_eq!(
         fixture
@@ -712,7 +741,10 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert!(expert_requests[0].replay.is_empty());
     assert_eq!(expert_requests[1].replay.len(), 1);
     assert_eq!(expert_requests[1].replay[0].call_id, executions[2].call_id);
-    assert_eq!(expert_requests[1].replay[0].replay.provider_call_id, "expert-only-call");
+    assert_eq!(
+        expert_requests[1].replay[0].replay.provider_call_id,
+        "expert-only-call"
+    );
     assert_eq!(expert_requests[0].messages.len(), 1);
     assert_eq!(
         expert_requests[0].capabilities[0].id,
@@ -1367,7 +1399,12 @@ async fn model_cannot_smuggle_scope_or_execution_fields_through_expert_input() {
         )
         .await
         .unwrap();
-    assert_eq!(result.session.last_outcome, Some(AgentOutcome::Halted { reason: AgentFailure::InvalidModelOutput }));
+    assert_eq!(
+        result.session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::InvalidModelOutput
+        })
+    );
     assert_eq!(result.session.messages.len(), 1);
     assert_eq!(model.requests.lock().unwrap().len(), 2);
     assert_eq!(access.calls.load(Ordering::Acquire), 0);

@@ -164,7 +164,7 @@ final class AgentSessionScope {
   String get dataClass => provider == 'fixture' ? 'synthetic' : 'personal';
 }
 
-enum AgentMessageKind { user, assistant, capability }
+enum AgentMessageKind { user, assistant, preamble, capability }
 
 sealed class AgentMessage {
   const AgentMessage(this.turnId);
@@ -180,6 +180,11 @@ sealed class AgentMessage {
       'assistant' => AgentTextMessage(
         turnId,
         AgentMessageKind.assistant,
+        json['text']! as String,
+      ),
+      'preamble' => AgentTextMessage(
+        turnId,
+        AgentMessageKind.preamble,
         json['text']! as String,
       ),
       'capability' => AgentCapabilityMessage.fromJson(json),

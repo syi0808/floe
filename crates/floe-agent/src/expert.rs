@@ -459,63 +459,76 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
         used_cost = used_cost
             .checked_add(response.cost_micros)
             .ok_or(AgentFailure::BudgetExceeded)?;
-        match response.step {
-            ModelStep::Answer { text } if tool_calls > 0 => {
-                let summary = text.trim();
-                if summary.is_empty() || summary.len() > 2048 {
-                    return Err(AgentFailure::InvalidModelOutput);
+        if response.call_count()
+            > invocation.budget.max_tool_calls.saturating_sub(tool_calls) as usize
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut call_index = 0;
+        for step in response.output.clone() {
+            match step {
+                ModelStep::Preamble { text } => {
+                    messages.push(AgentMessage::Preamble { turn_id, text });
                 }
-                return Ok((summary.into(), model_call));
-            }
-            ModelStep::Answer { .. } => return Err(AgentFailure::InvalidModelOutput),
-            ModelStep::Call {
-                capability_id,
-                input,
-            } => {
-                if capability_id != capability.id || tool_calls >= invocation.budget.max_tool_calls
-                {
-                    return Err(AgentFailure::InvalidModelOutput);
+                ModelStep::Answer { text } if tool_calls > 0 => {
+                    let summary = text.trim();
+                    if summary.is_empty() || summary.len() > 2048 {
+                        return Err(AgentFailure::InvalidModelOutput);
+                    }
+                    return Ok((summary.into(), model_call));
                 }
-                tool_calls += 1;
-                let call_id = Uuid::new_v4();
-                let output = crate::capability_execution::execute_recorded(
-                    &invocation.usage,
-                    crate::CapabilityExecution {
-                        scope_id: invocation.invocation_id,
-                        turn_id,
-                        call_id,
-                        capability_id: capability_id.clone(),
-                        input: input.clone(),
-                        state: crate::CapabilityExecutionState::Started,
-                        result: None,
-                        replay: response.replay.clone(),
-                    },
-                    invocation.deadline,
-                    &invocation.cancellation,
-                    invocation.budget.max_output_bytes,
-                    Box::pin(async {
-                        check_running(invocation)?;
-                        validate_view(view, invocation, data_class)?;
-                        let tool_insights =
-                            schedule_tool_result(view, insights, focus_minutes, &input)?;
-                        serde_json::to_string(&tool_insights)
-                            .map_err(|_| AgentFailure::InvalidInput)
-                    }),
-                )
-                .await??;
-                if let Some(provider_replay) = response.replay {
-                    replay.push(crate::ModelReplay {
-                        call_id,
-                        replay: provider_replay,
-                    });
-                }
-                messages.push(AgentMessage::Capability {
-                    turn_id,
-                    call_id,
+                ModelStep::Answer { .. } => return Err(AgentFailure::InvalidModelOutput),
+                ModelStep::Call {
                     capability_id,
                     input,
-                    result: Ok(output),
-                });
+                } => {
+                    if capability_id != capability.id
+                        || tool_calls >= invocation.budget.max_tool_calls
+                    {
+                        return Err(AgentFailure::InvalidModelOutput);
+                    }
+                    tool_calls += 1;
+                    let call_id = Uuid::new_v4();
+                    let output = crate::capability_execution::execute_recorded(
+                        &invocation.usage,
+                        crate::CapabilityExecution {
+                            scope_id: invocation.invocation_id,
+                            turn_id,
+                            call_id,
+                            capability_id: capability_id.clone(),
+                            input: input.clone(),
+                            state: crate::CapabilityExecutionState::Started,
+                            result: None,
+                            replay: response.replay_for(call_index)?,
+                        },
+                        invocation.deadline,
+                        &invocation.cancellation,
+                        invocation.budget.max_output_bytes,
+                        Box::pin(async {
+                            check_running(invocation)?;
+                            validate_view(view, invocation, data_class)?;
+                            let tool_insights =
+                                schedule_tool_result(view, insights, focus_minutes, &input)?;
+                            serde_json::to_string(&tool_insights)
+                                .map_err(|_| AgentFailure::InvalidInput)
+                        }),
+                    )
+                    .await??;
+                    if let Some(provider_replay) = response.replay_for(call_index)? {
+                        replay.push(crate::ModelReplay {
+                            call_id,
+                            replay: provider_replay,
+                        });
+                    }
+                    call_index += 1;
+                    messages.push(AgentMessage::Capability {
+                        turn_id,
+                        call_id,
+                        capability_id,
+                        input,
+                        result: Ok(output),
+                    });
+                }
             }
         }
     }

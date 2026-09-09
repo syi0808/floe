@@ -36,6 +36,8 @@ pub struct AgentSession {
     pub model_attempts: Vec<crate::ModelAttemptRecord>,
     #[serde(default)]
     pub capability_executions: Vec<CapabilityExecution>,
+    #[serde(default)]
+    pub pending_output: Option<Vec<ModelStep>>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,6 +81,7 @@ impl AgentSession {
             usage: AgentUsage::default(),
             model_attempts: vec![],
             capability_executions: vec![],
+            pending_output: None,
             active_turn: None,
             last_outcome: None,
             continuation: None,
@@ -103,6 +106,8 @@ pub struct CapabilityExecution {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderReplay {
+    pub call_ids: Vec<String>,
+    pub preamble: String,
     pub gateway: String,
     pub purpose: String,
     pub external: bool,
@@ -150,6 +155,10 @@ pub struct AgentContinuation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentMessage {
+    Preamble {
+        turn_id: Uuid,
+        text: String,
+    },
     User {
         turn_id: Uuid,
         text: String,
@@ -170,7 +179,8 @@ pub enum AgentMessage {
 impl AgentMessage {
     pub fn turn_id(&self) -> Uuid {
         match self {
-            Self::User { turn_id, .. }
+            Self::Preamble { turn_id, .. }
+            | Self::User { turn_id, .. }
             | Self::Assistant { turn_id, .. }
             | Self::Capability { turn_id, .. } => *turn_id,
         }
@@ -437,7 +447,7 @@ fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde
             };
             vec![call, output]
         }
-        AgentMessage::Capability { .. } => vec![],
+        AgentMessage::Capability { .. } | AgentMessage::Preamble { .. } => vec![],
     }
 }
 
@@ -448,6 +458,9 @@ fn embedded_json(value: &str) -> serde_json::Value {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelStep {
+    Preamble {
+        text: String,
+    },
     Answer {
         text: String,
     },
@@ -457,10 +470,12 @@ pub enum ModelStep {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelResponse {
     pub replay: Option<ProviderReplay>,
     pub schema_version: u32,
-    pub step: ModelStep,
+    pub output: Vec<ModelStep>,
     pub used_tokens: u64,
     pub cost_micros: u64,
 }
@@ -472,4 +487,27 @@ pub trait ModelRunner {
         &self,
         request: ModelRequest,
     ) -> impl Future<Output = Result<ModelResponse, AgentFailure>> + Send;
+}
+
+impl ModelResponse {
+    pub fn call_count(&self) -> usize {
+        self.output
+            .iter()
+            .filter(|step| matches!(step, ModelStep::Call { .. }))
+            .count()
+    }
+
+    pub fn replay_for(&self, call_index: usize) -> Result<Option<ProviderReplay>, AgentFailure> {
+        self.replay
+            .clone()
+            .map(|mut replay| {
+                replay.provider_call_id = replay
+                    .call_ids
+                    .get(call_index)
+                    .ok_or(AgentFailure::InvalidModelOutput)?
+                    .clone();
+                Ok(replay)
+            })
+            .transpose()
+    }
 }

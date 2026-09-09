@@ -368,7 +368,7 @@ impl ModelRunner for DeterministicModel {
         Ok(ModelResponse {
             replay: None,
             schema_version: PROTOCOL_VERSION,
-            step,
+            output: vec![step],
             used_tokens: 32,
             cost_micros: 0,
         })

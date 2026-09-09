@@ -221,7 +221,7 @@ async fn generate(
                 return Ok(ModelResponse {
                     replay: None,
                     schema_version: AGENT_VERSION,
-                    step,
+                    output: vec![step],
                     used_tokens: CONTEXT_RESERVATION,
                     cost_micros: 0,
                 });
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(result.used_tokens, 4096);
         assert_eq!(result.cost_micros, 0);
         assert_eq!(
-            result.step,
+            result.output[0],
             ModelStep::Answer {
                 text: "Synthetic answer".into()
             }
@@ -634,7 +634,7 @@ mod tests {
             generate(&transport, request(), SessionProtection::SyntheticOnly,)
                 .await
                 .unwrap()
-                .step,
+                .output[0],
             ModelStep::Call {
                 capability_id: "fixture.read".into(),
                 input: "today".into()

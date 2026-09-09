@@ -62,7 +62,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             accounting.settle(consumed_tokens, consumed_cost)?;
             if response.used_tokens > request.remaining_tokens
                 || response.cost_micros > request.remaining_cost_micros
-                || serde_json::to_vec(&response.step)
+                || serde_json::to_vec(&response.output)
                     .map_err(|_| AgentFailure::InvalidModelOutput)?
                     .len()
                     > request.max_output_bytes
@@ -70,25 +70,66 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
                 return Err(AgentFailure::BudgetExceeded);
             }
             if response.schema_version != crate::AGENT_VERSION
-                || matches!(&response.step, ModelStep::Answer { text } if text.trim().is_empty())
+                || response.output.is_empty()
+                || response.output.len() > 16
+                || response.call_count() > 8
             {
                 return Err(AgentFailure::InvalidModelOutput);
             }
-            if let ModelStep::Call {
-                capability_id,
-                input,
-            } = &response.step
+            let answers = response
+                .output
+                .iter()
+                .filter(|step| matches!(step, ModelStep::Answer { .. }))
+                .count();
+            if (response.call_count() > 0 && answers != 0)
+                || (response.call_count() == 0
+                    && (answers != 1
+                        || !matches!(response.output.last(), Some(ModelStep::Answer { .. }))))
             {
-                let index = request
-                    .capabilities
-                    .iter()
-                    .position(|capability| capability.id == *capability_id)
-                    .ok_or(AgentFailure::CapabilityDenied)?;
-                if let Some(validator) = &validators[index] {
-                    let value: serde_json::Value = serde_json::from_str(input)
-                        .map_err(|_| AgentFailure::InvalidModelOutput)?;
-                    if !validator.is_valid(&value) {
-                        return Err(AgentFailure::InvalidModelOutput);
+                return Err(AgentFailure::InvalidModelOutput);
+            }
+            if let Some(replay) = &response.replay {
+                let unique: std::collections::HashSet<_> = replay.call_ids.iter().collect();
+                if replay.call_ids.len() != response.call_count()
+                    || replay.call_ids.is_empty()
+                    || replay.call_ids.first() != Some(&replay.provider_call_id)
+                    || unique.len() != replay.call_ids.len()
+                    || replay
+                        .call_ids
+                        .iter()
+                        .any(|id| id.is_empty() || id.len() > 128)
+                {
+                    return Err(AgentFailure::InvalidModelOutput);
+                }
+            }
+            for step in &response.output {
+                match step {
+                    ModelStep::Answer { text } | ModelStep::Preamble { text } => {
+                        if text.trim().is_empty() {
+                            return Err(AgentFailure::InvalidModelOutput);
+                        }
+                    }
+                    ModelStep::Call {
+                        capability_id,
+                        input,
+                    } => {
+                        let index = request
+                            .capabilities
+                            .iter()
+                            .position(|capability| capability.id == *capability_id)
+                            .ok_or(AgentFailure::CapabilityDenied)?;
+                        if !request.capabilities[index].read_only {
+                            return Err(AgentFailure::CapabilityDenied);
+                        }
+                        let value: serde_json::Value = serde_json::from_str(input)
+                            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+                        if !value.is_object()
+                            || validators[index]
+                                .as_ref()
+                                .is_some_and(|validator| !validator.is_valid(&value))
+                        {
+                            return Err(AgentFailure::InvalidModelOutput);
+                        }
                     }
                 }
             }

@@ -1,7 +1,7 @@
 # ADR 0016: Native agent model protocol and shared correction boundary
 
 - Date: 2026-09-09
-- Status: accepted; native transport, replay, shared usage, durable model attempts and scoped capability execution implemented
+- Status: accepted; native transport, replay, shared usage, durable model attempts, scoped capability execution and ordered output implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
 ## Decision
@@ -22,7 +22,7 @@ database migrations are independent of public contract versions.
 
 Codex Responses, OpenAI-compatible Chat Completions and local-only server Ollama
 use native tools. The provider response is normalized by code into the existing
-Rust ModelStep; the model no longer writes the answer/call envelope. There is no
+Rust ModelResponse.output list of ModelStep items; the model no longer writes an answer/call envelope. There is no
 automatic structured-output fallback or undisclosed provider switch. Device-local
 Foundation Models retain their existing adapter and bypass the gateway.
 
@@ -31,9 +31,28 @@ against the currently advertised registry before dispatch. Rust validates argume
 against descriptor JSON Schema. Schema resolution has network and filesystem
 features disabled. Invalid registry schemas fail before model dispatch.
 
-The initial wire path is deliberately sequential: request parallel calls disabled
-and reject multiple returned calls before any execution. Plain answer text and tool
-calls are distinct. Text accompanying a tool call is not a final user answer.
+The native wire path permits multiple independent calls; host execution remains
+sequential. Each response contains an ordered list of at most 16 items and at most
+eight read-only calls. Preamble text is distinct from a final answer. A response
+with calls cannot also contain a final answer; without calls it must end with
+exactly one answer. The shared correction boundary validates the complete list,
+JSON object arguments, advertised read-only capabilities and every input schema
+before any preamble is published or tool is dispatched. Both loops preflight
+their entire batch against remaining call budgets.
+
+Manager checkpoints a multi-item output list in encrypted pending_output before
+processing it. Every preamble is committed as a non-final message; every tool uses
+the shared durable execution boundary. The checkpoint is cleared only after the
+whole list is consumed. Stops or recovery abandon an incomplete list and disable
+continuation of that partial batch, even when its already-executed calls are all
+settled. They never rerun completed reads or forward incomplete provider groups.
+Expert batches remain bounded by the in-flight parent capability and their own
+tool budget. Authority is rechecked at execution; this is not an atomic transaction
+across tools.
+
+Device-local Foundation Models still emit one item through their adapter.
+Preambles stream as committed v1 message events and Flutter renders them without
+ending the running turn. This is item-level progress, not token streaming.
 Codex output is accepted only on terminal response.completed, never output_text.done.
 Opaque Codex output items, including encrypted reasoning and assistant phase, and
 provider call IDs are returned as typed replay metadata rather than cached in a
@@ -144,8 +163,12 @@ purpose and transfer placement before sending replay. Gateway identity rotation
 old fingerprints: start a fresh turn instead of silently transferring or downgrading
 provider state. This is not a promise of arbitrary provider-session resumability.
 
-Codex replay must contain exactly the recorded function call with matching ID,
-name and JSON arguments. Assistant phase and reasoning items retain their order.
+Replay records bind all original call IDs in a response and its preamble to each
+host execution. Projection reconstructs one assistant call group followed by all
+matching results, inserting opaque provider items only once. Missing, reordered
+or inconsistent group records are rejected before transport. Codex validates
+every recorded call's ID, name and JSON arguments, including uniqueness and order.
+Assistant phase, interleaved text and reasoning items retain their original order.
 Capability aliases use a specified FNV-1a mapping with collision checks, not Rust's
 implementation-dependent default hasher. Rejected model attempts never commit
 their replay. Session and gateway input limits bound retained bytes; successful
@@ -154,16 +177,13 @@ execution ledger. Interrupted work is never automatically replayed.
 
 ## Remaining migration work
 
-This increment is not the entire agent-runtime redesign:
+The core ordered-output and durable-dispatch migration is implemented. Remaining
+operational or optional extensions are:
 
 - Define a durable gateway replay identity only if continuation across gateway
   restart is required; interrupted Expert conversations are not automatically resumed.
-- Introduce ordered multi-item ModelResponse, then support multiple independent
-  read calls without discarding preambles.
-- Move ordered-output scheduling onto the shared dispatch boundary without merging
-  Manager and Expert contexts, completion contracts or authority.
-- Extend the current attempt-level progress into ordered text/tool output streaming
-  and more detailed validation stages without exposing private reasoning.
+- Extend committed-item progress into token-level streaming and more detailed
+  validation stages without exposing private reasoning.
 - Add real-provider
   acceptance captures for the native transport.
 
@@ -172,6 +192,13 @@ expiry, consent, encrypted session storage and Review/Action Authority still app
 Codex OAuth wire reuse remains experimental as described in ADR 0015.
 
 ## Validation
+
+Ordered-output tests cover whole-list rejection with one correction, zero dispatch
+on malformed later calls or insufficient batch budget, preamble ordering,
+cancellation between settled calls, Expert-local batch budgets, grouped provider
+replay reconstruction, incomplete/mismatched group rejection and non-final Flutter
+progress. Server tests cover native multi-call normalization and Codex replay of
+interleaved text with multiple call/result pairs.
 
 Scoped execution tests cover pre-dispatch/result acknowledgment failures, oversized
 result rejection, dropped tool futures, recovery across parent and child scopes,

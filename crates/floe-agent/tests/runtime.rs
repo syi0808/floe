@@ -16,6 +16,327 @@ struct Store {
     fail_revision: AtomicUsize,
 }
 
+fn set_first_output(model: &Model, output: Vec<ModelStep>) {
+    model
+        .responses
+        .lock()
+        .unwrap()
+        .front_mut()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .output = output;
+}
+
+#[tokio::test]
+async fn complete_batch_replay_survives_continuation_with_a_new_runner() {
+    let store = Store::new();
+    let model = Model::new(vec![call()]);
+    set_first_output(&model, vec![call(), call()]);
+    model
+        .responses
+        .lock()
+        .unwrap()
+        .front_mut()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .replay = Some(ProviderReplay {
+        gateway: "http://127.0.0.1:8431".into(),
+        purpose: "everyday_assistance".into(),
+        external: false,
+        source: "a".repeat(64),
+        call_ids: vec!["first".into(), "second".into()],
+        provider_call_id: "first".into(),
+        preamble: String::new(),
+        items: serde_json::Value::Null,
+    });
+    let host = Host::default();
+    let policy = policy();
+    let budget = AgentBudget {
+        max_iterations: 1,
+        ..AgentBudget::default()
+    };
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget,
+    };
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    halted(&stopped, AgentFailure::BudgetExceeded);
+    assert!(stopped.pending_output.is_none());
+    assert!(stopped.continuation.is_some());
+    let resumed_model = Model::new(vec![answer()]);
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &resumed_model,
+        capabilities: &host,
+        policy: &policy,
+        budget,
+    };
+    let completed = runtime
+        .continue_turn(
+            stopped.person_id,
+            stopped.id,
+            stopped.revision,
+            context(),
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
+    let requests = resumed_model.requests.lock().unwrap();
+    assert_eq!(requests[0].replay.len(), 2);
+    assert_eq!(requests[0].replay[0].replay.provider_call_id, "first");
+    assert_eq!(requests[0].replay[1].replay.provider_call_id, "second");
+    assert!(
+        completed
+            .capability_executions
+            .iter()
+            .all(|execution| execution.replay.is_none())
+    );
+}
+
+#[tokio::test]
+async fn failed_batch_checkpoint_clear_recovers_without_reexecuting_settled_calls() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    set_first_output(&model, vec![call(), call()]);
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let result = runtime
+        .run_turn(
+            store.command(),
+            context(),
+            Cancellation::default(),
+            |event| {
+                if matches!(
+                    event.event,
+                    AgentEventKind::MessageCommitted {
+                        message: AgentMessage::Capability { .. },
+                        ..
+                    }
+                ) {
+                    let saved = store.snapshot();
+                    if saved.capability_executions.len() == 2 {
+                        store
+                            .fail_revision
+                            .store(saved.revision as usize + 1, Ordering::SeqCst);
+                    }
+                }
+            },
+        )
+        .await;
+    assert_eq!(result, Err(AgentFailure::StorageUnavailable));
+    let saved = store.snapshot();
+    assert!(saved.pending_output.is_some());
+    assert!(
+        saved
+            .capability_executions
+            .iter()
+            .all(|execution| execution.state == CapabilityExecutionState::Settled)
+    );
+    store.fail_revision.store(usize::MAX, Ordering::SeqCst);
+    let recovered = runtime
+        .recover_interrupted(saved.person_id, saved.id, saved.revision)
+        .await
+        .unwrap();
+    assert!(recovered.pending_output.is_none());
+    assert!(recovered.continuation.is_none());
+    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(model.calls(), 1);
+}
+
+#[tokio::test]
+async fn ordered_preambles_and_reads_complete_before_the_next_model_request() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    set_first_output(
+        &model,
+        vec![
+            ModelStep::Preamble {
+                text: "Checking both sources.".into(),
+            },
+            call(),
+            ModelStep::Preamble {
+                text: "Checking the second source.".into(),
+            },
+            call(),
+        ],
+    );
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let result = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(model.calls(), 2);
+    assert!(result.pending_output.is_none());
+    assert!(matches!(result.messages[1], AgentMessage::Preamble { .. }));
+    assert!(matches!(
+        result.messages[2],
+        AgentMessage::Capability { .. }
+    ));
+    assert!(matches!(result.messages[3], AgentMessage::Preamble { .. }));
+    assert!(matches!(
+        result.messages[4],
+        AgentMessage::Capability { .. }
+    ));
+    assert!(matches!(result.messages[5], AgentMessage::Assistant { .. }));
+    assert!(
+        result
+            .capability_executions
+            .iter()
+            .all(|record| record.state == CapabilityExecutionState::Settled)
+    );
+    assert_eq!(model.requests.lock().unwrap()[1].messages.len(), 5);
+}
+
+#[tokio::test]
+async fn invalid_output_batches_are_corrected_before_any_text_or_tool_dispatch() {
+    for output in [
+        vec![],
+        vec![ModelStep::Preamble {
+            text: "Not final".into(),
+        }],
+        vec![call(), answer()],
+        vec![
+            call(),
+            ModelStep::Call {
+                capability_id: "schedule.read".into(),
+                input: "null".into(),
+            },
+        ],
+        vec![
+            answer(),
+            ModelStep::Preamble {
+                text: "Too late".into(),
+            },
+        ],
+        vec![call(); 9],
+    ] {
+        let store = Store::new();
+        let model = Model::new(vec![call(), answer()]);
+        set_first_output(&model, output);
+        let host = Host::default();
+        let policy = policy();
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        let result = runtime
+            .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
+        assert_eq!(model.calls(), 2);
+        assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(result.messages.len(), 2);
+        assert_eq!(result.model_attempts[0].state, ModelAttemptState::Rejected);
+    }
+}
+
+#[tokio::test]
+async fn batch_budget_and_intent_commit_failures_prevent_all_dispatch() {
+    for storage_failure in [false, true] {
+        let store = Store::new();
+        let model = Model::new(vec![call()]);
+        set_first_output(&model, vec![call(), call()]);
+        let host = Host::default();
+        let policy = policy();
+        let mut budget = AgentBudget::default();
+        if storage_failure {
+            store.fail_revision.store(4, Ordering::SeqCst);
+        } else {
+            budget.max_capability_calls = 1;
+        }
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget,
+        };
+        let result = runtime
+            .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+            .await;
+        if storage_failure {
+            assert_eq!(result, Err(AgentFailure::StorageUnavailable));
+        } else {
+            halted(&result.unwrap(), AgentFailure::BudgetExceeded);
+        }
+        assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.snapshot().messages.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn stopping_between_settled_batch_calls_never_offers_partial_replay() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    set_first_output(&model, vec![call(), call()]);
+    let host = Host::default();
+    let policy = policy();
+    let cancellation = Cancellation::default();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let result = runtime
+        .run_turn(store.command(), context(), cancellation.clone(), |event| {
+            if matches!(
+                event.event,
+                AgentEventKind::MessageCommitted {
+                    message: AgentMessage::Capability { .. },
+                    ..
+                }
+            ) {
+                assert!(store.snapshot().pending_output.is_some());
+                cancellation.cancel();
+            }
+        })
+        .await
+        .unwrap();
+    halted(&result, AgentFailure::Cancelled);
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls(), 1);
+    assert_eq!(
+        result.capability_executions[0].state,
+        CapabilityExecutionState::Settled
+    );
+    assert!(result.continuation.is_none());
+    assert!(result.pending_output.is_none());
+}
+
 #[tokio::test]
 async fn malformed_model_output_is_corrected_once_without_reexecuting_tools() {
     for failure in [
@@ -102,7 +423,7 @@ async fn response_contract_failures_share_one_correction_boundary() {
             if wrong_version {
                 first.schema_version = 99;
             } else {
-                first.step = ModelStep::Answer { text: "  ".into() };
+                first.output[0] = ModelStep::Answer { text: "  ".into() };
             }
         }
         let host = Host::default();
@@ -206,7 +527,7 @@ impl Model {
                         Ok(ModelResponse {
                             replay: None,
                             schema_version: AGENT_VERSION,
-                            step,
+                            output: vec![step],
                             used_tokens: 10,
                             cost_micros: 0,
                         })
@@ -492,6 +813,8 @@ async fn provider_replay_survives_session_reload_and_is_pruned_after_completion(
         purpose: "everyday_assistance".into(),
         external: true,
         source: "a".repeat(64),
+        call_ids: vec!["original_call".into()],
+        preamble: String::new(),
         provider_call_id: "original_call".into(),
         items: serde_json::json!([{"type":"reasoning","encrypted_content":"opaque"}]),
     };
@@ -792,7 +1115,7 @@ async fn tool_schema_validation_recovers_before_dispatch() {
     assert_eq!(model.calls(), 2);
     assert_eq!(response.used_tokens, 20);
     assert_eq!(
-        response.step,
+        response.output[0],
         ModelStep::Call {
             capability_id: "read".into(),
             input: r#"{"count":1}"#.into()
@@ -837,7 +1160,7 @@ async fn correction_preserves_successful_tool_results() {
 fn call() -> ModelStep {
     ModelStep::Call {
         capability_id: "schedule.read".into(),
-        input: "today".into(),
+        input: r#"{"range":"today"}"#.into(),
     }
 }
 

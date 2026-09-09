@@ -202,7 +202,7 @@ class _AgentPanelState extends State<AgentPanel> {
       switch (message) {
         AgentTextMessage(:final kind, :final text) => FloeSquircle(
           size: FloeSquircleSize.md,
-          fill: kind == AgentMessageKind.assistant
+          fill: kind != AgentMessageKind.user
               ? FloePalette.primary50
               : FloePalette.neutral50,
           borderWidth: 0,
@@ -211,11 +211,11 @@ class _AgentPanelState extends State<AgentPanel> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                kind == AgentMessageKind.assistant ? 'Floe' : strings.agentYou,
+                kind != AgentMessageKind.user ? 'Floe' : strings.agentYou,
                 style: FloeType.label,
               ),
               const SizedBox(height: FloeSpace.sm),
-              if (kind == AgentMessageKind.assistant)
+              if (kind != AgentMessageKind.user)
                 _AgentMarkdown(data: text)
               else
                 SelectableText(text, style: FloeType.body),

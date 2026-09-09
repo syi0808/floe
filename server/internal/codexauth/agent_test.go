@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestNativeReplayValidatesEveryCallInOrderedGroup(test *testing.T) {
+	raw := `{"messages":[{"role":"assistant","provider_items":[
+        {"type":"reasoning","encrypted_content":"opaque"},
+        {"type":"function_call","call_id":"first","name":"read","arguments":"{}"},
+        {"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking more."}]},
+        {"type":"function_call","call_id":"second","name":"read","arguments":"{\"day\":2}"}
+    ],"tool_calls":[
+        {"id":"first","function":{"name":"read","arguments":"{}"}},
+        {"id":"second","function":{"name":"read","arguments":"{\"day\":2}"}}
+    ]},{"role":"tool","tool_call_id":"first","content":"one"},{"role":"tool","tool_call_id":"second","content":"two"}],"tools":[]}`
+	items, _, err := nativeInput(json.RawMessage(raw))
+	if err != nil || len(items) != 6 {
+		test.Fatal(items, err)
+	}
+	if items[2].(map[string]any)["phase"] != "commentary" ||
+		items[4].(map[string]any)["call_id"] != "first" || items[5].(map[string]any)["call_id"] != "second" {
+		test.Fatal(items)
+	}
+	changed := strings.Replace(raw, `"call_id":"second"`, `"call_id":"foreign"`, 1)
+	if _, _, err := nativeInput(json.RawMessage(changed)); err == nil {
+		test.Fatal("second replay call was not validated")
+	}
+}
+
 func TestNativeCallResultPairing(test *testing.T) {
 	items, tools, err := nativeInput(json.RawMessage(`{"messages":[{"role":"assistant","tool_calls":[{"id":"call_1","function":{"name":"read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"observed"}],"tools":[{"function":{"name":"read","description":"Read","parameters":{"type":"object"}}}]}`))
 	if err != nil || len(tools) != 1 || len(items) != 2 {
