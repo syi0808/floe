@@ -177,7 +177,14 @@ impl ModelRunner for Model<'_> {
                 }
             };
             return Ok(ModelResponse {
-                replay: None,
+                replay: (!has_tool_result).then(|| floe_agent::ProviderReplay {
+                    gateway: "http://127.0.0.1:8431".into(),
+                    purpose: "everyday_assistance".into(),
+                    external: false,
+                    source: "a".repeat(64),
+                    provider_call_id: "expert-only-call".into(),
+                    items: serde_json::json!([{"type": "reasoning", "encrypted_content": "expert-only-replay"}]),
+                }),
                 schema_version: 1,
                 step,
                 used_tokens: 10,
@@ -649,10 +656,20 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         .unwrap();
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(result.session.revision, 12);
+    assert_eq!(result.session.revision, 16);
     assert_eq!(result.session.usage.tokens, 40);
     assert_eq!(result.session.usage.model_attempts, 4);
     assert_eq!(result.session.model_attempts.len(), 4);
+    let executions = &result.session.capability_executions;
+    assert_eq!(executions.len(), 3);
+    assert_eq!(executions[0].scope_id, result.session.id);
+    assert_eq!(executions[1].capability_id, "view.timeline");
+    assert_eq!(executions[2].capability_id, "schedule.find_free_windows");
+    assert_eq!(executions[1].scope_id, executions[2].scope_id);
+    assert_ne!(executions[1].scope_id, result.session.id);
+    assert!(executions.iter().all(|execution| execution.state == floe_agent::CapabilityExecutionState::Settled));
+    assert!(executions.iter().all(|execution| matches!(execution.result, Some(Ok(_)))));
+    assert!(executions.iter().all(|execution| execution.replay.is_none()));
     assert_eq!(result.session.model_attempts.iter().filter(|record| record.scope_id == result.session.id).count(), 2);
     assert!(result.session.model_attempts.iter().all(|record| record.state == ModelAttemptState::Accepted));
     assert_eq!(result.session.usage.estimated_tokens, 0);
@@ -672,6 +689,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(fixture.state().await.revision, fixture.revision + 1);
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.replay.is_empty()));
     assert_eq!(
         requests[0].capabilities[0].input_schema.as_ref().unwrap()["properties"]["kind"]["enum"][1],
         "propose_focus"
@@ -691,6 +709,10 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     );
     let expert_requests = model.expert_requests.lock().unwrap();
     assert_eq!(expert_requests.len(), 2);
+    assert!(expert_requests[0].replay.is_empty());
+    assert_eq!(expert_requests[1].replay.len(), 1);
+    assert_eq!(expert_requests[1].replay[0].call_id, executions[2].call_id);
+    assert_eq!(expert_requests[1].replay[0].replay.provider_call_id, "expert-only-call");
     assert_eq!(expert_requests[0].messages.len(), 1);
     assert_eq!(
         expert_requests[0].capabilities[0].id,
@@ -713,7 +735,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     );
     assert!(events.iter().any(|event| matches!(
         event.event,
-        AgentEventKind::MessageCommitted { revision: 9, .. }
+        AgentEventKind::MessageCommitted { revision: 13, .. }
     )));
 }
 
@@ -755,7 +777,7 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         .await
         .unwrap();
     assert_eq!(second.session.messages[..3], first.session.messages);
-    assert_eq!(second.session.revision, 24);
+    assert_eq!(second.session.revision, 32);
     assert_eq!(second.proposals.len(), 1);
     assert_ne!(
         second.proposals[0].reference.invocation_id,

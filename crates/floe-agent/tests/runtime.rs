@@ -656,6 +656,15 @@ async fn dropped_tool_future_recovers_as_uncertain_without_reexecution() {
         .await
         .is_err()
     );
+    {
+        let mut session = store.session.lock().unwrap();
+        let mut child = session.capability_executions[0].clone();
+        child.scope_id = Uuid::new_v4();
+        child.turn_id = child.scope_id;
+        child.call_id = Uuid::new_v4();
+        child.capability_id = "view.timeline".into();
+        session.capability_executions.push(child);
+    }
     let saved = store.snapshot();
     assert_eq!(
         saved.capability_executions[0].state,
@@ -669,6 +678,11 @@ async fn dropped_tool_future_recovers_as_uncertain_without_reexecution() {
         recovered.capability_executions[0].state,
         CapabilityExecutionState::Interrupted
     );
+    assert_eq!(recovered.capability_executions.len(), 2);
+    assert!(recovered.capability_executions.iter().all(|execution| {
+        execution.state == CapabilityExecutionState::Interrupted && execution.result.is_none()
+    }));
+    assert!(recovered.continuation.is_none());
     assert_eq!(host.calls.load(Ordering::SeqCst), 1);
     assert_eq!(model.calls(), 1);
 }

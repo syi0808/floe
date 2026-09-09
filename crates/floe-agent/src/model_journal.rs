@@ -27,7 +27,13 @@ pub struct ModelAttemptRecord {
 }
 
 #[derive(Debug)]
+pub(crate) enum JournalRecord {
+    Model(ModelAttemptRecord),
+    Capability(crate::CapabilityExecution),
+}
+
+#[derive(Debug)]
 pub(crate) struct JournalUpdate {
-    pub record: ModelAttemptRecord,
+    pub record: JournalRecord,
     pub acknowledged: oneshot::Sender<Result<(), AgentFailure>>,
 }

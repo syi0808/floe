@@ -231,12 +231,30 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             deadline: invocation.deadline,
             cancellation,
         };
-        let view = tokio::select! {
-            biased;
-            _ = invocation.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            result = tokio::time::timeout_at(invocation.deadline, self.views.timeline(read)) =>
-                result.map_err(|_| AgentFailure::DeadlineExceeded)??,
-        };
+        let view_output = crate::capability_execution::execute_recorded(
+            &invocation.usage,
+            crate::CapabilityExecution {
+                scope_id: invocation.invocation_id,
+                turn_id: invocation.invocation_id,
+                call_id: Uuid::new_v4(),
+                capability_id: "view.timeline".into(),
+                input: serde_json::json!({"handle": read.handle}).to_string(),
+                state: crate::CapabilityExecutionState::Started,
+                result: None,
+                replay: None,
+            },
+            invocation.deadline,
+            &invocation.cancellation,
+            invocation.budget.max_view_bytes.min(16384),
+            Box::pin(async {
+                let view = self.views.timeline(read).await?;
+                validate_view(&view, &invocation, resolved.data_class)?;
+                serde_json::to_string(&view).map_err(|_| AgentFailure::InvalidInput)
+            }),
+        )
+        .await??;
+        let view: ExpertTimelineView =
+            serde_json::from_str(&view_output).map_err(|_| AgentFailure::InvalidInput)?;
         check_running(&invocation)?;
         validate_view(&view, &invocation, resolved.data_class)?;
         let minimum = match &resolved.package.implementation {
@@ -373,7 +391,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
     {
         return Err(AgentFailure::BudgetExceeded);
     }
-    let turn_id = Uuid::new_v4();
+    let turn_id = invocation.invocation_id;
     let capability = CapabilityDescriptor {
         schema_version: AGENT_VERSION,
         id: "schedule.find_free_windows".into(),
@@ -458,9 +476,33 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                 {
                     return Err(AgentFailure::InvalidModelOutput);
                 }
-                let tool_insights = schedule_tool_result(view, insights, focus_minutes, &input)?;
                 tool_calls += 1;
                 let call_id = Uuid::new_v4();
+                let output = crate::capability_execution::execute_recorded(
+                    &invocation.usage,
+                    crate::CapabilityExecution {
+                        scope_id: invocation.invocation_id,
+                        turn_id,
+                        call_id,
+                        capability_id: capability_id.clone(),
+                        input: input.clone(),
+                        state: crate::CapabilityExecutionState::Started,
+                        result: None,
+                        replay: response.replay.clone(),
+                    },
+                    invocation.deadline,
+                    &invocation.cancellation,
+                    invocation.budget.max_output_bytes,
+                    Box::pin(async {
+                        check_running(invocation)?;
+                        validate_view(view, invocation, data_class)?;
+                        let tool_insights =
+                            schedule_tool_result(view, insights, focus_minutes, &input)?;
+                        serde_json::to_string(&tool_insights)
+                            .map_err(|_| AgentFailure::InvalidInput)
+                    }),
+                )
+                .await??;
                 if let Some(provider_replay) = response.replay {
                     replay.push(crate::ModelReplay {
                         call_id,
@@ -472,8 +514,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                     call_id,
                     capability_id,
                     input,
-                    result: Ok(serde_json::to_string(&tool_insights)
-                        .map_err(|_| AgentFailure::InvalidInput)?),
+                    result: Ok(output),
                 });
             }
         }

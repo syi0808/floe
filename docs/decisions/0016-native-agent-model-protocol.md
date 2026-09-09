@@ -1,7 +1,7 @@
 # ADR 0016: Native agent model protocol and shared correction boundary
 
 - Date: 2026-09-09
-- Status: accepted; native transport, replay, shared usage and durable model-attempt events implemented
+- Status: accepted; native transport, replay, shared usage, durable model attempts and scoped capability execution implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
 ## Decision
@@ -9,7 +9,8 @@
 Rust owns the Floe agent loop, capability authorization, Expert host and action
 boundary. Go owns provider credentials and model transport, not tool execution.
 Manager and bounded Experts share the model-attempt recovery function; their
-domain execution loops and completion contracts remain distinct in this increment.
+domain reasoning loops and completion contracts remain distinct. Manager and
+Expert now also share a durable capability-dispatch function.
 
 `POST /v1/agent` is separate from the purpose-routed `/v1/generate` structured generation API.
 It uses schema version 1, a product purpose, data classes, explicit transfer
@@ -39,7 +40,9 @@ provider call IDs are returned as typed replay metadata rather than cached in a
 model adapter. Manager persists accepted call replay alongside encrypted execution
 intent, keyed by host call ID. Continuation reconstructs it from settled executions
 in the current turn, even with a new runner. Expert carries the same typed metadata
-within its isolated invocation; its internal transcript is not durable yet.
+within its isolated invocation and persists internal read inputs, results and replay
+under that invocation's execution scope. This is a recovery journal, not automatic
+reconstruction or resumption of an interrupted Expert conversation.
 Replay is not displayed or written into content-free gateway audit records.
 
 ## Recovery
@@ -87,8 +90,9 @@ If the process or future stops before settlement is durable, the persisted start
 record retains its estimated usage. Recovery marks it interrupted without
 reissuing the model request; observed usage that was never committed remains
 unknown, not free and not claimed to be exact billing. These records are bounded
-by the existing session byte budget. Expert-internal model attempts are journaled;
-its deterministic tool-read transcript still has a separate lifecycle.
+by the existing session byte budget. Expert-internal model attempts and tool reads
+use the same acknowledged journal; Expert private-state publication still has its
+separate authority-checked transaction.
 
 Committed attempt records stream as v1 model_attempt events through the existing
 sequenced, bounded FFI progress transport. Logical model_started events still mark
@@ -101,15 +105,32 @@ commit; restart recovery retains them in the encrypted session without replay.
 
 ## Durable capability dispatch
 
-Before Manager dispatches a capability (including an Expert invocation), Rust commits
-its call ID, turn ID, capability ID and input in the encrypted session using CAS.
-A failed intent commit prevents dispatch. The observed result and settled state
-are committed together before another model call. A dropped future or failed result
-commit leaves a started record; recovery marks it interrupted without rerunning it.
-Interrupted means completion is unknown, not that the capability did nothing.
-These records are bounded by the existing session size budget and are not model
-context or gateway audit content. Expert-internal read attempts still need to join
-the shared durable ledger in a later increment.
+Manager capability calls, Expert timeline views and Expert-internal schedule reads
+use the same dispatch boundary. Rust commits scope ID, call ID, turn ID, capability
+ID, input and optional provider replay through encrypted session CAS before polling
+the tool future. A failed intent commit prevents dispatch. Cancellation and deadline
+are checked again after acknowledgment. The observed bounded result and settled
+state are committed before returning evidence to either reasoning loop. Manager's
+public capability message is committed atomically with its settlement; child results
+remain in their execution scope, not in Manager messages or progress events.
+
+Execution settlement finds the matching call ID and scope, not the last journal
+entry: nested Expert reads must not prevent their parent capability from settling.
+Storage/journal failures propagate as runtime failures, not ordinary tool evidence.
+A dropped future, failed result commit or oversized result leaves a started record;
+recovery marks all affected scopes interrupted without rerunning them. Interrupted
+means completion is unknown, not that the capability did nothing. A settled child
+does not imply its parent Expert or private-state transaction completed.
+
+Fresh view validation, grants, consent and final Expert publication checks remain
+in their existing authority boundaries. Manager's replay projection selects only its
+own scope; child replay cannot enter a Manager provider request. Completion prunes
+opaque replay from every scope. Execution inputs and semantic results remain in
+the encrypted, session-size-bounded ledger. Root capability-call budgets and Expert
+view/tool budgets remain separate; model token/cost accounting is shared.
+
+The journal is attached by AgentRuntime. Standalone ExpertHost invocations retain
+the bounded execution path but do not acquire durable storage implicitly.
 
 ## Replay isolation and retention
 
@@ -135,12 +156,12 @@ execution ledger. Interrupted work is never automatically replayed.
 
 This increment is not the entire agent-runtime redesign:
 
-- Extend encrypted replay and execution records into Expert-internal reads; define
-  a durable gateway replay identity if continuation across gateway restart is needed.
+- Define a durable gateway replay identity only if continuation across gateway
+  restart is required; interrupted Expert conversations are not automatically resumed.
 - Introduce ordered multi-item ModelResponse, then support multiple independent
   read calls without discarding preambles.
-- Unify the remaining Manager/Expert loop mechanics without merging their contexts
-  or authority.
+- Move ordered-output scheduling onto the shared dispatch boundary without merging
+  Manager and Expert contexts, completion contracts or authority.
 - Extend the current attempt-level progress into ordered text/tool output streaming
   and more detailed validation stages without exposing private reasoning.
 - Add real-provider
@@ -151,6 +172,11 @@ expiry, consent, encrypted session storage and Review/Action Authority still app
 Codex OAuth wire reuse remains experimental as described in ADR 0015.
 
 ## Validation
+
+Scoped execution tests cover pre-dispatch/result acknowledgment failures, oversized
+result rejection, dropped tool futures, recovery across parent and child scopes,
+Expert replay exclusion from Manager requests, atomic parent settlement after child
+reads, and encrypted child result persistence through WAL/checkpoint reopen.
 
 Offline tests cover native request projection, plain answers, call normalization,
 malformed input rejection, terminal stream completion, opaque replay preservation,

@@ -1,3 +1,4 @@
+mod capability_execution;
 mod contract;
 mod expert;
 mod policy;

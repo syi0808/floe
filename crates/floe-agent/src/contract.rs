@@ -89,11 +89,13 @@ impl AgentSession {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityExecution {
+    pub scope_id: Uuid,
     pub turn_id: Uuid,
     pub call_id: Uuid,
     pub capability_id: String,
     pub input: String,
     pub state: CapabilityExecutionState,
+    pub result: Option<Result<String, AgentFailure>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<ProviderReplay>,
 }

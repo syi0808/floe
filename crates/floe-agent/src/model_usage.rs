@@ -75,6 +75,22 @@ impl UsageLedger {
         &self,
         record: crate::ModelAttemptRecord,
     ) -> Result<(), AgentFailure> {
+        self.record_entry(crate::model_journal::JournalRecord::Model(record))
+            .await
+    }
+
+    pub(crate) async fn record_capability(
+        &self,
+        record: crate::CapabilityExecution,
+    ) -> Result<(), AgentFailure> {
+        self.record_entry(crate::model_journal::JournalRecord::Capability(record))
+            .await
+    }
+
+    async fn record_entry(
+        &self,
+        record: crate::model_journal::JournalRecord,
+    ) -> Result<(), AgentFailure> {
         if let Some(journal) = &self.journal {
             let (acknowledged, receiver) = tokio::sync::oneshot::channel();
             journal

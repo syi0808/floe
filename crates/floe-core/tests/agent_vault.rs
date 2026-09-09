@@ -99,6 +99,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
         "synthetic-tool-result-236b6",
         "synthetic-answer-111f4",
         "synthetic-provider-replay-c914e",
+        "synthetic-expert-private-result-632ba",
     ];
     session.messages = vec![
         AgentMessage::User {
@@ -121,6 +122,8 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
         panic!("missing synthetic call")
     };
     session.capability_executions.push(CapabilityExecution {
+        scope_id: session.id,
+        result: Some(Ok(markers[2].into())),
         turn_id: turn,
         call_id,
         capability_id: "fixture.read.v1".into(),
@@ -135,6 +138,13 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
             items: serde_json::json!([{"type":"reasoning","encrypted_content":markers[4]}]),
         }),
     });
+    let mut child = session.capability_executions[0].clone();
+    child.scope_id = Uuid::new_v4();
+    child.turn_id = child.scope_id;
+    child.call_id = Uuid::new_v4();
+    child.capability_id = "schedule.find_free_windows".into();
+    child.result = Some(Ok(markers[5].into()));
+    session.capability_executions.push(child);
     let attempt_id = Uuid::new_v4();
     session.model_attempts.push(ModelAttemptRecord {
         id: attempt_id,

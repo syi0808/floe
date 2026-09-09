@@ -404,34 +404,92 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         deadline: Instant,
         cancellation: &Cancellation,
     ) -> Result<T, AgentFailure> {
-        let future = bounded(future, deadline, cancellation);
-        tokio::pin!(future);
+        let mut future = Box::pin(bounded(future, deadline, cancellation));
         loop {
             tokio::select! {
                 biased;
                 update = journal.recv() => {
                     let update = update.ok_or(AgentFailure::Interrupted)?;
-                    let previous = session.model_attempts.clone();
-                    if update.record.state == ModelAttemptState::Started {
-                        session.model_attempts.push(update.record.clone());
-                    } else {
-                        let record = session.model_attempts.iter_mut().find(|record| record.id == update.record.id)
-                            .ok_or(AgentFailure::InvalidInput)?;
-                        *record = update.record.clone();
-                    }
-                    ledger.sync(usage);
-                    session.usage = *usage;
-                    if let Err(failure) = self.commit(session).await {
-                        session.model_attempts = previous;
-                        if update.record.state == ModelAttemptState::Started {
-                            ledger.undispatched(update.record.usage.tokens);
-                        } else if let Some(record) = session.model_attempts.iter_mut().find(|record| record.id == update.record.id) {
-                            record.usage = update.record.usage;
+                    match update.record {
+                        crate::model_journal::JournalRecord::Model(record) => {
+                            let previous = session.model_attempts.clone();
+                            if record.state == ModelAttemptState::Started {
+                                session.model_attempts.push(record.clone());
+                            } else {
+                                let saved = session.model_attempts.iter_mut().find(|saved| saved.id == record.id)
+                                    .ok_or(AgentFailure::InvalidInput)?;
+                                *saved = record.clone();
+                            }
+                            ledger.sync(usage);
+                            session.usage = *usage;
+                            if let Err(failure) = self.commit(session).await {
+                                session.model_attempts = previous;
+                                if record.state == ModelAttemptState::Started {
+                                    ledger.undispatched(record.usage.tokens);
+                                } else if let Some(saved) = session.model_attempts.iter_mut().find(|saved| saved.id == record.id) {
+                                    saved.usage = record.usage;
+                                }
+                                let _ = update.acknowledged.send(Err(failure));
+                                return Err(failure);
+                            }
+                            emit_event(session, turn_id, AgentEventKind::ModelAttempt { record }, emit);
                         }
-                        let _ = update.acknowledged.send(Err(failure));
-                        return Err(failure);
+                        crate::model_journal::JournalRecord::Capability(record) => {
+                            let previous = session.capability_executions.clone();
+                            if record.state == CapabilityExecutionState::Started {
+                                if session.capability_executions.iter().any(|saved| saved.call_id == record.call_id) {
+                                    return Err(AgentFailure::InvalidInput);
+                                }
+                                session.capability_executions.push(record.clone());
+                            } else {
+                                let saved = session.capability_executions.iter_mut().find(|saved| {
+                                    saved.call_id == record.call_id && saved.scope_id == record.scope_id
+                                        && saved.state == CapabilityExecutionState::Started
+                                }).ok_or(AgentFailure::InvalidInput)?;
+                                *saved = record.clone();
+                            }
+                            let message = if record.scope_id == session.id
+                                && record.state == CapabilityExecutionState::Settled {
+                                Some(AgentMessage::Capability {
+                                    turn_id,
+                                    call_id: record.call_id,
+                                    capability_id: record.capability_id.clone(),
+                                    input: record.input.clone(),
+                                    result: record.result.clone().ok_or(AgentFailure::InvalidInput)?,
+                                })
+                            } else {
+                                None
+                            };
+                            if let Some(message) = &message {
+                                session.messages.push(message.clone());
+                            }
+                            ledger.sync(usage);
+                            session.usage = *usage;
+                            let commit = if encoded_len(session)? > self.budget.max_session_bytes.saturating_sub(4096) {
+                                Err(AgentFailure::BudgetExceeded)
+                            } else {
+                                self.commit(session).await
+                            };
+                            if let Err(failure) = commit {
+                                session.capability_executions = previous;
+                                if message.is_some() {
+                                    session.messages.pop();
+                                }
+                                let _ = update.acknowledged.send(Err(failure));
+                                return Err(failure);
+                            }
+                            if record.scope_id == session.id && record.state == CapabilityExecutionState::Started {
+                                emit_event(session, turn_id, AgentEventKind::CapabilityStarted {
+                                    call_id: record.call_id, capability_id: record.capability_id,
+                                }, emit);
+                            }
+                            if let Some(message) = message {
+                                emit_event(session, turn_id, AgentEventKind::MessageCommitted {
+                                    message, revision: session.revision,
+                                }, emit);
+                            }
+                        }
                     }
-                    emit_event(session, turn_id, AgentEventKind::ModelAttempt { record: update.record }, emit);
                     let _ = update.acknowledged.send(Ok(()));
                 }
                 result = &mut future => return result,
@@ -496,6 +554,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     .iter()
                     .filter(|execution| {
                         execution.turn_id == turn_id
+                            && execution.scope_id == session.id
                             && execution.state == CapabilityExecutionState::Settled
                     })
                     .filter_map(|execution| {
@@ -586,48 +645,49 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     usage.capability_calls += 1;
                     let call_id = Uuid::new_v4();
                     session.usage = *usage;
-                    session.capability_executions.push(CapabilityExecution {
+                    let execution = CapabilityExecution {
+                        scope_id: session.id,
+                        result: None,
                         turn_id,
                         call_id,
                         capability_id: capability_id.clone(),
                         input: input.clone(),
                         state: CapabilityExecutionState::Started,
                         replay: response.replay.clone(),
-                    });
-                    if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
-                        session.capability_executions.pop();
-                        return Err(AgentFailure::BudgetExceeded.into());
-                    }
-                    if let Err(failure) = self.commit(session).await {
-                        session.capability_executions.pop();
-                        return Err(failure.into());
-                    }
-                    check_drive_running(deadline, cancellation)?;
-                    self.authorize(context)?;
-                    emit_event(
-                        session,
+                    };
+                    let invocation = CapabilityInvocation {
+                        usage: ledger.clone(),
+                        schema_version: AGENT_VERSION,
+                        call_id,
+                        person_id: session.person_id,
+                        session_id: session.id,
                         turn_id,
-                        AgentEventKind::CapabilityStarted {
-                            call_id,
-                            capability_id: capability_id.clone(),
-                        },
-                        emit,
-                    );
+                        capability_id: capability_id.clone(),
+                        input: input.clone(),
+                        max_output_bytes: budget.max_output_bytes,
+                        deadline,
+                        cancellation: cancellation.clone(),
+                    };
                     let result = self
                         .recorded(
-                            self.capabilities.invoke(CapabilityInvocation {
-                                usage: ledger.clone(),
-                                schema_version: AGENT_VERSION,
-                                call_id,
-                                person_id: session.person_id,
-                                session_id: session.id,
-                                turn_id,
-                                capability_id: capability_id.clone(),
-                                input: input.clone(),
-                                max_output_bytes: budget.max_output_bytes,
+                            crate::capability_execution::execute_recorded(
+                                &ledger,
+                                execution,
                                 deadline,
-                                cancellation: cancellation.clone(),
-                            }),
+                                cancellation,
+                                budget.max_output_bytes,
+                                Box::pin(async {
+                                    self.authorize(context)?;
+                                    if !self
+                                        .capabilities
+                                        .descriptors(invocation.person_id)
+                                        .contains(descriptor)
+                                    {
+                                        return Err(AgentFailure::CapabilityUnavailable);
+                                    }
+                                    self.capabilities.invoke(invocation).await
+                                }),
+                            ),
                             session,
                             usage,
                             &ledger,
@@ -637,57 +697,29 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             deadline,
                             cancellation,
                         )
-                        .await;
+                        .await
+                        .map_err(DriveStop::from_call)?;
                     if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) = &result {
                         return Err(DriveStop::from_call(result.unwrap_err()));
                     }
                     check_drive_running(deadline, cancellation)?;
-                    if result
-                        .as_ref()
-                        .is_ok_and(|text| text.len() > budget.max_output_bytes)
-                    {
-                        return Err(AgentFailure::BudgetExceeded.into());
-                    }
-                    AgentMessage::Capability {
-                        turn_id,
-                        call_id,
-                        capability_id,
-                        input,
-                        result,
-                    }
+                    continue;
                 }
             };
             ledger.sync(usage);
             session.usage = *usage;
-            let completed = matches!(message, AgentMessage::Assistant { .. });
             session.messages.push(message.clone());
             if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
                 session.messages.pop();
                 return Err(AgentFailure::BudgetExceeded.into());
             }
-            if completed {
-                session.active_turn = None;
-                session.last_outcome = Some(AgentOutcome::Completed);
-                for execution in &mut session.capability_executions {
-                    execution.replay = None;
-                }
-            }
-            if let AgentMessage::Capability { call_id, .. } = &message {
-                if let Some(execution) = session.capability_executions.last_mut() {
-                    if execution.call_id == *call_id {
-                        execution.state = CapabilityExecutionState::Settled;
-                    }
-                }
+            session.active_turn = None;
+            session.last_outcome = Some(AgentOutcome::Completed);
+            for execution in &mut session.capability_executions {
+                execution.replay = None;
             }
             if let Err(failure) = self.commit(session).await {
                 session.messages.pop();
-                if let AgentMessage::Capability { call_id, .. } = &message {
-                    if let Some(execution) = session.capability_executions.last_mut() {
-                        if execution.call_id == *call_id {
-                            execution.state = CapabilityExecutionState::Started;
-                        }
-                    }
-                }
                 return Err(failure.into());
             }
             emit_event(
@@ -699,9 +731,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 },
                 emit,
             );
-            if completed {
-                return Ok(());
-            }
+            return Ok(());
         }
         Err(DriveStop::soft(AgentFailure::BudgetExceeded))
     }
