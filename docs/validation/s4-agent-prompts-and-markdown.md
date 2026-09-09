@@ -2,6 +2,10 @@
 
 Date: 2026-09-08. Implementation and automated evidence only; S4 remains **0/14**.
 
+> Historical checkpoint: the monolithic instruction layout below was superseded by
+> [the 2026-09-09 typed prompt assembly](s4-agent-context-generalization.md). Markdown
+> presentation evidence remains applicable.
+
 ## Implemented
 
 - Moved the Manager and built-in Schedule Expert system instructions, Calendar turn

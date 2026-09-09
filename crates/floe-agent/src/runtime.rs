@@ -565,7 +565,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     })
                     .collect(),
                 schema_version: AGENT_VERSION,
-                system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+                prompt: manager_prompt(context.persona.as_ref()).map_err(DriveStop::from)?,
                 person_id: session.person_id,
                 session_id: session.id,
                 turn_id,

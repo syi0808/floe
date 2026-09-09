@@ -119,14 +119,19 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
     if aliases.len() != request.capabilities.len() {
         return Err(AgentFailure::InvalidInput);
     }
-    let (history, current) = request.model_conversation();
-    if !current.iter().any(|message| message["role"] == "user") {
-        return Err(AgentFailure::InvalidInput);
-    }
+    let envelope = request.context_envelope()?;
     let mut messages = vec![json!({"role": "user", "content": json!({
-        "scoped": {"policy": request.policy, "context": request.context}
+        "scoped_instructions": envelope.scoped_instructions,
+        "contextual_data": envelope.contextual_data,
+        "runtime": envelope.runtime,
+        "manifest": envelope.manifest,
     }).to_string()})];
-    for mut message in history.into_iter().chain(current) {
+    for mut message in envelope
+        .conversation
+        .history
+        .into_iter()
+        .chain(envelope.conversation.current_turn)
+    {
         rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
             let content = if message["status"] == "error" {
@@ -258,6 +263,7 @@ impl ModelRunner for ServerModelRunner {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        request.prompt.validate()?;
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
@@ -289,7 +295,7 @@ impl ModelRunner for ServerModelRunner {
             "purpose": self.route.purpose,
             "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
-            "instructions": request.system_instructions,
+            "instructions": request.prompt.render(),
             "input": input
         });
         if body["input"].to_string().len() > 32768 {

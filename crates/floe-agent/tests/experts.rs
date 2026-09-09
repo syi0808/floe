@@ -121,8 +121,12 @@ fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
     assert_eq!(descriptor.id, "expert.schedule");
     assert_eq!(descriptor.output_data_class, DataClass::Synthetic);
     let schema = descriptor.input_schema.as_ref().unwrap();
-    assert_eq!(schema["properties"]["focus_minutes"]["maximum"], 240);
-    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(
+        schema["oneOf"][0]["properties"]["focus_minutes"]["maximum"],
+        240
+    );
+    assert_eq!(schema["oneOf"][0]["additionalProperties"], false);
+    assert_eq!(schema["oneOf"][1]["properties"]["kind"]["const"], "analyze");
     let mut legacy = serde_json::to_value(&descriptor).unwrap();
     legacy.as_object_mut().unwrap().remove("input_schema");
     assert_eq!(
@@ -966,13 +970,32 @@ impl ModelRunner for ScheduleModel {
             })
             .to_string()
         };
+        let capability_id = if has_capability {
+            request
+                .capabilities
+                .iter()
+                .find(|capability| capability.id == "schedule.find_free_windows")
+                .or_else(|| request.capabilities.first())
+                .unwrap()
+                .id
+                .clone()
+        } else {
+            String::new()
+        };
+        let should_call = has_capability
+            && !self.skip_tool
+            && if capability_id == "schedule.find_free_windows" {
+                call <= 3
+            } else {
+                call == 1
+            };
         self.requests.lock().unwrap().push(request);
         Ok(ModelResponse {
             replay: None,
             schema_version: AGENT_VERSION,
-            output: vec![if has_capability && !self.skip_tool && call <= 3 {
+            output: vec![if should_call {
                 ModelStep::Call {
-                    capability_id: "schedule.find_free_windows".into(),
+                    capability_id,
                     input,
                 }
             } else {
@@ -999,7 +1022,7 @@ fn synthetic_policy() -> InferencePolicyDecision {
 }
 
 #[tokio::test]
-async fn built_in_schedule_repeats_bounded_range_tools_in_an_isolated_model_loop() {
+async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_model_loop() {
     assert_eq!(ExpertBudget::default().max_model_calls, 10);
     assert_eq!(ExpertBudget::default().max_tool_calls, 9);
     let fixture = Fixture::new();
@@ -1036,23 +1059,37 @@ async fn built_in_schedule_repeats_bounded_range_tools_in_an_isolated_model_loop
     {
         let requests = model.requests.lock().unwrap();
         assert_eq!(requests.len(), 4);
-        assert_eq!(
-            requests[0].system_instructions,
-            SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS
+        assert_eq!(requests[0].prompt.role, PromptRole::ScheduleExpert);
+        assert!(
+            !requests[0]
+                .prompt
+                .components
+                .iter()
+                .any(|component| component.kind == PromptComponentKind::Persona)
         );
-        assert!(SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS.contains("formal, professional register"));
-        assert!(SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS.contains("do not use emoji"));
+        assert!(!requests[0].prompt.render().contains("find_free_windows"));
         assert_eq!(requests[0].messages.len(), 1);
         assert_eq!(requests[0].policy.purpose, "schedule-summary");
         assert_eq!(requests[0].policy.performance_class, "fast");
-        assert_eq!(requests[0].capabilities[0].id, "schedule.find_free_windows");
+        assert_eq!(
+            requests[0]
+                .capabilities
+                .iter()
+                .map(|capability| capability.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "calendar.read",
+                "calendar.search",
+                "schedule.find_free_windows"
+            ]
+        );
         assert_eq!(requests[1].messages.len(), 2);
         assert_eq!(requests[2].messages.len(), 3);
         assert_eq!(requests[3].messages.len(), 4);
         assert!(
             requests
                 .iter()
-                .all(|request| request.capabilities.len() == 1)
+                .all(|request| request.capabilities.len() == 3)
         );
     }
     assert_eq!(views.reads.load(Ordering::Acquire), 1);
@@ -1066,18 +1103,61 @@ async fn built_in_schedule_repeats_bounded_range_tools_in_an_isolated_model_loop
         requests: Mutex::new(vec![]),
         skip_tool: true,
     };
-    assert_eq!(
-        ExpertHost {
-            registry: &invalid.registry,
-            views: &invalid_views,
-        }
-        .invoke_with_model(
-            invalid.invocation(invalid.schedule),
-            &invalid_model,
-            &synthetic_policy(),
-        )
-        .await,
-        Err(AgentFailure::InvalidModelOutput)
+    let direct = ExpertHost {
+        registry: &invalid.registry,
+        views: &invalid_views,
+    }
+    .invoke_with_model(
+        invalid.invocation(invalid.schedule),
+        &invalid_model,
+        &synthetic_policy(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(direct.model_calls, 1);
+    assert_eq!(invalid.state(invalid.schedule).revision, 1);
+}
+
+#[tokio::test]
+async fn general_schedule_analysis_does_not_advertise_focus_workflow() {
+    let fixture = Fixture::new();
+    let views = Views {
+        view: fixture.view.clone(),
+        reads: AtomicUsize::new(0),
+    };
+    let model = ScheduleModel {
+        requests: Mutex::new(vec![]),
+        skip_tool: false,
+    };
+    let mut invocation = fixture.invocation(fixture.schedule);
+    invocation.input = ExpertInput::Analyze {
+        request: "What is on the calendar?".into(),
+        focus_minutes: None,
+    };
+    let result = ExpertHost {
+        registry: &fixture.registry,
+        views: &views,
+    }
+    .invoke_with_model(invocation, &model, &synthetic_policy())
+    .await
+    .unwrap();
+    assert!(
+        result
+            .insights
+            .iter()
+            .all(|insight| matches!(insight, ExpertInsight::Commitment { .. }))
     );
-    assert_eq!(invalid.state(invalid.schedule).revision, 0);
+    let requests = model.requests.lock().unwrap();
+    assert!(requests.iter().all(|request| {
+        request
+            .capabilities
+            .iter()
+            .map(|capability| capability.id.as_str())
+            .eq(["calendar.read", "calendar.search"])
+    }));
+    assert!(requests.iter().all(|request| {
+        request.messages.iter().all(|message| {
+            !matches!(message, AgentMessage::Capability { capability_id, .. } if capability_id == "schedule.find_free_windows")
+        })
+    }));
 }

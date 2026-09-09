@@ -1,10 +1,30 @@
 # Floe Progress
 
-> Last updated: 2026-09-08
+> Last updated: 2026-09-09
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### Agent context and Schedule Expert generalization — 2026-09-09
+
+- Split monolithic prompts into typed Behavior Kernel, Role, optional Persona and
+  capability-protocol components, then added one Core-owned `ContextEnvelope` and
+  provenance manifest shared by local and remote model adapters.
+- Added validated `PersonaProfile` composition for Manager calls while keeping Persona
+  out of Schedule Expert prompts and contextual evidence.
+- Replaced implicit focus-time handling for free-text Calendar requests with general
+  Schedule analysis. The Expert can choose Calendar read/search or an explicitly
+  relevant free-window Tool and no longer has a mandatory Tool sequence.
+- Added the bounded nested Playbook registry/discovery contract: roots are visible
+  first and loading a parent reveals only direct child summaries.
+- Workspace Rust formatting, checks and tests pass. Durable Persona/Memory/Playbook
+  storage, `SOUL.md` UI and model-visible Playbook loading remain S5 work.
+  [Evidence and limits](docs/validation/s4-agent-context-generalization.md). S4 remains
+  0/14.
+
 ### Managed Agent instructions and Markdown chat — 2026-09-08
+
+The instruction layout in this checkpoint is superseded by the 2026-09-09 typed
+prompt assembly above; the Markdown presentation evidence remains current.
 
 - Moved Manager/Schedule Expert instructions and product-owned preset turn templates
   from Rust literals into compile-time text resources, with explicit formal-register
@@ -18,6 +38,10 @@
   0/14.
 
 ### Lightweight Schedule Expert subagent — 2026-09-08
+
+The mandatory free-window loop in this checkpoint is superseded by the 2026-09-09
+general Calendar capability selection above; its isolation and authority evidence
+remains current.
 
 - Reframed the built-in Schedule Expert as a bounded domain subagent while keeping
   Floe's Manager as the only user-facing conversation owner.

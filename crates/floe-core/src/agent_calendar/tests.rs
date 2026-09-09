@@ -160,7 +160,7 @@ impl ModelRunner for Model<'_> {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        if request.system_instructions == SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS {
+        if request.prompt.role == PromptRole::ScheduleExpert {
             let has_tool_result = request
                 .messages
                 .iter()
@@ -405,6 +405,7 @@ impl Fixture {
             },
             context: AgentContext {
                 projection_version: 1,
+                persona: None,
                 evidence: vec![],
             },
             policy: InferencePolicyDecision {
@@ -720,7 +721,8 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| request.replay.is_empty()));
     assert_eq!(
-        requests[0].capabilities[0].input_schema.as_ref().unwrap()["properties"]["kind"]["enum"][1],
+        requests[0].capabilities[0].input_schema.as_ref().unwrap()["oneOf"][0]["properties"]["kind"]
+            ["enum"][1],
         "propose_focus"
     );
     let AgentMessage::Capability {
@@ -746,14 +748,12 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         "expert-only-call"
     );
     assert_eq!(expert_requests[0].messages.len(), 1);
-    assert_eq!(
-        expert_requests[0].capabilities[0].id,
-        "schedule.find_free_windows"
-    );
-    assert_eq!(
-        expert_requests[1].capabilities[0].id,
-        "schedule.find_free_windows"
-    );
+    assert!(expert_requests.iter().all(|request| {
+        request
+            .capabilities
+            .iter()
+            .any(|capability| capability.id == "schedule.find_free_windows")
+    }));
     assert!(matches!(
         expert_requests[1].messages[1],
         AgentMessage::Capability { .. }

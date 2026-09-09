@@ -112,6 +112,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         },
         context: AgentContext {
             projection_version: 1,
+            persona: None,
             evidence: vec![],
         },
         policy: InferencePolicyDecision {
@@ -321,8 +322,7 @@ impl ModelRunner for DeterministicModel {
         if request.policy.data_classes != [DataClass::Synthetic] {
             return Err(AgentFailure::PolicyDenied);
         }
-        let schedule_expert =
-            request.system_instructions == floe_agent::SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS;
+        let schedule_expert = request.prompt.role == floe_agent::PromptRole::ScheduleExpert;
         let step = if request
             .messages
             .iter()
@@ -349,9 +349,10 @@ impl ModelRunner for DeterministicModel {
                             focus_minutes: *focus_minutes,
                         }
                     }
-                    AgentCalendarPromptDto::FreeText { .. } => {
-                        ExpertInput::Briefing { focus_minutes: 60 }
-                    }
+                    AgentCalendarPromptDto::FreeText { text } => ExpertInput::Analyze {
+                        request: text.clone(),
+                        focus_minutes: None,
+                    },
                 })
                 .map_err(|_| AgentFailure::InvalidInput)?
             };

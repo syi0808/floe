@@ -15,6 +15,7 @@ fn policy(class: DataClass) -> InferencePolicyDecision {
 fn context(class: DataClass) -> AgentContext {
     AgentContext {
         projection_version: 1,
+        persona: None,
         evidence: vec![ContextEvidence {
             source_handle: "synthetic:coarse-state".into(),
             data_class: class,

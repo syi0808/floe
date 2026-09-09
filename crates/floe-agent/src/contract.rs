@@ -7,7 +7,6 @@ use uuid::Uuid;
 use crate::{InferencePolicyDecision, ModelPlacement};
 
 pub const AGENT_VERSION: u32 = 1;
-pub const AGENT_SYSTEM_INSTRUCTIONS: &str = include_str!("../prompts/manager.txt");
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -367,7 +366,7 @@ pub struct ModelRequest {
     pub usage: crate::UsageLedger,
     pub replay: Vec<ModelReplay>,
     pub schema_version: u32,
-    pub system_instructions: &'static str,
+    pub prompt: crate::PromptAssembly,
     pub person_id: PersonId,
     pub session_id: Uuid,
     pub turn_id: Uuid,
@@ -401,6 +400,117 @@ impl ModelRequest {
             .collect();
         (history, current_turn)
     }
+
+    pub fn context_envelope(&self) -> Result<ContextEnvelope, AgentFailure> {
+        self.prompt.validate()?;
+        let (history, current_turn) = self.model_conversation();
+        if !current_turn.iter().any(|message| message["role"] == "user") {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(ContextEnvelope {
+            schema_version: AGENT_VERSION,
+            stable_instructions: self.prompt.clone(),
+            scoped_instructions: ScopedInstructions {
+                purpose: self.policy.purpose.clone(),
+                available_capabilities: self.capabilities.clone(),
+            },
+            contextual_data: ContextualData {
+                projection_version: self.context.projection_version,
+                evidence: self.context.evidence.clone(),
+            },
+            conversation: ConversationContext {
+                history,
+                current_turn,
+            },
+            runtime: RuntimeContext {
+                max_output_bytes: self.max_output_bytes.min(16384),
+            },
+            manifest: ContextManifest {
+                prompt_components: self
+                    .prompt
+                    .components
+                    .iter()
+                    .map(|component| PromptManifestEntry {
+                        kind: component.kind,
+                        source: component.source.clone(),
+                        revision: component.revision,
+                    })
+                    .collect(),
+                evidence: self
+                    .context
+                    .evidence
+                    .iter()
+                    .map(|evidence| EvidenceManifestEntry {
+                        source_handle: evidence.source_handle.clone(),
+                        data_class: evidence.data_class,
+                        expires_at_unix_ms: evidence.expires_at_unix_ms,
+                    })
+                    .collect(),
+            },
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextEnvelope {
+    pub schema_version: u32,
+    pub stable_instructions: crate::PromptAssembly,
+    pub scoped_instructions: ScopedInstructions,
+    pub contextual_data: ContextualData,
+    pub conversation: ConversationContext,
+    pub runtime: RuntimeContext,
+    pub manifest: ContextManifest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextualData {
+    pub projection_version: u32,
+    pub evidence: Vec<crate::ContextEvidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopedInstructions {
+    pub purpose: String,
+    pub available_capabilities: Vec<CapabilityDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationContext {
+    pub history: Vec<serde_json::Value>,
+    pub current_turn: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeContext {
+    pub max_output_bytes: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextManifest {
+    pub prompt_components: Vec<PromptManifestEntry>,
+    pub evidence: Vec<EvidenceManifestEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptManifestEntry {
+    pub kind: crate::PromptComponentKind,
+    pub source: String,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceManifestEntry {
+    pub source_handle: String,
+    pub data_class: crate::DataClass,
+    pub expires_at_unix_ms: u64,
 }
 
 fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde_json::Value> {

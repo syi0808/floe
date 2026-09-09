@@ -39,7 +39,7 @@ pub struct InferencePolicyDecision {
     pub bounded_sensitive_projection: bool,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextEvidence {
     pub source_handle: String,
@@ -48,10 +48,12 @@ pub struct ContextEvidence {
     pub expires_at_unix_ms: u64,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentContext {
     pub projection_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<crate::PersonaProfile>,
     pub evidence: Vec<ContextEvidence>,
 }
 
@@ -73,10 +75,14 @@ impl InferencePolicyDecision {
                 evidence.source_handle.trim().is_empty()
                     || !self.data_classes.contains(&evidence.data_class)
             })
+            || (context.persona.is_some() && !self.data_classes.contains(&DataClass::Personal))
             || self.data_classes.contains(&DataClass::Credential)
             || self.data_classes.contains(&DataClass::DeviceOnlyRaw)
         {
             return Err(AgentFailure::PolicyDenied);
+        }
+        if let Some(persona) = &context.persona {
+            persona.validate()?;
         }
         match protection {
             SessionProtection::KeyUnavailable => return Err(AgentFailure::VaultUnavailable),

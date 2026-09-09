@@ -41,6 +41,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     };
     let context = AgentContext {
         projection_version: 1,
+        persona: None,
         evidence: vec![],
     };
     if request.continuation {

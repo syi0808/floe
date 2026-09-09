@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use floe_agent::{
-    AGENT_SYSTEM_INSTRUCTIONS, AgentContext, AgentMessage, Cancellation, DataClass,
-    InferencePolicyDecision, ModelPlacement, ModelRequest, ModelRunner, TransferConsent,
+    AgentContext, AgentMessage, Cancellation, DataClass, InferencePolicyDecision, ModelPlacement,
+    ModelRequest, ModelRunner, TransferConsent, manager_prompt,
 };
 use floe_domain::PersonId;
 use floe_ffi::local_model::{FoundationModelRunner, LocalModelAvailability};
@@ -42,7 +42,7 @@ async fn main() -> std::process::ExitCode {
         usage: Default::default(),
         replay: vec![],
         schema_version: 1,
-        system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+        prompt: manager_prompt(None).unwrap(),
         person_id: PersonId::new(),
         session_id: Uuid::new_v4(),
         turn_id,
@@ -55,7 +55,11 @@ async fn main() -> std::process::ExitCode {
             external_transfer_consent: TransferConsent::NotGranted,
             bounded_sensitive_projection: false,
         },
-        context: AgentContext { projection_version: 1, evidence: vec![] },
+        context: AgentContext {
+            projection_version: 1,
+            persona: None,
+            evidence: vec![],
+        },
         messages: vec![AgentMessage::User {
             turn_id,
             text: "This is a fictional test, not my calendar. A fictional person has a meeting at 14:00 and a free hour at 11:00. Suggest a preparation time in one sentence, explicitly noting that this is synthetic data. Do not call a tool.".into(),

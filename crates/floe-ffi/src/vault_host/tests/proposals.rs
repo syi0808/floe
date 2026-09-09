@@ -38,7 +38,7 @@ impl ModelRunner for Model {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        let schedule_expert = request.system_instructions == SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS;
+        let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
         let step = if request
             .messages
             .iter()
@@ -175,6 +175,7 @@ async fn seed(
                 },
                 context: AgentContext {
                     projection_version: 1,
+                    persona: None,
                     evidence: vec![],
                 },
                 policy: InferencePolicyDecision {

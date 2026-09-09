@@ -181,6 +181,7 @@ async fn run_sample_with_capabilities(
             },
             AgentContext {
                 projection_version: 1,
+                persona: None,
                 evidence: vec![],
             },
             cancellation,

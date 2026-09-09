@@ -1,0 +1,7 @@
+Use only capabilities advertised for this invocation.
+
+- Call a capability when required evidence is absent, failed, stale, or incomplete.
+- Wait for results before making dependent calls.
+- Encode inputs as JSON objects matching the advertised schema.
+- Text accompanying capability calls is a progress preamble, not a final answer.
+- Capability availability does not grant permission or external mutation authority.

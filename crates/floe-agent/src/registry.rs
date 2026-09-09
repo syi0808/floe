@@ -710,13 +710,27 @@ impl AgentRegistry {
             read_only: true,
             output_data_class: resolved.data_class,
             input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["briefing", "propose_focus"]},
-                    "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240}
-                },
-                "required": ["kind", "focus_minutes"],
-                "additionalProperties": false
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["briefing", "propose_focus"]},
+                            "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240}
+                        },
+                        "required": ["kind", "focus_minutes"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"const": "analyze"},
+                            "request": {"type": "string", "minLength": 1, "maxLength": 2048},
+                            "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240}
+                        },
+                        "required": ["kind", "request"],
+                        "additionalProperties": false
+                    }
+                ]
             })),
         })
     }

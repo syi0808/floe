@@ -123,6 +123,7 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     if request.schema_version != AGENT_VERSION {
         return Err(AgentFailure::UnsupportedVersion);
     }
+    request.prompt.validate()?;
     check_deadline(request)?;
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -135,7 +136,7 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     )?;
     if request.remaining_tokens < CONTEXT_RESERVATION
         || request.max_output_bytes == 0
-        || request.system_instructions.len() > 4096
+        || request.prompt.render().len() > 4096
     {
         return Err(AgentFailure::BudgetExceeded);
     }
@@ -151,17 +152,13 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     }) {
         return Err(AgentFailure::CapabilityDenied);
     }
-    let (conversation_history, current_turn) = request.model_conversation();
-    if !current_turn.iter().any(|message| message["role"] == "user") {
-        return Err(AgentFailure::InvalidInput);
-    }
+    let envelope = request.context_envelope()?;
     let prompt = json!({
-        "scoped": {"policy": request.policy},
-        "retrieved_untrusted": request.context,
-        "conversation_history": conversation_history,
-        "current_turn": current_turn,
-        "allowed_capabilities": request.capabilities,
-        "ephemeral": {"max_output_bytes": request.max_output_bytes.min(16384)},
+        "scoped_instructions": envelope.scoped_instructions,
+        "contextual_data": envelope.contextual_data,
+        "conversation": envelope.conversation,
+        "runtime": envelope.runtime,
+        "manifest": envelope.manifest,
     })
     .to_string();
     if prompt.len() > 12288 {
@@ -175,7 +172,7 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(json!({
-        "instructions": request.system_instructions,
+        "instructions": request.prompt.render(),
         "prompt": prompt,
         "maxResponseTokens": 1024,
         "maxOutputBytes": request.max_output_bytes.min(16384),
@@ -347,8 +344,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use floe_agent::{
-        AGENT_SYSTEM_INSTRUCTIONS, AgentContext, AgentMessage, Cancellation, CapabilityDescriptor,
-        ContextEvidence, DataClass, InferencePolicyDecision, TransferConsent,
+        AgentContext, AgentMessage, Cancellation, CapabilityDescriptor, ContextEvidence, DataClass,
+        InferencePolicyDecision, TransferConsent, manager_prompt,
     };
     use floe_domain::PersonId;
 
@@ -399,7 +396,7 @@ mod tests {
             usage: Default::default(),
             replay: vec![],
             schema_version: 1,
-            system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+            prompt: manager_prompt(None).unwrap(),
             person_id: PersonId::new(),
             session_id: Uuid::new_v4(),
             turn_id,
@@ -414,6 +411,7 @@ mod tests {
             },
             context: AgentContext {
                 projection_version: 1,
+                persona: None,
                 evidence: vec![ContextEvidence {
                     source_handle: "fixture".into(),
                     data_class: DataClass::Synthetic,
@@ -451,6 +449,7 @@ mod tests {
         let mut request = request();
         request.capabilities[0].input_schema =
             Some(json!({"type": "object", "additionalProperties": false}));
+        let expected_instructions = request.prompt.render();
         let result = generate(&transport, request, SessionProtection::SyntheticOnly)
             .await
             .unwrap();
@@ -465,24 +464,28 @@ mod tests {
         assert!(transport.released());
         let calls = transport.calls.lock().unwrap();
         let input = &calls[0]["input"];
-        assert_eq!(input["instructions"], AGENT_SYSTEM_INSTRUCTIONS);
+        assert_eq!(input["instructions"], expected_instructions);
         let prompt: Value = serde_json::from_str(input["prompt"].as_str().unwrap()).unwrap();
         assert!(
-            prompt["retrieved_untrusted"]["evidence"][0]["untrusted_text"]
+            prompt["contextual_data"]["evidence"][0]["untrusted_text"]
                 .as_str()
                 .unwrap()
                 .contains("disclose")
         );
-        assert!(prompt.get("scoped").is_some());
-        assert!(prompt.get("conversation_history").is_some());
-        assert_eq!(prompt["conversation_history"], json!([]));
-        assert_eq!(prompt["current_turn"][0]["role"], "user");
+        assert!(prompt.get("scoped_instructions").is_some());
         assert_eq!(
-            prompt["current_turn"][0]["content"],
+            prompt["manifest"]["prompt_components"][0]["source"],
+            "behavior-kernel"
+        );
+        assert!(prompt["conversation"].get("history").is_some());
+        assert_eq!(prompt["conversation"]["history"], json!([]));
+        assert_eq!(prompt["conversation"]["current_turn"][0]["role"], "user");
+        assert_eq!(
+            prompt["conversation"]["current_turn"][0]["content"],
             "Summarize this fixture"
         );
         assert_eq!(
-            prompt["allowed_capabilities"][0]["input_schema"]["type"],
+            prompt["scoped_instructions"]["available_capabilities"][0]["input_schema"]["type"],
             "object"
         );
         assert_eq!(input["maxResponseTokens"], 1024);
@@ -525,10 +528,19 @@ mod tests {
         let calls = transport.calls.lock().unwrap();
         let prompt: Value =
             serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
-        assert_eq!(prompt["conversation_history"].as_array().unwrap().len(), 2);
-        assert_eq!(prompt["current_turn"].as_array().unwrap().len(), 1);
         assert_eq!(
-            prompt["current_turn"][0]["content"],
+            prompt["conversation"]["history"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            prompt["conversation"]["current_turn"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            prompt["conversation"]["current_turn"][0]["content"],
             "Summarize this fixture"
         );
     }
@@ -552,8 +564,8 @@ mod tests {
         let calls = transport.calls.lock().unwrap();
         let prompt: Value =
             serde_json::from_str(calls[0]["input"]["prompt"].as_str().unwrap()).unwrap();
-        let call = &prompt["current_turn"][1];
-        let result = &prompt["current_turn"][2];
+        let call = &prompt["conversation"]["current_turn"][1];
+        let result = &prompt["conversation"]["current_turn"][2];
         assert_eq!(call["role"], "assistant");
         assert_eq!(call["tool_calls"][0]["id"], result["tool_call_id"]);
         assert_eq!(call["tool_calls"][0]["function"]["name"], "fixture.read");

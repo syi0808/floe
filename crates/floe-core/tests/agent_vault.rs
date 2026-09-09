@@ -606,6 +606,7 @@ async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
     };
     let context = AgentContext {
         projection_version: 1,
+        persona: None,
         evidence: vec![],
     };
     let mut events = vec![];

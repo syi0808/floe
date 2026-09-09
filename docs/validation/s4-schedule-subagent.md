@@ -3,6 +3,10 @@
 Date: 2026-09-08. Runtime integration with synthetic automated evidence; S4 remains
 **0/14**.
 
+> Historical checkpoint: the mandatory free-window behavior below was superseded by
+> [the 2026-09-09 generalization](s4-agent-context-generalization.md). Isolation,
+> authority and bounded execution evidence remains applicable.
+
 ## Implemented boundary
 
 - The Manager remains the only owner of user conversation history. A Schedule Expert

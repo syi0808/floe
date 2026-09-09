@@ -693,7 +693,7 @@ impl CapabilityHost for NestedModelHost<'_> {
                 usage: invocation.usage,
                 replay: vec![],
                 schema_version: AGENT_VERSION,
-                system_instructions: SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS,
+                prompt: schedule_expert_prompt(),
                 person_id: invocation.person_id,
                 session_id: invocation.call_id,
                 turn_id: invocation.call_id,
@@ -971,14 +971,18 @@ async fn dropped_tool_future_recovers_as_uncertain_without_reexecution() {
         policy: &policy,
         budget: AgentBudget::default(),
     };
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}),
-        )
-        .await
-        .is_err()
-    );
+    {
+        let turn = runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {});
+        tokio::pin!(turn);
+        tokio::select! {
+            result = &mut turn => panic!("pending tool unexpectedly completed: {result:?}"),
+            _ = async {
+                while host.calls.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+    }
     {
         let mut session = store.session.lock().unwrap();
         let mut child = session.capability_executions[0].clone();
@@ -1058,6 +1062,7 @@ fn policy() -> InferencePolicyDecision {
 fn context() -> AgentContext {
     AgentContext {
         projection_version: 1,
+        persona: None,
         evidence: vec![],
     }
 }
@@ -1085,7 +1090,7 @@ async fn tool_schema_validation_recovers_before_dispatch() {
         usage: Default::default(),
         replay: vec![],
         schema_version: AGENT_VERSION,
-        system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+        prompt: manager_prompt(None).unwrap(),
         person_id: PersonId::new(),
         session_id: Uuid::new_v4(),
         turn_id,
@@ -1437,11 +1442,53 @@ async fn multi_turn_messages_and_events_are_ordered_and_atomic() {
     assert_eq!(second.messages.len(), 5);
     assert_eq!(&second.messages[..3], first.messages.as_slice());
     let requests = model.requests.lock().unwrap();
-    assert_eq!(requests[0].system_instructions, AGENT_SYSTEM_INSTRUCTIONS);
-    assert!(AGENT_SYSTEM_INSTRUCTIONS.contains("formal, respectful tone"));
-    assert!(AGENT_SYSTEM_INSTRUCTIONS.contains("Do not use emoji"));
+    assert_eq!(requests[0].prompt.role, PromptRole::Manager);
+    assert!(
+        requests[0]
+            .prompt
+            .render()
+            .contains("formal, respectful tone")
+    );
+    assert!(requests[0].prompt.render().contains("without emoji"));
     assert_eq!(requests[2].messages.len(), 4);
     assert_eq!(requests[0].policy, policy);
+}
+
+#[tokio::test]
+async fn manager_uses_the_validated_persona_without_exposing_it_as_evidence() {
+    let store = Store::new();
+    let model = Model::new(vec![answer()]);
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let mut context = context();
+    context.persona = Some(PersonaProfile {
+        revision: 2,
+        source: "person.soul".into(),
+        instructions: "Respond calmly and directly.".into(),
+    });
+    runtime
+        .run_turn(store.command(), context, Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    let requests = model.requests.lock().unwrap();
+    let persona = requests[0]
+        .prompt
+        .components
+        .iter()
+        .find(|component| component.kind == PromptComponentKind::Persona)
+        .unwrap();
+    assert_eq!(persona.source, "person.soul");
+    assert_eq!(persona.revision, 2);
+    assert_eq!(persona.content, "Respond calmly and directly.");
+    let envelope = requests[0].context_envelope().unwrap();
+    assert!(envelope.contextual_data.evidence.is_empty());
 }
 
 #[tokio::test]
@@ -1731,7 +1778,7 @@ async fn injection_cannot_add_an_unadvertised_mutation() {
         requests[0].context.evidence[0].untrusted_text,
         context.evidence[0].untrusted_text
     );
-    assert_eq!(requests[0].system_instructions, AGENT_SYSTEM_INSTRUCTIONS);
+    assert_eq!(requests[0].prompt.role, PromptRole::Manager);
 }
 
 #[tokio::test]
