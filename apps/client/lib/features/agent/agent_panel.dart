@@ -516,7 +516,7 @@ class _AgentMarkdown extends StatelessWidget {
         h1: body.copyWith(fontSize: 18, fontWeight: FontWeight.w600),
         h2: body.copyWith(fontSize: 16, fontWeight: FontWeight.w600),
         h3: body.copyWith(fontWeight: FontWeight.w600),
-        blockSpacing: FloeSpace.sm,
+        blockSpacing: FloeSpace.xs,
         listIndent: FloeSpace.lg,
         blockquoteDecoration: const BoxDecoration(
           border: Border(

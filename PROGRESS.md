@@ -10,7 +10,7 @@
   cached instructions. Calendar Tool output pairs raw instants with adaptive local
   display values (`HH:mm`, date, year and seconds only as needed), while timezone
   metadata remains internal and is omitted from Manager-facing prose.
-- Assistant Markdown block spacing is reduced from 12 to 8 logical pixels, tightening
+- Assistant Markdown block spacing is reduced from 12 to 4 logical pixels, tightening
   list rows without changing the underlying Markdown content.
 - Focused Rust coverage includes same-day and cross-year formatting; Flutter coverage
   asserts the compact renderer style.

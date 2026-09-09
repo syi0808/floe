@@ -52,7 +52,7 @@ void main() {
     expect(markdown.selectable, isTrue);
     expect(markdown.imageBuilder, isNotNull);
     expect(markdown.onTapLink, isNull);
-    expect(markdown.styleSheet?.blockSpacing, FloeSpace.sm);
+    expect(markdown.styleSheet?.blockSpacing, FloeSpace.xs);
     expect(find.byType(Image), findsNothing);
     final renderedBlocks = tester
         .widgetList<SelectableText>(
