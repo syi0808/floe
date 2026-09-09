@@ -445,6 +445,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     final connected =
         sources?.containsScope(view.provider, view.calendarIds) ?? false;
     final active = current.accessEnabled(setup);
+    final scopeNames = _scopeNames(sources, view);
     final status = !connected
         ? 'Needs attention'
         : active
@@ -474,9 +475,23 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
             ],
           ),
           const SizedBox(height: FloeSpace.xs),
-          Text(
-            _scopeSummary(sources, view),
-            style: FloeType.body.copyWith(color: FloePalette.neutral600),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  scopeNames.join(', '),
+                  style: FloeType.body.copyWith(color: FloePalette.neutral600),
+                ),
+              ),
+              const SizedBox(width: FloeSpace.sm),
+              FloeBadge(
+                key: ValueKey('calendar-scope-count-${setup.setupId}'),
+                label:
+                    '${scopeNames.length} ${scopeNames.length == 1 ? 'calendar' : 'calendars'}',
+                compact: true,
+              ),
+            ],
           ),
           const SizedBox(height: FloeSpace.xs),
           const Text('Read event details and prepare suggestions.'),
@@ -580,17 +595,17 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     ],
   );
 
-  String _scopeSummary(AgentCalendarSources? sources, AgentCalendarView view) {
-    final names = [
-      for (final identifier in view.calendarIds)
-        sources?.provider == view.provider
-            ? sources!.calendars
-                      .where((entry) => entry.id == identifier)
-                      .singleOrNull
-                      ?.name ??
-                  'Unavailable calendar'
-            : 'Unavailable calendar',
-    ];
-    return '${names.join(', ')} — ${names.length} ${names.length == 1 ? 'calendar' : 'calendars'}';
-  }
+  List<String> _scopeNames(
+    AgentCalendarSources? sources,
+    AgentCalendarView view,
+  ) => [
+    for (final identifier in view.calendarIds)
+      sources?.provider == view.provider
+          ? sources!.calendars
+                    .where((entry) => entry.id == identifier)
+                    .singleOrNull
+                    ?.name ??
+                'Unavailable calendar'
+          : 'Unavailable calendar',
+  ];
 }

@@ -381,7 +381,10 @@ class _AiProcessingState extends State<_AiProcessing> {
           ),
         ),
         const SizedBox(height: FloeSpace.lg),
-        const Text('Processing locations', style: FloeType.controlLabel),
+        Text(
+          'Processing locations',
+          style: FloeType.controlLabel.copyWith(fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: FloeSpace.sm),
         _ProcessingGroup(
           children: [

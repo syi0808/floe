@@ -1,3 +1,4 @@
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
@@ -38,6 +39,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Data & privacy'), findsNWidgets(2));
     expect(find.text('AI processing'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.text('Processing locations')).style?.fontWeight,
+      FontWeight.w600,
+    );
+    expect(
+      tester.widget<Text>(find.text('On this device')).style?.fontWeight,
+      FontWeight.w500,
+    );
     expect(
       find.text('No connected data sources are available yet.'),
       findsOneWidget,

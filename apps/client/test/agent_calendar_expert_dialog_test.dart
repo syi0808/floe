@@ -165,6 +165,20 @@ void main() {
       );
       expect(find.text('Active'), findsOneWidget);
       expect(
+        tester.widget<Text>(find.text('Calendars')).style?.fontWeight,
+        FontWeight.w500,
+      );
+      expect(find.text('Personal · home'), findsOneWidget);
+      expect(find.text('1 calendar'), findsOneWidget);
+      expect(find.textContaining(' — '), findsNothing);
+      expect(
+        find.ancestor(
+          of: find.text('1 calendar'),
+          matching: find.byType(FloeBadge),
+        ),
+        findsOneWidget,
+      );
+      expect(
         find.ancestor(
           of: find.text('Active'),
           matching: find.byType(FloeBadge),

@@ -45,6 +45,7 @@ final class FloeBadge extends StatelessWidget {
                   softWrap: true,
                   style: (compact ? FloeType.micro : FloeType.label).copyWith(
                     color: foreground,
+                    fontWeight: FontWeight.w400,
                   ),
                 )
               : Wrap(
@@ -55,7 +56,10 @@ final class FloeBadge extends StatelessWidget {
                     Text(
                       label,
                       style: (compact ? FloeType.micro : FloeType.label)
-                          .copyWith(color: foreground),
+                          .copyWith(
+                            color: foreground,
+                            fontWeight: FontWeight.w400,
+                          ),
                     ),
                   ],
                 ),

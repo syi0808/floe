@@ -62,6 +62,10 @@ void main() {
     expect(find.text('Connected'), findsOneWidget);
     expect(tester.getSemantics(find.byType(FloeBadge)).label, 'Connected');
     expect(
+      tester.widget<Text>(find.text('Connected')).style?.fontWeight,
+      FontWeight.w400,
+    );
+    expect(
       tester
           .widget<FloeSquircle>(
             find.descendant(
