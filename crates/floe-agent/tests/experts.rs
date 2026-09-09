@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{TimeZone, Utc};
 use floe_agent::*;
 use floe_domain::PersonId;
 use tokio::{sync::Notify, time::Instant};
@@ -385,6 +386,8 @@ impl Fixture {
             expected_registry_revision: self.registry.lock().unwrap().revision(),
             granted_view_handles: vec![self.view.handle],
             allowed_data_classes: vec![DataClass::Synthetic],
+            current_time_unix_ms: self.view.range_start_unix_ms,
+            timezone_offset_seconds: 0,
             input: ExpertInput::Briefing { focus_minutes: 60 },
             budget: ExpertBudget::default(),
             deadline: Instant::now() + Duration::from_secs(1),
@@ -1069,7 +1072,18 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
                 .any(|component| component.kind == PromptComponentKind::Persona)
         );
         assert!(!requests[0].prompt.render().contains("find_free_windows"));
+        assert!(requests[0].prompt.render().contains("normally HH:mm"));
         assert_eq!(requests[0].messages.len(), 1);
+        let AgentMessage::User { text, .. } = &requests[0].messages[0] else {
+            panic!("expected Schedule Expert task");
+        };
+        let task: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(task["runtime_context"]["current_time_unix_ms"], 0);
+        assert_eq!(
+            task["runtime_context"]["current_datetime_local"],
+            "1970-01-01 00:00"
+        );
+        assert_eq!(task["runtime_context"]["timezone_offset_seconds"], 0);
         assert_eq!(requests[0].policy.purpose, "schedule-summary");
         assert_eq!(requests[0].policy.performance_class, "fast");
         assert_eq!(
@@ -1086,6 +1100,13 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
             ]
         );
         assert_eq!(requests[1].messages.len(), 2);
+        let AgentMessage::Capability {
+            result: Ok(result), ..
+        } = &requests[1].messages[1]
+        else {
+            panic!("expected formatted Schedule result");
+        };
+        assert!(result.contains("starts_at_local"));
         assert_eq!(requests[2].messages.len(), 3);
         assert_eq!(requests[3].messages.len(), 4);
         assert!(
@@ -1118,6 +1139,57 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
     .unwrap();
     assert_eq!(direct.model_calls, 1);
     assert_eq!(invalid.state(invalid.schedule).revision, 1);
+}
+
+#[tokio::test]
+async fn schedule_times_include_the_year_only_when_the_range_crosses_years() {
+    let fixture = Fixture::new();
+    let start = u64::try_from(
+        Utc.with_ymd_and_hms(2026, 12, 31, 0, 0, 0)
+            .unwrap()
+            .timestamp_millis(),
+    )
+    .unwrap();
+    let mut view = fixture.view.clone();
+    view.range_start_unix_ms = start;
+    view.range_end_unix_ms = start + 3 * 86_400_000;
+    for item in &mut view.items {
+        item.starts_at_unix_ms += start;
+        item.ends_at_unix_ms += start;
+    }
+    let views = Views {
+        view,
+        reads: AtomicUsize::new(0),
+    };
+    let model = ScheduleModel {
+        requests: Mutex::new(vec![]),
+        skip_tool: false,
+    };
+    let mut invocation = fixture.invocation(fixture.schedule);
+    invocation.current_time_unix_ms = start;
+    ExpertHost {
+        registry: &fixture.registry,
+        views: &views,
+    }
+    .invoke_with_model(invocation, &model, &synthetic_policy())
+    .await
+    .unwrap();
+
+    let requests = model.requests.lock().unwrap();
+    let results = requests
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::Capability {
+                result: Ok(result), ..
+            } => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(results[0].contains(r#""starts_at_local":"00:00""#));
+    assert!(results[1].contains(r#""starts_at_local":"2027-01-01"#));
 }
 
 #[tokio::test]

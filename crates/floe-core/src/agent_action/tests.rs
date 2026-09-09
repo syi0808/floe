@@ -216,6 +216,8 @@ impl Fixture {
             expected_registry_revision: revision,
             granted_view_handles: vec![handle],
             allowed_data_classes: vec![class],
+            current_time_unix_ms: start,
+            timezone_offset_seconds: 0,
             input,
             budget: ExpertBudget::default(),
             deadline: Instant::now() + Duration::from_secs(5),

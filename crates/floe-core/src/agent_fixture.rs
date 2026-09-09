@@ -719,6 +719,8 @@ impl InProcessAgent for FixtureCapabilities {
             expected_registry_revision,
             granted_view_handles: vec![self.view.handle],
             allowed_data_classes: vec![DataClass::Synthetic],
+            current_time_unix_ms: self.view.range_start_unix_ms,
+            timezone_offset_seconds: 0,
             input: ExpertInput::Analyze {
                 request: assignment,
                 focus_minutes: Some(60),

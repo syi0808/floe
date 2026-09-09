@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### Schedule time context and compact Markdown — 2026-09-09
+
+- Schedule Expert tasks now carry invocation-time local clock context after the stable
+  cached instructions. Calendar Tool output pairs raw instants with adaptive local
+  display values (`HH:mm`, date, year and seconds only as needed), while timezone
+  metadata remains internal and is omitted from Manager-facing prose.
+- Assistant Markdown block spacing is reduced from 12 to 8 logical pixels, tightening
+  list rows without changing the underlying Markdown content.
+- Focused Rust coverage includes same-day and cross-year formatting; Flutter coverage
+  asserts the compact renderer style.
+
 ### Agent context and Schedule Expert generalization — 2026-09-09
 
 - Split monolithic prompts into typed Behavior Kernel, Role, optional Persona and

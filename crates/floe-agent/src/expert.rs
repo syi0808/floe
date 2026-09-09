@@ -1,5 +1,6 @@
 use std::{future::Future, sync::Mutex, time::SystemTime};
 
+use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use floe_domain::PersonId;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
@@ -103,6 +104,8 @@ pub struct ExpertInvocation {
     pub expected_registry_revision: u64,
     pub granted_view_handles: Vec<Uuid>,
     pub allowed_data_classes: Vec<DataClass>,
+    pub current_time_unix_ms: u64,
+    pub timezone_offset_seconds: i32,
     pub input: ExpertInput,
     pub budget: ExpertBudget,
     pub deadline: Instant,
@@ -184,6 +187,9 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
     ) -> Result<ExpertResult, AgentFailure> {
         if invocation.schema_version != AGENT_VERSION {
             return Err(AgentFailure::UnsupportedVersion);
+        }
+        if invocation.timezone_offset_seconds.unsigned_abs() >= 86_400 {
+            return Err(AgentFailure::InvalidInput);
         }
         check_running(&invocation)?;
         invocation.deadline = invocation
@@ -422,6 +428,15 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
     let capabilities = schedule_capabilities(data_class);
     let task = serde_json::json!({
         "request": &invocation.input,
+        "runtime_context": {
+            "current_time_unix_ms": invocation.current_time_unix_ms,
+            "current_datetime_local": format_datetime(
+                invocation.current_time_unix_ms,
+                invocation.timezone_offset_seconds,
+                DateTimePrecision::Full,
+            )?,
+            "timezone_offset_seconds": invocation.timezone_offset_seconds,
+        },
         "authorized_range": {
             "starts_at_unix_ms": view.range_start_unix_ms,
             "ends_at_unix_ms": view.range_end_unix_ms
@@ -525,7 +540,13 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         Box::pin(async {
                             check_running(invocation)?;
                             validate_view(view, invocation, data_class)?;
-                            schedule_capability_result(&capability_id, view, &input)
+                            schedule_capability_result(
+                                &capability_id,
+                                view,
+                                &input,
+                                invocation.current_time_unix_ms,
+                                invocation.timezone_offset_seconds,
+                            )
                         }),
                     )
                     .await??;
@@ -657,17 +678,18 @@ fn schedule_capability_result(
     capability_id: &str,
     view: &ExpertTimelineView,
     input: &str,
+    current_time_unix_ms: u64,
+    timezone_offset_seconds: i32,
 ) -> Result<String, AgentFailure> {
     match capability_id {
         "calendar.read" => {
             let input: CalendarRangeInput =
                 serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            serde_json::to_string(&bounded_calendar_view(
-                view,
-                input.range_start_unix_ms,
-                input.range_end_unix_ms,
-            )?)
-            .map_err(|_| AgentFailure::InvalidInput)
+            calendar_view_model_output(
+                &bounded_calendar_view(view, input.range_start_unix_ms, input.range_end_unix_ms)?,
+                current_time_unix_ms,
+                timezone_offset_seconds,
+            )
         }
         "calendar.search" => {
             let input: CalendarSearchInput =
@@ -681,19 +703,27 @@ fn schedule_capability_result(
             bounded
                 .items
                 .retain(|item| item.untrusted_title.to_lowercase().contains(query.as_str()));
-            serde_json::to_string(&bounded).map_err(|_| AgentFailure::InvalidInput)
+            calendar_view_model_output(&bounded, current_time_unix_ms, timezone_offset_seconds)
         }
         "schedule.find_free_windows" => {
             let input: FreeWindowInput =
                 serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
             if input.range_start_unix_ms.is_none() && input.range_end_unix_ms.is_none() {
-                return serde_json::to_string(&analyze_schedule(view, input.minimum_minutes))
-                    .map_err(|_| AgentFailure::InvalidInput);
+                return schedule_insights_model_output(
+                    &analyze_schedule(view, input.minimum_minutes),
+                    view,
+                    current_time_unix_ms,
+                    timezone_offset_seconds,
+                );
             }
             let bounded =
                 bounded_calendar_view(view, input.range_start_unix_ms, input.range_end_unix_ms)?;
-            serde_json::to_string(&analyze_schedule(&bounded, input.minimum_minutes))
-                .map_err(|_| AgentFailure::InvalidInput)
+            schedule_insights_model_output(
+                &analyze_schedule(&bounded, input.minimum_minutes),
+                &bounded,
+                current_time_unix_ms,
+                timezone_offset_seconds,
+            )
         }
         "schedule.propose_window" => {
             let proposal: ScheduleProposalInput =
@@ -703,6 +733,119 @@ fn schedule_capability_result(
         }
         _ => Err(AgentFailure::CapabilityDenied),
     }
+}
+
+#[derive(Clone, Copy)]
+enum DateTimePrecision {
+    Time,
+    MonthDay,
+    Full,
+}
+
+fn calendar_view_model_output(
+    view: &ExpertTimelineView,
+    current_time_unix_ms: u64,
+    timezone_offset_seconds: i32,
+) -> Result<String, AgentFailure> {
+    let precision = datetime_precision(view, current_time_unix_ms, timezone_offset_seconds)?;
+    let mut value = serde_json::to_value(view).map_err(|_| AgentFailure::InvalidInput)?;
+    value["range_start_local"] =
+        format_datetime(view.range_start_unix_ms, timezone_offset_seconds, precision)?.into();
+    value["range_end_local"] =
+        format_datetime(view.range_end_unix_ms, timezone_offset_seconds, precision)?.into();
+    for (value, item) in value["items"]
+        .as_array_mut()
+        .ok_or(AgentFailure::InvalidInput)?
+        .iter_mut()
+        .zip(&view.items)
+    {
+        value["starts_at_local"] =
+            format_datetime(item.starts_at_unix_ms, timezone_offset_seconds, precision)?.into();
+        value["ends_at_local"] =
+            format_datetime(item.ends_at_unix_ms, timezone_offset_seconds, precision)?.into();
+    }
+    serde_json::to_string(&value).map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn schedule_insights_model_output(
+    insights: &[ExpertInsight],
+    view: &ExpertTimelineView,
+    current_time_unix_ms: u64,
+    timezone_offset_seconds: i32,
+) -> Result<String, AgentFailure> {
+    let precision = datetime_precision(view, current_time_unix_ms, timezone_offset_seconds)?;
+    let mut value = serde_json::to_value(insights).map_err(|_| AgentFailure::InvalidInput)?;
+    for insight in value
+        .as_array_mut()
+        .ok_or(AgentFailure::InvalidInput)?
+        .iter_mut()
+    {
+        if let Some(starts_at) = insight
+            .get("starts_at_unix_ms")
+            .and_then(|value| value.as_u64())
+        {
+            insight["starts_at_local"] =
+                format_datetime(starts_at, timezone_offset_seconds, precision)?.into();
+        }
+        if let Some(ends_at) = insight
+            .get("ends_at_unix_ms")
+            .and_then(|value| value.as_u64())
+        {
+            insight["ends_at_local"] =
+                format_datetime(ends_at, timezone_offset_seconds, precision)?.into();
+        }
+    }
+    serde_json::to_string(&value).map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn datetime_precision(
+    view: &ExpertTimelineView,
+    current_time_unix_ms: u64,
+    timezone_offset_seconds: i32,
+) -> Result<DateTimePrecision, AgentFailure> {
+    let current = local_datetime(current_time_unix_ms, timezone_offset_seconds)?;
+    let start = local_datetime(view.range_start_unix_ms, timezone_offset_seconds)?;
+    let end = local_datetime(
+        view.range_end_unix_ms.saturating_sub(1),
+        timezone_offset_seconds,
+    )?;
+    if start.date_naive() == current.date_naive() && end.date_naive() == current.date_naive() {
+        Ok(DateTimePrecision::Time)
+    } else if start.year() == end.year() && start.year() == current.year() {
+        Ok(DateTimePrecision::MonthDay)
+    } else {
+        Ok(DateTimePrecision::Full)
+    }
+}
+
+fn format_datetime(
+    unix_ms: u64,
+    timezone_offset_seconds: i32,
+    precision: DateTimePrecision,
+) -> Result<String, AgentFailure> {
+    let time = local_datetime(unix_ms, timezone_offset_seconds)?;
+    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+    let format = match (precision, include_seconds) {
+        (DateTimePrecision::Time, false) => "%H:%M",
+        (DateTimePrecision::Time, true) => "%H:%M:%S",
+        (DateTimePrecision::MonthDay, false) => "%m-%d %H:%M",
+        (DateTimePrecision::MonthDay, true) => "%m-%d %H:%M:%S",
+        (DateTimePrecision::Full, false) => "%Y-%m-%d %H:%M",
+        (DateTimePrecision::Full, true) => "%Y-%m-%d %H:%M:%S",
+    };
+    Ok(time.format(format).to_string())
+}
+
+fn local_datetime(
+    unix_ms: u64,
+    timezone_offset_seconds: i32,
+) -> Result<DateTime<FixedOffset>, AgentFailure> {
+    let unix_ms = i64::try_from(unix_ms).map_err(|_| AgentFailure::InvalidInput)?;
+    let offset =
+        FixedOffset::east_opt(timezone_offset_seconds).ok_or(AgentFailure::InvalidInput)?;
+    DateTime::<Utc>::from_timestamp_millis(unix_ms)
+        .map(|time| time.with_timezone(&offset))
+        .ok_or(AgentFailure::InvalidInput)
 }
 
 fn validate_schedule_proposal(

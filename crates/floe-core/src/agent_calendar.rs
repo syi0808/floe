@@ -446,6 +446,9 @@ impl<
                 expected_registry_revision: self.revision.load(Ordering::Acquire),
                 granted_view_handles: vec![self.views.grant().handle],
                 allowed_data_classes: vec![self.views.grant().data_class()],
+                current_time_unix_ms: u64::try_from(self.views.current_time().timestamp_millis())
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+                timezone_offset_seconds: self.views.grant().day.timezone_offset_seconds,
                 input: ExpertInput::Analyze {
                     request: assignment,
                     focus_minutes: None,

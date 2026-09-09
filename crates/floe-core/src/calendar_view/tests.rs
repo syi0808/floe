@@ -696,6 +696,8 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         expected_registry_revision: revision,
         granted_view_handles: vec![grant.handle],
         allowed_data_classes: vec![DataClass::Synthetic],
+        current_time_unix_ms: milliseconds(now()).unwrap(),
+        timezone_offset_seconds: grant.day.timezone_offset_seconds,
         input: ExpertInput::ProposeFocus { focus_minutes: 60 },
         budget: ExpertBudget::default(),
         deadline: Instant::now() + Duration::from_secs(5),

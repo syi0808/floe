@@ -57,15 +57,18 @@ impl ModelRunner for Model {
                     text: "Synthetic proposal recorded.".into(),
                 },
                 Some(("schedule.find_free_windows", output)) => {
-                    let insights: Vec<ExpertInsight> = serde_json::from_str(output).unwrap();
+                    let insights: Vec<serde_json::Value> = serde_json::from_str(output).unwrap();
                     let (starts_at_unix_ms, ends_at_unix_ms) = insights
                         .into_iter()
-                        .find_map(|insight| match insight {
-                            ExpertInsight::FocusWindow {
-                                starts_at_unix_ms,
-                                ends_at_unix_ms,
-                            } => Some((starts_at_unix_ms, ends_at_unix_ms)),
-                            _ => None,
+                        .find_map(|insight| {
+                            if insight["kind"] == "focus_window" {
+                                Some((
+                                    insight["starts_at_unix_ms"].as_u64()?,
+                                    insight["ends_at_unix_ms"].as_u64()?,
+                                ))
+                            } else {
+                                None
+                            }
                         })
                         .unwrap();
                     ModelStep::Call {

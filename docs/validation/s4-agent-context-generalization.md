@@ -30,6 +30,12 @@ Date: 2026-09-09. Implementation and automated evidence only; S4 remains **0/14*
   `schedule.find_free_windows` and `schedule.propose_window` according to the task.
   No common prompt forces a focus-time workflow; host budgets, schemas and proposal
   validation remain authoritative.
+- Schedule Expert tasks now append invocation-time clock and local-offset context
+  outside the stable Role prompt. Calendar Tool results retain authoritative epoch
+  values while adding local display values whose precision expands from `HH:mm` to
+  month/day or year/month/day when the authorized range requires it; seconds appear
+  only when present. The Expert uses the offset for interpretation but omits timezone
+  metadata from its Manager-facing summary.
 - Added a bounded `PlaybookRegistry` and per-invocation discovery session. Only
   eligible roots are initially visible; loading a parent reveals direct child
   summaries. Missing ancestry, cycles, repeated loads, depth and content budgets fail
@@ -53,8 +59,9 @@ All Go server tests passed.
 
 Coverage includes prompt component validation, custom Manager Persona composition,
 context manifest serialization, Agent Card assembly, in-process A2A task lookup and
-cancellation, natural-language delegation, generic Schedule tool selection, typed
-proposal artifacts, nested Playbook visibility and hierarchy rejection. The existing
+cancellation, natural-language delegation, generic Schedule tool selection, adaptive
+cross-year time formatting, typed proposal artifacts, nested Playbook visibility and
+hierarchy rejection. The existing
 Calendar authority, encrypted-session, model-adapter and replay suites remain green.
 
 ## Remaining boundary

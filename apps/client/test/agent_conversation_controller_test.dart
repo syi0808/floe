@@ -1,3 +1,4 @@
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_conversation_gateway.dart';
@@ -50,6 +51,7 @@ void main() {
     expect(markdown.selectable, isTrue);
     expect(markdown.imageBuilder, isNotNull);
     expect(markdown.onTapLink, isNull);
+    expect(markdown.styleSheet?.blockSpacing, FloeSpace.sm);
     expect(find.byType(Image), findsNothing);
     final renderedBlocks = tester
         .widgetList<SelectableText>(

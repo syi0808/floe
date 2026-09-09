@@ -117,6 +117,10 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         &self.grant
     }
 
+    pub fn current_time(&self) -> DateTime<Utc> {
+        (self.clock)()
+    }
+
     async fn authorized(
         &self,
         deadline: Instant,

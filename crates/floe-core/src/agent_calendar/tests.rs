@@ -181,18 +181,21 @@ impl ModelRunner for Model<'_> {
                     .find_map(|message| match message {
                         AgentMessage::Capability {
                             result: Ok(output), ..
-                        } => serde_json::from_str::<Vec<ExpertInsight>>(output).ok(),
+                        } => serde_json::from_str::<Vec<serde_json::Value>>(output).ok(),
                         _ => None,
                     })
                     .ok_or(AgentFailure::InvalidModelOutput)?;
                 let (starts_at_unix_ms, ends_at_unix_ms) = insights
                     .iter()
-                    .find_map(|insight| match insight {
-                        ExpertInsight::FocusWindow {
-                            starts_at_unix_ms,
-                            ends_at_unix_ms,
-                        } => Some((*starts_at_unix_ms, *ends_at_unix_ms)),
-                        _ => None,
+                    .find_map(|insight| {
+                        if insight["kind"] == "focus_window" {
+                            Some((
+                                insight["starts_at_unix_ms"].as_u64()?,
+                                insight["ends_at_unix_ms"].as_u64()?,
+                            ))
+                        } else {
+                            None
+                        }
                     })
                     .ok_or(AgentFailure::InvalidModelOutput)?;
                 ModelStep::Call {

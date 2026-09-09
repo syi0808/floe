@@ -15,6 +15,8 @@ Date: 2026-09-08. Implementation and automated evidence only; S4 remains **0/14*
   use concise Markdown when it improves readability.
 - Rendered assistant messages with selectable GitHub-Flavored Markdown in the
   Flutter panel. User messages remain literal selectable text.
+- Reduced Markdown block spacing from 12 to 8 logical pixels so consecutive list
+  items read as one compact group rather than separate paragraphs.
 - Kept Markdown presentational: links have no navigation callback and image syntax
   renders only alt text, preventing model-authored Markdown from fetching a remote or
   local resource.

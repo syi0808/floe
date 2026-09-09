@@ -35,6 +35,13 @@ Manager는 사용자 conversation history를 유지하고, Schedule Expert에는
 요청에서 파생한 자연어 delegation message와 허가된 View만 전달한다. Expert의 내부
 모델 turn은 Manager conversation에 합쳐지지 않는다.
 
+Schedule Expert task에는 호출 시점의 현재 시각과 사용자 로컬 UTC offset을 동적
+runtime context로 덧붙인다. 이 값은 고정 Role prompt에 포함하지 않으므로 prompt cache의
+stable prefix를 바꾸지 않는다. Calendar Tool은 원본 epoch와 함께 사람이 바로 읽을 수
+있는 로컬 시각을 제공한다. 같은 날은 `HH:mm`, 날짜가 달라지면 월·일, 연도를 넘으면
+연도까지 포함하고 초는 실제 정밀도가 필요할 때만 포함한다. offset 자체는 해석에만
+사용하며 Manager가 사용자에게 보여주는 결과에는 노출하지 않는다.
+
 ```text
 Manager
   → A2A SendMessage("일정 관점에서 …를 검토해줘")

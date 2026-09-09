@@ -1,8 +1,7 @@
 use floe_agent::{
     AgentBudget, AgentCommand, AgentContext, AgentEvent, AgentFailure, AgentMessage, DataClass,
-    ExpertInsight, InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, TransferConsent, calendar_briefing_prompt,
-    calendar_focus_proposal_prompt,
+    InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+    TransferConsent, calendar_briefing_prompt, calendar_focus_proposal_prompt,
 };
 use floe_core::{
     CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
@@ -379,14 +378,17 @@ impl ModelRunner for DeterministicModel {
         } else if matches!(self.prompt, AgentCalendarPromptDto::ProposeFocus { .. })
             && capability_results.len() == 1
         {
-            let insights: Vec<ExpertInsight> = serde_json::from_str(capability_results[0].1)
+            let insights: Vec<serde_json::Value> = serde_json::from_str(capability_results[0].1)
                 .map_err(|_| AgentFailure::InvalidModelOutput)?;
-            let window = insights.iter().find_map(|insight| match insight {
-                ExpertInsight::FocusWindow {
-                    starts_at_unix_ms,
-                    ends_at_unix_ms,
-                } => Some((*starts_at_unix_ms, *ends_at_unix_ms)),
-                _ => None,
+            let window = insights.iter().find_map(|insight| {
+                if insight["kind"] == "focus_window" {
+                    Some((
+                        insight["starts_at_unix_ms"].as_u64()?,
+                        insight["ends_at_unix_ms"].as_u64()?,
+                    ))
+                } else {
+                    None
+                }
             });
             match window {
                 Some((starts_at_unix_ms, ends_at_unix_ms)) => ModelStep::Call {
