@@ -361,7 +361,10 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('Calendars', style: FloeType.controlLabel),
+        Text(
+          'Calendars',
+          style: FloeType.controlLabel.copyWith(fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: FloeSpace.xs),
         Text(
           sources == null
@@ -461,8 +464,13 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         children: [
           Row(
             children: [
-              const Expanded(
-                child: Text('Calendars', style: FloeType.controlLabel),
+              Expanded(
+                child: Text(
+                  'Calendars',
+                  style: FloeType.controlLabel.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
               FloeBadge(
                 label: status,

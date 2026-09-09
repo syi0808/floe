@@ -471,7 +471,10 @@ class _AiProcessingState extends State<_AiProcessing> {
         ),
         if (connection != null && purposes != null) ...[
           const SizedBox(height: FloeSpace.lg),
-          const Text('Task routes', style: FloeType.controlLabel),
+          Text(
+            'Task routes',
+            style: FloeType.controlLabel.copyWith(fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: FloeSpace.xs),
           Text(
             'Floe selects among these routes based on the work and your consent.',

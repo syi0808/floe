@@ -170,6 +170,17 @@ void main() {
     expect(find.text('Unavailable'), findsOneWidget);
     expect(find.text('View recent data use (1)'), findsOneWidget);
     expect(find.text('Completed'), findsNothing);
+    expect(
+      tester.widget<Text>(find.text('Task routes')).style?.fontWeight,
+      FontWeight.w600,
+    );
+    expect(
+      tester
+          .widget<Text>(find.text('Allow external model providers'))
+          .style
+          ?.fontWeight,
+      FontWeight.w600,
+    );
 
     final activityButton = find.byKey(
       const ValueKey('processing-activity-open'),

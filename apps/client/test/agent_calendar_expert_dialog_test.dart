@@ -166,7 +166,7 @@ void main() {
       expect(find.text('Active'), findsOneWidget);
       expect(
         tester.widget<Text>(find.text('Calendars')).style?.fontWeight,
-        FontWeight.w500,
+        FontWeight.w600,
       );
       expect(find.text('Personal · home'), findsOneWidget);
       expect(find.text('1 calendar'), findsOneWidget);

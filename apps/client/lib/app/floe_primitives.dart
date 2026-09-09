@@ -185,7 +185,10 @@ final class FloeSwitchTile extends StatelessWidget {
     label: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: FloeType.controlLabel),
+        Text(
+          title,
+          style: FloeType.controlLabel.copyWith(fontWeight: FontWeight.w600),
+        ),
         if (subtitle != null) ...[
           const SizedBox(height: FloeSpace.xxs),
           Text(subtitle!, style: FloeType.bodySmall),
