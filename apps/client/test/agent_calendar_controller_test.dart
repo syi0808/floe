@@ -70,8 +70,8 @@ void main() {
     expect(find.text('Calendar conversation'), findsNothing);
     expect(find.text('Message'), findsOneWidget);
     expect(
-      tester.getCenter(find.byType(TextFormField)).dy,
-      tester.getCenter(find.byTooltip('Ask Floe')).dy,
+      tester.getTopLeft(find.byType(TextFormField)).dy,
+      tester.getTopLeft(find.byTooltip('Ask Floe')).dy,
     );
     await tester.enterText(
       find.byType(TextFormField),

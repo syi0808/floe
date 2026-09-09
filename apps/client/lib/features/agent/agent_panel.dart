@@ -355,7 +355,7 @@ class _AgentPanelState extends State<AgentPanel> {
             const SizedBox(height: FloeSpace.md),
           ],
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (!storageLocked) ...[
                 Expanded(
