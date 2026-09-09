@@ -90,10 +90,10 @@ export FLOE_INFERENCE_TOKEN="$(openssl rand -hex 32)"
 ```
 
 Edit the copied config **before** starting the service. Product features request a
-performance class; the gateway resolves it to an operator-managed target. Target,
+product purpose; the gateway resolves it to an operator-managed target. Target,
 model, provider and reasoning effort are operator-only configuration. Apps can see
-only class availability and data-boundary metadata through authenticated
-`GET /v1/inference-classes`. Restart the gateway after changing configuration or credentials.
+only purpose availability and data-boundary metadata through authenticated
+`GET /v1/inference-purposes`. Restart the gateway after changing configuration or credentials.
 This headless path exists for fixtures and direct development clients; native Floe
 uses console pairing instead. Device-local models execute inside the client runtime
 and do not use this gateway.
