@@ -721,8 +721,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| request.replay.is_empty()));
     assert_eq!(
-        requests[0].capabilities[0].input_schema.as_ref().unwrap()["oneOf"][0]["properties"]["kind"]
-            ["enum"][1],
+        requests[0].capabilities[0].input_schema.as_ref().unwrap()["properties"]["kind"]["enum"][1],
         "propose_focus"
     );
     let AgentMessage::Capability {

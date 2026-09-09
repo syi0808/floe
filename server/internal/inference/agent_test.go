@@ -77,6 +77,17 @@ func TestBatchTranscriptRequiresEveryUniqueResult(test *testing.T) {
 	}
 }
 
+func TestConditionalToolSchemaKeepsObjectEnvelope(test *testing.T) {
+	raw := json.RawMessage(`{"messages":[{"role":"user","content":"Inspect the calendar"}],"tools":[{"type":"function","function":{"name":"expert_schedule","parameters":{"type":"object","properties":{"kind":{"type":"string"},"focus_minutes":{"type":"integer"},"request":{"type":"string"}},"required":["kind"],"oneOf":[{"properties":{"kind":{"enum":["briefing","propose_focus"]}},"required":["focus_minutes"]},{"properties":{"kind":{"const":"analyze"}},"required":["request"]}],"additionalProperties":false}}}]}`)
+	if failure := agentInputFailure(raw); failure != "" {
+		test.Fatal("conditional object schema rejected", failure)
+	}
+	withoutObjectEnvelope := json.RawMessage(`{"messages":[{"role":"user","content":"Inspect the calendar"}],"tools":[{"type":"function","function":{"name":"expert_schedule","parameters":{"oneOf":[]}}}]}`)
+	if failure := agentInputFailure(withoutObjectEnvelope); failure != "invalid_agent_tool_parameters" {
+		test.Fatal("non-object tool schema returned the wrong failure", failure)
+	}
+}
+
 func TestOnlyV1ContractsAreAccepted(test *testing.T) {
 	gateway := fixtureGateway(test, "ollama", "http://127.0.0.1:1")
 	for _, path := range []string{"/v2/generate", "/v3/agent"} {

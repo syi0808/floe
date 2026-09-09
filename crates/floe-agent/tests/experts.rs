@@ -121,11 +121,9 @@ fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
     assert_eq!(descriptor.id, "expert.schedule");
     assert_eq!(descriptor.output_data_class, DataClass::Synthetic);
     let schema = descriptor.input_schema.as_ref().unwrap();
-    assert_eq!(
-        schema["oneOf"][0]["properties"]["focus_minutes"]["maximum"],
-        240
-    );
-    assert_eq!(schema["oneOf"][0]["additionalProperties"], false);
+    assert_eq!(schema["properties"]["focus_minutes"]["maximum"], 240);
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["additionalProperties"], false);
     assert_eq!(schema["oneOf"][1]["properties"]["kind"]["const"], "analyze");
     let mut legacy = serde_json::to_value(&descriptor).unwrap();
     legacy.as_object_mut().unwrap().remove("input_schema");

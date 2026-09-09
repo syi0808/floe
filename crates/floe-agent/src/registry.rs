@@ -710,27 +710,28 @@ impl AgentRegistry {
             read_only: true,
             output_data_class: resolved.data_class,
             input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["briefing", "propose_focus", "analyze"]},
+                    "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240},
+                    "request": {"type": "string", "minLength": 1, "maxLength": 2048}
+                },
+                "required": ["kind"],
                 "oneOf": [
                     {
-                        "type": "object",
                         "properties": {
-                            "kind": {"type": "string", "enum": ["briefing", "propose_focus"]},
-                            "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240}
+                            "kind": {"enum": ["briefing", "propose_focus"]}
                         },
-                        "required": ["kind", "focus_minutes"],
-                        "additionalProperties": false
+                        "required": ["focus_minutes"]
                     },
                     {
-                        "type": "object",
                         "properties": {
-                            "kind": {"const": "analyze"},
-                            "request": {"type": "string", "minLength": 1, "maxLength": 2048},
-                            "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240}
+                            "kind": {"const": "analyze"}
                         },
-                        "required": ["kind", "request"],
-                        "additionalProperties": false
+                        "required": ["request"]
                     }
-                ]
+                ],
+                "additionalProperties": false
             })),
         })
     }
