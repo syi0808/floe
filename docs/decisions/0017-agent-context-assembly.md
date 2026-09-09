@@ -14,8 +14,9 @@ session history or progressively disclosed procedures without turning the system
 prompt into an unbounded mixture of instructions and data.
 
 The prompt must also stop carrying workflow details that belong in capabilities or
-procedures. Manager and Expert role prompts should say who the model is, what it is
-responsible for, what it may do, what it must not do and how it communicates.
+procedures. Common prompts should contain only stable behavior that materially helps
+the model and cannot be derived from capability schemas or enforced more reliably by
+the host. Their final section structure remains a separate prompt-design decision.
 Schemas, grants, call counts, freshness and output bounds remain host-enforced.
 
 ## Reference findings
