@@ -29,7 +29,8 @@
 │ Intelligence Layer  │  │ Integration      │
 │                     │  │ Fabric           │
 │ Manager Agent Loop  │  │                  │
-│ Tool/Expert Registry│  │ Connectors       │
+│ Tool Registry       │  │ Connectors       │
+│ Agent Directory/A2A │  │                  │
 │ Domain Models       │  │ Activepieces     │
 └──────────┬──────────┘  │ Native adapters  │
            │             └────────┬─────────┘
@@ -117,16 +118,16 @@ Connectors: Native Rust / Go + ConnectorSpec
 ## Expert Ecosystem Boundary
 
 ```text
-                     Expert Registry
+                  Agent Directory / Agent Cards
              ┌────────────┼────────────┐
              │            │            │
           Built-in    User-created  Marketplace
              │            │            │
              └────────────┼────────────┘
                           ↓
-                    Expert Runtime
+                 A2A Router / Expert Runtime
                           │
-             granted Views / Capabilities
+          in-process binding + granted Views / Tools
                           │
                           ↓
                        Manager
@@ -134,4 +135,6 @@ Connectors: Native Rust / Go + ConnectorSpec
 
 Third-party Experts do not receive direct DB, credential, or unrestricted network access.
 
-The runtime boundary is designed around semantic capabilities and structured outputs.
+The runtime boundary uses A2A-aligned Message, Task and Artifact semantics. Experts
+normally share the Manager process through an in-process binding; remote bindings can
+be added without turning Experts into Tools.

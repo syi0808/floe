@@ -418,3 +418,17 @@ code emits an explicit inference policy decision before selection, and local-onl
 work never silently falls back to remote inference.
 
 See [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md).
+
+---
+
+## D-041 — Manager–Expert collaboration uses an A2A-aligned runtime
+
+**Status:** Accepted — 2026-09-09
+
+Experts are discoverable agents rather than Manager Tools. The Context Assembler
+provides compact projections of active Expert Agent Cards; Manager and Expert exchange
+natural-language A2A Messages and terminal Artifacts through a Task lifecycle. Both
+run in one process initially through `InProcessA2ATransport`. Remote protocol bindings
+may be added later without changing Manager semantics.
+
+See [ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md).

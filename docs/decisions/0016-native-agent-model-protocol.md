@@ -4,6 +4,10 @@
 - Status: accepted; native transport, replay, shared usage, durable model attempts, scoped capability execution and ordered output implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
+> The implemented Expert-as-capability transport is superseded as the target design
+> by [ADR 0018](0018-manager-expert-a2a-delegation.md). Its model-attempt, usage,
+> journal and authorization guarantees remain requirements of the A2A-aligned path.
+
 ## Decision
 
 Rust owns the Floe agent loop, capability authorization, Expert host and action

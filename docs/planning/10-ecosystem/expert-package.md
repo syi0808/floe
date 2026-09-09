@@ -41,6 +41,7 @@ Candidate fields:
 ```toml
 id = "dev.example.job-search"
 name = "Job Search Expert"
+description = "채용 활동의 맥락, 후속 조치와 일정 현실성을 함께 검토하는 전문가"
 version = "1.2.0"
 expert_api = "1"
 publisher = "example"
@@ -49,6 +50,11 @@ execution = "declarative" # declarative | component | builtin
 
 [compatibility]
 min_floe = "..."
+
+[agent_card]
+protocol_version = "1.0"
+domain_tags = ["job-search", "communication", "schedule"]
+skills = ["채용 과정의 다음 단계를 독립적인 관점에서 검토"]
 
 [permissions]
 read = [
@@ -65,6 +71,16 @@ schedules = ["daily"]
 ```
 
 Exact syntax is not finalized.
+
+The package metadata is projected into an A2A-aligned Agent Card. `description` and
+`skills` are bounded discovery text, not callable commands, prompt instructions or
+permission grants. Floe derives `supportedInterfaces` from the installed transport;
+the package cannot claim an endpoint or authentication mode that the host does not
+provide.
+
+For the in-process runtime the Agent Card remains registry metadata. A future remote
+binding may publish it through the standard discovery operation without changing the
+package identity or Manager-facing compact projection.
 
 ---
 

@@ -2,6 +2,10 @@
 
 > Status: Recommended architecture direction
 
+> Manager–Expert transport follows
+> [ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md). The S4 typed
+> invocation is an implemented migration baseline, not the target Manager API.
+
 ## S4 implementation baseline
 
 S4는 이 문서의 모든 execution class를 한 번에 구현하지 않는다. local host에서
@@ -16,6 +20,35 @@ S4는 이 문서의 모든 execution class를 한 번에 구현하지 않는다.
 Sandboxed Component와 server embedding topology는 S4 제외 범위다. 다만 S4의 host
 contract에 direct database, credential, UI 또는 authoritative Memory write를 넣어
 미래 sandbox를 우회해서는 안 된다.
+
+## Target runtime topology
+
+Manager와 Expert는 기본적으로 같은 process에서 실행한다. 서로 직접 함수를 호출하지
+않고 A2A-aligned operation port를 사용하며, 초기 binding만 in-process다.
+
+```text
+Manager Agent
+  → A2ARouter
+      → InProcessA2ATransport
+          → ExpertRuntime
+```
+
+`InProcessA2ATransport`는 canonical Agent Card, Message, Task, Artifact와 Part 객체를
+직접 전달하므로 loopback HTTP나 JSON serialization cost가 없다. 향후
+`RemoteA2ATransport`가 공식 JSON-RPC, gRPC 또는 HTTP+JSON binding을 구현해도 Router와
+Manager contract는 유지된다.
+
+초기 operation surface는 다음과 같다.
+
+```text
+send_message(agent_ref, message, configuration) -> Message | Task
+get_task(task_id)                                -> Task
+cancel_task(task_id)                             -> Task
+get_agent_card(agent_ref)                        -> AgentCard
+```
+
+stream/resubscribe와 push notification은 같은 process의 첫 구현에는 필요하지 않지만
+canonical task lifecycle과 persisted event는 이후 추가를 막지 않도록 설계한다.
 
 ## Execution Classes
 
@@ -42,7 +75,8 @@ Examples:
 
 Implementation may live in Go server or Rust Device Core depending on execution placement.
 
-Even trusted Experts should consume domain Views and emit structured outputs where practical.
+Even trusted Experts should consume domain Views and emit Artifacts with typed Data
+Parts where practical.
 
 ---
 
@@ -135,6 +169,9 @@ output.emit(...)
 
 Only manifest-approved interfaces are linked into the invocation context.
 
+이 API는 Expert가 사용하는 host-side Tool/View boundary다. Manager가 Expert를
+capability처럼 호출하는 API가 아니다.
+
 ---
 
 # Model Usage
@@ -179,35 +216,38 @@ An Expert cannot read another Expert's private state unless an explicit future s
 
 ---
 
-# Invocation Semantics
+# A2A Semantics
 
-Invocation input should be bounded and structured.
+Manager의 assignment와 Expert의 clarification은 자연어 Message Part다. 실행 제어와
+결과 lifecycle은 canonical A2A 객체와 Floe extension metadata로 구조화한다.
 
 ```text
-ExpertInvocation {
-  invocationId
-  trigger
-  timestamp
-  personRef
-  grantedViewHandles
-  config
+Message {
+  messageId
+  contextId
+  taskId?
+  role
+  parts[]
+}
+
+Task {
+  id
+  contextId
+  status
+  history[]
+  artifacts[]
 }
 ```
 
-Output:
+Artifact의 Text Part는 Manager가 종합할 자연어 결과를 담는다. evidence,
+ActionProposal, MemoryCandidate와 state update는 versioned Data Part 또는 reference로
+담아 typed validation과 Review를 유지한다. deadline, Person, assignment, grant, budget,
+trace와 context projection은 model-authored text가 아니라 host-owned Floe extension
+metadata다.
 
-```text
-ExpertResult {
-  insights[]
-  interventions[]
-  actionProposals[]
-  memoryCandidates[]
-  stateUpdates[]
-  diagnostics
-}
-```
-
-The exact transport schema remains TBD.
+Agent Card의 description과 coarse skills는 discovery용이다. 이는 Expert가 수행할 수
+있는 명령의 폐쇄적인 목록이나 권한 선언이 아니다. 실제 활성 여부와 Tool/View grant는
+Installation, Assignment와 invocation policy로 결정한다.
 
 ---
 

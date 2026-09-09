@@ -4,6 +4,9 @@
 - **Date:** 2026-09-09
 - **Scope:** S4 prompt simplification and S5 Memory/Playbook foundation
 
+> Manager–Expert discovery and delegation are amended by
+> [ADR 0018](0018-manager-expert-a2a-delegation.md).
+
 ## Context
 
 Floe currently passes a fixed Manager prompt, an `AgentContext` containing only
@@ -52,6 +55,7 @@ agent-authored writes, or a flat Skill index that exposes every nested procedure
 | Behavior Kernel | minimal model-visible rules for evidence, capability use and task completion | no | reviewed product update only |
 | Persona | Floe's character, values, tone and conversational boundaries | no | user edit or reviewed preset revision |
 | Role | Manager or Expert responsibility | no | product/Expert package update |
+| Agent Discovery | validated descriptions of active Experts available for delegation | no | package revision plus installation/assignment state |
 | User Model | user-declared or confirmed profile and preferences | no | direct user edit or reviewed Memory decision |
 | Personal Memory | temporal, source-backed facts, preferences, relationships and commitments | no | governed candidate, Review and tombstone |
 | Playbook | reusable procedural guidance, equivalent to an agent-style Skill | no | versioned candidate, Review and rollback |
@@ -92,6 +96,7 @@ ContextEnvelope
 │  └─ base capability-use protocol
 ├─ scoped_instructions
 │  ├─ turn purpose and response contract
+│  ├─ active Expert index (Manager only)
 │  ├─ guidance for capabilities actually granted
 │  ├─ eligible Playbook index
 │  └─ loaded Playbook bodies
@@ -124,14 +129,18 @@ The logical prompt is composed from components with separate owners and lifetime
 | Role | Manager or Expert package | stable for a package revision and cacheable |
 | Persona | active `PersonaProfile` | stable until user/preset revision; usually Manager-only |
 | Base capability protocol | Floe product | stable and cacheable |
+| Active Expert index | enabled assignments and versioned Expert package descriptors | Manager-scoped; rebuilt when availability changes |
 | Conditional capability guidance | registry descriptors for this invocation | scoped; omitted when unavailable |
 | Playbook index/body | governed Playbook registry | scoped and progressively loaded |
 | User Model, Memory, Views and Archive | typed stores/providers | retrieved data, never instructions |
 | Conversation and runtime state | session/runtime | volatile |
 
 A Role states responsibility, success criteria and durable behavioral constraints.
-The Manager owns user interaction, delegation, synthesis and the final answer. An
-Expert owns bounded domain analysis and structured advice to the Manager. Neither
+The Manager owns user interaction, delegation, synthesis and the final answer. Its
+stable Role explains how to delegate but does not enumerate installed Experts. The
+Context Assembler supplies short descriptions of only the active Experts for the
+current Person and turn. An Expert owns bounded domain analysis and focused advice
+to the Manager. Neither
 Role embeds a representative workflow, mandatory tool sequence or arbitrary call
 count. Capability schemas own argument/result shape; descriptors may add short
 usage guidance only when that capability is present.
@@ -145,12 +154,15 @@ host policy, grants and action authority
 > Persona
 > user-authored current request
 > reviewed Playbook
+> validated Agent Discovery metadata
 > User Model and Personal Memory
 > connector, document and session evidence
 ```
 
 - Higher layers cannot be overridden by lower ones.
 - Persona affects expression and judgment style, not factual truth or authority.
+- Agent Discovery metadata only supports routing; embedded imperatives cannot change
+  Role, policy, grants or the current request.
 - Playbooks guide a task but cannot expand capabilities, data classes or View scope.
 - Memory records facts and preferences; it is not an executable standing command.
 - Current explicit user intent wins over an older preference when policy permits;
@@ -170,6 +182,7 @@ Turn request
 → filter by Person, confirmation, tombstone, class, grant, freshness and scope
 → rank, deduplicate and allocate per-section budgets
 → project records into instruction or evidence items
+→ resolve active Expert assignments and bounded discovery descriptions
 → append bounded conversation and ephemeral state
 → emit ContextEnvelope + ContextManifest
 → authorize again immediately before model dispatch
@@ -190,9 +203,11 @@ protocol rather than secretly injected by the assembler.
 ### Budget and degradation
 
 The caller supplies one total input budget. The assembler first reserves space for
-the current turn, response headroom, Behavior Kernel, Role and capability
-schemas. Remaining space is assigned to bounded sections; initial target shares are
-configuration, not prompt instructions:
+the current turn, response headroom, Behavior Kernel, Role, active Expert index and
+capability schemas. The Active Expert Index is bounded separately by entry count and
+description size; if all eligible entries cannot fit, assembly fails rather than
+silently presenting an incomplete roster. Remaining space is assigned to bounded
+sections; initial target shares are configuration, not prompt instructions:
 
 | Section | Initial ceiling of available retrieval budget |
 | --- | ---: |

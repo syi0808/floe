@@ -20,6 +20,7 @@ Floe can generate a **Declarative Expert draft**.
 
 The generated artifact should still be inspectable:
 
+- Agent Card discovery description
 - triggers
 - permissions
 - rules
@@ -66,7 +67,7 @@ Fixture
        ↓
 Expert
        ↓
-Expected ActionProposal / Insight
+Expected Task / Artifact / typed proposal reference
 ```
 
 Third-party Experts should be testable without the developer's personal Floe database.
@@ -104,6 +105,7 @@ publish
 Marketplace review can combine:
 
 - manifest validation
+- Agent Card metadata validation
 - package signature
 - static permission analysis
 - Wasm import inspection

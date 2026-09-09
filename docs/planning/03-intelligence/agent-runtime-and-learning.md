@@ -12,6 +12,11 @@ bounded model-output/schema correction attempt. This supersedes the immediate
 hard-stop rule below for the first such failure only; subsequent failure remains a
 hard stop. The full durable replay and multi-item event migration is not complete.
 
+Manager–Expert collaboration is amended by
+[ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md). The current
+Manager-visible Expert Tool is a migration path; the target runtime uses distinct
+A2A-aligned delegation semantics with an in-process transport.
+
 ## Product boundary
 
 Floe has one user-facing **Manager Agent**. Experts provide bounded domain judgment;
@@ -24,7 +29,8 @@ Chat / Voice / System Invocation
         ├─ Context Assembler
         ├─ Model Port
         ├─ Tool Registry
-        ├─ Expert Host
+        ├─ A2A Router / Agent Directory
+        ├─ In-process Expert Runtime
         ├─ Policy / Budgets
         └─ Event Stream
               ↓
@@ -46,7 +52,8 @@ AgentRuntime
 ├─ ContextProvider[]
 ├─ ModelRunner
 ├─ ToolRegistry
-├─ ExpertRegistry / ExpertHost
+├─ AgentDirectory / A2ARouter
+├─ InProcessA2ATransport / ExpertRuntime
 ├─ ConnectorRegistry / ViewProvider
 ├─ PolicyEngine
 ├─ LearningSink
@@ -57,9 +64,11 @@ Required invariants:
 
 - Flutter chat, future voice, tests and server transport consume the same typed
   AgentCommand/AgentEvent stream.
-- Model adapters converge on one internal message/tool-call representation.
-- Tools and Experts register through versioned descriptors with availability and
-  permission checks; core code does not maintain provider-specific switch lists.
+- Model adapters converge on one internal message, Tool-call and delegation
+  representation.
+- Tools register through versioned capability descriptors. Experts publish
+  A2A-aligned Agent Cards through a separate Agent Directory; core code does not
+  maintain provider-specific switch lists.
 - Connectors register capabilities and provider-neutral Views. Agent context never
   embeds OAuth credentials, native framework objects or unrestricted raw datasets.
 - ExpertPackage, Installation and Person Assignment remain separate.
@@ -81,7 +90,7 @@ append UserMessage
 → assemble bounded context
 → model step
 → validate structured output
-→ zero or more Tool/Expert calls
+→ zero or more Tool calls or A2A delegations
 → append typed results
 → repeat within budget
 → persist AssistantMessage + outcome
@@ -153,7 +162,7 @@ builds the stable/cacheable prefix before scoped and volatile data.
 
 ## Sessions and chat
 
-`AgentSession`, `AgentMessage`, `CapabilityCall`, `ExpertInvocation` and
+`AgentSession`, `AgentMessage`, `CapabilityCall`, A2A `Task`/`Message`/`Artifact` and
 `AgentOutcome` are durable, Person-scoped records. Session history supports resume,
 branch/compaction lineage and on-demand search. Compaction preserves user messages,
 tool/result pairing, identifiers and recovery pointers to archived turns.
@@ -169,24 +178,27 @@ errors. It does not expose private chain-of-thought.
 
 ## Expert extensibility
 
-Experts are invoked like typed advisors, not given the entire Agent transcript or
-ambient tool access.
+Experts are addressable agents, not typed Manager Tools. The Agent Directory resolves
+active Agent Cards; the Context Assembler gives their compact descriptions to the
+Manager. A delegation uses natural-language A2A Message Parts, a Task lifecycle and
+terminal Artifacts. The Expert is not given the entire Manager transcript or ambient
+Tool access.
 
 ```text
-ExpertInvocation {
-  apiVersion, invocationId, expertId, assignmentId,
-  trigger, personRef, deadline, budget,
-  grantedViewHandles, grantedCapabilities, input
-}
-
-ExpertResult {
-  insights[], actionProposals[], memoryCandidates[],
-  stateUpdates[], diagnostics
-}
+Manager → A2ARouter.send_message(agentRef, Message)
+        → InProcessA2ATransport
+        → ExpertRuntime(granted context + Tools + Playbooks)
+        → Task(completed, artifacts[])
 ```
 
-The host validates schema/version, budgets and grants before and after invocation.
-Native, declarative, future Wasm and remote Experts adapt to this contract. Experts
+Floe initially implements `SendMessage`, `GetTask` and `CancelTask` without loopback
+network serialization. A future remote transport maps the same semantic operations to
+an official A2A binding. Floe-specific context, budget, evidence and proposal
+references live in versioned extensions or Data Parts.
+
+The host validates Agent Card/package versions, budgets and grants before and after
+each operation. Native, declarative, future Wasm and remote Experts adapt to this
+contract. Experts
 cannot render arbitrary UI, read credentials/DBs, mutate authoritative Memory or
 execute external actions. Private state is namespaced per assignment and migrated
 transactionally with rollback.

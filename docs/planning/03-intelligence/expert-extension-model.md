@@ -40,6 +40,7 @@ An Expert is conceptually:
 ```text
 Expert
 ├─ identity / metadata
+├─ Manager-facing discovery description
 ├─ trigger subscriptions
 ├─ required domain views
 ├─ required skills/capabilities
@@ -47,7 +48,8 @@ Expert
 ├─ memory view
 ├─ private state
 ├─ model/heuristic logic
-├─ output contract
+├─ natural-language delegation contract
+├─ typed evidence / proposal references
 └─ permission declaration
 ```
 
@@ -67,7 +69,39 @@ brief, granted Views, an explicit model placement/policy and an invocation budge
 Deterministic Tools remain the authority for calculations that can be made exact.
 The host also resolves capability descriptors and eligible root Playbooks for that
 invocation. The Expert chooses whether to call a capability or progressively load a
-Playbook; its common Role does not prescribe a universal workflow.
+Playbook; its common Role does not prescribe a universal workflow. The Manager does
+not invoke an Expert through this capability set. It discovers active Experts through
+their descriptions and sends a natural-language A2A delegation message.
+
+## Discovery descriptor
+
+Every package carries concise, versioned metadata that can be projected into an
+A2A-aligned Agent Card and the Manager's Active Expert Index:
+
+```text
+FloeAgentCard {
+  id, packageVersion, protocolVersion, name,
+  description,
+  domainTags[], skills[],
+  supportedInterfaces[], capabilities
+}
+```
+
+The description states the domain perspective and when consultation is useful. It
+must not enumerate a closed command set, prescribe a workflow, embed hidden prompt
+instructions or imply permissions. Agent Card skills are coarse discovery examples,
+not callable functions. Installation and assignment state determine whether the card
+is shown; metadata alone never makes an Expert invocable.
+
+Marketplace card text is not trusted as Role instruction. The registry validates and
+bounds it, and the Context Assembler emits only a quoted compact projection whose
+content cannot alter policy, grants or the current user request.
+
+The current runtime uses an in-process A2A binding over canonical Message, Task,
+Artifact and Part objects. A future remote binding may expose the same Agent Card and
+operations through JSON-RPC, gRPC or HTTP+JSON without changing Manager semantics.
+Floe-specific grants, trace references and typed domain references use versioned A2A
+extensions rather than altering the core protocol objects.
 
 ---
 
@@ -157,7 +191,7 @@ Read granted Views
   ↓
 Compute
   ↓
-Structured Output
+Natural-language result + typed references
   ↓
 Manager / Policy
 ```
@@ -247,9 +281,16 @@ Connector and Expert ecosystems remain separate.
 
 ---
 
-# Outputs
+# Delegation messages and outputs
 
-Experts return structured candidates rather than mutating product state arbitrarily.
+For a user-requested consultation, the Manager and Expert exchange natural-language
+messages inside typed host envelopes. The Manager explains the goal, relevant context,
+constraints and desired result without selecting a domain command enum. The Expert
+returns focused advice for the Manager to judge and synthesize.
+
+Experts may additionally return typed candidates rather than mutating product state
+arbitrarily. These are references beside the natural-language response, not a fixed
+replacement for it.
 
 Initial output types:
 

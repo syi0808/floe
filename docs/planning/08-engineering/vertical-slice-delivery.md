@@ -135,6 +135,11 @@ read capability로 제한한다. source 선정 근거는
 
 ### Acceptance criteria
 
+아래 기준의 `ExpertInvocation`/`ExpertResult`와 Manager-visible Expert call은 S4에서
+구현된 migration baseline이다. 후속 설계 목표는
+[ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md)의 in-process
+A2A-aligned Message/Task/Artifact contract다.
+
 - **S4-A1:** 새 chat을 시작하고 streaming 응답, stop, retry, 오류를 다룬다. 완결된
   User/Assistant/Tool/Expert event만 Person-scoped session에 저장하며 앱/core 재시작
   후 순서와 상태를 보존해 재개할 수 있다.
