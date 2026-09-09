@@ -38,6 +38,28 @@ S5의 self-improvement는 versioned Playbook change candidate를 만들며 Revie
 rollback을 거친다. 자세한 계약은
 [Agent Runtime and Governed Learning](agent-runtime-and-learning.md)을 따른다.
 
+## Progressive and nested Playbooks
+
+모든 Playbook 원문이나 하위 요약을 처음부터 context에 넣지 않는다. 현재 Manager
+또는 Expert에 허용된 root Playbook의 이름·요약·trigger만 먼저 노출한다.
+
+```text
+eligible root summaries
+→ playbook.load(parent)
+→ parent body + direct child summaries
+→ playbook.load(child)
+→ child body + its direct child summaries
+```
+
+하위 Playbook은 부모가 load되기 전에는 요약조차 보이지 않는다. 이는 단순한 디렉터리
+구성이 아니라 runtime discovery 규칙이며, 관련 없는 workflow가 모델 판단과 token을
+방해하지 않게 한다. registry는 ancestry cycle, revision, depth, visible-summary와
+loaded-body budget을 검증한다.
+
+Playbook은 고정 실행 엔진이 아니다. 모델이 필요성을 판단해 읽는 절차적 guidance이고,
+일반 요청은 Playbook 없이 capability를 직접 선택할 수 있다. Playbook에 적힌 Skill이나
+Tool도 현재 invocation에 grant되지 않았다면 호출할 수 없다.
+
 ## LLM이 직접 외부 상태를 변경하지 않는다
 
 ```text

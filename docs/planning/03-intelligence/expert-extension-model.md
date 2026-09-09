@@ -43,6 +43,7 @@ Expert
 ├─ trigger subscriptions
 ├─ required domain views
 ├─ required skills/capabilities
+├─ eligible Playbook roots
 ├─ memory view
 ├─ private state
 ├─ model/heuristic logic
@@ -64,6 +65,9 @@ An implementation may use a small domain-specific model loop, but that does not 
 it ambient Manager history or unrestricted recursion. The host supplies a bounded task
 brief, granted Views, an explicit model placement/policy and an invocation budget.
 Deterministic Tools remain the authority for calculations that can be made exact.
+The host also resolves capability descriptors and eligible root Playbooks for that
+invocation. The Expert chooses whether to call a capability or progressively load a
+Playbook; its common Role does not prescribe a universal workflow.
 
 ---
 
@@ -205,6 +209,11 @@ HealthStateView {
 rather than raw HealthKit samples.
 
 This is both an API stability boundary and a privacy boundary.
+
+View projection and freshness checks are host responsibilities, not an Expert prompt
+step. Re-validating a granted handle immediately before dispatch prevents stale or
+foreign-Person data from reaching the Expert without teaching every Expert the same
+mechanical validation workflow.
 
 ---
 

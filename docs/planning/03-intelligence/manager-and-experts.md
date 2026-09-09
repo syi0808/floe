@@ -11,7 +11,7 @@ server와 background lifecycle보다 먼저 local foreground에서 이 구조를
 multi-turn text chat
 → bounded Timeline + confirmed Memory views
 → Schedule Expert
-→ structured advice / action proposal
+→ structured calendar analysis / action proposal
 → Manager synthesis
 → S3 review and action gate
 ```
@@ -35,18 +35,25 @@ Manager는 사용자 conversation history를 유지하고, Schedule Expert에는
 Manager
   → ScheduleTaskBrief
   → lightweight Schedule Expert loop
-      → schedule.find_free_windows       # deterministic Tool
-      → concise domain summary
+      ├─ calendar.read/search             # granted calendar evidence
+      ├─ schedule.find_free_windows       # optional deterministic analysis
+      ├─ playbook.load                    # optional procedural guidance
+      └─ model-directed domain judgment
   → structured ExpertResult
   → Manager synthesis
 ```
 
-초기 loop는 최대 10번의 작은 model call로 제한한다. 최소 한 번, 최대 9번까지
-deterministic scheduling Tool을 호출한 뒤 Manager용 요약으로 종료해야 한다. Tool은
-최대 14일의 허가된 View 전체 또는 그 안의 최대 24시간 subrange를 받으므로 여러
-날짜 후보를 나눠 비교할 수 있다. 빈 시간 계산, interval 병합과 proposal 후보 생성은
-계속 검증 가능한 Rust 로직이 담당한다. Declarative fixture는 LLM 없이 같은
-Tool/output contract를 검증할 수 있다.
+Expert는 요청과 현재 근거를 보고 필요한 capability와 Playbook을 임의로 선택한다.
+캘린더 내용을 묻는 요청은 일반 read/search만으로 답할 수 있고, 실제 빈 구간 계산이
+필요할 때 `schedule.find_free_windows`를 사용할 수 있다. 반복되는 특수 절차는
+Playbook으로 분리한다. 예를 들어 focus-time 탐색은 선택 가능한 Calendar Playbook일
+뿐 Schedule Expert의 기본 목적이나 공통 실행 순서가 아니다.
+
+호스트는 전체 invocation의 iteration, model/tool call, 시간, token/cost와 output
+상한을 집행하지만 Role prompt에 임의의 최소 tool call이나 고정 call sequence를
+넣지 않는다. 빈 시간 계산과 interval 병합처럼 정확성이 필요한 연산은 검증 가능한
+Rust Tool이 담당한다. Declarative fixture는 LLM 없이 같은 capability/output contract를
+검증할 수 있다.
 
 다일 조회에는 host가 해당 날짜들을 포함하는 bounded Calendar View를 먼저 발급해야
 한다. Expert의 반복 호출 자체가 grant를 넓히거나 새로운 Calendar source를 읽을 수는
@@ -69,19 +76,31 @@ Manager Secretary
 
 ## Manager의 역할
 
-- 사용자와 대화
-- 현재 상황 통합
-- Expert 의견 취합
-- 우선순위 판단
-- 계획
-- intervention 결정
-- relevant memory retrieval
-- action proposal 생성
-- 사용자에게 전달할 표현 결정
+Manager Role은 다음 책임과 성공 조건만 안정 지침으로 가진다.
+
+- 사용자의 현재 요청을 이해하고 필요한 근거와 capability를 선택한다.
+- 여러 View, Memory와 Expert 결과를 구분하여 종합하고 불확실성을 보존한다.
+- Expert에 최소 범위의 task brief를 위임하되 최종 판단과 사용자 응답을 소유한다.
+- 외부 변경은 typed proposal로 만들고 Policy/Review/Executor 경계를 지킨다.
+- 활성 Persona에 따라 일관된 말투로 간결하고 유용하게 응답한다.
+
+특정 tool 호출 순서, 대표 업무 workflow, schema 사본과 runtime budget 숫자는
+Manager Role에 넣지 않는다. capability descriptor, Playbook과 host 설정이 각각 이를
+소유한다.
 
 ## Expert
 
 Expert는 API wrapper가 아니라 **특정 영역의 판단 서비스**다.
+
+Expert Role은 담당 domain, Manager에게 반환할 판단의 성공 조건, 근거와 불확실성
+처리 원칙만 정의한다. Expert는 받은 task brief를 벗어나 사용자와 직접 대화하거나
+권한을 확장하지 않으며, 사용할 수 없는 capability를 가정하지 않는다. 일반 실행은
+모델의 판단에 맡기고 반복 가능한 절차가 실제로 필요할 때만 Playbook을 읽는다.
+
+Schedule Expert는 일정의 조회·충돌·가용성·우선순위와 변경 후보를 분석한다. 허가된
+Calendar View와 read/search/free-window capability를 필요에 따라 사용해 근거가 있는
+`ExpertResult`를 Manager에게 반환한다. 집중 시간 확보는 가능한 요청 유형 중 하나일
+뿐 기본 목표가 아니다.
 
 초기 후보:
 

@@ -116,7 +116,7 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 **사용자 결과:** 사용자가 Day Canvas의 assistant panel에서 Floe와 여러 turn을
 대화한다. Manager는 Calendar, Gmail과 기기에서 허용된 attention/health context를
 Contacts, 다음 일정의 위치·ETA·날씨와 함께 전문 Expert를 통해 종합해 오늘
-브리핑을 답하거나 집중 시간 작업을 제안한다. 사용자는 각 source와 실행 과정을
+일정 질문에 답하거나 적절한 일정 작업을 제안한다. 사용자는 각 source와 실행 과정을
 확인·중단하며 나중에 같은 대화를 재개한다.
 
 **의존성:** S3 Accepted, S1 calendar view, P0-I Agent/Expert contract harness,
@@ -139,7 +139,7 @@ read capability로 제한한다. source 선정 근거는
   User/Assistant/Tool/Expert event만 Person-scoped session에 저장하며 앱/core 재시작
   후 순서와 상태를 보존해 재개할 수 있다.
 - **S4-A2:** Flutter, fixture와 model adapter가 같은 versioned AgentCommand/Event
-  contract를 사용한다. stable/scoped/retrieved/recent/ephemeral context layer와
+  contract를 사용한다. stable/scoped/contextual/conversation/runtime context layer와
   내부 message/tool-call representation은 provider나 UI 구현에 종속되지 않는다.
 - **S4-A3:** registry가 Tool과 Expert package/version, installation, Person assignment,
   enablement와 private state를 관리한다. built-in Schedule Expert와 declarative
@@ -213,7 +213,8 @@ read capability로 제한한다. source 선정 근거는
 7. live Gmail read/search와 on-demand body를 local Go connector로 검증한다.
 8. Contacts identity와 location/ETA/weather 기반 next-event feasibility를 연결한다.
 9. physical Apple device에서 Screen Time gate와 Health derived-only connector를 검증한다.
-10. source cohort로 today briefing을 만들고 Expert 결과를 S3 ActionProposal에 연결한다.
+10. source cohort의 일정 질문과 일정 변경 요청을 처리하고 Expert 결과를 S3
+    ActionProposal에 연결한다.
 11. live model, placement/consent denial, injection, budget/stall/cancel 회귀를 검증한다.
 
 **제외:** Gmail send/archive, Contacts write/note import, Always location/history,
@@ -224,11 +225,12 @@ multi-agent persona/chat, Expert 직접 mutation, model training/fine-tuning, �
 semantic smart router, local-only 요청의 자동 remote fallback, 실험적 Codex OAuth의
 production 지원 보장.
 
-## S5 — Governed Memory and Self-Improvement
+## S5 — Governed Context, Memory and Self-Improvement
 
 **사용자 결과:** Floe가 이전 대화의 확정된 선호·약속을 다음 대화에서 적절히
 기억한다. 사용자는 무엇을 왜 기억했는지와 Floe가 학습한 반복 절차를 검토하고,
-수정·되돌리기·고정·보관·완전 삭제할 수 있다.
+수정·되돌리기·고정·보관·완전 삭제할 수 있다. 사용자는 Floe의 Persona를 별도로
+설정하고 실제 model call에 조립된 context의 출처와 크기를 확인할 수 있다.
 
 **의존성:** S4 Accepted, P0-D versioned corpus, P0-F local vault/key boundary.
 S4 session, tool/Expert outcome과 명시적 user correction만 첫 learning evidence로 쓴다.
@@ -249,13 +251,18 @@ nested Playbook progressive disclosure는
 - **S5-A2:** background Learner는 bounded digest와 read-only evidence/evaluation만
   받고 candidate 외의 tool을 사용할 수 없다. foreground와 별도 budget/cancellation을
   가지며 새 user turn이 local review를 defer/preempt해도 session을 손상시키지 않는다.
-- **S5-A3:** candidate는 기본적으로 Review를 거쳐야 활성화된다. rejected/pending
-  항목은 context에 들어가지 않고 Memory와 Playbook은 compact index + on-demand retrieval로
-  주입되며 external evidence를 instruction으로 승격하지 않는다.
-- **S5-A4:** Memory/Playbook의 source, revision, usage/outcome을 inspect/edit/delete할 수
+- **S5-A3:** Behavior Kernel, Role, Persona, capability guidance, Playbook, contextual
+  data, conversation과 runtime state가 typed envelope/manifest로 분리된다. Persona는
+  inspect/edit/reset 및 `SOUL.md` import/export가 가능하지만 policy, Role이나 authority를
+  바꿀 수 없고 Expert에는 명시적으로 필요한 경우에만 전달된다.
+- **S5-A4:** candidate는 기본적으로 Review를 거쳐야 활성화된다. rejected/pending
+  항목은 context에 들어가지 않는다. root Playbook 요약만 먼저 노출하고 parent를
+  load한 뒤에만 direct child 요약을 발견할 수 있다. Memory와 external evidence를
+  instruction으로 승격하지 않는다.
+- **S5-A5:** Memory/Playbook의 source, revision, usage/outcome을 inspect/edit/delete할 수
   있다. 모든 변경은 ledger와 rollback material을 남기고 pin을 존중한다. 자동 curator는
   stale/archive만 하며 hard delete나 consolidation은 기본적으로 수행하지 않는다.
-- **S5-A5:** 재시작, context compaction, extractor/Playbook version 변경 뒤에도 decision과
+- **S5-A6:** 재시작, context compaction, extractor/Playbook version 변경 뒤에도 decision과
   tombstone이 일관되고 삭제 항목이 부활하지 않는다. replay set에서 false memory,
   retrieval precision, task outcome과 regression을 비교하며 실제 데이터는 local
   at-rest/key-unavailable gate 통과 후에만 dogfood한다.
@@ -263,10 +270,12 @@ nested Playbook progressive disclosure는
 ### 구현 increment
 
 1. session search/compaction과 recovery pointer를 구현해 S4 대화를 재개·검색한다.
-2. correction에서 MemoryCandidate를 만들고 Review/confirmed retrieval을 연결한다.
-3. 성공·실패 workflow에서 Playbook diff를 만들고 staged activation/rollback을 연결한다.
-4. isolated Learner, ledger, pin/stale/archive와 progressive disclosure를 구현한다.
-5. corpus/replay, 삭제, key failure와 실제 대화 dogfood를 검증한다.
+2. typed `ContextEnvelope`/manifest와 component별 budget·inspection을 구현한다.
+3. versioned Persona/User Model과 `SOUL.md` import/export를 분리해 연결한다.
+4. correction에서 MemoryCandidate를 만들고 Review/confirmed retrieval을 연결한다.
+5. nested Playbook load와 staged activation/rollback을 연결한다.
+6. isolated Learner, ledger, pin/stale/archive와 삭제 전파를 구현한다.
+7. corpus/replay, key failure와 실제 대화 dogfood를 검증한다.
 
 **제외:** 무검토 inferred write, model fine-tuning/weight update, safety/policy 자가수정,
 Wasm/code Playbook 자동 설치, autonomous consolidation, cross-device Memory sync.

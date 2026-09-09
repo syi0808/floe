@@ -1,6 +1,6 @@
 # ADR 0017: Assemble Agent context from typed, governed layers
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-09
 - **Scope:** S4 prompt simplification and S5 Memory/Playbook foundation
 
@@ -16,8 +16,9 @@ prompt into an unbounded mixture of instructions and data.
 The prompt must also stop carrying workflow details that belong in capabilities or
 procedures. Common prompts should contain only stable behavior that materially helps
 the model and cannot be derived from capability schemas or enforced more reliably by
-the host. Their final section structure remains a separate prompt-design decision.
-Schemas, grants, call counts, freshness and output bounds remain host-enforced.
+the host. Prompt composition is therefore based on ownership and lifetime, not a
+fixed checklist of prose headings. Schemas, grants, call counts, freshness and output
+bounds remain host-enforced.
 
 ## Reference findings
 
@@ -43,20 +44,32 @@ agent-authored writes, or a flat Skill index that exposes every nested procedure
 
 ## Decision
 
-### Separate six concepts
+### Separate policy, prompt and knowledge concepts
 
 | Concept | Meaning | May grant authority? | Mutation |
 | --- | --- | --- | --- |
-| Product Constitution | safety, evidence and action invariants | no; it defines the boundary | signed product update only |
+| Host Policy | grants, Action Authority, data policy and executable limits | yes, through deterministic enforcement | signed product/configuration update only |
+| Behavior Kernel | minimal model-visible rules for evidence, capability use and task completion | no | reviewed product update only |
 | Persona | Floe's character, values, tone and conversational boundaries | no | user edit or reviewed preset revision |
 | Role | Manager or Expert responsibility | no | product/Expert package update |
 | User Model | user-declared or confirmed profile and preferences | no | direct user edit or reviewed Memory decision |
 | Personal Memory | temporal, source-backed facts, preferences, relationships and commitments | no | governed candidate, Review and tombstone |
 | Playbook | reusable procedural guidance, equivalent to an agent-style Skill | no | versioned candidate, Review and rollback |
 
-`SOUL.md` is the import/export and editing representation of Persona, not the safety
-policy. Floe stores a parsed, versioned `PersonaProfile`; invalid or oversized source
-text cannot enter a prompt. A default product persona is always available. Changing
+The product constitution is represented by two different mechanisms rather than one
+large prompt: enforceable **Host Policy** and its minimal model-visible **Behavior
+Kernel**. The kernel tells the model to complete the current assignment, distinguish
+fact/inference/proposal, avoid fabricated evidence, continue after capability results
+and never claim authority it was not granted. The host independently enforces the
+actual schema, scope, budget and mutation boundary even if the model ignores the
+kernel.
+
+`SOUL.md` is the import/export and editing representation of Persona, not Host Policy
+or the Behavior Kernel. It does not have to follow the Role's document structure. The
+Manager normally receives the active Persona; an Expert receives it only when its
+declared assignment genuinely depends on presentation style. Floe stores a parsed,
+versioned `PersonaProfile`; invalid or oversized source text cannot enter a prompt. A
+default product persona is always available. Changing
 Persona invalidates the stable prompt prefix but never changes grants, data policy or
 Action Authority.
 
@@ -73,12 +86,14 @@ than by Flutter, a connector, an Expert or a model adapter.
 ```text
 ContextEnvelope
 ├─ stable_instructions
-│  ├─ Product Constitution
-│  ├─ Persona projection
-│  └─ Manager or Expert role
+│  ├─ Behavior Kernel
+│  ├─ Manager or Expert Role
+│  ├─ optional Persona projection
+│  └─ base capability-use protocol
 ├─ scoped_instructions
 │  ├─ turn purpose and response contract
-│  ├─ granted capability descriptors
+│  ├─ guidance for capabilities actually granted
+│  ├─ eligible Playbook index
 │  └─ loaded Playbook bodies
 ├─ contextual_data
 │  ├─ compact User Model projection
@@ -101,11 +116,31 @@ quoted/structured evidence and can never become an instruction merely because it
 contains imperative text. Model adapters must preserve these boundaries instead of
 flattening every item into one undifferentiated string.
 
+The logical prompt is composed from components with separate owners and lifetimes:
+
+| Component | Owner/source | Lifetime and cache behavior |
+| --- | --- | --- |
+| Behavior Kernel | Floe product | stable across roles and cacheable |
+| Role | Manager or Expert package | stable for a package revision and cacheable |
+| Persona | active `PersonaProfile` | stable until user/preset revision; usually Manager-only |
+| Base capability protocol | Floe product | stable and cacheable |
+| Conditional capability guidance | registry descriptors for this invocation | scoped; omitted when unavailable |
+| Playbook index/body | governed Playbook registry | scoped and progressively loaded |
+| User Model, Memory, Views and Archive | typed stores/providers | retrieved data, never instructions |
+| Conversation and runtime state | session/runtime | volatile |
+
+A Role states responsibility, success criteria and durable behavioral constraints.
+The Manager owns user interaction, delegation, synthesis and the final answer. An
+Expert owns bounded domain analysis and structured advice to the Manager. Neither
+Role embeds a representative workflow, mandatory tool sequence or arbitrary call
+count. Capability schemas own argument/result shape; descriptors may add short
+usage guidance only when that capability is present.
+
 ### Precedence and conflict rules
 
 ```text
-Product Constitution
-> host policy, grants and action authority
+host policy, grants and action authority
+> Behavior Kernel
 > Role
 > Persona
 > user-authored current request
@@ -155,7 +190,7 @@ protocol rather than secretly injected by the assembler.
 ### Budget and degradation
 
 The caller supplies one total input budget. The assembler first reserves space for
-the current turn, response headroom, Product Constitution, Role and capability
+the current turn, response headroom, Behavior Kernel, Role and capability
 schemas. Remaining space is assigned to bounded sections; initial target shares are
 configuration, not prompt instructions:
 
@@ -224,7 +259,7 @@ summaries and compaction artifacts; tombstones prevent replay from resurrecting 
 1. Add `ContextEnvelope`, `ContextItem`, `ContextManifest` and assembler ports while
    adapting today's empty `AgentContext` without changing model behavior.
 2. Add versioned Persona and typed User Model projections with inspect/edit/reset and
-   strict separation from Product Constitution.
+   strict separation from Host Policy and the Behavior Kernel.
 3. Add confirmed Memory retrieval, FTS session retrieval and per-chat use/generation
    controls; reject pending/rejected/tombstoned records before ranking.
 4. Add root Playbook index, body loading and nested discovery, then move focus-time

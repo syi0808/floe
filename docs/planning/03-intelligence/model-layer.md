@@ -34,6 +34,19 @@ Foundation Model/sLLM과 하나의 supported remote adapter가 같은 bounded co
 사용해야 한다. Codex browser authentication은 별도 feasibility gate이며, 공개적으로
 supportable한 Floe integration을 확립하지 못하면 API-key route로 대체한다.
 
+## Prompt assembly boundary
+
+Core의 Context Assembler가 Behavior Kernel, Role, Persona, conditional capability
+guidance, Playbook, contextual data, conversation과 runtime state를 typed
+`ContextEnvelope`로 조립한다. Model provider나 gateway는 이 구성요소의 필요성을
+추론하거나 Memory를 검색하지 않는다. Adapter는 envelope 경계와 순서를 해당
+provider의 native message/tool 형식으로 직렬화하고 model-family별 표현 최적화만 한다.
+
+따라서 provider 교체가 Floe의 Role, Persona, retrieval, authority 또는 Playbook
+의미를 바꾸지 않는다. 반대로 provider-specific tokenization과 prompt-cache key는
+adapter가 계산해 manifest에 돌려줄 수 있다. 구체 계약은
+[ADR 0017](../../decisions/0017-agent-context-assembly.md)을 따른다.
+
 ## 핵심 원칙
 
 Floe는 하나의 AI provider에 종속되지 않는다.

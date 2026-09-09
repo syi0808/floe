@@ -120,34 +120,36 @@ hierarchical Playbook decision is defined by
 the product-level model.
 
 ```text
-1. Stable: Floe identity, safety, tool/Expert protocol
-2. Scoped: Person policy, session purpose, granted capabilities
-3. Retrieved: relevant Memory/Playbooks/domain Views with provenance handles
-4. Recent: bounded conversation tail and compression summary
-5. Ephemeral: current time, budget and fresh execution state
+1. Stable: Behavior Kernel, Role, optional Persona, base capability protocol
+2. Scoped: purpose, available capability guidance, eligible/loaded Playbooks
+3. Contextual data: User Model, Memory, authorized Views and Archive evidence
+4. Conversation: compaction summary, ordered recent events, current request
+5. Runtime: current time, surface, budget and fresh execution state
 ```
 
-Stable identity and safety are product-owned and cannot be edited by the Agent.
-Memory and Playbooks are data, never higher-priority instructions. External content is
-quoted/typed as untrusted evidence. Prompt snapshots are versioned so a trace can
-be replayed without logging hidden reasoning or raw sensitive content.
+Host Policy is enforced outside the prompt. Its minimal model-visible Behavior Kernel
+is product-owned and cannot be edited by the Agent. Persona is user-editable but
+cannot change Role, policy or authority. Playbooks are scoped procedural instructions;
+Memory and external content are quoted/typed evidence, never instructions. Prompt
+snapshots are versioned so a trace can be replayed without logging hidden reasoning
+or raw sensitive content.
 
 ### Product-owned instruction files
 
-Manager and built-in Expert system instructions, together with product-owned preset
-turn templates, are maintained as standalone UTF-8 text files under
-`crates/floe-agent/prompts/`. Runtime code embeds those reviewed files at compile
-time; it must not duplicate prompt literals or load a mutable user-writable prompt at
-runtime. Dynamic values are substituted only into named, bounded placeholders. A
-prompt change is therefore an ordinary source review and ships with the binary that
-uses it. Free-form user text remains session data and is never a prompt resource.
+Product-owned Behavior Kernel, base capability protocol, Manager Role, built-in Expert
+Roles and preset turn templates are maintained as separate UTF-8 resources under
+`crates/floe-agent/prompts/`. Runtime code embeds those reviewed files at compile time;
+it must not duplicate prompt literals. Role files define responsibility, success
+criteria and durable behavior, not representative workflows, complete tool manuals or
+host-enforced limits.
 
-The Manager instruction requires a formal, respectful register, prohibits emoji and
-permits concise Markdown when it improves structure. Each built-in Expert applies the
-same no-emoji and professional-register baseline even though its result is addressed
-to the Manager rather than directly to the user. Safety, capability and evidence
-rules remain in the same instruction file as the relevant role so tone changes cannot
-silently replace the runtime boundary.
+Persona is a separate, typed and versioned user configuration with `SOUL.md` as an
+import/export surface. It is composed for the Manager and omitted from Experts unless
+an assignment explicitly needs it. Conditional capability guidance comes from the
+granted registry descriptors, and Playbook bodies come from the governed registry.
+Dynamic values enter only typed, bounded context components; free-form user text
+remains session data. The Context Assembler records every component revision and
+builds the stable/cacheable prefix before scoped and volatile data.
 
 ## Sessions and chat
 
