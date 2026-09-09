@@ -22,7 +22,7 @@ void main() {
     await expectLater(
       LocalServerClient(store: MemoryServerCredentials()).request(
         'http://127.0.0.1:${server.port}',
-        '/v1/inference-classes',
+        '/v1/inference-purposes',
         token: 'a' * 52,
       ),
       throwsA(isA<ServerConnectionException>()),

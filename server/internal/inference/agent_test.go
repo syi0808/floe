@@ -8,8 +8,30 @@ import (
 	"testing"
 )
 
+func TestOnlyV1ContractsAreAccepted(test *testing.T) {
+	gateway := fixtureGateway(test, "ollama", "http://127.0.0.1:1")
+	for _, path := range []string{"/v2/generate", "/v3/agent"} {
+		if response := invokePath(gateway, path, agentRequest()); response.Code != 404 {
+			test.Fatalf("legacy endpoint %s accepted: %s", path, response.Body.String())
+		}
+	}
+	for _, version := range []int{0, 2, 3} {
+		input := agentRequest()
+		input.SchemaVersion = version
+		if response := invokePath(gateway, "/v1/agent", input); response.Code != 400 {
+			test.Fatalf("unsupported schema %d accepted: %s", version, response.Body.String())
+		}
+	}
+	if response := invokePath(gateway, "/v1/generate", agentRequest()); response.Code != 400 {
+		test.Fatal("native input accepted on structured endpoint")
+	}
+	if response := invokePath(gateway, "/v1/agent", fixtureRequest()); response.Code != 400 {
+		test.Fatal("structured input accepted on native endpoint")
+	}
+}
+
 func agentRequest() Request {
-	return Request{SchemaVersion: 3, Purpose: "deep_work", DataClasses: []string{"synthetic"}, AllowExternal: true, Instructions: "Answer the current request", Input: json.RawMessage(`{"messages":[{"role":"user","content":"Brief today"}],"tools":[{"type":"function","function":{"name":"schedule_read","parameters":{"type":"object","properties":{}}}}]}`)}
+	return Request{SchemaVersion: 1, Agent: true, Purpose: "deep_work", DataClasses: []string{"synthetic"}, AllowExternal: true, Instructions: "Answer the current request", Input: json.RawMessage(`{"messages":[{"role":"user","content":"Brief today"}],"tools":[{"type":"function","function":{"name":"schedule_read","parameters":{"type":"object","properties":{}}}}]}`)}
 }
 
 func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
@@ -34,9 +56,9 @@ func TestAgentUsesNativeToolsAndPlainAnswer(test *testing.T) {
 			_ = json.NewEncoder(writer).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": message}}, "usage": map[string]any{"total_tokens": 42}})
 		}))
 		gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
-		response := invokePath(gateway, "/v3/agent", agentRequest())
+		response := invokePath(gateway, "/v1/agent", agentRequest())
 		upstream.Close()
-		if response.Code != 200 || !strings.Contains(response.Body.String(), `"schema_version":3`) {
+		if response.Code != 200 || !strings.Contains(response.Body.String(), `"schema_version":1`) {
 			test.Fatal(response.Body.String())
 		}
 		var decoded struct {
@@ -60,7 +82,7 @@ func TestAgentRejectsMalformedTranscriptBeforeProvider(test *testing.T) {
 	} {
 		request := agentRequest()
 		request.Input = json.RawMessage(input)
-		response := invokePath(fixtureGateway(test, "ollama", "http://127.0.0.1:1"), "/v3/agent", request)
+		response := invokePath(fixtureGateway(test, "ollama", "http://127.0.0.1:1"), "/v1/agent", request)
 		if response.Code != 400 {
 			test.Fatal(response.Body.String())
 		}

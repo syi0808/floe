@@ -38,15 +38,15 @@ type CodexClient interface {
 }
 
 type Request struct {
-	SchemaVersion  int             `json:"schema_version"`
-	InferenceClass string          `json:"inference_class,omitempty"`
-	Purpose        string          `json:"purpose,omitempty"`
-	DataClasses    []string        `json:"data_classes,omitempty"`
-	AllowExternal  bool            `json:"allow_external"`
-	Instructions   string          `json:"instructions"`
-	Input          json.RawMessage `json:"input"`
-	OutputSchema   json.RawMessage `json:"output_schema,omitempty"`
-	ReplayOf       string          `json:"replay_of,omitempty"`
+	Agent         bool            `json:"-"`
+	SchemaVersion int             `json:"schema_version"`
+	Purpose       string          `json:"purpose,omitempty"`
+	DataClasses   []string        `json:"data_classes,omitempty"`
+	AllowExternal bool            `json:"allow_external"`
+	Instructions  string          `json:"instructions"`
+	Input         json.RawMessage `json:"input"`
+	OutputSchema  json.RawMessage `json:"output_schema,omitempty"`
+	ReplayOf      string          `json:"replay_of,omitempty"`
 }
 
 type Gateway struct {
@@ -133,15 +133,7 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if request.Method == http.MethodGet && request.URL.Path == "/v1/inference-classes" {
-		classes := make(map[string]any, len(gateway.routes))
-		for class, configured := range gateway.routes {
-			classes[class] = map[string]any{"available": true, "requires_external_consent": configured.provider.external}
-		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "inference_classes": classes})
-		return
-	}
-	if request.Method == http.MethodGet && request.URL.Path == "/v2/inference-purposes" {
+	if request.Method == http.MethodGet && request.URL.Path == "/v1/inference-purposes" {
 		purposes := make(map[string]any, 3)
 		for _, purpose := range []string{"quick_response", "everyday_assistance", "deep_work"} {
 			configured, available := gateway.routes[classForPurpose(purpose)]
@@ -155,42 +147,36 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			}
 			purposes[purpose] = value
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "purposes": purposes})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "purposes": purposes})
 		return
 	}
-	if request.Method == http.MethodGet && request.URL.Path == "/v2/traces" {
-		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "traces": gateway.audit.list(20)})
+	if request.Method == http.MethodGet && request.URL.Path == "/v1/traces" {
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "traces": gateway.audit.list(20)})
 		return
 	}
-	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v2/traces/") {
-		identifier := strings.TrimPrefix(request.URL.Path, "/v2/traces/")
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/traces/") {
+		identifier := strings.TrimPrefix(request.URL.Path, "/v1/traces/")
 		record, exists := gateway.audit.get(identifier)
 		if !exists {
 			writeError(writer, http.StatusNotFound, "trace_not_found")
 			return
 		}
-		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "trace": record})
+		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "trace": record})
 		return
 	}
-	if request.Method != http.MethodPost || (request.URL.Path != "/v1/generate" && request.URL.Path != "/v2/generate" && request.URL.Path != "/v3/agent") {
+	if request.Method != http.MethodPost || (request.URL.Path != "/v1/generate" && request.URL.Path != "/v1/agent") {
 		writeError(writer, http.StatusNotFound, "not_found")
 		return
 	}
 	var input Request
+	input.Agent = request.URL.Path == "/v1/agent"
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 98304))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF || !validRequest(input) {
 		writeError(writer, http.StatusBadRequest, "validation")
 		return
 	}
-	if (request.URL.Path == "/v3/agent") != (input.SchemaVersion == 3) {
-		writeError(writer, http.StatusBadRequest, "validation")
-		return
-	}
-	class := input.InferenceClass
-	if input.SchemaVersion >= 2 {
-		class = classForPurpose(input.Purpose)
-	}
+	class := classForPurpose(input.Purpose)
 	configured, exists := gateway.routes[class]
 	if !exists {
 		writeError(writer, http.StatusBadRequest, "route_unavailable")
@@ -235,10 +221,6 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	gateway.audit.add(newAuditRecord(traceID, input, placement, "completed", output))
-	if input.SchemaVersion == 1 {
-		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "inference_class": class, "output": output, "trace_id": traceID})
-		return
-	}
 	_ = json.NewEncoder(writer).Encode(map[string]any{
 		"schema_version": input.SchemaVersion,
 		"purpose":        input.Purpose,
@@ -249,12 +231,11 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 }
 
 func validRequest(request Request) bool {
-	if request.SchemaVersion == 3 {
-		return request.InferenceClass == "" && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses) && request.ReplayOf == "" && len(request.OutputSchema) == 0 && len(request.Instructions) > 0 && len(request.Instructions) <= 8192 && len(request.Input) <= 32768 && validAgentInput(request.Input)
+	if request.Agent {
+		return request.SchemaVersion == 1 && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses) && request.ReplayOf == "" && len(request.OutputSchema) == 0 && len(request.Instructions) > 0 && len(request.Instructions) <= 8192 && len(request.Input) <= 32768 && validAgentInput(request.Input)
 	}
 	var schema map[string]any
-	validRoute := request.SchemaVersion == 1 && ValidClass(request.InferenceClass) && request.Purpose == "" && request.ReplayOf == "" && len(request.DataClasses) == 0 ||
-		request.SchemaVersion == 2 && request.InferenceClass == "" && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses)
+	validRoute := request.SchemaVersion == 1 && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses)
 	validReplay := request.ReplayOf == "" || len(request.ReplayOf) == 32 && strings.IndexFunc(request.ReplayOf, func(value rune) bool {
 		return value < '0' || value > '9' && value < 'a' || value > 'f'
 	}) == -1
@@ -293,5 +274,5 @@ func writeError(writer http.ResponseWriter, status int, code string) {
 
 func writeErrorWithTrace(writer http.ResponseWriter, status int, code, traceID string) {
 	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "error": map[string]string{"code": code}, "trace_id": traceID})
+	_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 1, "error": map[string]string{"code": code}, "trace_id": traceID})
 }

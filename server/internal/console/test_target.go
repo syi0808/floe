@@ -41,7 +41,7 @@ func (console *Console) testTarget(writer http.ResponseWriter, request *http.Req
 		failure(writer, 503, "model_unavailable")
 		return
 	}
-	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, InferenceClass: "fast", AllowExternal: input.AllowExternal, Instructions: `Return only {"ok":true}. This is a synthetic connectivity test without personal data.`, Input: json.RawMessage(`{"test":true}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)})
+	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, Purpose: "quick_response", DataClasses: []string{"synthetic"}, AllowExternal: input.AllowExternal, Instructions: `Return only {"ok":true}. This is a synthetic connectivity test without personal data.`, Input: json.RawMessage(`{"test":true}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)})
 	ctx, cancel := context.WithTimeout(request.Context(), 40*time.Second)
 	defer cancel()
 	forward, _ := http.NewRequestWithContext(ctx, "POST", "/v1/generate", bytes.NewReader(payload))

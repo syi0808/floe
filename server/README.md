@@ -138,11 +138,11 @@ provider before adding an OAuth adapter. Existing Codex credentials are not read
 
 ## Inference contract
 
-Agent conversations now use `POST /v3/agent` (schema version 3), with native
+Agent conversations now use `POST /v1/agent` (schema version 1), with native
 `input.messages` and `input.tools`, rather than a model-authored JSON step envelope.
 The gateway normalizes provider output; Rust alone executes tools and owns the
-single output/schema correction retry. v1/v2 structured generation stays unchanged.
-Upgrade the server before launching the new client. Native tool support is required
+single output/schema correction retry. Structured generation uses `/v1/generate`, also with schema version 1. Legacy class-selected APIs are removed.
+Build and deploy the matching server and client together; v2/v3 aliases are not supported. Native tool support is required
 on the selected route; there is no automatic downgrade or provider fallback.
 See [ADR 0016](../docs/decisions/0016-native-agent-model-protocol.md) for the migration
 boundary and the remaining session/replay/UI work.

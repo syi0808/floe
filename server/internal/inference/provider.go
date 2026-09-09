@@ -89,7 +89,7 @@ func newProvider(target Target, lookup func(string) string, codex CodexClient) (
 }
 
 func (adapter *provider) generate(ctx context.Context, request Request, reasoningEffort string) (string, error) {
-	if request.SchemaVersion == 3 {
+	if request.Agent {
 		return adapter.agent(ctx, request, reasoningEffort)
 	}
 	if adapter.target.Provider == "codex_oauth" {

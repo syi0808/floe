@@ -40,7 +40,7 @@ requires external-transfer consent. They cannot discover the underlying target,
 provider, model, endpoint, or reasoning effort. Generation responses identify the
 requested purpose, placement and external-transfer fact, not the resolved model.
 The v1 class endpoint remains a compatibility surface; new clients use
-`/v2/inference-purposes` and `/v2/generate`.
+`/v1/inference-purposes` and `/v1/generate`.
 
 Device-local inference does not use the Go gateway. It implements the same domain
 model interface inside the native client boundary. A model process running beside

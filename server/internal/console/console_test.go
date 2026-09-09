@@ -115,7 +115,7 @@ func (fixture *fixture) pair() (string, string) {
 func TestPairingRestartAndRevocation(test *testing.T) {
 	fixture := setup(test)
 	identifier, token := fixture.pair()
-	fixture.value(fixture.call("GET", "/v1/inference-classes", nil, token))
+	fixture.value(fixture.call("GET", "/v1/inference-purposes", nil, token))
 	disk, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
 	if strings.Contains(string(disk), token) {
 		test.Fatal("plaintext app token persisted")
@@ -126,13 +126,13 @@ func TestPairingRestartAndRevocation(test *testing.T) {
 	}
 	old := fixture.console
 	fixture.console = management
-	fixture.value(fixture.call("GET", "/v1/inference-classes", nil, token))
+	fixture.value(fixture.call("GET", "/v1/inference-purposes", nil, token))
 	if fixture.call("GET", "/manage/api/state", nil, "").Code != 401 {
 		test.Fatal("management session survived restart")
 	}
 	fixture.console = old
 	fixture.value(fixture.call("POST", "/manage/api/client/delete", map[string]string{"id": identifier}, ""))
-	if fixture.call("GET", "/v1/inference-classes", nil, token).Code != 401 {
+	if fixture.call("GET", "/v1/inference-purposes", nil, token).Code != 401 {
 		test.Fatal("revoked token accepted")
 	}
 }
@@ -149,10 +149,8 @@ func TestManagementAndInferenceAuthAreSeparate(test *testing.T) {
 		{"/manage/api/target/delete", "POST", "http://127.0.0.1:8431", "127.0.0.1:8431", "wrong", true, ""},
 		{"/manage/api/target/delete", "POST", "https://evil.example", "127.0.0.1:8431", fixture.csrf, true, ""},
 		{"/manage/api/state", "GET", "", "evil.example:8431", "", true, ""},
-		{"/v1/inference-classes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
-		{"/v1/inference-classes", "GET", "", "127.0.0.1:8431", "", true, ""},
-		{"/v2/inference-purposes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
-		{"/v2/inference-purposes", "GET", "", "127.0.0.1:8431", "", true, ""},
+		{"/v1/inference-purposes", "GET", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, token},
+		{"/v1/inference-purposes", "GET", "", "127.0.0.1:8431", "", true, ""},
 		{"/pair/start", "POST", "http://127.0.0.1:8431", "127.0.0.1:8431", "", true, ""},
 	} {
 		request := httptest.NewRequest(sample.method, "http://"+sample.host+sample.path, strings.NewReader(`{"id":"missing"}`))
@@ -202,11 +200,11 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 		test.Fatal("internal target or route inventory leaked through management state")
 	}
 	_, appToken := fixture.pair()
-	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
-	if !strings.Contains(classes.Body.String(), `"high_effort"`) || strings.Contains(classes.Body.String(), "fixture") {
+	classes := fixture.call("GET", "/v1/inference-purposes", nil, appToken)
+	if !strings.Contains(classes.Body.String(), `"deep_work"`) || strings.Contains(classes.Body.String(), "fixture") {
 		test.Fatal("app inference inventory exposed server routing")
 	}
-	purposes := fixture.call("GET", "/v2/inference-purposes", nil, appToken)
+	purposes := fixture.call("GET", "/v1/inference-purposes", nil, appToken)
 	if purposes.Code != 200 || !strings.Contains(purposes.Body.String(), `"everyday_assistance"`) || strings.Contains(purposes.Body.String(), "fixture") {
 		test.Fatal("app purpose inventory was not routed or exposed server configuration")
 	}
@@ -247,7 +245,7 @@ func TestProviderProfilesOwnClassModelsAndReplaceActiveRoutes(test *testing.T) {
 		test.Fatal("management provider view exposed a secret or omitted its model")
 	}
 	_, appToken := fixture.pair()
-	classes := fixture.call("GET", "/v1/inference-classes", nil, appToken)
+	classes := fixture.call("GET", "/v1/inference-purposes", nil, appToken)
 	if strings.Contains(classes.Body.String(), "strong-model") || strings.Contains(classes.Body.String(), "openai_compatible") {
 		test.Fatal("app class inventory exposed provider configuration")
 	}

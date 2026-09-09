@@ -30,7 +30,7 @@ func (client *fixtureCodex) Generate(_ context.Context, model, effort, instructi
 }
 
 func fixtureRequest() Request {
-	return Request{SchemaVersion: 1, InferenceClass: "high_effort", Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
+	return Request{SchemaVersion: 1, Purpose: "deep_work", DataClasses: []string{"synthetic"}, Instructions: "Choose one supplied slot", Input: json.RawMessage(`{"slots":[{"id":"slot_1"}]}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"slot_id":{"type":"string"}},"required":["slot_id"]}`)}
 }
 
 func fixtureGateway(test *testing.T, providerName, endpoint string) *Gateway {
@@ -90,7 +90,7 @@ func TestOpenAIWireContract(test *testing.T) {
 	input := fixtureRequest()
 	input.AllowExternal = true
 	response := invoke(gateway, input)
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `"inference_class":"high_effort"`) || strings.Contains(response.Body.String(), "fixture-model") {
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"purpose":"deep_work"`) || strings.Contains(response.Body.String(), "fixture-model") {
 		test.Fatal(response.Body.String())
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
@@ -182,7 +182,7 @@ func TestAuthenticationOriginAndRequestBounds(test *testing.T) {
 			test.Error("unauthenticated request accepted")
 		}
 	}
-	request := httptest.NewRequest(http.MethodGet, "/v1/inference-classes", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/inference-purposes", nil)
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	request.Header.Set("Origin", "https://untrusted.example")
 	writer := httptest.NewRecorder()
@@ -205,22 +205,22 @@ func TestAuthenticationOriginAndRequestBounds(test *testing.T) {
 		test.Error("unsupported version accepted")
 	}
 	input = fixtureRequest()
-	input.InferenceClass = "unknown"
+	input.Purpose = "unknown"
 	if invoke(gateway, input).Code != 400 {
 		test.Error("unknown target accepted")
 	}
 }
 
-func TestClassInventoryDoesNotExposeModelRoutingOrSecrets(test *testing.T) {
+func TestPurposeInventoryDisclosesRecipientButNotModelOrSecrets(test *testing.T) {
 	gateway := fixtureGateway(test, "openai_compatible", "https://private.example/v1")
-	request := httptest.NewRequest(http.MethodGet, "/v1/inference-classes", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/inference-purposes", nil)
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	writer := httptest.NewRecorder()
 	gateway.ServeHTTP(writer, request)
 	if writer.Code != 200 {
 		test.Fatal(writer.Body.String())
 	}
-	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "private.example", "fixture-model", "fixture", testToken} {
+	for _, secret := range []string{"private-provider-key", "FIXTURE_KEY", "fixture-model", "fixture", testToken} {
 		if strings.Contains(writer.Body.String(), secret) {
 			test.Error("inventory exposed secret or configuration")
 		}
@@ -234,7 +234,7 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	defer upstream.Close()
 	gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
 
-	inventory := httptest.NewRequest(http.MethodGet, "/v2/inference-purposes", nil)
+	inventory := httptest.NewRequest(http.MethodGet, "/v1/inference-purposes", nil)
 	inventory.Header.Set("Authorization", "Bearer "+testToken)
 	inventoryWriter := httptest.NewRecorder()
 	gateway.ServeHTTP(inventoryWriter, inventory)
@@ -243,13 +243,11 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	}
 
 	input := fixtureRequest()
-	input.SchemaVersion = 2
-	input.InferenceClass = ""
 	input.Purpose = "deep_work"
 	input.DataClasses = []string{"personal"}
 	input.AllowExternal = true
 	body, _ := json.Marshal(input)
-	request := httptest.NewRequest(http.MethodPost, "/v2/generate", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	writer := httptest.NewRecorder()
 	gateway.ServeHTTP(writer, request)
@@ -262,7 +260,7 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	if json.Unmarshal(writer.Body.Bytes(), &response) != nil || response.TraceID == "" {
 		test.Fatal("missing trace ID")
 	}
-	traceRequest := httptest.NewRequest(http.MethodGet, "/v2/traces/"+response.TraceID, nil)
+	traceRequest := httptest.NewRequest(http.MethodGet, "/v1/traces/"+response.TraceID, nil)
 	traceRequest.Header.Set("Authorization", "Bearer "+testToken)
 	traceWriter := httptest.NewRecorder()
 	gateway.ServeHTTP(traceWriter, traceRequest)
@@ -270,7 +268,7 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 	if traceWriter.Code != http.StatusOK || !strings.Contains(trace, `"placement":"remote"`) || strings.Contains(trace, "Choose one supplied slot") || strings.Contains(trace, candidate) || strings.Contains(trace, "fixture-model") {
 		test.Fatal(trace)
 	}
-	listRequest := httptest.NewRequest(http.MethodGet, "/v2/traces", nil)
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/traces", nil)
 	listRequest.Header.Set("Authorization", "Bearer "+testToken)
 	listWriter := httptest.NewRecorder()
 	gateway.ServeHTTP(listWriter, listRequest)
@@ -281,16 +279,16 @@ func TestPurposeRoutingAndContentFreeTrace(test *testing.T) {
 
 func TestPurposeAPIRejectsClientSelectedClass(test *testing.T) {
 	input := fixtureRequest()
-	input.SchemaVersion = 2
 	input.Purpose = "deep_work"
 	input.AllowExternal = true
 	body, _ := json.Marshal(input)
-	request := httptest.NewRequest(http.MethodPost, "/v2/generate", bytes.NewReader(body))
+	body = append([]byte(`{"inference_class":"high_effort",`), body[1:]...)
+	request := httptest.NewRequest(http.MethodPost, "/v1/generate", bytes.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	writer := httptest.NewRecorder()
 	fixtureGateway(test, "ollama", "http://127.0.0.1:1").ServeHTTP(writer, request)
 	if writer.Code != http.StatusBadRequest {
-		test.Fatal("v2 accepted a client-selected inference class")
+		test.Fatal("API accepted a client-selected inference class")
 	}
 }
 
@@ -303,23 +301,21 @@ func TestReplayRequiresTheExactContentAndRecordsParentTrace(test *testing.T) {
 	defer upstream.Close()
 	gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
 	input := fixtureRequest()
-	input.SchemaVersion = 2
-	input.InferenceClass = ""
 	input.Purpose = "deep_work"
 	input.DataClasses = []string{"personal"}
 	input.AllowExternal = true
-	first := invokePath(gateway, "/v2/generate", input)
+	first := invokePath(gateway, "/v1/generate", input)
 	var generated struct {
 		TraceID string `json:"trace_id"`
 	}
 	_ = json.Unmarshal(first.Body.Bytes(), &generated)
 	input.ReplayOf = generated.TraceID
-	replayed := invokePath(gateway, "/v2/generate", input)
+	replayed := invokePath(gateway, "/v1/generate", input)
 	if replayed.Code != http.StatusOK || calls.Load() != 2 {
 		test.Fatal(replayed.Body.String())
 	}
 	input.Instructions = "Changed content"
-	refused := invokePath(gateway, "/v2/generate", input)
+	refused := invokePath(gateway, "/v1/generate", input)
 	if refused.Code != http.StatusConflict || calls.Load() != 2 {
 		test.Fatal("mismatched replay reached provider")
 	}

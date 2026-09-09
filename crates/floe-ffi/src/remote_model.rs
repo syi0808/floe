@@ -205,7 +205,7 @@ impl ModelRunner for ServerModelRunner {
             }
         }
         let body = json!({
-            "schema_version": 3,
+            "schema_version": 1,
             "purpose": self.route.purpose,
             "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
@@ -217,7 +217,7 @@ impl ModelRunner for ServerModelRunner {
         }
         let send = client
             .post(format!(
-                "{}/v3/agent",
+                "{}/v1/agent",
                 self.route.base_url.trim_end_matches('/')
             ))
             .bearer_auth(&self.route.bearer_token)
@@ -254,7 +254,7 @@ impl ModelRunner for ServerModelRunner {
         }
         let response: GenerateResponse =
             serde_json::from_slice(&bytes).map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        if response.schema_version != 3
+        if response.schema_version != 1
             || response.purpose != self.route.purpose
             || response.trace_id.len() != 32
             || response.routing.external_transfer != self.route.external

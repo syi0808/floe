@@ -239,10 +239,10 @@ class LocalServerClient {
   Future<void> checkConnection(ServerConnection value) async {
     final response = await request(
       value.address,
-      '/v2/inference-purposes',
+      '/v1/inference-purposes',
       token: value.token,
     );
-    if (response['schema_version'] != 2 ||
+    if (response['schema_version'] != 1 ||
         response['purposes'] is! Map<String, dynamic>) {
       throw const ServerConnectionException('invalid_response');
     }
@@ -253,10 +253,10 @@ class LocalServerClient {
   ) async {
     final response = await request(
       connection.address,
-      '/v2/inference-purposes',
+      '/v1/inference-purposes',
       token: connection.token,
     );
-    if (response['schema_version'] != 2 ||
+    if (response['schema_version'] != 1 ||
         response['purposes'] is! Map<String, dynamic>) {
       throw const ServerConnectionException('invalid_response');
     }
@@ -276,10 +276,10 @@ class LocalServerClient {
   ) async {
     final response = await request(
       connection.address,
-      '/v2/traces',
+      '/v1/traces',
       token: connection.token,
     );
-    if (response['schema_version'] != 2 ||
+    if (response['schema_version'] != 1 ||
         response['traces'] is! List ||
         (response['traces'] as List).length > 20) {
       throw const ServerConnectionException('invalid_response');
@@ -335,10 +335,10 @@ class LocalServerClient {
   }) async {
     final response = await request(
       connection.address,
-      '/v2/generate',
+      '/v1/generate',
       token: connection.token,
       body: {
-        'schema_version': 2,
+        'schema_version': 1,
         'purpose': purpose.wireName,
         'data_classes': dataClasses,
         'allow_external': connection.allowExternal,
@@ -349,7 +349,7 @@ class LocalServerClient {
       },
     );
     final routing = Map<String, dynamic>.from(response['routing'] as Map);
-    if (response['schema_version'] != 2 ||
+    if (response['schema_version'] != 1 ||
         response['purpose'] != purpose.wireName ||
         response['output'] is! String ||
         response['trace_id'] is! String ||
