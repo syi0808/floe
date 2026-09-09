@@ -130,13 +130,6 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                     ],
                   ),
-                  if (controller.isCalendarConversation) ...[
-                    const SizedBox(height: FloeSpace.sm),
-                    Text(
-                      strings.agentConnectedTitle,
-                      style: FloeType.controlLabel,
-                    ),
-                  ],
                 ],
               ),
             );
@@ -362,7 +355,7 @@ class _AgentPanelState extends State<AgentPanel> {
             const SizedBox(height: FloeSpace.md),
           ],
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               if (!storageLocked) ...[
                 Expanded(

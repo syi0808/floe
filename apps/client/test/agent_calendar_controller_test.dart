@@ -67,8 +67,12 @@ void main() {
       ),
     );
 
-    expect(find.text('Calendar conversation'), findsOneWidget);
+    expect(find.text('Calendar conversation'), findsNothing);
     expect(find.text('Message'), findsOneWidget);
+    expect(
+      tester.getCenter(find.byType(TextFormField)).dy,
+      tester.getCenter(find.byTooltip('Ask Floe')).dy,
+    );
     await tester.enterText(
       find.byType(TextFormField),
       'What does the rest of my day look like?',
