@@ -352,19 +352,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                       ),
                       child: Row(
                         children: [
-                          if (confirmedEmpty &&
-                              widget.draftStartsAt == null) ...[
-                            Expanded(
-                              child: IgnorePointer(
-                                child: _EmptyDayBanner(
-                                  compact:
-                                      MediaQuery.sizeOf(context).width <= 780,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: FloeSpace.base),
-                          ] else
-                            const Spacer(),
+                          const Spacer(),
                           FloeButton.icon(
                             tooltip: AppLocalizations.of(context).zoomOut,
                             onPressed: zoom <= 1
@@ -404,11 +392,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         ],
                       ),
                     ),
-                    if (empty &&
-                        widget.draftStartsAt == null &&
-                        snapshot.calendar?.error == null &&
-                        !confirmedEmpty)
-                      _EmptyDayStatus(onConnections: widget.onConnections),
+                    const FloeDivider(key: Key('zoom-toolbar-divider')),
                     Expanded(
                       child: Stack(
                         key: viewportKey,
@@ -666,6 +650,30 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               ),
                             ),
                           ),
+                          if (confirmedEmpty && widget.draftStartsAt == null)
+                            Positioned(
+                              top: FloeSpace.base,
+                              left: 80,
+                              right: FloeSpace.lg,
+                              child: IgnorePointer(
+                                child: _EmptyDayBanner(
+                                  compact:
+                                      MediaQuery.sizeOf(context).width <= 780,
+                                ),
+                              ),
+                            ),
+                          if (empty &&
+                              widget.draftStartsAt == null &&
+                              snapshot.calendar?.error == null &&
+                              !confirmedEmpty)
+                            Positioned(
+                              top: FloeSpace.base,
+                              left: 80,
+                              right: FloeSpace.lg,
+                              child: _EmptyDayStatus(
+                                onConnections: widget.onConnections,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -698,8 +706,12 @@ class _EmptyDayStatus extends StatelessWidget {
     return Semantics(
       container: true,
       liveRegion: true,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+      child: FloeSquircle(
+        key: const Key('empty-day-status'),
+        size: FloeSquircleSize.md,
+        fill: FloePalette.primary50,
+        borderColor: FloePalette.primary200,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
             Expanded(

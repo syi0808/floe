@@ -42,6 +42,16 @@ void main() {
     expect(find.byKey(const Key('calendar-hour-label-10')), findsNothing);
     expect(find.byKey(const Key('calendar-hour-label-9')), findsOneWidget);
     expect(find.byKey(const Key('calendar-hour-label-11')), findsOneWidget);
+    final status = find.byKey(const Key('empty-day-status'));
+    expect(status, findsOneWidget);
+    expect(
+      find.ancestor(of: status, matching: find.byType(Positioned)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: status, matching: find.byType(Material)),
+      findsWidgets,
+    );
   });
 
   testWidgets(
@@ -98,7 +108,11 @@ void main() {
       );
       final banner = find.byKey(const Key('empty-day-banner'));
       final viewport = tester.getRect(find.byKey(const Key('calendar-scroll')));
-      expect(tester.getRect(banner).bottom, lessThanOrEqualTo(viewport.top));
+      expect(
+        find.ancestor(of: banner, matching: find.byType(Positioned)),
+        findsOneWidget,
+      );
+      expect(viewport.contains(tester.getRect(banner).center), isTrue);
       expect(
         tester
             .widget<IgnorePointer>(
@@ -109,6 +123,7 @@ void main() {
             .ignoring,
         isTrue,
       );
+      expect(find.byKey(const Key('zoom-toolbar-divider')), findsOneWidget);
       final timeline = find.byKey(const Key('timeline-card'));
       final pointerGuard = tester.widget<IgnorePointer>(
         find

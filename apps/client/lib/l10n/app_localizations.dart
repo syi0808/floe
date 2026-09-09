@@ -1291,7 +1291,7 @@ abstract class AppLocalizations {
   /// No description provided for @wonderingWhereAnEventCameFromOpen.
   ///
   /// In en, this message translates to:
-  /// **'Wondering where an event came from?\nOpen it to see its source calendar.'**
+  /// **'Wondering where an event came from? Open it to see its source calendar.'**
   String get wonderingWhereAnEventCameFromOpen;
 
   /// No description provided for @backToConnections.

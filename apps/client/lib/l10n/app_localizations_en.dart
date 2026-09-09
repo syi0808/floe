@@ -678,7 +678,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get wonderingWhereAnEventCameFromOpen =>
-      'Wondering where an event came from?\nOpen it to see its source calendar.';
+      'Wondering where an event came from? Open it to see its source calendar.';
 
   @override
   String get backToConnections => 'Back to connections';

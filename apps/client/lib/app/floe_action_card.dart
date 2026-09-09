@@ -46,6 +46,9 @@ final class FloeActionCard extends StatelessWidget {
               : FloePalette.neutral200,
           child: InkWell(
             onTap: onPressed,
+            mouseCursor: enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
             focusNode: focusNode,
             statesController: states,
             child: Padding(
