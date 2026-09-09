@@ -18,29 +18,95 @@ struct Store {
 
 #[tokio::test]
 async fn malformed_model_output_is_corrected_once_without_reexecuting_tools() {
-    for failure in [AgentFailure::InvalidModelOutput, AgentFailure::LocalModelInvalidOutput, AgentFailure::ServerModelInvalidOutput] {
+    for failure in [
+        AgentFailure::InvalidModelOutput,
+        AgentFailure::LocalModelInvalidOutput,
+        AgentFailure::ServerModelInvalidOutput,
+    ] {
         for recover in [true, false] {
             let store = Store::new();
             let model = Model::new(vec![answer()]);
             {
                 let mut responses = model.responses.lock().unwrap();
-                if !recover { responses.push_front(Err(failure)); }
+                if !recover {
+                    responses.push_front(Err(failure));
+                }
                 responses.push_front(Err(failure));
             }
             let host = Host::default();
             let policy = policy();
-            let runtime = AgentRuntime { store: &store, model: &model, capabilities: &host, policy: &policy, budget: AgentBudget::default() };
-            let result = runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}).await.unwrap();
+            let runtime = AgentRuntime {
+                store: &store,
+                model: &model,
+                capabilities: &host,
+                policy: &policy,
+                budget: AgentBudget::default(),
+            };
+            let result = runtime
+                .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+                .await
+                .unwrap();
             assert_eq!(model.calls(), 2);
             assert_eq!(host.calls.load(Ordering::SeqCst), 0);
-            if recover { assert_eq!(result.last_outcome, Some(AgentOutcome::Completed)); }
-            else { halted(&result, failure); }
+            if recover {
+                assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
+            } else {
+                halted(&result, failure);
+            }
             let requests = model.requests.lock().unwrap();
             assert_eq!(requests[0].deadline, requests[1].deadline);
-            assert_eq!(requests[0].remaining_tokens - requests[1].remaining_tokens, 4096);
+            assert_eq!(
+                requests[0].remaining_tokens - requests[1].remaining_tokens,
+                4096
+            );
             assert_eq!(requests[0].messages.len() + 1, requests[1].messages.len());
-            assert_eq!(result.messages.iter().filter(|message| matches!(message, AgentMessage::User { .. })).count(), 1);
+            assert_eq!(
+                result
+                    .messages
+                    .iter()
+                    .filter(|message| matches!(message, AgentMessage::User { .. }))
+                    .count(),
+                1
+            );
         }
+    }
+}
+
+#[tokio::test]
+async fn response_contract_failures_share_one_correction_boundary() {
+    for wrong_version in [false, true] {
+        let store = Store::new();
+        let model = Model::new(vec![answer(), answer()]);
+        {
+            let mut responses = model.responses.lock().unwrap();
+            let first = responses.front_mut().unwrap().as_mut().unwrap();
+            if wrong_version {
+                first.schema_version = 99;
+            } else {
+                first.step = ModelStep::Answer { text: "  ".into() };
+            }
+        }
+        let host = Host::default();
+        let policy = policy();
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        let result = runtime
+            .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
+        assert_eq!(model.calls(), 2);
+        assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+        let requests = model.requests.lock().unwrap();
+        assert_eq!(
+            requests[0].remaining_tokens - requests[1].remaining_tokens,
+            10
+        );
     }
 }
 
@@ -195,6 +261,152 @@ impl CapabilityHost for Host {
     }
 }
 
+struct DurableHost<'store> {
+    store: &'store Store,
+    calls: AtomicUsize,
+    pending: bool,
+}
+
+impl CapabilityHost for DurableHost<'_> {
+    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+        Host::default().descriptors(person_id)
+    }
+
+    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
+        let saved = self.store.snapshot();
+        let execution = saved.capability_executions.last().unwrap();
+        assert_eq!(execution.call_id, invocation.call_id);
+        assert_eq!(execution.input, invocation.input);
+        assert_eq!(execution.state, CapabilityExecutionState::Started);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.pending {
+            std::future::pending().await
+        } else {
+            Ok("Observed result".into())
+        }
+    }
+}
+
+#[tokio::test]
+async fn execution_requires_durable_intent_and_uncertain_results_are_not_replayed() {
+    for failed_revision in [2, 3] {
+        let store = Store::new();
+        store.fail_revision.store(failed_revision, Ordering::SeqCst);
+        let model = Model::new(vec![call(), answer()]);
+        let host = DurableHost {
+            store: &store,
+            calls: AtomicUsize::new(0),
+            pending: false,
+        };
+        let policy = policy();
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        assert_eq!(
+            runtime
+                .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+                .await,
+            Err(AgentFailure::StorageUnavailable),
+        );
+        let expected_calls = usize::from(failed_revision == 3);
+        assert_eq!(host.calls.load(Ordering::SeqCst), expected_calls);
+        let saved = store.snapshot();
+        assert_eq!(saved.capability_executions.len(), expected_calls);
+        store.fail_revision.store(usize::MAX, Ordering::SeqCst);
+        let recovered = runtime
+            .recover_interrupted(saved.person_id, saved.id, saved.revision)
+            .await
+            .unwrap();
+        assert!(
+            recovered
+                .capability_executions
+                .iter()
+                .all(|execution| execution.state == CapabilityExecutionState::Interrupted)
+        );
+        assert_eq!(host.calls.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(model.calls(), 1);
+    }
+}
+
+#[tokio::test]
+async fn dropped_tool_future_recovers_as_uncertain_without_reexecution() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    let host = DurableHost {
+        store: &store,
+        calls: AtomicUsize::new(0),
+        pending: true,
+    };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}),
+        )
+        .await
+        .is_err()
+    );
+    let saved = store.snapshot();
+    assert_eq!(
+        saved.capability_executions[0].state,
+        CapabilityExecutionState::Started
+    );
+    let recovered = runtime
+        .recover_interrupted(saved.person_id, saved.id, saved.revision)
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered.capability_executions[0].state,
+        CapabilityExecutionState::Interrupted
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls(), 1);
+}
+
+#[tokio::test]
+async fn tool_deadline_does_not_offer_continuation_of_uncertain_execution() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    let host = DurableHost {
+        store: &store,
+        calls: AtomicUsize::new(0),
+        pending: true,
+    };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget {
+            deadline_ms: 20,
+            ..AgentBudget::default()
+        },
+    };
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    halted(&stopped, AgentFailure::DeadlineExceeded);
+    assert!(stopped.continuation.is_none());
+    assert_eq!(
+        stopped.capability_executions[0].state,
+        CapabilityExecutionState::Interrupted
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+}
+
 fn policy() -> InferencePolicyDecision {
     InferencePolicyDecision {
         purpose: "test-briefing".into(),
@@ -223,44 +435,88 @@ fn answer() -> ModelStep {
 #[tokio::test]
 async fn tool_schema_validation_recovers_before_dispatch() {
     let model = Model::new(vec![
-        ModelStep::Call { capability_id: "read".into(), input: r#"{"count":"wrong"}"#.into() },
-        ModelStep::Call { capability_id: "read".into(), input: r#"{"count":1}"#.into() },
+        ModelStep::Call {
+            capability_id: "read".into(),
+            input: r#"{"count":"wrong"}"#.into(),
+        },
+        ModelStep::Call {
+            capability_id: "read".into(),
+            input: r#"{"count":1}"#.into(),
+        },
     ]);
     let turn_id = Uuid::new_v4();
     let request = ModelRequest {
-        schema_version: AGENT_VERSION, system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
-        person_id: PersonId::new(), session_id: Uuid::new_v4(), turn_id,
-        policy: policy(), context: context(),
-        messages: vec![AgentMessage::User { turn_id, text: "Read one".into() }],
-        capabilities: vec![CapabilityDescriptor {
-            schema_version: AGENT_VERSION, id: "read".into(), version: "1".into(), read_only: true,
-            output_data_class: DataClass::Personal,
-            input_schema: Some(serde_json::json!({"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false})),
+        schema_version: AGENT_VERSION,
+        system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+        person_id: PersonId::new(),
+        session_id: Uuid::new_v4(),
+        turn_id,
+        policy: policy(),
+        context: context(),
+        messages: vec![AgentMessage::User {
+            turn_id,
+            text: "Read one".into(),
         }],
-        remaining_tokens: 10000, remaining_cost_micros: 1000, max_output_bytes: 4096,
+        capabilities: vec![CapabilityDescriptor {
+            schema_version: AGENT_VERSION,
+            id: "read".into(),
+            version: "1".into(),
+            read_only: true,
+            output_data_class: DataClass::Personal,
+            input_schema: Some(
+                serde_json::json!({"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false}),
+            ),
+        }],
+        remaining_tokens: 10000,
+        remaining_cost_micros: 1000,
+        max_output_bytes: 4096,
         deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
         cancellation: Cancellation::default(),
     };
     let response = generate_with_recovery(&model, request).await.unwrap();
     assert_eq!(model.calls(), 2);
     assert_eq!(response.used_tokens, 20);
-    assert_eq!(response.step, ModelStep::Call { capability_id: "read".into(), input: r#"{"count":1}"#.into() });
+    assert_eq!(
+        response.step,
+        ModelStep::Call {
+            capability_id: "read".into(),
+            input: r#"{"count":1}"#.into()
+        }
+    );
 }
 
 #[tokio::test]
 async fn correction_preserves_successful_tool_results() {
     let store = Store::new();
     let model = Model::new(vec![call(), answer()]);
-    model.responses.lock().unwrap().insert(1, Err(AgentFailure::ServerModelInvalidOutput));
+    model
+        .responses
+        .lock()
+        .unwrap()
+        .insert(1, Err(AgentFailure::ServerModelInvalidOutput));
     let host = Host::default();
     let policy = policy();
-    let runtime = AgentRuntime { store: &store, model: &model, capabilities: &host, policy: &policy, budget: AgentBudget::default() };
-    let result = runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}).await.unwrap();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let result = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
     assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(host.calls.load(Ordering::SeqCst), 1);
     assert_eq!(model.calls(), 3);
     let requests = model.requests.lock().unwrap();
-    assert!(requests[2].messages.iter().any(|message| matches!(message, AgentMessage::Capability { result: Ok(_), .. })));
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .any(|message| matches!(message, AgentMessage::Capability { result: Ok(_), .. }))
+    );
 }
 
 fn call() -> ModelStep {
@@ -509,7 +765,12 @@ async fn multi_turn_messages_and_events_are_ordered_and_atomic() {
         )
         .await
         .unwrap();
-    assert_eq!(first.revision, 3);
+    assert_eq!(first.revision, 4);
+    assert_eq!(first.capability_executions.len(), 1);
+    assert_eq!(
+        first.capability_executions[0].state,
+        CapabilityExecutionState::Settled
+    );
     assert_eq!(first.messages.len(), 3);
     assert_eq!(first.last_outcome, Some(AgentOutcome::Completed));
     assert_eq!(first, store.snapshot());
@@ -1018,7 +1279,10 @@ async fn invalid_and_unavailable_model_outputs_are_typed_and_retryable() {
     }
     for bad_version in [false, true] {
         let store = Store::new();
-        let model = Model::new(vec![ModelStep::Answer { text: "  ".into() }]);
+        let model = Model::new(vec![
+            ModelStep::Answer { text: "  ".into() },
+            ModelStep::Answer { text: "  ".into() },
+        ]);
         if bad_version {
             model
                 .responses

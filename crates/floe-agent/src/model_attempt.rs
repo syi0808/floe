@@ -36,6 +36,20 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         let result = result.and_then(|response| {
             consumed_tokens = response.used_tokens;
             consumed_cost = response.cost_micros;
+            if response.used_tokens > request.remaining_tokens
+                || response.cost_micros > request.remaining_cost_micros
+                || serde_json::to_vec(&response.step)
+                    .map_err(|_| AgentFailure::InvalidModelOutput)?
+                    .len()
+                    > request.max_output_bytes
+            {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            if response.schema_version != crate::AGENT_VERSION
+                || matches!(&response.step, ModelStep::Answer { text } if text.trim().is_empty())
+            {
+                return Err(AgentFailure::InvalidModelOutput);
+            }
             if let ModelStep::Call {
                 capability_id,
                 input,

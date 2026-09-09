@@ -30,6 +30,8 @@ pub struct AgentSession {
     pub revision: u64,
     pub data_classes: Vec<crate::DataClass>,
     pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub capability_executions: Vec<CapabilityExecution>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,11 +72,30 @@ impl AgentSession {
             revision: 0,
             data_classes: vec![crate::DataClass::Personal],
             messages: vec![],
+            capability_executions: vec![],
             active_turn: None,
             last_outcome: None,
             continuation: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityExecution {
+    pub turn_id: Uuid,
+    pub call_id: Uuid,
+    pub capability_id: String,
+    pub input: String,
+    pub state: CapabilityExecutionState,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityExecutionState {
+    Started,
+    Settled,
+    Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

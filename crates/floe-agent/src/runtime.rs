@@ -126,10 +126,16 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             ),
         };
         if outcome != AgentOutcome::Completed {
+            let interrupted = interrupt_executions(&mut session);
             session.active_turn = None;
             session.last_outcome = Some(outcome);
-            session.continuation =
-                soft_continuation(resumable, turn_id, 0, usage, self.model.placement());
+            session.continuation = soft_continuation(
+                resumable && !interrupted,
+                turn_id,
+                0,
+                usage,
+                self.model.placement(),
+            );
             self.commit(&mut session).await?;
         }
         emit_event(
@@ -229,10 +235,11 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             ),
         };
         if outcome != AgentOutcome::Completed {
+            let interrupted = interrupt_executions(&mut session);
             session.active_turn = None;
             session.last_outcome = Some(outcome);
             session.continuation = soft_continuation(
-                resumable,
+                resumable && !interrupted,
                 continuation.turn_id,
                 level,
                 usage,
@@ -280,6 +287,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             return Err(AgentFailure::Conflict);
         }
         if session.active_turn.is_some() {
+            interrupt_executions(&mut session);
             session.active_turn = None;
             session.continuation = None;
             session.last_outcome = Some(AgentOutcome::Halted {
@@ -473,6 +481,23 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     }
                     usage.capability_calls += 1;
                     let call_id = Uuid::new_v4();
+                    session.capability_executions.push(CapabilityExecution {
+                        turn_id,
+                        call_id,
+                        capability_id: capability_id.clone(),
+                        input: input.clone(),
+                        state: CapabilityExecutionState::Started,
+                    });
+                    if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
+                        session.capability_executions.pop();
+                        return Err(AgentFailure::BudgetExceeded.into());
+                    }
+                    if let Err(failure) = self.commit(session).await {
+                        session.capability_executions.pop();
+                        return Err(failure.into());
+                    }
+                    check_drive_running(deadline, cancellation)?;
+                    self.authorize(context)?;
                     emit_event(
                         session,
                         turn_id,
@@ -528,8 +553,22 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 session.active_turn = None;
                 session.last_outcome = Some(AgentOutcome::Completed);
             }
+            if let AgentMessage::Capability { call_id, .. } = &message {
+                if let Some(execution) = session.capability_executions.last_mut() {
+                    if execution.call_id == *call_id {
+                        execution.state = CapabilityExecutionState::Settled;
+                    }
+                }
+            }
             if let Err(failure) = self.commit(session).await {
                 session.messages.pop();
+                if let AgentMessage::Capability { call_id, .. } = &message {
+                    if let Some(execution) = session.capability_executions.last_mut() {
+                        if execution.call_id == *call_id {
+                            execution.state = CapabilityExecutionState::Started;
+                        }
+                    }
+                }
                 return Err(failure.into());
             }
             emit_event(
@@ -547,6 +586,17 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         }
         Err(DriveStop::soft(AgentFailure::BudgetExceeded))
     }
+}
+
+fn interrupt_executions(session: &mut AgentSession) -> bool {
+    let mut interrupted = false;
+    for execution in &mut session.capability_executions {
+        if execution.state == CapabilityExecutionState::Started {
+            execution.state = CapabilityExecutionState::Interrupted;
+            interrupted = true;
+        }
+    }
+    interrupted
 }
 
 #[derive(Debug)]

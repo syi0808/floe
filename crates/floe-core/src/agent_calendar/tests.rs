@@ -647,7 +647,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         .unwrap();
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(result.session.revision, 3);
+    assert_eq!(result.session.revision, 4);
     assert_eq!(
         fixture
             .vault
@@ -705,7 +705,7 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     );
     assert!(events.iter().any(|event| matches!(
         event.event,
-        AgentEventKind::MessageCommitted { revision: 2, .. }
+        AgentEventKind::MessageCommitted { revision: 3, .. }
     )));
 }
 
@@ -747,7 +747,7 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         .await
         .unwrap();
     assert_eq!(second.session.messages[..3], first.session.messages);
-    assert_eq!(second.session.revision, 6);
+    assert_eq!(second.session.revision, 8);
     assert_eq!(second.proposals.len(), 1);
     assert_ne!(
         second.proposals[0].reference.invocation_id,
