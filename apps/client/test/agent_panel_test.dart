@@ -1,5 +1,6 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_panel.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
@@ -90,6 +91,28 @@ void main() {
       expect(find.text('Ask Floe'), findsOneWidget);
     },
   );
+
+  for (final failure in {
+    'server_model_timeout': 'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.',
+    'server_model_request_rejected': 'The configured server model rejected this request. Check the latest server trace and model compatibility.',
+  }.entries) {
+    testWidgets('${failure.key} shows actionable recovery guidance', (
+      tester,
+    ) async {
+      final gateway = TestAgentGateway()..responseFailure = failure.key;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      final run = controller.send(AgentFixturePrompt.today);
+      await tester.pump(const Duration(milliseconds: 100));
+      await run;
+      await tester.pumpWidget(
+        app(AgentPanel(controller: controller, onClose: () {})),
+      );
+      expect(find.text(failure.value), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+    });
+  }
 
   for (final width in [1280.0, 390.0]) {
     testWidgets(

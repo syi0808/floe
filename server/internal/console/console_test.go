@@ -51,7 +51,10 @@ func (runtime *fakeAuthRuntime) Ready() bool { return runtime.ready }
 
 func (runtime *fakeAuthRuntime) ReplayIdentity() string { return "fixture-account" }
 
-func (*fakeAuthRuntime) Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error) {
+func (*fakeAuthRuntime) Generate(_ context.Context, _, _, _ string, _ json.RawMessage, schema json.RawMessage) (string, error) {
+	if len(schema) == 0 {
+		return `{"content":"OK"}`, nil
+	}
 	return `{"ok":true}`, nil
 }
 
@@ -246,10 +249,10 @@ func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&body)
-		if body["messages"].([]any)[1].(map[string]any)["content"] != `{"test":true}` {
+		if body["messages"].([]any)[1].(map[string]any)["content"] != "Confirm the Agent route." || len(body["tools"].([]any)) != 0 {
 			test.Error("test context was not synthetic")
 		}
-		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}]}`))
+		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"OK"}}]}`))
 	}))
 	defer upstream.Close()
 	input := map[string]string{"id": "fixture", "provider": "openai_compatible", "base_url": upstream.URL, "model": "fixture", "api_key": "private-provider-key"}

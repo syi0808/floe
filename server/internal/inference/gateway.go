@@ -174,12 +174,34 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	input.Agent = request.URL.Path == "/v1/agent"
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 98304))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF || !validRequest(input) {
+	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
 		writeError(writer, http.StatusBadRequest, "validation")
 		return
 	}
 	class := classForPurpose(input.Purpose)
 	configured, exists := gateway.routes[class]
+	if !validRequest(input) {
+		if exists && ValidPurpose(input.Purpose) && validDataClasses(input.DataClasses) {
+			code := "validation"
+			if input.Agent {
+				if failure := agentInputFailure(input.Input); failure != "" {
+					code = failure
+				}
+			}
+			traceID := newTraceID()
+			placement := "server_local"
+			if configured.provider.external {
+				placement = "remote"
+			}
+			record := newAuditRecord(traceID, input, placement, code, "")
+			record.ExternalTransfer = false
+			gateway.audit.add(record)
+			writeErrorWithTrace(writer, http.StatusBadRequest, code, traceID)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "validation")
+		return
+	}
 	if !exists {
 		writeError(writer, http.StatusBadRequest, "route_unavailable")
 		return

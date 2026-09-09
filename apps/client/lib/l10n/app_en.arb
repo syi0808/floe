@@ -33,6 +33,8 @@
   "agentLocalModelUnavailable": "The on-device model could not run. Check that it is ready, then try again.",
   "agentLocalModelInvalidOutput": "The on-device model returned an invalid response. Try a shorter request.",
   "agentServerModelUnavailable": "The configured server model could not complete the request. Check the server dashboard and try again.",
+  "agentServerModelTimeout": "The configured server model timed out. Try again, or choose a faster model route in the server dashboard.",
+  "agentServerModelRequestRejected": "The configured server model rejected this request. Check the latest server trace and model compatibility.",
   "agentServerModelInvalidOutput": "The server model returned a response that Floe could not validate. Check the server trace and model configuration.",
   "agentModelPolicyDenied": "The configured model could not handle this request.",
   "agentTransportUnavailable": "Floe could not reach the selected model adapter. Check the server connection or restart Floe.",

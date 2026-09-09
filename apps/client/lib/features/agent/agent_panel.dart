@@ -445,6 +445,9 @@ class _AgentPanelState extends State<AgentPanel> {
             : strings.agentFailure,
       'local_model_unavailable' => strings.agentLocalModelUnavailable,
       'server_model_unavailable' => strings.agentServerModelUnavailable,
+      'server_model_timeout' => strings.agentServerModelTimeout,
+      'server_model_request_rejected' =>
+        strings.agentServerModelRequestRejected,
       'local_model_invalid_output' => strings.agentLocalModelInvalidOutput,
       'server_model_invalid_output' => strings.agentServerModelInvalidOutput,
       'consent_required' => strings.agentRemoteConsentRequired,

@@ -280,6 +280,18 @@ abstract class AppLocalizations {
   /// **'The configured server model could not complete the request. Check the server dashboard and try again.'**
   String get agentServerModelUnavailable;
 
+  /// No description provided for @agentServerModelTimeout.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.'**
+  String get agentServerModelTimeout;
+
+  /// No description provided for @agentServerModelRequestRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured server model rejected this request. Check the latest server trace and model compatibility.'**
+  String get agentServerModelRequestRejected;
+
   /// No description provided for @agentServerModelInvalidOutput.
   ///
   /// In en, this message translates to:

@@ -201,6 +201,8 @@ pub enum AgentFailure {
     ModelUnavailable,
     LocalModelUnavailable,
     ServerModelUnavailable,
+    ServerModelTimeout,
+    ServerModelRequestRejected,
     CredentialExpired,
     QuotaExceeded,
     InvalidModelOutput,

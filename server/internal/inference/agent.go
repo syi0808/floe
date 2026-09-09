@@ -19,24 +19,28 @@ type AgentInput struct {
 }
 
 func validAgentInput(raw json.RawMessage) bool {
+	return agentInputFailure(raw) == ""
+}
+
+func agentInputFailure(raw json.RawMessage) string {
 	var input AgentInput
 	if json.Unmarshal(raw, &input) != nil || len(input.Messages) == 0 || len(input.Messages) > 256 || len(input.Tools) > 64 {
-		return false
+		return "invalid_agent_input_envelope"
 	}
 	names := map[string]bool{}
 	for _, tool := range input.Tools {
 		function, ok := tool["function"].(map[string]any)
 		if !ok || tool["type"] != "function" {
-			return false
+			return "invalid_agent_tool_envelope"
 		}
 		name, ok := function["name"].(string)
 		if !ok || !targetID.MatchString(name) || names[name] {
-			return false
+			return "invalid_agent_tool_name"
 		}
 		names[name] = true
 		parameters, ok := function["parameters"].(map[string]any)
 		if !ok || parameters["type"] != "object" {
-			return false
+			return "invalid_agent_tool_parameters"
 		}
 	}
 	pending := map[string]bool{}
@@ -44,67 +48,67 @@ func validAgentInput(raw json.RawMessage) bool {
 	for _, message := range input.Messages {
 		if items, exists := message["provider_items"]; exists {
 			if input.ReplaySource == "" || message["role"] != "assistant" {
-				return false
+				return "invalid_agent_replay_scope"
 			}
 			if _, ok := items.([]any); !ok {
-				return false
+				return "invalid_agent_replay_items"
 			}
 		}
 		role, _ := message["role"].(string)
 		if role != "user" && role != "assistant" && role != "tool" {
-			return false
+			return "invalid_agent_message_role"
 		}
 		if role == "tool" {
 			identifier, _ := message["tool_call_id"].(string)
 			if !pending[identifier] {
-				return false
+				return "invalid_agent_tool_result_order"
 			}
 			delete(pending, identifier)
 			if _, ok := message["content"].(string); !ok {
-				return false
+				return "invalid_agent_tool_result_content"
 			}
 			continue
 		}
 		if len(pending) != 0 {
-			return false
+			return "invalid_agent_missing_tool_result"
 		}
 		if rawCalls, exists := message["tool_calls"]; exists {
 			calls, ok := rawCalls.([]any)
 			if !ok || role != "assistant" || (len(calls) == 0 || len(calls) > 8) {
-				return false
+				return "invalid_agent_tool_calls"
 			}
 			for _, value := range calls {
 				call, ok := value.(map[string]any)
 				if !ok {
-					return false
+					return "invalid_agent_tool_call_envelope"
 				}
 				identifier, _ := call["id"].(string)
 				if identifier == "" || len(identifier) > 128 || seen[identifier] || call["type"] != "function" {
-					return false
+					return "invalid_agent_tool_call_id"
 				}
 				function, ok := call["function"].(map[string]any)
 				if !ok {
-					return false
+					return "invalid_agent_tool_call_function"
 				}
 				name, _ := function["name"].(string)
 				if !targetID.MatchString(name) {
-					return false
+					return "invalid_agent_tool_call_name"
 				}
 				arguments, ok := function["arguments"].(string)
 				var object map[string]any
 				if !ok || json.Unmarshal([]byte(arguments), &object) != nil || object == nil {
-					return false
+					return "invalid_agent_tool_call_arguments"
 				}
 				pending[identifier], seen[identifier] = true, true
 			}
 		} else if _, ok := message["content"].(string); !ok {
-			return false
+			return "invalid_agent_message_content"
 		}
 	}
 	if len(pending) != 0 {
-		return false
+		return "invalid_agent_missing_tool_result"
 	}
-	return true
+	return ""
 }
 
 func (gateway *Gateway) replaySource(configured route, purpose, identity string) string {

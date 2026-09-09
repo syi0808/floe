@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"floe/server/internal/inference"
@@ -41,10 +42,10 @@ func (console *Console) testTarget(writer http.ResponseWriter, request *http.Req
 		failure(writer, 503, "model_unavailable")
 		return
 	}
-	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, Purpose: "quick_response", DataClasses: []string{"synthetic"}, AllowExternal: input.AllowExternal, Instructions: `Return only {"ok":true}. This is a synthetic connectivity test without personal data.`, Input: json.RawMessage(`{"test":true}`), OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)})
+	payload, _ := json.Marshal(inference.Request{SchemaVersion: 1, Purpose: "quick_response", DataClasses: []string{"synthetic"}, AllowExternal: input.AllowExternal, Instructions: "Reply briefly to confirm the Agent route is working. This is a synthetic connectivity test without personal data.", Input: json.RawMessage(`{"messages":[{"role":"user","content":"Confirm the Agent route."}],"tools":[]}`)})
 	ctx, cancel := context.WithTimeout(request.Context(), 40*time.Second)
 	defer cancel()
-	forward, _ := http.NewRequestWithContext(ctx, "POST", "/v1/generate", bytes.NewReader(payload))
+	forward, _ := http.NewRequestWithContext(ctx, "POST", "/v1/agent", bytes.NewReader(payload))
 	forward.Header.Set("Authorization", "Bearer "+console.internalToken)
 	response := httptest.NewRecorder()
 	started := time.Now()
@@ -62,8 +63,15 @@ func (console *Console) testTarget(writer http.ResponseWriter, request *http.Req
 	var envelope struct {
 		Output string `json:"output"`
 	}
-	var result map[string]any
-	if json.Unmarshal(response.Body.Bytes(), &envelope) != nil || json.Unmarshal([]byte(envelope.Output), &result) != nil || len(result) != 1 || result["ok"] != true {
+	var result struct {
+		Output []struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		} `json:"output"`
+	}
+	if json.Unmarshal(response.Body.Bytes(), &envelope) != nil ||
+		json.Unmarshal([]byte(envelope.Output), &result) != nil ||
+		len(result.Output) != 1 || result.Output[0].Kind != "answer" || strings.TrimSpace(result.Output[0].Text) == "" {
 		failure(writer, 502, "invalid_proposal")
 		return
 	}

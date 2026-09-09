@@ -117,6 +117,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'The configured server model could not complete the request. Check the server dashboard and try again.';
 
   @override
+  String get agentServerModelTimeout =>
+      'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.';
+
+  @override
+  String get agentServerModelRequestRejected =>
+      'The configured server model rejected this request. Check the latest server trace and model compatibility.';
+
+  @override
   String get agentServerModelInvalidOutput =>
       'The server model returned a response that Floe could not validate. Check the server trace and model configuration.';
 

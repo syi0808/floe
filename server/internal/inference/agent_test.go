@@ -96,6 +96,15 @@ func TestOnlyV1ContractsAreAccepted(test *testing.T) {
 	}
 	if response := invokePath(gateway, "/v1/agent", fixtureRequest()); response.Code != 400 {
 		test.Fatal("structured input accepted on native endpoint")
+	} else {
+		var failure struct {
+			TraceID string `json:"trace_id"`
+		}
+		_ = json.Unmarshal(response.Body.Bytes(), &failure)
+		traces := gateway.Traces(1)
+		if failure.TraceID == "" || len(traces) != 1 || traces[0].TraceID != failure.TraceID || traces[0].Outcome != "invalid_agent_input_envelope" || traces[0].ExternalTransfer {
+			test.Fatal("Agent validation failure was not safely traceable")
+		}
 	}
 }
 

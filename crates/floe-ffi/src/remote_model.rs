@@ -74,6 +74,11 @@ fn gateway_failure(error: &serde_json::Value) -> AgentFailure {
         Some("invalid_proposal") => AgentFailure::ServerModelInvalidOutput,
         Some("credential_expired") => AgentFailure::CredentialExpired,
         Some("quota_exceeded") => AgentFailure::QuotaExceeded,
+        Some("model_timeout") => AgentFailure::ServerModelTimeout,
+        Some("request_rejected" | "validation") => AgentFailure::ServerModelRequestRejected,
+        Some(code) if code.starts_with("invalid_agent_") => {
+            AgentFailure::ServerModelRequestRejected
+        }
         _ => AgentFailure::ServerModelUnavailable,
     }
 }
@@ -85,6 +90,24 @@ fn tool_name(identifier: &str) -> String {
             (hash ^ u64::from(value)).wrapping_mul(0x100000001b3)
         });
     format!("floe_{hash:016x}")
+}
+
+fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailure> {
+    let Some(calls) = message
+        .get_mut("tool_calls")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    for call in calls {
+        let function = &mut call["function"];
+        let identifier = function["name"]
+            .as_str()
+            .ok_or(AgentFailure::InvalidInput)?;
+        function["name"] = json!(tool_name(identifier));
+        function["arguments"] = json!(function["arguments"].to_string());
+    }
+    Ok(())
 }
 
 fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
@@ -104,16 +127,7 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
         "scoped": {"policy": request.policy, "context": request.context}
     }).to_string()})];
     for mut message in history.into_iter().chain(current) {
-        if let Some(calls) = message["tool_calls"].as_array_mut() {
-            for call in calls {
-                let function = &mut call["function"];
-                let identifier = function["name"]
-                    .as_str()
-                    .ok_or(AgentFailure::InvalidInput)?;
-                function["name"] = json!(tool_name(identifier));
-                function["arguments"] = json!(function["arguments"].to_string());
-            }
-        }
+        rewrite_tool_calls(&mut message)?;
         if message["role"] == "tool" {
             let content = if message["status"] == "error" {
                 json!({"status":"error", "failure": message["failure"]})
@@ -298,14 +312,13 @@ impl ModelRunner for ServerModelRunner {
             StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
             StatusCode::FORBIDDEN => return Err(AgentFailure::ConsentRequired),
             StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
-            StatusCode::BAD_GATEWAY => {
+            status if !status.is_success() => {
                 let error: serde_json::Value = response
                     .json()
                     .await
                     .map_err(|_| AgentFailure::ServerModelUnavailable)?;
                 return Err(gateway_failure(&error));
             }
-            status if !status.is_success() => return Err(AgentFailure::ServerModelUnavailable),
             _ => {}
         }
         let bytes = response
@@ -561,12 +574,43 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_rewrite_does_not_add_field_to_plain_messages() {
+        let mut plain = json!({"role":"user","content":"hello"});
+        rewrite_tool_calls(&mut plain).unwrap();
+        assert_eq!(plain, json!({"role":"user","content":"hello"}));
+        assert!(plain.get("tool_calls").is_none());
+
+        let mut assistant = json!({
+            "role":"assistant",
+            "tool_calls":[{
+                "id":"call-1",
+                "function":{"name":"calendar.read","arguments":{"date":"today"}}
+            }]
+        });
+        rewrite_tool_calls(&mut assistant).unwrap();
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            tool_name("calendar.read")
+        );
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"],
+            r#"{"date":"today"}"#
+        );
+    }
+
+    #[test]
     fn gateway_failures_preserve_actionable_categories() {
         for (code, failure) in [
             ("invalid_proposal", AgentFailure::ServerModelInvalidOutput),
             ("credential_expired", AgentFailure::CredentialExpired),
             ("quota_exceeded", AgentFailure::QuotaExceeded),
-            ("request_rejected", AgentFailure::ServerModelUnavailable),
+            ("model_timeout", AgentFailure::ServerModelTimeout),
+            ("request_rejected", AgentFailure::ServerModelRequestRejected),
+            ("validation", AgentFailure::ServerModelRequestRejected),
+            (
+                "invalid_agent_tool_parameters",
+                AgentFailure::ServerModelRequestRejected,
+            ),
             ("model_unavailable", AgentFailure::ServerModelUnavailable),
         ] {
             assert_eq!(gateway_failure(&json!({"error":{"code":code}})), failure);
