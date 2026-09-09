@@ -54,6 +54,8 @@
   "@agentExpertSource": { "placeholders": { "ability": {"type": "String"} } },
   "agentExpertNoFocus": "No free interval meets the requested duration.",
   "agentLoading": "Loading saved conversation…",
+  "agentExpertReasoning": "Expert is analyzing the available information…",
+  "agentCorrectingResponse": "Correcting the model response (one retry)…",
   "agentPreparing": "Preparing reply…",
   "agentStopping": "Stopping response…",
   "agentStopped": "Response stopped. Saved messages are kept.",

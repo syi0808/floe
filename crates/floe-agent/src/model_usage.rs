@@ -16,6 +16,7 @@ pub struct ModelUsage {
 #[derive(Clone, Debug)]
 pub struct UsageLedger {
     inner: Arc<Mutex<LedgerState>>,
+    journal: Option<tokio::sync::mpsc::UnboundedSender<crate::model_journal::JournalUpdate>>,
 }
 
 #[derive(Debug)]
@@ -35,6 +36,7 @@ impl Default for UsageLedger {
 impl UsageLedger {
     pub fn new(max_tokens: u64, max_cost_micros: u64, usage: AgentUsage) -> Self {
         Self {
+            journal: None,
             inner: Arc::new(Mutex::new(LedgerState {
                 active: false,
                 max_tokens,
@@ -51,6 +53,41 @@ impl UsageLedger {
 
     pub fn snapshot(&self) -> ModelUsage {
         self.inner.lock().unwrap().usage
+    }
+
+    pub(crate) fn undispatched(&self, reserved: u64) {
+        let mut state = self.inner.lock().unwrap();
+        state.usage.attempts = state.usage.attempts.saturating_sub(1);
+        state.usage.tokens = state.usage.tokens.saturating_sub(reserved);
+        state.usage.estimated_tokens = state.usage.estimated_tokens.saturating_sub(reserved);
+        state.active = false;
+    }
+
+    pub(crate) fn with_journal(
+        mut self,
+        journal: tokio::sync::mpsc::UnboundedSender<crate::model_journal::JournalUpdate>,
+    ) -> Self {
+        self.journal = Some(journal);
+        self
+    }
+
+    pub(crate) async fn record(
+        &self,
+        record: crate::ModelAttemptRecord,
+    ) -> Result<(), AgentFailure> {
+        if let Some(journal) = &self.journal {
+            let (acknowledged, receiver) = tokio::sync::oneshot::channel();
+            journal
+                .send(crate::model_journal::JournalUpdate {
+                    record,
+                    acknowledged,
+                })
+                .map_err(|_| AgentFailure::StorageUnavailable)?;
+            receiver
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)??;
+        }
+        Ok(())
     }
 
     pub fn sync(&self, usage: &mut AgentUsage) {

@@ -1,7 +1,7 @@
 # ADR 0016: Native agent model protocol and shared correction boundary
 
 - Date: 2026-09-09
-- Status: accepted; native transport, durable Manager replay and shared usage accounting implemented
+- Status: accepted; native transport, replay, shared usage and durable model-attempt events implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
 ## Decision
@@ -67,12 +67,37 @@ ledger. A second concurrent attempt fails before dispatch rather than overspendi
 Continuation seeds the ledger from the preceding turn checkpoint, so completed
 child work is neither rerun nor counted twice.
 
-AgentSession.usage contains the current/last turn totals at normal message,
+AgentSession.usage contains the current/last turn totals at attempt, message,
 capability and termination commits. It is not a lifetime session total or exact
 provider billing. Unknown monetary cost remains zero; adapters may also supply
-their own token estimates without an estimate marker. Abrupt process termination
-between checkpoints still needs a durable per-attempt reservation journal; this
-increment does not claim crash-exact accounting.
+their own token estimates without an estimate marker.
+
+## Durable model attempts and progress
+
+Each runtime-managed model attempt has a unique ID, scope ID, model turn ID,
+one-based correction attempt number, placement, usage and typed outcome.
+Manager and child Expert requests share a journal channel. The runtime commits
+the started record and reservation through encrypted session CAS before
+acknowledging model dispatch. A failed start commit blocks dispatch and refunds
+the undispatched reservation. Validation acceptance/rejection is committed before
+a tool may execute or a correction may start. Neither prompts nor model output
+are copied into this journal.
+
+If the process or future stops before settlement is durable, the persisted started
+record retains its estimated usage. Recovery marks it interrupted without
+reissuing the model request; observed usage that was never committed remains
+unknown, not free and not claimed to be exact billing. These records are bounded
+by the existing session byte budget. Expert-internal model attempts are journaled;
+its deterministic tool-read transcript still has a separate lifecycle.
+
+Committed attempt records stream as v1 model_attempt events through the existing
+sequenced, bounded FFI progress transport. Logical model_started events still mark
+Manager iterations, while attempt events distinguish actual provider attempts
+and child scopes. Flutter distinguishes Expert analysis from a correction retry.
+Attempt metadata is not appended as a conversation message or interpreted as a
+successful source read. Final cancellation and recovery use the existing typed
+turn outcome. Controlled stops publish interrupted attempt events after the halt
+commit; restart recovery retains them in the encrypted session without replay.
 
 ## Durable capability dispatch
 
@@ -115,9 +140,9 @@ This increment is not the entire agent-runtime redesign:
 - Introduce ordered multi-item ModelResponse, then support multiple independent
   read calls without discarding preambles.
 - Unify the remaining Manager/Expert loop mechanics without merging their contexts
-  or authority; extend the shared usage ledger into durable per-attempt records.
-- Expose model-attempt IDs, validation stages, correction events and settled outcomes
-  through FFI/UI, distinguishing model synthesis from source execution failures.
+  or authority.
+- Extend the current attempt-level progress into ordered text/tool output streaming
+  and more detailed validation stages without exposing private reasoning.
 - Add real-provider
   acceptance captures for the native transport.
 
@@ -132,7 +157,9 @@ malformed input rejection, terminal stream completion, opaque replay preservatio
 one correction attempt, argument schema validation, preservation of completed tool
 results, replay across session reload, encrypted WAL/checkpoint persistence,
 route/account-switch rejection, parent/child budget enforcement, failed-attempt
-accounting, continuation without double charging and authorization/cancellation behavior. Live Calendar/provider
+accounting, durable pre-dispatch acknowledgments, interrupted reservation recovery,
+Dart/native attempt decoding, correction progress, continuation without double
+charging and authorization/cancellation behavior. Live Calendar/provider
 acceptance is a separate gate, not implied by fixture tests.
 
 ## References

@@ -29,10 +29,26 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             &mut request.remaining_tokens,
             &mut request.remaining_cost_micros,
         )?;
+        let mut record = crate::ModelAttemptRecord {
+            id: uuid::Uuid::new_v4(),
+            turn_id: request.turn_id,
+            scope_id: request.session_id,
+            attempt: attempt + 1,
+            placement: model.placement(),
+            state: crate::ModelAttemptState::Started,
+            failure: None,
+            usage: crate::ModelUsage {
+                attempts: 1,
+                tokens: request.remaining_tokens.min(4096),
+                estimated_tokens: request.remaining_tokens.min(4096),
+                cost_micros: 0,
+            },
+        };
+        request.usage.record(record.clone()).await?;
         let result = tokio::select! {
             biased;
-            _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            _ = tokio::time::sleep_until(request.deadline) => return Err(AgentFailure::DeadlineExceeded),
+            _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
+            _ = tokio::time::sleep_until(request.deadline) => Err(AgentFailure::DeadlineExceeded),
             result = model.generate(request.clone()) => result,
         };
         let mut consumed_tokens = 4096;
@@ -40,6 +56,9 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         let result = result.and_then(|response| {
             consumed_tokens = response.used_tokens;
             consumed_cost = response.cost_micros;
+            record.usage.tokens = consumed_tokens;
+            record.usage.cost_micros = consumed_cost;
+            record.usage.estimated_tokens = 0;
             accounting.settle(consumed_tokens, consumed_cost)?;
             if response.used_tokens > request.remaining_tokens
                 || response.cost_micros > request.remaining_cost_micros
@@ -75,6 +94,15 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             }
             Ok(response)
         });
+        record.state = match &result {
+            Ok(_) => crate::ModelAttemptState::Accepted,
+            Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) => {
+                crate::ModelAttemptState::Interrupted
+            }
+            Err(_) => crate::ModelAttemptState::Rejected,
+        };
+        record.failure = result.as_ref().err().copied();
+        request.usage.record(record).await?;
         match result {
             Ok(mut response) => {
                 response.used_tokens = response

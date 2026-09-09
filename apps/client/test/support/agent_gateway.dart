@@ -19,6 +19,8 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   final _events = <Map<String, Object?>>[];
   bool _done = false;
 
+  void appendProgress(Map<String, Object?> event) => _event(event);
+
   @override
   Future<AgentFixtureResult> startAgentFixture(String personId) async {
     saved = {

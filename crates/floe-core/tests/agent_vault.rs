@@ -135,6 +135,18 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
             items: serde_json::json!([{"type":"reasoning","encrypted_content":markers[4]}]),
         }),
     });
+    let attempt_id = Uuid::new_v4();
+    session.model_attempts.push(ModelAttemptRecord {
+        id: attempt_id,
+        turn_id: turn,
+        scope_id: session.id,
+        attempt: 1,
+        placement: ModelPlacement::DeviceLocal,
+        state: ModelAttemptState::Accepted,
+        failure: None,
+        usage: ModelUsage { attempts: 1, tokens: 10, ..ModelUsage::default() },
+    });
+    session.usage = AgentUsage { model_attempts: 1, tokens: 10, ..AgentUsage::default() };
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
     vault.compare_and_swap(&session, 0).await.unwrap();
@@ -146,9 +158,11 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
             > 0
     );
     assert_no_plaintext(&directory, &markers);
+    assert_no_plaintext(&directory, &[&attempt_id.to_string()]);
     vault.checkpoint().await.unwrap();
     assert!(fs::metadata(directory.join("sessions.db")).unwrap().len() > 4096);
     assert_no_plaintext(&directory, &markers);
+    assert_no_plaintext(&directory, &[&attempt_id.to_string()]);
     drop(vault);
     assert!(
         turso::Builder::new_local(directory.join("sessions.db").to_str().unwrap())

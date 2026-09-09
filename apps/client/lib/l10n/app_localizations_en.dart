@@ -185,6 +185,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentLoading => 'Loading saved conversation…';
 
   @override
+  String get agentExpertReasoning =>
+      'Expert is analyzing the available information…';
+
+  @override
+  String get agentCorrectingResponse =>
+      'Correcting the model response (one retry)…';
+
+  @override
   String get agentPreparing => 'Preparing reply…';
 
   @override

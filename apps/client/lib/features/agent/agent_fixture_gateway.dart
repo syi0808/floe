@@ -254,6 +254,7 @@ sealed class AgentEventData {
   factory AgentEventData.fromJson(Map<String, Object?> json) =>
       switch (json['kind']) {
         'started' => const AgentStarted(),
+        'model_attempt' => AgentModelAttempt.fromJson(_object(json['record'])),
         'model_started' => AgentModelStarted(
           json['iteration']! as int,
           json['placement']! as String,
@@ -276,6 +277,29 @@ sealed class AgentEventData {
 
 final class AgentStarted extends AgentEventData {
   const AgentStarted();
+}
+
+final class AgentModelAttempt extends AgentEventData {
+  AgentModelAttempt.fromJson(Map<String, Object?> json)
+    : id = json['id']! as String,
+      scopeId = json['scope_id']! as String,
+      attempt = json['attempt']! as int,
+      state = json['state']! as String,
+      failure = json['failure'] as String? {
+    if (id.isEmpty ||
+        scopeId.isEmpty ||
+        attempt < 1 ||
+        attempt > 2 ||
+        !{'started', 'accepted', 'rejected', 'interrupted'}.contains(state)) {
+      throw const FormatException('Invalid model attempt.');
+    }
+  }
+
+  final String id;
+  final String scopeId;
+  final int attempt;
+  final String state;
+  final String? failure;
 }
 
 final class AgentModelStarted extends AgentEventData {

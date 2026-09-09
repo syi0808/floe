@@ -411,6 +411,8 @@ class _AgentPanelState extends State<AgentPanel> {
     if (controller.busy) {
       return switch (controller.progress) {
         AgentProgress.loading => strings.agentLoading,
+        AgentProgress.expertModel => strings.agentExpertReasoning,
+        AgentProgress.correcting => strings.agentCorrectingResponse,
         AgentProgress.capability =>
           controller.isCalendarConversation
               ? strings.agentConnectedReading

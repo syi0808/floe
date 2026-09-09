@@ -7,6 +7,61 @@ import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('native model attempt journal crosses the Dart boundary', () async {
+    final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+    final directory = await Directory.systemTemp.createTemp(
+      'floe-attempt-test-',
+    );
+    final gateway = await FfiDayGateway.open(
+      libraryPath: library.path,
+      databasePath: '${directory.path}/fixture.db',
+    );
+    addTearDown(() async {
+      await gateway.close();
+      await directory.delete(recursive: true);
+    });
+    final initial = await gateway.startAgentFixture(localPersonId);
+    final result = await gateway.runAgentFixture(
+      initial.session,
+      AgentFixturePrompt.today,
+    );
+    final attempts = result.events
+        .map((event) => event.event)
+        .whereType<AgentModelAttempt>()
+        .toList();
+    expect(result.session.lastOutcome!.completed, isTrue);
+    expect(attempts.map((event) => event.state), [
+      'started',
+      'accepted',
+      'started',
+      'accepted',
+    ]);
+    expect(attempts[0].id, attempts[1].id);
+    expect(attempts[0].id, isNot(attempts[2].id));
+    expect(
+      attempts.every((event) => event.scopeId == initial.session.id),
+      isTrue,
+    );
+  });
+
+  test('model attempt decoder rejects invalid attempt ordinals and states', () {
+    final record = <String, Object?>{
+      'id': 'attempt',
+      'scope_id': 'scope',
+      'attempt': 1,
+      'state': 'started',
+      'failure': null,
+    };
+    expect(AgentModelAttempt.fromJson(record).attempt, 1);
+    for (final invalid in [
+      {...record, 'attempt': 0},
+      {...record, 'attempt': 3},
+      {...record, 'state': 'executed'},
+    ]) {
+      expect(() => AgentModelAttempt.fromJson(invalid), throwsFormatException);
+    }
+  });
+
   test(
     'native streaming controller stops, releases and resumes completed turns',
     () async {

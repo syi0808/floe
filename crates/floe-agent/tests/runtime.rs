@@ -47,6 +47,19 @@ async fn malformed_model_output_is_corrected_once_without_reexecuting_tools() {
                 .await
                 .unwrap();
             assert_eq!(model.calls(), 2);
+            assert_eq!(result.model_attempts.len(), 2);
+            assert_ne!(result.model_attempts[0].id, result.model_attempts[1].id);
+            assert_eq!(result.model_attempts[0].state, ModelAttemptState::Rejected);
+            assert_eq!(result.model_attempts[0].failure, Some(failure));
+            assert_eq!(result.model_attempts[1].attempt, 2);
+            assert_eq!(
+                result.model_attempts[1].state,
+                if recover {
+                    ModelAttemptState::Accepted
+                } else {
+                    ModelAttemptState::Rejected
+                }
+            );
             assert_eq!(result.usage.model_attempts, 2);
             assert_eq!(result.usage.tokens, if recover { 4106 } else { 8192 });
             assert_eq!(
@@ -265,6 +278,81 @@ impl CapabilityHost for Host {
         assert!(!invocation.cancellation.is_cancelled());
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.output.clone()
+    }
+}
+
+struct JournalModel<'model> {
+    store: &'model Store,
+    inner: &'model Model,
+}
+
+impl ModelRunner for JournalModel<'_> {
+    fn placement(&self) -> ModelPlacement {
+        self.inner.placement()
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        let saved = self.store.snapshot();
+        let record = saved.model_attempts.last().unwrap();
+        assert_eq!(record.state, ModelAttemptState::Started);
+        assert_eq!(record.scope_id, request.session_id);
+        assert_eq!(saved.usage.model_attempts, 1);
+        assert_eq!(saved.usage.estimated_tokens, 4096);
+        self.inner.generate(request).await
+    }
+}
+
+#[tokio::test]
+async fn model_dispatch_waits_for_intent_and_unsettled_usage_survives_recovery() {
+    for failed_revision in [2, 3] {
+        let store = Store::new();
+        store.fail_revision.store(failed_revision, Ordering::SeqCst);
+        let inner = Model::new(vec![answer()]);
+        let model = JournalModel {
+            store: &store,
+            inner: &inner,
+        };
+        let host = Host::default();
+        let policy = policy();
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        let mut events = vec![];
+        assert_eq!(
+            runtime
+                .run_turn(
+                    store.command(),
+                    context(),
+                    Cancellation::default(),
+                    |event| events.push(event)
+                )
+                .await,
+            Err(AgentFailure::StorageUnavailable)
+        );
+        let dispatched = usize::from(failed_revision == 3);
+        assert_eq!(inner.calls(), dispatched);
+        assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+        assert!(!events.iter().any(|event| matches!(&event.event, AgentEventKind::ModelAttempt { record } if record.state == ModelAttemptState::Accepted)));
+        let saved = store.snapshot();
+        assert_eq!(saved.model_attempts.len(), dispatched);
+        assert_eq!(saved.usage.model_attempts as usize, dispatched);
+        store.fail_revision.store(usize::MAX, Ordering::SeqCst);
+        let recovered = runtime
+            .recover_interrupted(saved.person_id, saved.id, saved.revision)
+            .await
+            .unwrap();
+        assert!(
+            recovered
+                .model_attempts
+                .iter()
+                .all(|record| record.state == ModelAttemptState::Interrupted)
+        );
+        assert_eq!(recovered.usage.estimated_tokens, (dispatched as u64) * 4096);
+        assert_eq!(inner.calls(), dispatched);
     }
 }
 
@@ -500,7 +588,7 @@ impl CapabilityHost for DurableHost<'_> {
 
 #[tokio::test]
 async fn execution_requires_durable_intent_and_uncertain_results_are_not_replayed() {
-    for failed_revision in [2, 3] {
+    for failed_revision in [4, 5] {
         let store = Store::new();
         store.fail_revision.store(failed_revision, Ordering::SeqCst);
         let model = Model::new(vec![call(), answer()]);
@@ -523,7 +611,7 @@ async fn execution_requires_durable_intent_and_uncertain_results_are_not_replaye
                 .await,
             Err(AgentFailure::StorageUnavailable),
         );
-        let expected_calls = usize::from(failed_revision == 3);
+        let expected_calls = usize::from(failed_revision == 5);
         assert_eq!(host.calls.load(Ordering::SeqCst), expected_calls);
         let saved = store.snapshot();
         assert_eq!(saved.capability_executions.len(), expected_calls);
@@ -853,7 +941,7 @@ async fn model_context_failure_is_a_hard_stop_without_continuation() {
 #[tokio::test]
 async fn completion_storage_failure_never_emits_a_success_or_loses_recovery_pointer() {
     let store = Store::new();
-    store.fail_revision.store(2, Ordering::SeqCst);
+    store.fail_revision.store(4, Ordering::SeqCst);
     let model = Model::new(vec![answer()]);
     let host = Host::default();
     let policy = policy();
@@ -978,7 +1066,7 @@ async fn multi_turn_messages_and_events_are_ordered_and_atomic() {
         )
         .await
         .unwrap();
-    assert_eq!(first.revision, 4);
+    assert_eq!(first.revision, 8);
     assert_eq!(first.capability_executions.len(), 1);
     assert_eq!(
         first.capability_executions[0].state,
@@ -1596,6 +1684,12 @@ async fn competing_turns_cannot_dispatch_twice_and_interrupted_work_requires_rec
             .is_err()
     );
     assert!(store.snapshot().active_turn.is_some());
+    assert_eq!(store.snapshot().model_attempts.len(), 1);
+    assert_eq!(
+        store.snapshot().model_attempts[0].state,
+        ModelAttemptState::Started
+    );
+    assert_eq!(store.snapshot().usage.estimated_tokens, 4096);
     assert_eq!(
         runtime
             .run_turn(stale, context(), Cancellation::default(), |_| {})
@@ -1608,6 +1702,11 @@ async fn competing_turns_cannot_dispatch_twice_and_interrupted_work_requires_rec
         .await
         .unwrap();
     halted(&recovered, AgentFailure::Interrupted);
+    assert_eq!(
+        recovered.model_attempts[0].state,
+        ModelAttemptState::Interrupted
+    );
+    assert_eq!(recovered.usage.estimated_tokens, 4096);
     assert_eq!(
         runtime
             .recover_interrupted(session.person_id, session.id, recovered.revision)

@@ -388,6 +388,18 @@ abstract class AppLocalizations {
   /// **'Loading saved conversation…'**
   String get agentLoading;
 
+  /// No description provided for @agentExpertReasoning.
+  ///
+  /// In en, this message translates to:
+  /// **'Expert is analyzing the available information…'**
+  String get agentExpertReasoning;
+
+  /// No description provided for @agentCorrectingResponse.
+  ///
+  /// In en, this message translates to:
+  /// **'Correcting the model response (one retry)…'**
+  String get agentCorrectingResponse;
+
   /// No description provided for @agentPreparing.
   ///
   /// In en, this message translates to:

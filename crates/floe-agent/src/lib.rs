@@ -6,6 +6,7 @@ mod registry;
 mod runtime;
 mod model_attempt;
 mod model_usage;
+mod model_journal;
 
 pub use contract::*;
 pub use expert::*;
@@ -15,3 +16,4 @@ pub use registry::*;
 pub use runtime::*;
 pub use model_attempt::*;
 pub use model_usage::*;
+pub use model_journal::*;

@@ -131,7 +131,13 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         ledger.sync(&mut usage);
         session.usage = usage;
         if outcome != AgentOutcome::Completed {
-            let interrupted = interrupt_executions(&mut session);
+            let (interrupted, attempts) = interrupt_executions(
+                &mut session,
+                match outcome {
+                    AgentOutcome::Halted { reason } => reason,
+                    _ => AgentFailure::Interrupted,
+                },
+            );
             session.active_turn = None;
             session.last_outcome = Some(outcome);
             session.continuation = soft_continuation(
@@ -142,6 +148,14 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 self.model.placement(),
             );
             self.commit(&mut session).await?;
+            for record in attempts {
+                emit_event(
+                    &session,
+                    turn_id,
+                    AgentEventKind::ModelAttempt { record },
+                    &mut emit,
+                );
+            }
         }
         emit_event(
             &session,
@@ -244,7 +258,13 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         ledger.sync(&mut usage);
         session.usage = usage;
         if outcome != AgentOutcome::Completed {
-            let interrupted = interrupt_executions(&mut session);
+            let (interrupted, attempts) = interrupt_executions(
+                &mut session,
+                match outcome {
+                    AgentOutcome::Halted { reason } => reason,
+                    _ => AgentFailure::Interrupted,
+                },
+            );
             session.active_turn = None;
             session.last_outcome = Some(outcome);
             session.continuation = soft_continuation(
@@ -255,6 +275,14 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 self.model.placement(),
             );
             self.commit(&mut session).await?;
+            for record in attempts {
+                emit_event(
+                    &session,
+                    continuation.turn_id,
+                    AgentEventKind::ModelAttempt { record },
+                    &mut emit,
+                );
+            }
         }
         emit_event(
             &session,
@@ -296,7 +324,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             return Err(AgentFailure::Conflict);
         }
         if session.active_turn.is_some() {
-            interrupt_executions(&mut session);
+            interrupt_executions(&mut session, AgentFailure::Interrupted);
             session.active_turn = None;
             session.continuation = None;
             session.last_outcome = Some(AgentOutcome::Halted {
@@ -364,6 +392,53 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         result
     }
 
+    async fn recorded<T>(
+        &self,
+        future: impl Future<Output = Result<T, AgentFailure>>,
+        session: &mut AgentSession,
+        usage: &mut AgentUsage,
+        ledger: &UsageLedger,
+        journal: &mut tokio::sync::mpsc::UnboundedReceiver<crate::model_journal::JournalUpdate>,
+        turn_id: Uuid,
+        emit: &mut impl FnMut(AgentEvent),
+        deadline: Instant,
+        cancellation: &Cancellation,
+    ) -> Result<T, AgentFailure> {
+        let future = bounded(future, deadline, cancellation);
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                biased;
+                update = journal.recv() => {
+                    let update = update.ok_or(AgentFailure::Interrupted)?;
+                    let previous = session.model_attempts.clone();
+                    if update.record.state == ModelAttemptState::Started {
+                        session.model_attempts.push(update.record.clone());
+                    } else {
+                        let record = session.model_attempts.iter_mut().find(|record| record.id == update.record.id)
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        *record = update.record.clone();
+                    }
+                    ledger.sync(usage);
+                    session.usage = *usage;
+                    if let Err(failure) = self.commit(session).await {
+                        session.model_attempts = previous;
+                        if update.record.state == ModelAttemptState::Started {
+                            ledger.undispatched(update.record.usage.tokens);
+                        } else if let Some(record) = session.model_attempts.iter_mut().find(|record| record.id == update.record.id) {
+                            record.usage = update.record.usage;
+                        }
+                        let _ = update.acknowledged.send(Err(failure));
+                        return Err(failure);
+                    }
+                    emit_event(session, turn_id, AgentEventKind::ModelAttempt { record: update.record }, emit);
+                    let _ = update.acknowledged.send(Ok(()));
+                }
+                result = &mut future => return result,
+            }
+        }
+    }
+
     async fn drive(
         &self,
         session: &mut AgentSession,
@@ -376,6 +451,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         ledger: &UsageLedger,
         emit: &mut impl FnMut(AgentEvent),
     ) -> Result<(), DriveStop> {
+        let (sender, mut journal) = tokio::sync::mpsc::unbounded_channel();
+        let ledger = ledger.clone().with_journal(sender);
         for iteration in usage.iterations..budget.max_iterations {
             ledger.sync(usage);
             check_drive_running(deadline, cancellation)?;
@@ -452,13 +529,20 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 return Err(AgentFailure::BudgetExceeded.into());
             }
             usage.iterations = iteration + 1;
-            let response = bounded(
-                crate::generate_with_recovery(self.model, request),
-                deadline,
-                cancellation,
-            )
-            .await
-            .map_err(DriveStop::from_call)?;
+            let response = self
+                .recorded(
+                    crate::generate_with_recovery(self.model, request),
+                    session,
+                    usage,
+                    &ledger,
+                    &mut journal,
+                    turn_id,
+                    emit,
+                    deadline,
+                    cancellation,
+                )
+                .await
+                .map_err(DriveStop::from_call)?;
             check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if response.schema_version != AGENT_VERSION {
@@ -529,24 +613,31 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         },
                         emit,
                     );
-                    let result = bounded(
-                        self.capabilities.invoke(CapabilityInvocation {
-                            usage: ledger.clone(),
-                            schema_version: AGENT_VERSION,
-                            call_id,
-                            person_id: session.person_id,
-                            session_id: session.id,
+                    let result = self
+                        .recorded(
+                            self.capabilities.invoke(CapabilityInvocation {
+                                usage: ledger.clone(),
+                                schema_version: AGENT_VERSION,
+                                call_id,
+                                person_id: session.person_id,
+                                session_id: session.id,
+                                turn_id,
+                                capability_id: capability_id.clone(),
+                                input: input.clone(),
+                                max_output_bytes: budget.max_output_bytes,
+                                deadline,
+                                cancellation: cancellation.clone(),
+                            }),
+                            session,
+                            usage,
+                            &ledger,
+                            &mut journal,
                             turn_id,
-                            capability_id: capability_id.clone(),
-                            input: input.clone(),
-                            max_output_bytes: budget.max_output_bytes,
+                            emit,
                             deadline,
-                            cancellation: cancellation.clone(),
-                        }),
-                        deadline,
-                        cancellation,
-                    )
-                    .await;
+                            cancellation,
+                        )
+                        .await;
                     if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) = &result {
                         return Err(DriveStop::from_call(result.unwrap_err()));
                     }
@@ -616,7 +707,18 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
     }
 }
 
-fn interrupt_executions(session: &mut AgentSession) -> bool {
+fn interrupt_executions(
+    session: &mut AgentSession,
+    failure: AgentFailure,
+) -> (bool, Vec<ModelAttemptRecord>) {
+    let mut attempts = vec![];
+    for record in &mut session.model_attempts {
+        if record.state == ModelAttemptState::Started {
+            record.state = ModelAttemptState::Interrupted;
+            record.failure = Some(failure);
+            attempts.push(record.clone());
+        }
+    }
     let mut interrupted = false;
     for execution in &mut session.capability_executions {
         if execution.state == CapabilityExecutionState::Started {
@@ -624,7 +726,7 @@ fn interrupt_executions(session: &mut AgentSession) -> bool {
             interrupted = true;
         }
     }
-    interrupted
+    (interrupted, attempts)
 }
 
 #[derive(Debug)]

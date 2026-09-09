@@ -13,7 +13,15 @@ import 'agent_registry.dart';
 import 'agent_request_id.dart';
 import 'agent_vault_gateway.dart';
 
-enum AgentProgress { idle, loading, model, capability, stopping }
+enum AgentProgress {
+  idle,
+  loading,
+  model,
+  expertModel,
+  correcting,
+  capability,
+  stopping,
+}
 
 final class AgentController extends ChangeNotifier {
   AgentController({
@@ -805,18 +813,7 @@ final class AgentController extends ChangeNotifier {
       var sequence = 0;
       while (true) {
         _validateUpdate(original, update, sequence);
-        for (final event in _sealed ? <AgentEvent>[] : update.events) {
-          switch (event.event) {
-            case AgentMessageCommitted(:final message):
-              messages = [...messages, message];
-            case AgentModelStarted():
-              progress = AgentProgress.model;
-            case AgentCapabilityStarted():
-              progress = AgentProgress.capability;
-            case AgentStarted() || AgentFinished():
-              break;
-          }
-        }
+        _acceptEvents(update.events);
         sequence = update.nextSequence;
         if (_stopRequested) progress = AgentProgress.stopping;
         _notify();
@@ -1093,6 +1090,14 @@ final class AgentController extends ChangeNotifier {
       switch (event.event) {
         case AgentMessageCommitted(:final message):
           messages = [...messages, message];
+        case AgentModelAttempt(:final scopeId, :final state, :final attempt):
+          if (state == 'started') {
+            progress = attempt == 2
+                ? AgentProgress.correcting
+                : scopeId == event.sessionId
+                ? AgentProgress.model
+                : AgentProgress.expertModel;
+          }
         case AgentModelStarted():
           progress = AgentProgress.model;
         case AgentCapabilityStarted():

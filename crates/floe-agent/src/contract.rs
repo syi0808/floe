@@ -33,6 +33,8 @@ pub struct AgentSession {
     #[serde(default)]
     pub usage: AgentUsage,
     #[serde(default)]
+    pub model_attempts: Vec<crate::ModelAttemptRecord>,
+    #[serde(default)]
     pub capability_executions: Vec<CapabilityExecution>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
@@ -75,6 +77,7 @@ impl AgentSession {
             data_classes: vec![crate::DataClass::Personal],
             messages: vec![],
             usage: AgentUsage::default(),
+            model_attempts: vec![],
             capability_executions: vec![],
             active_turn: None,
             last_outcome: None,
@@ -221,6 +224,9 @@ pub struct AgentEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEventKind {
     Started,
+    ModelAttempt {
+        record: crate::ModelAttemptRecord,
+    },
     ModelStarted {
         iteration: u32,
         placement: ModelPlacement,

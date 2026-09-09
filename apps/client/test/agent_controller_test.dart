@@ -5,6 +5,47 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/agent_gateway.dart';
 
 void main() {
+  test(
+    'durable attempt events distinguish Expert reasoning and correction',
+    () async {
+      final gateway = TestAgentGateway()..hold = true;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      final run = controller.send(AgentFixturePrompt.today);
+      await Future<void>.delayed(Duration.zero);
+      gateway.appendProgress({
+        'kind': 'model_attempt',
+        'record': {
+          'id': 'attempt-1',
+          'scope_id': 'expert-call',
+          'attempt': 1,
+          'state': 'started',
+          'failure': null,
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(controller.progress, AgentProgress.expertModel);
+      gateway.appendProgress({
+        'kind': 'model_attempt',
+        'record': {
+          'id': 'attempt-2',
+          'scope_id': 'expert-call',
+          'attempt': 2,
+          'state': 'started',
+          'failure': null,
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(controller.progress, AgentProgress.correcting);
+      expect(gateway.begins, 1);
+      expect(controller.messages, hasLength(1));
+      await controller.stop();
+      await run;
+      expect(controller.failure, 'cancelled');
+    },
+  );
+
   test('progress is visible before completion and stop retains only committed messages', () async {
     final gateway = TestAgentGateway()..hold = true;
     final controller = AgentController(gateway: gateway, personId: 'test');
