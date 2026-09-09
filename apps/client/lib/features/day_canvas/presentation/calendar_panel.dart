@@ -359,7 +359,6 @@ class _CalendarPanelState extends State<CalendarPanel> {
             Text(
               AppLocalizations.of(context).connectedCalendar,
               style: FloeType.caption.copyWith(
-                letterSpacing: 1,
                 color: FloePalette.neutral600,
               ),
             ),
