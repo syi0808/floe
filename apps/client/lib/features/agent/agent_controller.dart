@@ -1102,6 +1102,8 @@ final class AgentController extends ChangeNotifier {
           progress = AgentProgress.model;
         case AgentCapabilityStarted():
           progress = AgentProgress.capability;
+        case AgentDelegationStarted():
+          progress = AgentProgress.expertModel;
         case AgentStarted() || AgentFinished():
           break;
       }

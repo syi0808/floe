@@ -188,6 +188,7 @@ sealed class AgentMessage {
         json['text']! as String,
       ),
       'capability' => AgentCapabilityMessage.fromJson(json),
+      'delegation' => AgentCapabilityMessage.fromDelegation(json),
       _ => throw const FormatException('Unknown Agent message kind.'),
     };
   }
@@ -205,6 +206,53 @@ final class AgentTextMessage extends AgentMessage {
 }
 
 final class AgentCapabilityMessage extends AgentMessage {
+  factory AgentCapabilityMessage.fromDelegation(Map<String, Object?> json) {
+    final task = _object(json['task']);
+    final state = task['state'] as String?;
+    final failure = task['failure'] as String?;
+    if (task['id'] is! String ||
+        task['agent_id'] is! String ||
+        !const {
+          'submitted',
+          'working',
+          'completed',
+          'failed',
+          'cancelled',
+          'rejected',
+        }.contains(state) ||
+        task['artifacts'] is! List) {
+      throw const FormatException('Invalid Agent delegation.');
+    }
+    final outputs = <String>[];
+    for (final artifact in task['artifacts']! as List) {
+      final parts = _object(artifact)['parts'];
+      if (parts is! List) {
+        throw const FormatException('Invalid Agent delegation artifact.');
+      }
+      for (final part in parts) {
+        final value = _object(part);
+        if (value['kind'] == 'data' &&
+            value['media_type'] ==
+                'application/vnd.floe.expert-result+json;version=1' &&
+            value['data'] is String) {
+          outputs.add(value['data']! as String);
+        }
+      }
+    }
+    if (state == 'completed' && (failure != null || outputs.length != 1)) {
+      throw const FormatException('Invalid completed Agent delegation.');
+    }
+    return AgentCapabilityMessage.fromJson({
+      'turn_id': json['turn_id'],
+      'call_id': task['id'],
+      'capability_id': 'floe.a2a.delegate',
+      'input': task['agent_id'],
+      'result': state == 'completed'
+          ? {'Ok': outputs.single}
+          : {'Err': failure ?? 'invalid_model_output'},
+    });
+  }
+
   AgentCapabilityMessage.fromJson(Map<String, Object?> json)
     : callId = json['call_id']! as String,
       capabilityId = json['capability_id']! as String,
@@ -268,6 +316,10 @@ sealed class AgentEventData {
           json['call_id']! as String,
           json['capability_id']! as String,
         ),
+        'delegation_started' => AgentDelegationStarted(
+          json['task_id']! as String,
+          json['agent_id']! as String,
+        ),
         'message_committed' => AgentMessageCommitted(
           AgentMessage.fromJson(_object(json['message'])),
           json['revision']! as int,
@@ -282,6 +334,17 @@ sealed class AgentEventData {
 
 final class AgentStarted extends AgentEventData {
   const AgentStarted();
+}
+
+final class AgentDelegationStarted extends AgentEventData {
+  AgentDelegationStarted(this.taskId, this.agentId) {
+    if (taskId.isEmpty || agentId.isEmpty) {
+      throw const FormatException('Invalid Agent delegation event.');
+    }
+  }
+
+  final String taskId;
+  final String agentId;
 }
 
 final class AgentModelAttempt extends AgentEventData {

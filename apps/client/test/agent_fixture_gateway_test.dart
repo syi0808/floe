@@ -7,6 +7,59 @@ import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Expert delegation is projected as an inspectable capability', () {
+    final message = AgentMessage.fromJson({
+      'kind': 'delegation',
+      'turn_id': 'turn-1',
+      'task': {
+        'id': 'task-1',
+        'context_id': 'context-1',
+        'agent_id': 'floe.schedule',
+        'state': 'completed',
+        'history': <Object?>[],
+        'artifacts': [
+          {
+            'artifact_id': 'artifact-1',
+            'name': 'Schedule expert result',
+            'parts': [
+              {'kind': 'text', 'text': 'A summary'},
+              {
+                'kind': 'data',
+                'media_type':
+                    'application/vnd.floe.expert-result+json;version=1',
+                'data': '{"schema_version":1}',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(message, isA<AgentCapabilityMessage>());
+    final capability = message as AgentCapabilityMessage;
+    expect(capability.callId, 'task-1');
+    expect(capability.capabilityId, 'floe.a2a.delegate');
+    expect(capability.output, '{"schema_version":1}');
+  });
+
+  test('Expert delegation progress crosses the event boundary', () {
+    final event = AgentEvent.fromJson({
+      'schema_version': 1,
+      'session_id': 'session-1',
+      'turn_id': 'turn-1',
+      'event': {
+        'kind': 'delegation_started',
+        'task_id': 'task-1',
+        'agent_id': 'floe.schedule',
+      },
+    });
+
+    expect(event.event, isA<AgentDelegationStarted>());
+    final delegation = event.event as AgentDelegationStarted;
+    expect(delegation.taskId, 'task-1');
+    expect(delegation.agentId, 'floe.schedule');
+  });
+
   test('native model attempt journal crosses the Dart boundary', () async {
     final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
     final directory = await Directory.systemTemp.createTemp(
