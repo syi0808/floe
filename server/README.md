@@ -138,6 +138,15 @@ provider before adding an OAuth adapter. Existing Codex credentials are not read
 
 ## Inference contract
 
+Agent conversations now use `POST /v3/agent` (schema version 3), with native
+`input.messages` and `input.tools`, rather than a model-authored JSON step envelope.
+The gateway normalizes provider output; Rust alone executes tools and owns the
+single output/schema correction retry. v1/v2 structured generation stays unchanged.
+Upgrade the server before launching the new client. Native tool support is required
+on the selected route; there is no automatic downgrade or provider fallback.
+See [ADR 0016](../docs/decisions/0016-native-agent-model-protocol.md) for the migration
+boundary and the remaining session/replay/UI work.
+
 Bearer authentication is required for both endpoints. Console mode issues distinct
 app tokens; legacy mode uses the shared developer token. The default is `127.0.0.1:8431`.
 Requests with a browser Origin header are rejected. No CORS or public deployment

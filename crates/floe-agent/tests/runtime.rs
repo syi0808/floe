@@ -16,6 +16,34 @@ struct Store {
     fail_revision: AtomicUsize,
 }
 
+#[tokio::test]
+async fn malformed_model_output_is_corrected_once_without_reexecuting_tools() {
+    for failure in [AgentFailure::InvalidModelOutput, AgentFailure::LocalModelInvalidOutput, AgentFailure::ServerModelInvalidOutput] {
+        for recover in [true, false] {
+            let store = Store::new();
+            let model = Model::new(vec![answer()]);
+            {
+                let mut responses = model.responses.lock().unwrap();
+                if !recover { responses.push_front(Err(failure)); }
+                responses.push_front(Err(failure));
+            }
+            let host = Host::default();
+            let policy = policy();
+            let runtime = AgentRuntime { store: &store, model: &model, capabilities: &host, policy: &policy, budget: AgentBudget::default() };
+            let result = runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}).await.unwrap();
+            assert_eq!(model.calls(), 2);
+            assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+            if recover { assert_eq!(result.last_outcome, Some(AgentOutcome::Completed)); }
+            else { halted(&result, failure); }
+            let requests = model.requests.lock().unwrap();
+            assert_eq!(requests[0].deadline, requests[1].deadline);
+            assert_eq!(requests[0].remaining_tokens - requests[1].remaining_tokens, 4096);
+            assert_eq!(requests[0].messages.len() + 1, requests[1].messages.len());
+            assert_eq!(result.messages.iter().filter(|message| matches!(message, AgentMessage::User { .. })).count(), 1);
+        }
+    }
+}
+
 impl Store {
     fn new() -> Self {
         Self {
@@ -190,6 +218,49 @@ fn answer() -> ModelStep {
     ModelStep::Answer {
         text: "Synthetic answer".into(),
     }
+}
+
+#[tokio::test]
+async fn tool_schema_validation_recovers_before_dispatch() {
+    let model = Model::new(vec![
+        ModelStep::Call { capability_id: "read".into(), input: r#"{"count":"wrong"}"#.into() },
+        ModelStep::Call { capability_id: "read".into(), input: r#"{"count":1}"#.into() },
+    ]);
+    let turn_id = Uuid::new_v4();
+    let request = ModelRequest {
+        schema_version: AGENT_VERSION, system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
+        person_id: PersonId::new(), session_id: Uuid::new_v4(), turn_id,
+        policy: policy(), context: context(),
+        messages: vec![AgentMessage::User { turn_id, text: "Read one".into() }],
+        capabilities: vec![CapabilityDescriptor {
+            schema_version: AGENT_VERSION, id: "read".into(), version: "1".into(), read_only: true,
+            output_data_class: DataClass::Personal,
+            input_schema: Some(serde_json::json!({"type":"object","properties":{"count":{"type":"integer"}},"required":["count"],"additionalProperties":false})),
+        }],
+        remaining_tokens: 10000, remaining_cost_micros: 1000, max_output_bytes: 4096,
+        deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+        cancellation: Cancellation::default(),
+    };
+    let response = generate_with_recovery(&model, request).await.unwrap();
+    assert_eq!(model.calls(), 2);
+    assert_eq!(response.used_tokens, 20);
+    assert_eq!(response.step, ModelStep::Call { capability_id: "read".into(), input: r#"{"count":1}"#.into() });
+}
+
+#[tokio::test]
+async fn correction_preserves_successful_tool_results() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    model.responses.lock().unwrap().insert(1, Err(AgentFailure::ServerModelInvalidOutput));
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime { store: &store, model: &model, capabilities: &host, policy: &policy, budget: AgentBudget::default() };
+    let result = runtime.run_turn(store.command(), context(), Cancellation::default(), |_| {}).await.unwrap();
+    assert_eq!(result.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls(), 3);
+    let requests = model.requests.lock().unwrap();
+    assert!(requests[2].messages.iter().any(|message| matches!(message, AgentMessage::Capability { result: Ok(_), .. })));
 }
 
 fn call() -> ModelStep {

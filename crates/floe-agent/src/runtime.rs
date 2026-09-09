@@ -418,9 +418,13 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 return Err(AgentFailure::BudgetExceeded.into());
             }
             usage.iterations = iteration + 1;
-            let response = bounded(self.model.generate(request), deadline, cancellation)
-                .await
-                .map_err(DriveStop::from_call)?;
+            let response = bounded(
+                crate::generate_with_recovery(self.model, request),
+                deadline,
+                cancellation,
+            )
+            .await
+            .map_err(DriveStop::from_call)?;
             check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
             if response.schema_version != AGENT_VERSION {

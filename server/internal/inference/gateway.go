@@ -45,7 +45,7 @@ type Request struct {
 	AllowExternal  bool            `json:"allow_external"`
 	Instructions   string          `json:"instructions"`
 	Input          json.RawMessage `json:"input"`
-	OutputSchema   json.RawMessage `json:"output_schema"`
+	OutputSchema   json.RawMessage `json:"output_schema,omitempty"`
 	ReplayOf       string          `json:"replay_of,omitempty"`
 }
 
@@ -172,7 +172,7 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		_ = json.NewEncoder(writer).Encode(map[string]any{"schema_version": 2, "trace": record})
 		return
 	}
-	if request.Method != http.MethodPost || (request.URL.Path != "/v1/generate" && request.URL.Path != "/v2/generate") {
+	if request.Method != http.MethodPost || (request.URL.Path != "/v1/generate" && request.URL.Path != "/v2/generate" && request.URL.Path != "/v3/agent") {
 		writeError(writer, http.StatusNotFound, "not_found")
 		return
 	}
@@ -183,8 +183,12 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, "validation")
 		return
 	}
+	if (request.URL.Path == "/v3/agent") != (input.SchemaVersion == 3) {
+		writeError(writer, http.StatusBadRequest, "validation")
+		return
+	}
 	class := input.InferenceClass
-	if input.SchemaVersion == 2 {
+	if input.SchemaVersion >= 2 {
 		class = classForPurpose(input.Purpose)
 	}
 	configured, exists := gateway.routes[class]
@@ -236,7 +240,7 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	_ = json.NewEncoder(writer).Encode(map[string]any{
-		"schema_version": 2,
+		"schema_version": input.SchemaVersion,
 		"purpose":        input.Purpose,
 		"output":         output,
 		"routing":        map[string]any{"placement": placement, "external_transfer": adapter.external},
@@ -245,6 +249,9 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 }
 
 func validRequest(request Request) bool {
+	if request.SchemaVersion == 3 {
+		return request.InferenceClass == "" && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses) && request.ReplayOf == "" && len(request.OutputSchema) == 0 && len(request.Instructions) > 0 && len(request.Instructions) <= 8192 && len(request.Input) <= 32768 && validAgentInput(request.Input)
+	}
 	var schema map[string]any
 	validRoute := request.SchemaVersion == 1 && ValidClass(request.InferenceClass) && request.Purpose == "" && request.ReplayOf == "" && len(request.DataClasses) == 0 ||
 		request.SchemaVersion == 2 && request.InferenceClass == "" && ValidPurpose(request.Purpose) && validDataClasses(request.DataClasses)

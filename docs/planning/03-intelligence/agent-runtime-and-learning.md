@@ -5,6 +5,13 @@
 > Reference reviewed: NousResearch/hermes-agent commit
 > `693641aa8b4359c602283bdbbc14041e03bc47bc` on 2026-09-07
 
+The first native-model migration increment is described in
+[ADR 0016](../../decisions/0016-native-agent-model-protocol.md). Remote adapters now
+send actual provider-native messages and tools, while Manager and Expert share one
+bounded model-output/schema correction attempt. This supersedes the immediate
+hard-stop rule below for the first such failure only; subsequent failure remains a
+hard stop. The full durable replay and multi-item event migration is not complete.
+
 ## Product boundary
 
 Floe has one user-facing **Manager Agent**. Experts provide bounded domain judgment;

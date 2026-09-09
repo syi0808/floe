@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
@@ -12,6 +14,7 @@ use serde_json::json;
 pub struct ServerModelRunner {
     route: AgentRemoteRouteDto,
     placement: ModelPlacement,
+    replay: Mutex<HashMap<uuid::Uuid, Vec<(serde_json::Value, String)>>>,
 }
 
 impl ServerModelRunner {
@@ -38,7 +41,11 @@ impl ServerModelRunner {
         } else {
             ModelPlacement::DeviceLocal
         };
-        Ok(Self { route, placement })
+        Ok(Self {
+            route,
+            placement,
+            replay: Mutex::new(HashMap::new()),
+        })
     }
 }
 
@@ -59,63 +66,86 @@ struct RoutingResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireStep {
-    kind: String,
-    text: Option<String>,
-    capability_id: Option<String>,
-    input: Option<String>,
+struct AgentOutput {
+    step: ModelStep,
+    used_tokens: u64,
+    #[serde(default)]
+    replay: Option<serde_json::Value>,
+    #[serde(default)]
+    call_id: String,
 }
 
-fn output_schema() -> serde_json::Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "kind": {"type": "string", "enum": ["answer", "call"]},
-            "text": {"type": ["string", "null"]},
-            "capability_id": {"type": ["string", "null"]},
-            "input": {"type": ["string", "null"]}
-        },
-        "required": ["kind", "text", "capability_id", "input"]
-    })
+fn tool_name(identifier: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    identifier.hash(&mut hash);
+    format!("floe_{:016x}", hash.finish())
 }
 
 fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
-    let (conversation_history, current_turn) = request.model_conversation();
-    if !current_turn.iter().any(|message| message["role"] == "user") {
+    let aliases: std::collections::HashSet<_> = request
+        .capabilities
+        .iter()
+        .map(|capability| tool_name(&capability.id))
+        .collect();
+    if aliases.len() != request.capabilities.len() {
         return Err(AgentFailure::InvalidInput);
     }
-    Ok(json!({
-        "scoped": {"policy": &request.policy, "context": &request.context},
-        "conversation_history": conversation_history,
-        "current_turn": current_turn,
-        "allowed_capabilities": &request.capabilities,
-        "max_output_bytes": request.max_output_bytes.min(16384),
-    }))
+    let (history, current) = request.model_conversation();
+    if !current.iter().any(|message| message["role"] == "user") {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let mut messages = vec![json!({"role": "user", "content": json!({
+        "scoped": {"policy": request.policy, "context": request.context}
+    }).to_string()})];
+    for mut message in history.into_iter().chain(current) {
+        if let Some(calls) = message["tool_calls"].as_array_mut() {
+            for call in calls {
+                let function = &mut call["function"];
+                let identifier = function["name"]
+                    .as_str()
+                    .ok_or(AgentFailure::InvalidInput)?;
+                function["name"] = json!(tool_name(identifier));
+                function["arguments"] = json!(function["arguments"].to_string());
+            }
+        }
+        if message["role"] == "tool" {
+            let content = if message["status"] == "error" {
+                json!({"status":"error", "failure": message["failure"]})
+            } else {
+                json!({"status":"success", "content": message["content"]})
+            };
+            message = json!({"role":"tool", "tool_call_id":message["tool_call_id"],"content":content.to_string()});
+        }
+        messages.push(message);
+    }
+    let tools: Vec<_> = request.capabilities.iter().map(|capability| json!({
+        "type": "function",
+        "function": {
+            "name": tool_name(&capability.id),
+            "description": capability.id,
+            "parameters": capability.input_schema.clone().unwrap_or_else(|| json!({"type":"object","properties":{}})),
+            "strict": false
+        }
+    })).collect();
+    Ok(json!({"messages": messages, "tools": tools}))
 }
 
-fn decode_step(output: &str) -> Result<ModelStep, AgentFailure> {
-    let step: WireStep =
-        serde_json::from_str(output).map_err(|_| AgentFailure::InvalidModelOutput)?;
-    match (
-        step.kind.as_str(),
-        step.text,
-        step.capability_id,
-        step.input,
-    ) {
-        ("answer", Some(text), None, None) if !text.trim().is_empty() => {
-            Ok(ModelStep::Answer { text })
-        }
-        ("call", None, Some(capability_id), Some(input))
-            if !capability_id.trim().is_empty()
-                && serde_json::from_str::<serde_json::Value>(&input).is_ok() =>
+fn decode_step(output: &str) -> Result<AgentOutput, AgentFailure> {
+    let result: AgentOutput =
+        serde_json::from_str(output).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+    match &result.step {
+        ModelStep::Answer { text } if !text.trim().is_empty() => Ok(result),
+        ModelStep::Call {
+            capability_id,
+            input,
+        } if !capability_id.is_empty()
+            && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(input)
+                .is_ok() =>
         {
-            Ok(ModelStep::Call {
-                capability_id,
-                input,
-            })
+            Ok(result)
         }
-        _ => Err(AgentFailure::InvalidModelOutput),
+        _ => Err(AgentFailure::ServerModelInvalidOutput),
     }
 }
 
@@ -149,19 +179,45 @@ impl ModelRunner for ServerModelRunner {
             .no_proxy()
             .build()
             .map_err(|_| AgentFailure::ServerModelUnavailable)?;
-        let input = model_input(&request)?;
+        let mut input = model_input(&request)?;
+        {
+            let replay = self.replay.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if let Some(items) = replay.get(&request.turn_id) {
+                let messages = input["messages"]
+                    .as_array_mut()
+                    .ok_or(AgentFailure::InvalidInput)?;
+                let mut index = 0;
+                let mut current_call_id = None;
+                for message in messages {
+                    if message["tool_calls"].is_array() {
+                        if let Some((raw, identifier)) = items.get(index) {
+                            message["provider_items"] = raw.clone();
+                            message["tool_calls"][0]["id"] = json!(identifier);
+                            current_call_id = Some(identifier.clone());
+                        }
+                        index += 1;
+                    } else if message["role"] == "tool" {
+                        if let Some(identifier) = current_call_id.take() {
+                            message["tool_call_id"] = json!(identifier);
+                        }
+                    }
+                }
+            }
+        }
         let body = json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "purpose": self.route.purpose,
             "data_classes": request.policy.data_classes,
             "allow_external": self.route.allow_external,
             "instructions": request.system_instructions,
-            "input": input,
-            "output_schema": output_schema()
+            "input": input
         });
+        if body["input"].to_string().len() > 32768 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         let send = client
             .post(format!(
-                "{}/v2/generate",
+                "{}/v3/agent",
                 self.route.base_url.trim_end_matches('/')
             ))
             .bearer_auth(&self.route.bearer_token)
@@ -175,6 +231,17 @@ impl ModelRunner for ServerModelRunner {
             StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
             StatusCode::FORBIDDEN => return Err(AgentFailure::ConsentRequired),
             StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
+            StatusCode::BAD_GATEWAY => {
+                let error: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|_| AgentFailure::ServerModelUnavailable)?;
+                return Err(if error["error"]["code"] == "invalid_proposal" {
+                    AgentFailure::ServerModelInvalidOutput
+                } else {
+                    AgentFailure::ServerModelUnavailable
+                });
+            }
             status if !status.is_success() => return Err(AgentFailure::ServerModelUnavailable),
             _ => {}
         }
@@ -186,8 +253,8 @@ impl ModelRunner for ServerModelRunner {
             return Err(AgentFailure::BudgetExceeded);
         }
         let response: GenerateResponse =
-            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
-        if response.schema_version != 2
+            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::ServerModelUnavailable)?;
+        if response.schema_version != 3
             || response.purpose != self.route.purpose
             || response.trace_id.len() != 32
             || response.routing.external_transfer != self.route.external
@@ -198,19 +265,17 @@ impl ModelRunner for ServerModelRunner {
                     "server_local"
                 }
         {
-            return Err(AgentFailure::ServerModelInvalidOutput);
+            return Err(AgentFailure::PolicyDenied);
         }
-        let step = decode_step(&response.output).map_err(|failure| match failure {
-            AgentFailure::InvalidModelOutput => AgentFailure::ServerModelInvalidOutput,
-            failure => failure,
-        })?;
-        if let ModelStep::Call { capability_id, .. } = &step
-            && !request
+        let output = decode_step(&response.output)?;
+        let mut step = output.step;
+        if let ModelStep::Call { capability_id, .. } = &mut step {
+            let descriptor = request
                 .capabilities
                 .iter()
-                .any(|capability| capability.id == *capability_id)
-        {
-            return Err(AgentFailure::CapabilityDenied);
+                .find(|capability| tool_name(&capability.id) == *capability_id)
+                .ok_or(AgentFailure::CapabilityDenied)?;
+            *capability_id = descriptor.id.clone();
         }
         if serde_json::to_vec(&step)
             .map_err(|_| AgentFailure::ServerModelInvalidOutput)?
@@ -219,10 +284,33 @@ impl ModelRunner for ServerModelRunner {
         {
             return Err(AgentFailure::BudgetExceeded);
         }
+        if matches!(step, ModelStep::Call { .. }) {
+            if let Some(items) = output.replay {
+                if output.call_id.is_empty() {
+                    return Err(AgentFailure::ServerModelInvalidOutput);
+                }
+                let mut replay = self.replay.lock().map_err(|_| AgentFailure::Interrupted)?;
+                if !replay.contains_key(&request.turn_id) && replay.len() >= 32 {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let saved = replay.entry(request.turn_id).or_default();
+                if saved.len() >= 100 {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let completed = request.messages.iter().filter(|message| matches!(message, floe_agent::AgentMessage::Capability { turn_id, .. } if *turn_id == request.turn_id)).count();
+                saved.truncate(completed);
+                saved.push((items, output.call_id));
+            }
+        } else {
+            self.replay
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?
+                .remove(&request.turn_id);
+        }
         Ok(ModelResponse {
             schema_version: AGENT_VERSION,
             step,
-            used_tokens: 4096,
+            used_tokens: output.used_tokens.max(1),
             cost_micros: 0,
         })
     }
@@ -263,44 +351,18 @@ mod tests {
     }
 
     #[test]
-    fn remote_output_schema_requires_every_property_for_strict_providers() {
-        let schema = output_schema();
-        assert_eq!(
-            schema["required"],
-            json!(["kind", "text", "capability_id", "input"])
+    fn native_output_is_server_normalized_not_model_json() {
+        assert!(
+            decode_step(r#"{"step":{"kind":"answer","text":"Hello"},"used_tokens":12}"#).is_ok()
         );
-        assert_eq!(
-            schema["properties"]["text"]["type"],
-            json!(["string", "null"])
-        );
-        assert_eq!(
-            schema["properties"]["capability_id"]["type"],
-            json!(["string", "null"])
-        );
-    }
-
-    #[test]
-    fn remote_output_decodes_nullable_strict_envelope() {
-        assert_eq!(
-            decode_step(r#"{"kind":"answer","text":"Hello","capability_id":null,"input":null}"#),
-            Ok(ModelStep::Answer {
-                text: "Hello".into()
-            })
-        );
-        assert_eq!(
+        assert!(
             decode_step(
-                r#"{"kind":"call","text":null,"capability_id":"calendar.read","input":"{}"}"#
-            ),
-            Ok(ModelStep::Call {
-                capability_id: "calendar.read".into(),
-                input: "{}".into()
-            })
+                r#"{"step":{"kind":"answer","text":"Hello","input":null},"used_tokens":12}"#
+            )
+            .is_err()
         );
-        assert_eq!(
-            decode_step(
-                r#"{"kind":"answer","text":"Hello","capability_id":"calendar.read","input":null}"#
-            ),
-            Err(AgentFailure::InvalidModelOutput)
-        );
+        assert!(decode_step(r#"{"step":{"kind":"call","capability_id":"floe_read","input":"{}"},"used_tokens":12}"#).is_ok());
+        assert!(decode_step(r#"{"step":{"kind":"call","capability_id":"floe_read","input":"null"},"used_tokens":12}"#).is_err());
+        assert_ne!(tool_name("a.b"), tool_name("a_b"));
     }
 }

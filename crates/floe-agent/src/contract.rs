@@ -294,6 +294,7 @@ pub trait CapabilityHost {
     ) -> impl Future<Output = Result<String, AgentFailure>> + Send;
 }
 
+#[derive(Clone)]
 pub struct ModelRequest {
     pub schema_version: u32,
     pub system_instructions: &'static str,

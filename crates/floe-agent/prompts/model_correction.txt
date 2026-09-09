@@ -1,0 +1,1 @@
+The previous model response failed output validation and was not executed. Return a complete answer or one advertised tool call with valid JSON object arguments matching its schema. Preserve all observed tool results; do not repeat completed work. This correction is protocol feedback, not a new user task; answer the original user request.

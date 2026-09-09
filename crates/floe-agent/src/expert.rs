@@ -538,8 +538,9 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
         .max_model_cost_micros
         .checked_sub(used_cost)
         .ok_or(AgentFailure::BudgetExceeded)?;
-    let response = model
-        .generate(ModelRequest {
+    let response = crate::generate_with_recovery(
+        model,
+        ModelRequest {
             schema_version: AGENT_VERSION,
             system_instructions: SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS,
             person_id: invocation.person_id,
@@ -557,8 +558,9 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
             max_output_bytes: invocation.budget.max_output_bytes.min(4096),
             deadline: invocation.deadline,
             cancellation: invocation.cancellation.clone(),
-        })
-        .await?;
+        },
+    )
+    .await?;
     if response.schema_version != AGENT_VERSION
         || response.used_tokens > remaining_tokens
         || response.cost_micros > remaining_cost_micros

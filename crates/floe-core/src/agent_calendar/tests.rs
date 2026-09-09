@@ -1320,6 +1320,10 @@ async fn model_cannot_smuggle_scope_or_execution_fields_through_expert_input() {
             r#"{"kind":"propose_focus","focus_minutes":60,"calendar_id":"other","approved":true}"#
                 .into(),
     };
+    {
+        let mut steps = model.steps.lock().unwrap();
+        steps[1] = steps[0].clone();
+    }
     let access = Access::default();
     let result = fixture
         .core
@@ -1333,13 +1337,9 @@ async fn model_cannot_smuggle_scope_or_execution_fields_through_expert_input() {
         )
         .await
         .unwrap();
-    assert!(matches!(
-        result.session.messages[1],
-        AgentMessage::Capability {
-            result: Err(AgentFailure::InvalidInput),
-            ..
-        }
-    ));
+    assert_eq!(result.session.last_outcome, Some(AgentOutcome::Halted { reason: AgentFailure::InvalidModelOutput }));
+    assert_eq!(result.session.messages.len(), 1);
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
     assert_eq!(access.calls.load(Ordering::Acquire), 0);
     assert_eq!(fixture.state().await.revision, fixture.revision);
     assert!(result.proposals.is_empty());

@@ -31,6 +31,7 @@ const (
 
 var unavailable = errors.New("Codex authentication unavailable")
 var invalidOutput = errors.New("invalid Codex output")
+var ErrInvalidOutput = invalidOutput
 
 type Store interface {
 	Get(string) (string, error)
@@ -391,6 +392,17 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 	if reasoningEffort != "" {
 		requestBody["reasoning"] = map[string]string{"effort": reasoningEffort, "summary": "auto"}
 	}
+	if len(schema) == 0 {
+		native, tools, err := nativeInput(input)
+		if err != nil {
+			return "", err
+		}
+		requestBody["input"] = native
+		requestBody["tools"] = tools
+		requestBody["tool_choice"] = "auto"
+		requestBody["parallel_tool_calls"] = false
+		delete(requestBody, "text")
+	}
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", invalidOutput
@@ -415,6 +427,9 @@ func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, in
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return "", unavailable
+	}
+	if len(schema) == 0 {
+		return readNativeResponse(response.Body)
 	}
 	return readResponse(response.Body)
 }

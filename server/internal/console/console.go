@@ -147,7 +147,7 @@ func (console *Console) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		failure(writer, 403, "invalid_origin")
 		return
 	}
-	if strings.HasPrefix(request.URL.Path, "/v1/") || strings.HasPrefix(request.URL.Path, "/v2/") {
+	if strings.HasPrefix(request.URL.Path, "/v1/") || strings.HasPrefix(request.URL.Path, "/v2/") || strings.HasPrefix(request.URL.Path, "/v3/") {
 		console.serveInference(writer, request)
 		return
 	}
