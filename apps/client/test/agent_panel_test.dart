@@ -77,18 +77,18 @@ void main() {
       await tester.pumpWidget(
         app(AgentPanel(controller: controller, onClose: () {})),
       );
-      expect(find.text('Reload conversation'), findsOneWidget);
+      expect(find.byTooltip('Reload conversation'), findsOneWidget);
       gateway.failLoad = false;
       await gateway.startAgentFixture('test');
       gateway.saved!['active_turn'] = 'interrupted';
-      await tester.tap(find.text('Reload conversation'));
+      await tester.tap(find.byTooltip('Reload conversation'));
       await tester.pumpAndSettle();
-      expect(find.text('Recover conversation'), findsOneWidget);
-      await tester.tap(find.text('Recover conversation'));
+      expect(find.byTooltip('Recover conversation'), findsOneWidget);
+      await tester.tap(find.byTooltip('Recover conversation'));
       await tester.pumpAndSettle();
       expect(gateway.recoveries, 1);
       expect(gateway.begins, 0);
-      expect(find.text('Ask Floe'), findsOneWidget);
+      expect(find.byTooltip('Ask Floe'), findsOneWidget);
     },
   );
 
@@ -138,7 +138,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('couldn’t access secure storage'), findsNothing);
-    expect(find.text('Reload conversation'), findsOneWidget);
+    expect(find.byTooltip('Reload conversation'), findsOneWidget);
   });
 
   for (final width in [1280.0, 390.0]) {

@@ -130,13 +130,13 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    controller.isCalendarConversation
-                        ? strings.agentConnectedTitle
-                        : strings.agentConversationTitle,
-                    style: FloeType.controlLabel,
-                  ),
+                  if (controller.isCalendarConversation) ...[
+                    const SizedBox(height: FloeSpace.sm),
+                    Text(
+                      strings.agentConnectedTitle,
+                      style: FloeType.controlLabel,
+                    ),
+                  ],
                 ],
               ),
             );
@@ -315,6 +315,13 @@ class _AgentPanelState extends State<AgentPanel> {
         : controller.needsRecovery
         ? strings.agentRecover
         : strings.agentConnectedSend;
+    final icon = storageLocked || controller.needsReload
+        ? LucideIcons.refreshCw
+        : controller.running
+        ? LucideIcons.square
+        : controller.needsRecovery
+        ? LucideIcons.rotateCcw
+        : LucideIcons.arrowUp;
     final VoidCallback? action = storageLocked
         ? controller.busy
               ? null
@@ -354,31 +361,43 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          if (!storageLocked)
-            FloeInput(
-              label: controller.isGeneralConversation
-                  ? strings.agentConversationPrompt
-                  : strings.agentConnectedPrompt,
-              controller: _composerText,
-              focusNode: _messageFocus,
-              enabled: controller.canSend && controller.isConnectedConversation,
-              placeholder: controller.isGeneralConversation
-                  ? strings.agentConversationEmpty
-                  : strings.agentConnectedEmpty,
-              minLines: 1,
-              maxLines: 4,
-              compact: true,
-              textInputAction: TextInputAction.newline,
-              textCapitalization: TextCapitalization.sentences,
-              inputFormatters: [LengthLimitingTextInputFormatter(8192)],
-              onChanged: (_) => setState(() {}),
-            ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeButton.filled(
-            onPressed: action,
-            focusNode: _actionFocus,
-            size: FloeButtonSize.compact,
-            child: Text(label),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (!storageLocked) ...[
+                Expanded(
+                  child: FloeInput(
+                    label: controller.isGeneralConversation
+                        ? strings.agentConversationPrompt
+                        : strings.agentConnectedPrompt,
+                    controller: _composerText,
+                    focusNode: _messageFocus,
+                    enabled:
+                        controller.canSend &&
+                        controller.isConnectedConversation,
+                    placeholder: controller.isGeneralConversation
+                        ? strings.agentConversationEmpty
+                        : strings.agentConnectedEmpty,
+                    minLines: 1,
+                    maxLines: 4,
+                    compact: true,
+                    textInputAction: TextInputAction.newline,
+                    textCapitalization: TextCapitalization.sentences,
+                    inputFormatters: [LengthLimitingTextInputFormatter(8192)],
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: FloeSpace.sm),
+              ] else
+                const Spacer(),
+              FloeButton.icon(
+                tooltip: label,
+                onPressed: action,
+                focusNode: _actionFocus,
+                size: FloeButtonSize.compact,
+                icon: Icon(icon, size: 16),
+              ),
+            ],
           ),
           if (controller.canContinue || controller.canRetry) ...[
             const SizedBox(height: FloeSpace.sm),

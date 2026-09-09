@@ -30,14 +30,15 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Conversation'), findsOneWidget);
+    expect(find.text('Conversation'), findsNothing);
     expect(
       tester.getSize(find.byType(TextFormField)).height,
       lessThanOrEqualTo(50),
     );
-    expect(tester.getSize(find.byType(FilledButton)).height, 36);
+    expect(find.byType(FilledButton), findsNothing);
+    expect(find.byTooltip('Ask Floe'), findsOneWidget);
     await tester.enterText(find.byType(TextFormField), 'Hello Floe');
-    await tester.tap(find.text('Ask Floe'));
+    await tester.tap(find.byTooltip('Ask Floe'));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(gateway.turns.single.text, 'Hello Floe');

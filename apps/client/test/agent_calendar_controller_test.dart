@@ -73,7 +73,7 @@ void main() {
       find.byType(TextFormField),
       'What does the rest of my day look like?',
     );
-    await tester.tap(find.text('Ask Floe'));
+    await tester.tap(find.byTooltip('Ask Floe'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
