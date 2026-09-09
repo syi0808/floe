@@ -20,7 +20,9 @@ mod calendar_sessions;
 mod expert_actions;
 mod keyring;
 mod registry;
+mod session_archive;
 pub use keyring::KeyringVaultKeys;
+pub use session_archive::*;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
 
@@ -134,6 +136,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
+        vault.initialize_session_archive().await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -205,6 +208,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(unavailable)?;
+        vault.initialize_session_archive().await?;
         vault.expert_registry().await?;
         Ok(vault)
     }

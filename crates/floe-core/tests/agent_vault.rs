@@ -83,6 +83,87 @@ fn assert_no_plaintext(directory: &Path, markers: &[&str]) {
 }
 
 #[tokio::test]
+async fn session_archive_search_compaction_and_recovery_survive_reopen() {
+    let root = private_root();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let archived_turn = Uuid::new_v4();
+    let retained_turn = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id: archived_turn,
+            text: "제주 워케이션 숙소를 찾아줘".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: archived_turn,
+            text: "조용한 숙소를 우선할게요.".into(),
+        },
+        AgentMessage::User {
+            turn_id: retained_turn,
+            text: "다음 주 일정도 확인해줘".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: retained_turn,
+            text: "일정을 확인했어요.".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 0).await.unwrap();
+
+    let live_hits = vault.search_sessions("워케이션 숙소", 10).await.unwrap();
+    assert_eq!(live_hits.len(), 1);
+    assert_eq!(live_hits[0].session_id, session.id);
+    assert!(live_hits[0].recovery.is_none());
+
+    let compacted = vault
+        .compact_session(
+            session.id,
+            1,
+            archived_turn,
+            "사용자는 제주 워케이션에서 조용한 숙소를 원했다.".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(compacted.session.revision, 2);
+    assert_eq!(compacted.session.messages.len(), 3);
+    assert!(matches!(
+        &compacted.session.messages[0],
+        AgentMessage::Compaction { recovery, .. } if recovery == &compacted.recovery
+    ));
+    assert_eq!(
+        vault.recover_session(&compacted.recovery).await.unwrap(),
+        session
+    );
+    assert_eq!(
+        vault
+            .compact_session(session.id, 1, retained_turn, "stale compaction".into(),)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    drop(vault);
+    let vault = EncryptedAgentVault::open(root.path(), person, keys)
+        .await
+        .unwrap();
+    let recovered = vault.recover_session(&compacted.recovery).await.unwrap();
+    assert_eq!(recovered, session);
+    let archived_hits = vault.search_sessions("제주 워케이션", 10).await.unwrap();
+    assert!(archived_hits.iter().any(|hit| {
+        hit.recovery.as_ref() == Some(&compacted.recovery)
+            && hit.session_revision == compacted.recovery.source_revision
+    }));
+    assert_eq!(
+        vault.load(person, session.id).await.unwrap(),
+        compacted.session
+    );
+}
+
+#[tokio::test]
 async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen() {
     let root = private_root();
     let person = PersonId::new();

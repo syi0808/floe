@@ -179,6 +179,11 @@ pub struct AgentContinuation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentMessage {
+    Compaction {
+        turn_id: Uuid,
+        summary: String,
+        recovery: SessionRecoveryPointer,
+    },
     Preamble {
         turn_id: Uuid,
         text: String,
@@ -207,13 +212,23 @@ pub enum AgentMessage {
 impl AgentMessage {
     pub fn turn_id(&self) -> Uuid {
         match self {
-            Self::Preamble { turn_id, .. }
+            Self::Compaction { turn_id, .. }
+            | Self::Preamble { turn_id, .. }
             | Self::User { turn_id, .. }
             | Self::Assistant { turn_id, .. }
             | Self::Capability { turn_id, .. }
             | Self::Delegation { turn_id, .. } => *turn_id,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRecoveryPointer {
+    pub archive_id: Uuid,
+    pub source_revision: u64,
+    pub through_turn_id: Uuid,
+    pub archived_message_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -568,6 +583,10 @@ pub struct EvidenceManifestEntry {
 
 fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde_json::Value> {
     match message {
+        AgentMessage::Compaction { summary, .. } => vec![serde_json::json!({
+            "role": "assistant",
+            "content": summary,
+        })],
         AgentMessage::User { text, .. } => vec![serde_json::json!({
             "role": "user",
             "content": text,
@@ -716,5 +735,32 @@ impl ModelResponse {
                 Ok(replay)
             })
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compaction_projects_only_the_summary_to_the_model() {
+        let message = AgentMessage::Compaction {
+            turn_id: Uuid::new_v4(),
+            summary: "Earlier conversation summary".into(),
+            recovery: SessionRecoveryPointer {
+                archive_id: Uuid::new_v4(),
+                source_revision: 4,
+                through_turn_id: Uuid::new_v4(),
+                archived_message_count: 6,
+            },
+        };
+
+        assert_eq!(
+            model_messages(&message, false),
+            vec![serde_json::json!({
+                "role": "assistant",
+                "content": "Earlier conversation summary",
+            })]
+        );
     }
 }

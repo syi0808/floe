@@ -1,8 +1,26 @@
 # Floe Progress
 
-> Last updated: 2026-09-09
+> Last updated: 2026-09-10
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
+
+### S5 encrypted Session Archive foundation — 2026-09-10
+
+- Added Person-vault-local conversation search across live and compacted sessions.
+  Search indexes remain inside the existing encrypted Turso database and reject empty,
+  oversized and over-limit queries.
+- Added turn-boundary compaction with optimistic revision checks. The active session
+  keeps a typed summary and recovery pointer while the exact pre-compaction session,
+  including ordered messages and capability/delegation records, remains immutable.
+- Recovery and search continue after vault reopen; active turns, stale revisions and
+  missing cutoffs fail without partially changing the session or archive.
+- Focused `floe-agent`, encrypted-vault and full workspace tests pass. Workspace
+  `cargo check` and formatting pass; warnings-denied Clippy remains blocked by
+  pre-existing warnings in the Agent/Core runtime and journal.
+- This is foundation evidence only. Automatic/model-generated compaction, ranked FTS,
+  archive UI/FFI, deletion propagation and Memory/Playbook learning remain. S5 stays
+  Planned at 0/5 because S4 is not Accepted.
+  [Evidence and limits](docs/validation/s5-session-archive-foundation.md).
 
 ### Schedule time context and compact Markdown — 2026-09-09
 
@@ -102,7 +120,7 @@ verified criteria, not estimated implementation percentages.
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
-| S5 — Memory/self-improvement | Planned | None | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
+| S5 — Memory/self-improvement | Planned; foundation started | Encrypted session search, compaction and exact recovery fixture | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
 | S8 — Cross-device/server | Planned | None | 0/4 | S7 Accepted; sync/security PoCs | Same result on two devices |
