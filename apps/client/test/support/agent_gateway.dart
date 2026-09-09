@@ -9,6 +9,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   bool failLoad = false;
   bool failPoll = false;
   String? responseFailure;
+  bool omitSessionOnFailure = false;
   String? capabilityOutput;
   int begins = 0;
   int stops = 0;
@@ -185,7 +186,9 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
     'next_sequence': _events.length,
     'events': _events.skip(afterSequence).toList(),
     'done': _done,
-    'session': _done ? saved : null,
-    'failure': null,
+    'session': _done && !(omitSessionOnFailure && responseFailure != null)
+        ? saved
+        : null,
+    'failure': _done && omitSessionOnFailure ? responseFailure : null,
   });
 }

@@ -1211,7 +1211,12 @@ final class AgentController extends ChangeNotifier {
     _clearProposals();
     failure = reason;
     needsReload = true;
-    if (usesVault) {
+    if (usesVault &&
+        const {
+          'vault_unavailable',
+          'storage_unavailable',
+          'interrupted',
+        }.contains(reason)) {
       registry = null;
       registryLoaded = false;
       calendarExperts = null;

@@ -114,6 +114,33 @@ void main() {
     });
   }
 
+  testWidgets('vault-backed model failure is not shown as a storage failure', (
+    tester,
+  ) async {
+    final gateway = TestVaultGateway()
+      ..responseFailure = 'server_model_invalid_output'
+      ..omitSessionOnFailure = true;
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    final run = controller.send(AgentFixturePrompt.today);
+    await tester.pump(const Duration(milliseconds: 100));
+    await run;
+
+    await tester.pumpWidget(
+      app(AgentPanel(controller: controller, onClose: () {})),
+    );
+
+    expect(
+      find.text(
+        'The server model returned a response that Floe could not validate. Check the server trace and model configuration.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('couldn’t access secure storage'), findsNothing);
+    expect(find.text('Reload conversation'), findsOneWidget);
+  });
+
   for (final width in [1280.0, 390.0]) {
     testWidgets(
       'Today opens one user-invoked assistant surface at width $width',

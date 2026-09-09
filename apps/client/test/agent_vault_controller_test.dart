@@ -87,6 +87,26 @@ void main() {
     },
   );
 
+  test(
+    'model failure keeps the unlocked vault and confirmed messages',
+    () async {
+      final gateway = TestVaultGateway()
+        ..responseFailure = 'server_model_invalid_output'
+        ..omitSessionOnFailure = true;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+
+      await controller.send(AgentFixturePrompt.today);
+
+      expect(controller.failure, 'server_model_invalid_output');
+      expect(controller.needsReload, isTrue);
+      expect(controller.vaultState, AgentVaultState.ready);
+      expect(controller.session, isNotNull);
+      expect(controller.messages, isNotEmpty);
+    },
+  );
+
   test('closing during unlock seals delayed loaded messages', () async {
     final gateway = TestVaultGateway()..resumeGate = Completer<void>();
     final controller = AgentController(gateway: gateway, personId: 'test');

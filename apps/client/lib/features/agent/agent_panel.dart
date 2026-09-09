@@ -432,10 +432,9 @@ class _AgentPanelState extends State<AgentPanel> {
         _ => strings.agentStorageUnavailable,
       };
     }
-    if (controller.needsReload) return strings.agentReloadNeeded;
     if (controller.needsRecovery) return strings.agentInterrupted;
     if (controller.canContinue) return strings.agentConnectedSoftStop;
-    return switch (controller.failure) {
+    final failure = switch (controller.failure) {
       null => null,
       'cancelled' => strings.agentStopped,
       'interrupted' => strings.agentRecovered,
@@ -466,6 +465,9 @@ class _AgentPanelState extends State<AgentPanel> {
             : strings.agentConversationBudget,
       _ => strings.agentFailure,
     };
+    if (failure != null) return failure;
+    if (controller.needsReload) return strings.agentReloadNeeded;
+    return null;
   }
 }
 

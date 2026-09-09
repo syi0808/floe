@@ -141,7 +141,19 @@ impl Worker {
                                 progress.proposal = proposal;
                             }
                             Err(failure) => {
-                                progress.state = Some(AgentVaultStateDto::Unavailable);
+                                progress.state = Some(
+                                    if matches!(
+                                        failure,
+                                        AgentFailure::VaultUnavailable | AgentFailure::Interrupted
+                                    ) || !vault
+                                        .as_ref()
+                                        .is_some_and(|(person, _)| *person == job.person)
+                                    {
+                                        AgentVaultStateDto::Unavailable
+                                    } else {
+                                        AgentVaultStateDto::Ready
+                                    },
+                                );
                                 progress.failure = Some(failure);
                             }
                         }
@@ -962,6 +974,7 @@ mod tests {
         ] {
             let result = perform(&worker, person, AgentVaultActionDto::Session { operation });
             assert_eq!(result.failure, Some(AgentFailure::PolicyDenied));
+            assert_eq!(result.state, Some(AgentVaultStateDto::Ready));
             assert!(result.session.is_none());
             assert!(result.events.is_empty());
         }
