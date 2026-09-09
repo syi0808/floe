@@ -177,6 +177,7 @@ impl ModelRunner for Model<'_> {
                 }
             };
             return Ok(ModelResponse {
+                replay: None,
                 schema_version: 1,
                 step,
                 used_tokens: 10,
@@ -194,6 +195,7 @@ impl ModelRunner for Model<'_> {
             std::future::pending::<()>().await;
         }
         Ok(ModelResponse {
+            replay: None,
             schema_version: 1,
             step: self
                 .steps

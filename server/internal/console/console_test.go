@@ -28,6 +28,8 @@ func (runtime *fakeAuthRuntime) Action(context.Context, string) (any, error) {
 
 func (runtime *fakeAuthRuntime) Ready() bool { return runtime.ready }
 
+func (runtime *fakeAuthRuntime) ReplayIdentity() string { return "fixture-account" }
+
 func (*fakeAuthRuntime) Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error) {
 	return `{"ok":true}`, nil
 }

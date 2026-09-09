@@ -46,6 +46,32 @@ func fixtureIDToken(account string) string {
 	return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
 
+func TestReplayAccountBindingIsCheckedAgainstTheDispatchedCredential(test *testing.T) {
+	runtime := New(&memoryStore{values: map[string]string{}})
+	defer runtime.Close()
+	if err := runtime.save(&tokenBundle{
+		AccessToken: "access", RefreshToken: "refresh", AccountID: "new-account",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		test.Fatal(err)
+	}
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		writer.WriteHeader(500)
+	}))
+	defer upstream.Close()
+	runtime.endpoint = upstream.URL
+	runtime.client = upstream.Client()
+	if runtime.ReplayIdentity() != "new-account" {
+		test.Fatal("missing account binding")
+	}
+	_, err := runtime.Generate(WithAccountIdentity(context.Background(), "old-account"), "model", "", "instructions", json.RawMessage(`{"messages":[],"tools":[]}`), nil)
+	if err == nil || calls != 0 {
+		test.Fatal("account-switched replay reached provider")
+	}
+}
+
 func TestDirectOAuthLoginStoresTokensAndLogoutDeletesThem(test *testing.T) {
 	store := &memoryStore{values: map[string]string{}}
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

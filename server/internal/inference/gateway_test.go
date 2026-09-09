@@ -21,6 +21,8 @@ type fixtureCodex struct{ calls atomic.Int32 }
 
 func (client *fixtureCodex) Ready() bool { return true }
 
+func (client *fixtureCodex) ReplayIdentity() string { return "fixture-account" }
+
 func (client *fixtureCodex) Generate(_ context.Context, model, effort, instructions string, input, schema json.RawMessage) (string, error) {
 	client.calls.Add(1)
 	if model != "fixture-model" || effort != "high" || instructions == "" || !json.Valid(input) || !json.Valid(schema) {

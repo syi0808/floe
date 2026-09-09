@@ -402,6 +402,20 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 emit,
             );
             let request = ModelRequest {
+                replay: session
+                    .capability_executions
+                    .iter()
+                    .filter(|execution| {
+                        execution.turn_id == turn_id
+                            && execution.state == CapabilityExecutionState::Settled
+                    })
+                    .filter_map(|execution| {
+                        execution.replay.clone().map(|replay| ModelReplay {
+                            call_id: execution.call_id,
+                            replay,
+                        })
+                    })
+                    .collect(),
                 schema_version: AGENT_VERSION,
                 system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
                 person_id: session.person_id,
@@ -487,6 +501,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         capability_id: capability_id.clone(),
                         input: input.clone(),
                         state: CapabilityExecutionState::Started,
+                        replay: response.replay.clone(),
                     });
                     if encoded_len(session)? > budget.max_session_bytes.saturating_sub(4096) {
                         session.capability_executions.pop();
@@ -552,6 +567,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if completed {
                 session.active_turn = None;
                 session.last_outcome = Some(AgentOutcome::Completed);
+                for execution in &mut session.capability_executions {
+                    execution.replay = None;
+                }
             }
             if let AgentMessage::Capability { call_id, .. } = &message {
                 if let Some(execution) = session.capability_executions.last_mut() {

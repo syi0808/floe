@@ -883,6 +883,7 @@ impl ModelRunner for ScheduleModel {
         };
         self.requests.lock().unwrap().push(request);
         Ok(ModelResponse {
+            replay: None,
             schema_version: AGENT_VERSION,
             step: if has_capability && !self.skip_tool && call <= 3 {
                 ModelStep::Call {

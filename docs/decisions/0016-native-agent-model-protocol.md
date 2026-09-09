@@ -1,7 +1,7 @@
 # ADR 0016: Native agent model protocol and shared correction boundary
 
 - Date: 2026-09-09
-- Status: accepted; native transport and v1 contract consolidation implemented
+- Status: accepted; native transport, v1 contracts and durable Manager replay implemented
 - Amends: ADR 0011 and the model transport portion of ADR 0015
 
 ## Decision
@@ -35,8 +35,12 @@ and reject multiple returned calls before any execution. Plain answer text and t
 calls are distinct. Text accompanying a tool call is not a final user answer.
 Codex output is accepted only on terminal response.completed, never output_text.done.
 Opaque Codex output items, including encrypted reasoning and assistant phase, and
-provider call IDs are retained in bounded per-turn adapter memory for subsequent
-calls. They are not displayed or written into content-free gateway audit records.
+provider call IDs are returned as typed replay metadata rather than cached in a
+model adapter. Manager persists accepted call replay alongside encrypted execution
+intent, keyed by host call ID. Continuation reconstructs it from settled executions
+in the current turn, even with a new runner. Expert carries the same typed metadata
+within its isolated invocation; its internal transcript is not durable yet.
+Replay is not displayed or written into content-free gateway audit records.
 
 ## Recovery
 
@@ -66,15 +70,34 @@ These records are bounded by the existing session size budget and are not model
 context or gateway audit content. Expert-internal read attempts still need to join
 the shared durable ledger in a later increment.
 
+## Replay isolation and retention
+
+The gateway provides an opaque HMAC route fingerprint covering provider, endpoint,
+model, reasoning effort, credential, purpose and Codex account identity. It rejects
+a different fingerprint before provider dispatch. Codex also checks the bound
+account against the actual credential selected for the outgoing request, closing
+the account-switch gap between gateway routing and dispatch. Rust checks gateway address,
+purpose and transfer placement before sending replay. Gateway identity rotation
+(including a console restart with a new internal token) deliberately invalidates
+old fingerprints: start a fresh turn instead of silently transferring or downgrading
+provider state. This is not a promise of arbitrary provider-session resumability.
+
+Codex replay must contain exactly the recorded function call with matching ID,
+name and JSON arguments. Assistant phase and reasoning items retain their order.
+Capability aliases use a specified FNV-1a mapping with collision checks, not Rust's
+implementation-dependent default hasher. Rejected model attempts never commit
+their replay. Session and gateway input limits bound retained bytes; successful
+turn completion removes opaque replay while preserving semantic results and the
+execution ledger. Interrupted work is never automatically replayed.
+
 ## Remaining migration work
 
 This increment is not the entire agent-runtime redesign:
 
-- Persist provider replay metadata in encrypted sessions with schema migration,
-  route identity and retention rules. Current opaque replay memory does not survive
-  runner recreation; old sessions retain their existing semantic transcript.
-- Introduce ordered multi-item ModelResponse and extend durable pre-execution
-  records into Expert-internal reads, then support multiple independent read calls without discarding preambles.
+- Extend encrypted replay and execution records into Expert-internal reads; define
+  a durable gateway replay identity if continuation across gateway restart is needed.
+- Introduce ordered multi-item ModelResponse, then support multiple independent
+  read calls without discarding preambles.
 - Unify the remaining Manager/Expert loop mechanics without merging their contexts
   or authority; aggregate child usage into the parent ledger.
 - Expose model-attempt IDs, validation stages, correction events and settled outcomes
@@ -91,7 +114,8 @@ Codex OAuth wire reuse remains experimental as described in ADR 0015.
 Offline tests cover native request projection, plain answers, call normalization,
 malformed input rejection, terminal stream completion, opaque replay preservation,
 one correction attempt, argument schema validation, preservation of completed tool
-results and existing authorization/cancellation behavior. Live Calendar/provider
+results, replay across session reload, encrypted WAL/checkpoint persistence,
+route/account-switch rejection and existing authorization/cancellation behavior. Live Calendar/provider
 acceptance is a separate gate, not implied by fixture tests.
 
 ## References

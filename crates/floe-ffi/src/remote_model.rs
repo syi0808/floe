@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
@@ -14,7 +12,6 @@ use serde_json::json;
 pub struct ServerModelRunner {
     route: AgentRemoteRouteDto,
     placement: ModelPlacement,
-    replay: Mutex<HashMap<uuid::Uuid, Vec<(serde_json::Value, String)>>>,
 }
 
 impl ServerModelRunner {
@@ -41,11 +38,7 @@ impl ServerModelRunner {
         } else {
             ModelPlacement::DeviceLocal
         };
-        Ok(Self {
-            route,
-            placement,
-            replay: Mutex::new(HashMap::new()),
-        })
+        Ok(Self { route, placement })
     }
 }
 
@@ -62,6 +55,7 @@ struct GenerateResponse {
 struct RoutingResponse {
     placement: String,
     external_transfer: bool,
+    replay_source: String,
 }
 
 #[derive(Deserialize)]
@@ -76,10 +70,12 @@ struct AgentOutput {
 }
 
 fn tool_name(identifier: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    identifier.hash(&mut hash);
-    format!("floe_{:016x}", hash.finish())
+    let hash = identifier
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, value| {
+            (hash ^ u64::from(value)).wrapping_mul(0x100000001b3)
+        });
+    format!("floe_{hash:016x}")
 }
 
 fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
@@ -131,6 +127,56 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
     Ok(json!({"messages": messages, "tools": tools}))
 }
 
+fn restore_replay(
+    replay: &[floe_agent::ModelReplay],
+    route: &AgentRemoteRouteDto,
+    input: &mut serde_json::Value,
+) -> Result<(), AgentFailure> {
+    let mut seen = std::collections::HashSet::new();
+    let mut source = None;
+    for saved in replay {
+        let replay = &saved.replay;
+        if replay.gateway != route.base_url
+            || replay.purpose != route.purpose
+            || replay.external != route.external
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if !seen.insert(saved.call_id)
+            || source.as_ref().is_some_and(|value| value != &replay.source)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        source = Some(replay.source.clone());
+        let messages = input["messages"]
+            .as_array_mut()
+            .ok_or(AgentFailure::InvalidInput)?;
+        let local_id = saved.call_id.to_string();
+        let mut restored = false;
+        for index in 0..messages.len().saturating_sub(1) {
+            if messages[index]["tool_calls"][0]["id"] == local_id
+                && messages[index + 1]["role"] == "tool"
+                && messages[index + 1]["tool_call_id"] == local_id
+            {
+                if !replay.items.is_null() {
+                    messages[index]["provider_items"] = replay.items.clone();
+                }
+                messages[index]["tool_calls"][0]["id"] = json!(replay.provider_call_id);
+                messages[index + 1]["tool_call_id"] = json!(replay.provider_call_id);
+                restored = true;
+                break;
+            }
+        }
+        if !restored {
+            return Err(AgentFailure::InvalidInput);
+        }
+    }
+    if let Some(source) = source {
+        input["replay_source"] = json!(source);
+    }
+    Ok(())
+}
+
 fn decode_step(output: &str) -> Result<AgentOutput, AgentFailure> {
     let result: AgentOutput =
         serde_json::from_str(output).map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
@@ -180,30 +226,7 @@ impl ModelRunner for ServerModelRunner {
             .build()
             .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let mut input = model_input(&request)?;
-        {
-            let replay = self.replay.lock().map_err(|_| AgentFailure::Interrupted)?;
-            if let Some(items) = replay.get(&request.turn_id) {
-                let messages = input["messages"]
-                    .as_array_mut()
-                    .ok_or(AgentFailure::InvalidInput)?;
-                let mut index = 0;
-                let mut current_call_id = None;
-                for message in messages {
-                    if message["tool_calls"].is_array() {
-                        if let Some((raw, identifier)) = items.get(index) {
-                            message["provider_items"] = raw.clone();
-                            message["tool_calls"][0]["id"] = json!(identifier);
-                            current_call_id = Some(identifier.clone());
-                        }
-                        index += 1;
-                    } else if message["role"] == "tool" {
-                        if let Some(identifier) = current_call_id.take() {
-                            message["tool_call_id"] = json!(identifier);
-                        }
-                    }
-                }
-            }
-        }
+        restore_replay(&request.replay, &self.route, &mut input)?;
         let body = json!({
             "schema_version": 1,
             "purpose": self.route.purpose,
@@ -228,6 +251,7 @@ impl ModelRunner for ServerModelRunner {
             response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::ServerModelUnavailable })?,
         };
         match response.status() {
+            StatusCode::CONFLICT => return Err(AgentFailure::PolicyDenied),
             StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
             StatusCode::FORBIDDEN => return Err(AgentFailure::ConsentRequired),
             StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
@@ -284,30 +308,37 @@ impl ModelRunner for ServerModelRunner {
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        if matches!(step, ModelStep::Call { .. }) {
-            if let Some(items) = output.replay {
-                if output.call_id.is_empty() {
-                    return Err(AgentFailure::ServerModelInvalidOutput);
-                }
-                let mut replay = self.replay.lock().map_err(|_| AgentFailure::Interrupted)?;
-                if !replay.contains_key(&request.turn_id) && replay.len() >= 32 {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                let saved = replay.entry(request.turn_id).or_default();
-                if saved.len() >= 100 {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                let completed = request.messages.iter().filter(|message| matches!(message, floe_agent::AgentMessage::Capability { turn_id, .. } if *turn_id == request.turn_id)).count();
-                saved.truncate(completed);
-                saved.push((items, output.call_id));
-            }
+        let replay = if matches!(step, ModelStep::Call { .. }) {
+            output
+                .replay
+                .or_else(|| (!output.call_id.is_empty()).then_some(serde_json::Value::Null))
+                .map(|items| {
+                    if output.call_id.is_empty()
+                        || output.call_id.len() > 128
+                        || response.routing.replay_source.len() != 64
+                        || !response
+                            .routing
+                            .replay_source
+                            .bytes()
+                            .all(|value| value.is_ascii_hexdigit())
+                    {
+                        return Err(AgentFailure::ServerModelInvalidOutput);
+                    }
+                    Ok(floe_agent::ProviderReplay {
+                        gateway: self.route.base_url.clone(),
+                        purpose: self.route.purpose.clone(),
+                        external: self.route.external,
+                        source: response.routing.replay_source,
+                        provider_call_id: output.call_id,
+                        items,
+                    })
+                })
+                .transpose()?
         } else {
-            self.replay
-                .lock()
-                .map_err(|_| AgentFailure::Interrupted)?
-                .remove(&request.turn_id);
-        }
+            None
+        };
         Ok(ModelResponse {
+            replay,
             schema_version: AGENT_VERSION,
             step,
             used_tokens: output.used_tokens.max(1),
@@ -328,6 +359,53 @@ mod tests {
             external: true,
             allow_external: false,
         }
+    }
+
+    #[test]
+    fn replay_restores_original_ids_without_runner_memory_and_rejects_foreign_routes() {
+        let route = route();
+        let call_id = uuid::Uuid::new_v4();
+        let replay = floe_agent::ModelReplay {
+            call_id,
+            replay: floe_agent::ProviderReplay {
+                gateway: route.base_url.clone(),
+                purpose: route.purpose.clone(),
+                external: route.external,
+                source: "a".repeat(64),
+                provider_call_id: "original".into(),
+                items: json!([{"type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"original","name":"read","arguments":"{}"}]),
+            },
+        };
+        let original = json!({"messages":[
+            {"role":"assistant","tool_calls":[{"id":call_id.to_string(),"function":{"name":"read","arguments":"{}"}}]},
+            {"role":"tool","tool_call_id":call_id.to_string(),"content":"observed"}
+        ]});
+        let encoded = serde_json::to_string(&replay.replay).unwrap();
+        let reloaded = floe_agent::ModelReplay {
+            call_id,
+            replay: serde_json::from_str(&encoded).unwrap(),
+        };
+        let mut restored = original.clone();
+        restore_replay(&[reloaded], &route, &mut restored).unwrap();
+        assert_eq!(restored["messages"][0]["tool_calls"][0]["id"], "original");
+        assert_eq!(restored["messages"][1]["tool_call_id"], "original");
+        assert_eq!(
+            restored["messages"][0]["provider_items"][0]["encrypted_content"],
+            "opaque"
+        );
+        assert_eq!(restored["replay_source"], "a".repeat(64));
+        let mut foreign = route.clone();
+        foreign.base_url = "http://127.0.0.1:9431".into();
+        assert_eq!(
+            restore_replay(&[replay.clone()], &foreign, &mut original.clone()),
+            Err(AgentFailure::PolicyDenied)
+        );
+        let mut orphan = replay;
+        orphan.call_id = uuid::Uuid::new_v4();
+        assert_eq!(
+            restore_replay(&[orphan], &route, &mut original.clone()),
+            Err(AgentFailure::InvalidInput)
+        );
     }
 
     #[test]
@@ -364,5 +442,6 @@ mod tests {
         assert!(decode_step(r#"{"step":{"kind":"call","capability_id":"floe_read","input":"{}"},"used_tokens":12}"#).is_ok());
         assert!(decode_step(r#"{"step":{"kind":"call","capability_id":"floe_read","input":"null"},"used_tokens":12}"#).is_err());
         assert_ne!(tool_name("a.b"), tool_name("a_b"));
+        assert_eq!(tool_name("hello"), "floe_a430d84680aabd0b");
     }
 }

@@ -185,6 +185,7 @@ impl Model {
                     .into_iter()
                     .map(|step| {
                         Ok(ModelResponse {
+                            replay: None,
                             schema_version: AGENT_VERSION,
                             step,
                             used_tokens: 10,
@@ -265,6 +266,89 @@ struct DurableHost<'store> {
     store: &'store Store,
     calls: AtomicUsize,
     pending: bool,
+}
+
+#[tokio::test]
+async fn provider_replay_survives_session_reload_and_is_pruned_after_completion() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), call()]);
+    let replay = ProviderReplay {
+        gateway: "http://127.0.0.1:8431".into(),
+        purpose: "everyday_assistance".into(),
+        external: true,
+        source: "a".repeat(64),
+        provider_call_id: "original_call".into(),
+        items: serde_json::json!([{"type":"reasoning","encrypted_content":"opaque"}]),
+    };
+    {
+        let mut responses = model.responses.lock().unwrap();
+        let rejected = responses.front_mut().unwrap().as_mut().unwrap();
+        rejected.schema_version = 99;
+        let mut invalid_replay = replay.clone();
+        invalid_replay.provider_call_id = "rejected_call".into();
+        rejected.replay = Some(invalid_replay);
+        responses.back_mut().unwrap().as_mut().unwrap().replay = Some(replay.clone());
+    }
+    let host = Host::default();
+    let policy = policy();
+    let budget = AgentBudget {
+        max_iterations: 1,
+        ..AgentBudget::default()
+    };
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget,
+    };
+    let stopped = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+    assert!(stopped.continuation.is_some());
+    assert_eq!(model.calls(), 2);
+    assert!(model.requests.lock().unwrap()[1].replay.is_empty());
+    assert_eq!(
+        stopped.capability_executions[0].replay,
+        Some(replay.clone())
+    );
+    let restored = Store::new();
+    *restored.session.lock().unwrap() =
+        serde_json::from_str(&serde_json::to_string(&stopped).unwrap()).unwrap();
+    let next_model = Model::new(vec![answer()]);
+    let next_runtime = AgentRuntime {
+        store: &restored,
+        model: &next_model,
+        capabilities: &host,
+        policy: &policy,
+        budget,
+    };
+    let completed = next_runtime
+        .continue_turn(
+            stopped.person_id,
+            stopped.id,
+            stopped.revision,
+            context(),
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let requests = next_model.requests.lock().unwrap();
+    assert_eq!(requests[0].replay.len(), 1);
+    assert_eq!(
+        requests[0].replay[0].call_id,
+        stopped.capability_executions[0].call_id
+    );
+    assert_eq!(requests[0].replay[0].replay, replay);
+    assert!(
+        completed
+            .capability_executions
+            .iter()
+            .all(|execution| execution.replay.is_none())
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
 }
 
 impl CapabilityHost for DurableHost<'_> {
@@ -446,6 +530,7 @@ async fn tool_schema_validation_recovers_before_dispatch() {
     ]);
     let turn_id = Uuid::new_v4();
     let request = ModelRequest {
+        replay: vec![],
         schema_version: AGENT_VERSION,
         system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
         person_id: PersonId::new(),

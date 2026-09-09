@@ -2,6 +2,9 @@ package inference
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"floe/server/internal/codexauth"
@@ -9,8 +12,9 @@ import (
 )
 
 type AgentInput struct {
-	Messages []map[string]any `json:"messages"`
-	Tools    []map[string]any `json:"tools"`
+	ReplaySource string           `json:"replay_source,omitempty"`
+	Messages     []map[string]any `json:"messages"`
+	Tools        []map[string]any `json:"tools"`
 }
 
 func validAgentInput(raw json.RawMessage) bool {
@@ -37,6 +41,14 @@ func validAgentInput(raw json.RawMessage) bool {
 	pending := map[string]bool{}
 	seen := map[string]bool{}
 	for _, message := range input.Messages {
+		if items, exists := message["provider_items"]; exists {
+			if input.ReplaySource == "" || message["role"] != "assistant" {
+				return false
+			}
+			if _, ok := items.([]any); !ok {
+				return false
+			}
+		}
 		role, _ := message["role"].(string)
 		if role != "user" && role != "assistant" && role != "tool" {
 			return false
@@ -92,6 +104,13 @@ func validAgentInput(raw json.RawMessage) bool {
 		return false
 	}
 	return true
+}
+
+func (gateway *Gateway) replaySource(configured route, purpose, identity string) string {
+	encoded, _ := json.Marshal([]any{configured.provider.target, configured.effort, configured.provider.credential, purpose, identity})
+	digest := hmac.New(sha256.New, gateway.tokenHash[:])
+	_, _ = digest.Write(encoded)
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 type AgentOutput struct {
@@ -156,6 +175,7 @@ func normalizeAgentMessage(message map[string]any, usage uint64) (string, error)
 
 func (adapter *provider) agent(ctx context.Context, request Request, effort string) (string, error) {
 	if adapter.target.Provider == "codex_oauth" {
+		ctx = codexauth.WithAccountIdentity(ctx, request.ProviderIdentity)
 		output, err := adapter.codex.Generate(ctx, adapter.target.Model, effort, request.Instructions, request.Input, nil)
 		if err != nil {
 			if errors.Is(err, codexauth.ErrInvalidOutput) {

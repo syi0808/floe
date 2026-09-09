@@ -34,19 +34,21 @@ type Target struct {
 
 type CodexClient interface {
 	Ready() bool
+	ReplayIdentity() string
 	Generate(context.Context, string, string, string, json.RawMessage, json.RawMessage) (string, error)
 }
 
 type Request struct {
-	Agent         bool            `json:"-"`
-	SchemaVersion int             `json:"schema_version"`
-	Purpose       string          `json:"purpose,omitempty"`
-	DataClasses   []string        `json:"data_classes,omitempty"`
-	AllowExternal bool            `json:"allow_external"`
-	Instructions  string          `json:"instructions"`
-	Input         json.RawMessage `json:"input"`
-	OutputSchema  json.RawMessage `json:"output_schema,omitempty"`
-	ReplayOf      string          `json:"replay_of,omitempty"`
+	ProviderIdentity string          `json:"-"`
+	Agent            bool            `json:"-"`
+	SchemaVersion    int             `json:"schema_version"`
+	Purpose          string          `json:"purpose,omitempty"`
+	DataClasses      []string        `json:"data_classes,omitempty"`
+	AllowExternal    bool            `json:"allow_external"`
+	Instructions     string          `json:"instructions"`
+	Input            json.RawMessage `json:"input"`
+	OutputSchema     json.RawMessage `json:"output_schema,omitempty"`
+	ReplayOf         string          `json:"replay_of,omitempty"`
 }
 
 type Gateway struct {
@@ -190,6 +192,22 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		}
 	}
 	adapter := configured.provider
+	replaySource := ""
+	if input.Agent {
+		if adapter.codex != nil {
+			input.ProviderIdentity = adapter.codex.ReplayIdentity()
+		}
+		replaySource = gateway.replaySource(configured, input.Purpose, input.ProviderIdentity)
+		var agentInput AgentInput
+		if json.Unmarshal(input.Input, &agentInput) != nil {
+			writeError(writer, http.StatusBadRequest, "validation")
+			return
+		}
+		if agentInput.ReplaySource != "" && agentInput.ReplaySource != replaySource {
+			writeError(writer, http.StatusConflict, "replay_source_mismatch")
+			return
+		}
+	}
 	if adapter.external && !input.AllowExternal {
 		writeError(writer, http.StatusForbidden, "external_transfer_denied")
 		return
@@ -225,7 +243,7 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		"schema_version": input.SchemaVersion,
 		"purpose":        input.Purpose,
 		"output":         output,
-		"routing":        map[string]any{"placement": placement, "external_transfer": adapter.external},
+		"routing":        map[string]any{"placement": placement, "external_transfer": adapter.external, "replay_source": replaySource},
 		"trace_id":       traceID,
 	})
 }

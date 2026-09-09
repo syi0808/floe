@@ -38,3 +38,17 @@ func TestNativeReplayPreservesReasoningAndCallIdentity(test *testing.T) {
 		test.Fatal("lost replay data")
 	}
 }
+
+func TestNativeReplayCannotReplaceTheRecordedCall(test *testing.T) {
+	for _, call := range []string{
+		`{"type":"function_call","call_id":"wrong","name":"read","arguments":"{}"}`,
+		`{"type":"function_call","call_id":"original","name":"write","arguments":"{}"}`,
+		`{"type":"function_call","call_id":"original","name":"read","arguments":"{\"changed\":true}"}`,
+		`{"type":"reasoning"}`,
+	} {
+		raw := json.RawMessage(`{"messages":[{"role":"assistant","provider_items":[` + call + `],"tool_calls":[{"id":"original","function":{"name":"read","arguments":"{}"}}]}],"tools":[]}`)
+		if _, _, err := nativeInput(raw); err == nil {
+			test.Fatal("accepted mismatched replay", call)
+		}
+	}
+}

@@ -58,6 +58,7 @@ impl ModelRunner for Model {
             }
         };
         Ok(ModelResponse {
+            replay: None,
             schema_version: 1,
             step,
             used_tokens: 10,

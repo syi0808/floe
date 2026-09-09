@@ -88,6 +88,25 @@ pub struct CapabilityExecution {
     pub capability_id: String,
     pub input: String,
     pub state: CapabilityExecutionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ProviderReplay>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderReplay {
+    pub gateway: String,
+    pub purpose: String,
+    pub external: bool,
+    pub source: String,
+    pub provider_call_id: String,
+    pub items: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelReplay {
+    pub call_id: Uuid,
+    pub replay: ProviderReplay,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -317,6 +336,7 @@ pub trait CapabilityHost {
 
 #[derive(Clone)]
 pub struct ModelRequest {
+    pub replay: Vec<ModelReplay>,
     pub schema_version: u32,
     pub system_instructions: &'static str,
     pub person_id: PersonId,
@@ -421,6 +441,7 @@ pub enum ModelStep {
 }
 
 pub struct ModelResponse {
+    pub replay: Option<ProviderReplay>,
     pub schema_version: u32,
     pub step: ModelStep,
     pub used_tokens: u64,

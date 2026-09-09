@@ -428,7 +428,7 @@ impl ModelRunner for FixtureModel {
                 result: Ok(result), ..
             }) = request.messages.last()
             else {
-                return Ok(ModelResponse { schema_version: AGENT_VERSION,
+                return Ok(ModelResponse { replay: None, schema_version: AGENT_VERSION,
                     step: ModelStep::Answer { text: "The sample Schedule Expert is unavailable. No connected sources were read or changed.".into() },
                     used_tokens: 32, cost_micros: 0 });
             };
@@ -445,6 +445,7 @@ impl ModelRunner for FixtureModel {
             ModelStep::Answer { text: "Sample briefing: Design review is at 10:00. There is a free hour afterward. No connected Calendar, mail, health or location data was read.".into() }
         };
         Ok(ModelResponse {
+            replay: None,
             schema_version: AGENT_VERSION,
             step,
             used_tokens: 32,

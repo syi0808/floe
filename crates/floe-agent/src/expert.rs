@@ -405,6 +405,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
         turn_id,
         text: task,
     }];
+    let mut replay = vec![];
     let mut used_tokens = 0;
     let mut used_cost = 0;
     let mut expert_policy = policy.clone();
@@ -427,6 +428,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
             &expert_policy,
             invocation,
             &messages,
+            &replay,
             capabilities,
             used_tokens,
             used_cost,
@@ -457,9 +459,16 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                 }
                 let tool_insights = schedule_tool_result(view, insights, focus_minutes, &input)?;
                 tool_calls += 1;
+                let call_id = Uuid::new_v4();
+                if let Some(provider_replay) = response.replay {
+                    replay.push(crate::ModelReplay {
+                        call_id,
+                        replay: provider_replay,
+                    });
+                }
                 messages.push(AgentMessage::Capability {
                     turn_id,
-                    call_id: Uuid::new_v4(),
+                    call_id,
                     capability_id,
                     input,
                     result: Ok(serde_json::to_string(&tool_insights)
@@ -523,6 +532,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
     policy: &InferencePolicyDecision,
     invocation: &ExpertInvocation,
     messages: &[AgentMessage],
+    replay: &[crate::ModelReplay],
     capabilities: Vec<CapabilityDescriptor>,
     used_tokens: u64,
     used_cost: u64,
@@ -541,6 +551,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
     let response = crate::generate_with_recovery(
         model,
         ModelRequest {
+            replay: replay.to_vec(),
             schema_version: AGENT_VERSION,
             system_instructions: SCHEDULE_EXPERT_SYSTEM_INSTRUCTIONS,
             person_id: invocation.person_id,

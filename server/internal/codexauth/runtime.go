@@ -136,6 +136,14 @@ func (runtime *Runtime) save(value *tokenBundle) error {
 
 func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
 
+func (runtime *Runtime) ReplayIdentity() string {
+	tokens := runtime.load()
+	if tokens == nil {
+		return ""
+	}
+	return tokens.AccountID
+}
+
 func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) {
 	if action != "status" && action != "login" && action != "cancel" && action != "logout" {
 		return nil, unavailable
@@ -377,10 +385,19 @@ func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	return next, nil
 }
 
+type accountIdentityKey struct{}
+
+func WithAccountIdentity(ctx context.Context, identity string) context.Context {
+	return context.WithValue(ctx, accountIdentityKey{}, identity)
+}
+
 func (runtime *Runtime) Generate(ctx context.Context, model, reasoningEffort, instructions string, input, schema json.RawMessage) (string, error) {
 	credential, err := runtime.access(ctx)
 	if err != nil {
 		return "", err
+	}
+	if identity, supplied := ctx.Value(accountIdentityKey{}).(string); supplied && identity != credential.AccountID {
+		return "", unavailable
 	}
 	requestBody := map[string]any{
 		"model": model, "instructions": instructions,

@@ -219,6 +219,7 @@ async fn generate(
                     &request,
                 )?;
                 return Ok(ModelResponse {
+                    replay: None,
                     schema_version: AGENT_VERSION,
                     step,
                     used_tokens: CONTEXT_RESERVATION,
@@ -395,6 +396,7 @@ mod tests {
     fn request() -> ModelRequest {
         let turn_id = Uuid::new_v4();
         ModelRequest {
+            replay: vec![],
             schema_version: 1,
             system_instructions: AGENT_SYSTEM_INSTRUCTIONS,
             person_id: PersonId::new(),

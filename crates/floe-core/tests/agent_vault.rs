@@ -98,6 +98,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
         "synthetic-tool-input-7db83",
         "synthetic-tool-result-236b6",
         "synthetic-answer-111f4",
+        "synthetic-provider-replay-c914e",
     ];
     session.messages = vec![
         AgentMessage::User {
@@ -116,6 +117,24 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
             text: markers[3].into(),
         },
     ];
+    let AgentMessage::Capability { call_id, .. } = session.messages[1] else {
+        panic!("missing synthetic call")
+    };
+    session.capability_executions.push(CapabilityExecution {
+        turn_id: turn,
+        call_id,
+        capability_id: "fixture.read.v1".into(),
+        input: markers[1].into(),
+        state: CapabilityExecutionState::Settled,
+        replay: Some(ProviderReplay {
+            gateway: "http://127.0.0.1:8431".into(),
+            purpose: "everyday_assistance".into(),
+            external: true,
+            source: "a".repeat(64),
+            provider_call_id: "provider-original".into(),
+            items: serde_json::json!([{"type":"reasoning","encrypted_content":markers[4]}]),
+        }),
+    });
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
     vault.compare_and_swap(&session, 0).await.unwrap();
@@ -489,6 +508,7 @@ impl ModelRunner for LocalModel {
             self.keys.0.blocked.store(true, Ordering::SeqCst);
         }
         Ok(ModelResponse {
+            replay: None,
             schema_version: AGENT_VERSION,
             step: ModelStep::Answer {
                 text: "synthetic-private-answer".into(),

@@ -89,6 +89,39 @@ func TestAgentRejectsMalformedTranscriptBeforeProvider(test *testing.T) {
 	}
 }
 
+func TestReplaySourceRejectsRouteChangesBeforeProvider(test *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		_, _ = writer.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"Done"}}],"usage":{"total_tokens":1}}`))
+	}))
+	defer upstream.Close()
+	gateway := fixtureGateway(test, "openai_compatible", upstream.URL)
+	first := invokePath(gateway, "/v1/agent", agentRequest())
+	var response struct {
+		Routing struct {
+			Source string `json:"replay_source"`
+		} `json:"routing"`
+	}
+	if first.Code != 200 || json.Unmarshal(first.Body.Bytes(), &response) != nil || len(response.Routing.Source) != 64 {
+		test.Fatal(first.Body.String())
+	}
+	input := agentRequest()
+	var transcript map[string]any
+	_ = json.Unmarshal(input.Input, &transcript)
+	transcript["replay_source"] = response.Routing.Source
+	input.Input, _ = json.Marshal(transcript)
+	if replayed := invokePath(gateway, "/v1/agent", input); replayed.Code != 200 {
+		test.Fatal(replayed.Body.String())
+	}
+	configured := gateway.routes["high_effort"]
+	configured.effort = "changed"
+	gateway.routes["high_effort"] = configured
+	if rejected := invokePath(gateway, "/v1/agent", input); rejected.Code != 409 || calls != 2 {
+		test.Fatal("foreign replay reached provider", rejected.Body.String(), calls)
+	}
+}
+
 func TestAgentOutputValidation(test *testing.T) {
 	for _, raw := range []string{`{}`, `{"content":" "}`, `{"tool_calls":[{}]}`, `{"tool_calls":[{},{}]}`, `{"tool_calls":[{"function":{"name":"read","arguments":"null"}}]}`} {
 		var message map[string]any

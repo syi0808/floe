@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"reflect"
 	"strings"
 )
 
@@ -29,6 +30,19 @@ func nativeInput(raw json.RawMessage) ([]any, []any, error) {
 			if message["role"] != "assistant" {
 				return nil, nil, invalidOutput
 			}
+			calls, ok := message["tool_calls"].([]any)
+			if !ok || len(calls) != 1 {
+				return nil, nil, invalidOutput
+			}
+			call, ok := calls[0].(map[string]any)
+			if !ok {
+				return nil, nil, invalidOutput
+			}
+			function, ok := call["function"].(map[string]any)
+			if !ok {
+				return nil, nil, invalidOutput
+			}
+			callCount := 0
 			for _, value := range replay {
 				item, ok := value.(map[string]any)
 				if !ok {
@@ -38,7 +52,23 @@ func nativeInput(raw json.RawMessage) ([]any, []any, error) {
 				if kind != "reasoning" && kind != "function_call" && !(kind == "message" && item["role"] == "assistant") {
 					return nil, nil, invalidOutput
 				}
+				if kind == "function_call" {
+					callCount++
+					original, originalOK := item["arguments"].(string)
+					canonical, canonicalOK := function["arguments"].(string)
+					var originalValue, canonicalValue any
+					if item["call_id"] != call["id"] || item["name"] != function["name"] ||
+						!originalOK || !canonicalOK ||
+						json.Unmarshal([]byte(original), &originalValue) != nil ||
+						json.Unmarshal([]byte(canonical), &canonicalValue) != nil ||
+						!reflect.DeepEqual(originalValue, canonicalValue) {
+						return nil, nil, invalidOutput
+					}
+				}
 				items = append(items, item)
+			}
+			if callCount != 1 {
+				return nil, nil, invalidOutput
 			}
 			continue
 		}
