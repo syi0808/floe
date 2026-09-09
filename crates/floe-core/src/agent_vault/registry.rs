@@ -418,10 +418,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::Conflict);
             }
             let mut next = stored.clone();
-            if let Some(AgentMessage::Capability { turn_id, call_id, result: Ok(output), .. }) = session.messages.get(previous.messages.len()) {
-                if let Ok(receipt) = serde_json::from_str::<ExpertResult>(output) {
+            if let Some(AgentMessage::Delegation { turn_id, task }) = session.messages.get(previous.messages.len()) {
+                if let Some(output) = task.data_part(floe_agent::EXPERT_RESULT_MEDIA_TYPE) {
+                    let receipt: ExpertResult = serde_json::from_str(output).map_err(|_| AgentFailure::InvalidInput)?;
+                    let call_id = task.id;
                     if previous.active_turn != Some(*turn_id) || session.active_turn != previous.active_turn
-                        || receipt.invocation_id != *call_id || receipt.person_id != self.person_id
+                        || receipt.invocation_id != call_id || receipt.person_id != self.person_id
                         || !session.data_classes.contains(&receipt.data_class) {
                         return Err(AgentFailure::Conflict);
                     }
@@ -435,8 +437,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     self.update_registry(&transaction, expected_registry_revision, next.revision, self.registry_payload(&next)?).await?;
                     transaction.execute("INSERT INTO agent_expert_receipts VALUES (?, ?, ?, ?)",
                         (call_id.to_string(), session.id.to_string(), receipt.assignment_id.to_string(), integer(next.revision)?)).await.map_err(storage)?;
-                } else if staged.revision != expected_registry_revision {
-                    return Err(AgentFailure::InvalidInput);
                 }
             }
             after_registry_write.await?;

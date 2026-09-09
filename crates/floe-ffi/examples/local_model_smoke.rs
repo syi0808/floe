@@ -65,6 +65,7 @@ async fn main() -> std::process::ExitCode {
             text: "This is a fictional test, not my calendar. A fictional person has a meeting at 14:00 and a free hour at 11:00. Suggest a preparation time in one sentence, explicitly noting that this is synthetic data. Do not call a tool.".into(),
         }],
         capabilities: vec![],
+        active_agents: vec![],
         remaining_tokens: 4096,
         remaining_cost_micros: 0,
         max_output_bytes: 16384,

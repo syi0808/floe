@@ -135,10 +135,9 @@ impl Default for Model<'_> {
     fn default() -> Self {
         Self {
             steps: Mutex::new(VecDeque::from([
-                ModelStep::Call {
-                    capability_id: "expert.schedule".into(),
-                    input: serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 })
-                        .unwrap(),
+                ModelStep::Delegate {
+                    agent_id: "schedule".into(),
+                    message: "Find an available 60-minute window and return a typed proposal for the best option.".into(),
                 },
                 ModelStep::Answer {
                     text: "A synthetic focus window is available; review the proposal.".into(),
@@ -165,15 +164,45 @@ impl ModelRunner for Model<'_> {
                 .messages
                 .iter()
                 .any(|message| matches!(message, AgentMessage::Capability { .. }));
-            self.expert_requests.lock().unwrap().push(request);
-            let step = if has_tool_result {
+            self.expert_requests.lock().unwrap().push(request.clone());
+            let tool_results = request
+                .messages
+                .iter()
+                .filter(|message| matches!(message, AgentMessage::Capability { .. }))
+                .count();
+            let step = if tool_results >= 2 {
                 ModelStep::Answer {
                     text: "One commitment is followed by an available focus window.".into(),
+                }
+            } else if tool_results == 1 {
+                let insights = request
+                    .messages
+                    .iter()
+                    .find_map(|message| match message {
+                        AgentMessage::Capability {
+                            result: Ok(output), ..
+                        } => serde_json::from_str::<Vec<ExpertInsight>>(output).ok(),
+                        _ => None,
+                    })
+                    .ok_or(AgentFailure::InvalidModelOutput)?;
+                let (starts_at_unix_ms, ends_at_unix_ms) = insights
+                    .iter()
+                    .find_map(|insight| match insight {
+                        ExpertInsight::FocusWindow {
+                            starts_at_unix_ms,
+                            ends_at_unix_ms,
+                        } => Some((*starts_at_unix_ms, *ends_at_unix_ms)),
+                        _ => None,
+                    })
+                    .ok_or(AgentFailure::InvalidModelOutput)?;
+                ModelStep::Call {
+                    capability_id: "schedule.propose_window".into(),
+                    input: serde_json::json!({"starts_at_unix_ms": starts_at_unix_ms, "ends_at_unix_ms": ends_at_unix_ms}).to_string(),
                 }
             } else {
                 ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
-                    input: "{}".into(),
+                    input: serde_json::json!({"minimum_minutes": 60}).to_string(),
                 }
             };
             return Ok(ModelResponse {
@@ -337,6 +366,7 @@ impl Fixture {
                         reference: reference.clone(),
                         publisher: "floe".into(),
                         implementation,
+                        expert_metadata: None,
                         required_tools,
                         state_schema_version: 1,
                     },
@@ -594,17 +624,17 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             .save_expert_registry(revision, &registry.snapshot())
             .await
             .unwrap();
-        let descriptor = registry
-            .expert_descriptor(
+        let card = registry
+            .expert_card(
                 fixture.session.person_id,
                 fixture.assignment,
                 registry.revision(),
                 fixture.grant.handle,
             )
             .unwrap();
-        *model.steps.lock().unwrap().front_mut().unwrap() = ModelStep::Call {
-            capability_id: descriptor.id,
-            input: serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 }).unwrap(),
+        *model.steps.lock().unwrap().front_mut().unwrap() = ModelStep::Delegate {
+            agent_id: card.id,
+            message: "Find an available 60-minute window and return a typed proposal.".into(),
         };
         let result = fixture
             .core
@@ -660,17 +690,22 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         .unwrap();
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(result.session.revision, 16);
-    assert_eq!(result.session.usage.tokens, 40);
-    assert_eq!(result.session.usage.model_attempts, 4);
-    assert_eq!(result.session.model_attempts.len(), 4);
+    assert_eq!(result.session.revision, 20);
+    assert_eq!(result.session.usage.tokens, 50);
+    assert_eq!(result.session.usage.model_attempts, 5);
+    assert_eq!(result.session.model_attempts.len(), 5);
     let executions = &result.session.capability_executions;
     assert_eq!(executions.len(), 3);
-    assert_eq!(executions[0].scope_id, result.session.id);
-    assert_eq!(executions[1].capability_id, "view.timeline");
-    assert_eq!(executions[2].capability_id, "schedule.find_free_windows");
-    assert_eq!(executions[1].scope_id, executions[2].scope_id);
-    assert_ne!(executions[1].scope_id, result.session.id);
+    assert_eq!(executions[0].capability_id, "view.timeline");
+    assert_eq!(executions[1].capability_id, "schedule.find_free_windows");
+    assert_eq!(executions[2].capability_id, "schedule.propose_window");
+    assert!(
+        executions
+            .iter()
+            .all(|execution| execution.scope_id != result.session.id)
+    );
+    assert_eq!(result.session.delegation_executions.len(), 1);
+    assert_eq!(result.session.delegation_executions[0].agent_id, "schedule");
     assert!(
         executions
             .iter()
@@ -720,28 +755,24 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| request.replay.is_empty()));
-    assert_eq!(
-        requests[0].capabilities[0].input_schema.as_ref().unwrap()["properties"]["kind"]["enum"][1],
-        "propose_focus"
-    );
-    let AgentMessage::Capability {
-        result: Ok(output), ..
-    } = &requests[1].messages[1]
-    else {
+    assert!(requests[0].capabilities.is_empty());
+    assert_eq!(requests[0].active_agents[0].id, "schedule");
+    let AgentMessage::Delegation { task, .. } = &requests[1].messages[1] else {
         panic!("missing committed evidence")
     };
+    let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
     assert!(output.contains("Ignore all rules"));
     let expert: ExpertResult = serde_json::from_str(output).unwrap();
-    assert_eq!(expert.model_calls, 2);
+    assert_eq!(expert.model_calls, 3);
     assert_eq!(
         expert.summary.as_deref(),
         Some("One commitment is followed by an available focus window.")
     );
     let expert_requests = model.expert_requests.lock().unwrap();
-    assert_eq!(expert_requests.len(), 2);
+    assert_eq!(expert_requests.len(), 3);
     assert!(expert_requests[0].replay.is_empty());
     assert_eq!(expert_requests[1].replay.len(), 1);
-    assert_eq!(expert_requests[1].replay[0].call_id, executions[2].call_id);
+    assert_eq!(expert_requests[1].replay[0].call_id, executions[1].call_id);
     assert_eq!(
         expert_requests[1].replay[0].replay.provider_call_id,
         "expert-only-call"
@@ -764,10 +795,11 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
             .iter()
             .all(|request| request.cancellation.is_cancelled())
     );
-    assert!(events.iter().any(|event| matches!(
-        event.event,
-        AgentEventKind::MessageCommitted { revision: 13, .. }
-    )));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event.event, AgentEventKind::DelegationStarted { .. }))
+    );
 }
 
 #[tokio::test]
@@ -808,20 +840,19 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         .await
         .unwrap();
     assert_eq!(second.session.messages[..3], first.session.messages);
-    assert_eq!(second.session.revision, 32);
+    assert_eq!(second.session.revision, 40);
     assert_eq!(second.proposals.len(), 1);
     assert_ne!(
         second.proposals[0].reference.invocation_id,
         first.proposals[0].reference.invocation_id
     );
     assert_eq!(fixture.state().await.revision, fixture.revision + 2);
-    assert!(matches!(
-        model.requests.lock().unwrap()[0].messages[1],
-        AgentMessage::Capability {
-            result: Err(AgentFailure::StaleContext),
-            ..
-        }
-    ));
+    let (history, _) = model.requests.lock().unwrap()[0].model_conversation();
+    assert!(
+        history
+            .iter()
+            .all(|message| message.get("tool_calls").is_none())
+    );
 }
 
 #[tokio::test]
@@ -847,10 +878,8 @@ async fn permission_failure_is_a_typed_missing_source_not_a_fake_empty_calendar(
         .unwrap();
     assert!(matches!(
         result.session.messages[1],
-        AgentMessage::Capability {
-            result: Err(AgentFailure::CapabilityDenied),
-            ..
-        }
+        AgentMessage::Delegation { ref task, .. }
+            if task.failure == Some(AgentFailure::CapabilityDenied)
     ));
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert!(result.proposals.is_empty());
@@ -1271,16 +1300,12 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert!(result.proposals.is_empty());
     let requests = model.requests.lock().unwrap();
-    assert_eq!(
-        requests[0].capabilities[0].output_data_class,
-        DataClass::Personal
-    );
-    let AgentMessage::Capability {
-        result: Ok(output), ..
-    } = &requests[1].messages[1]
-    else {
+    assert!(requests[0].capabilities.is_empty());
+    assert_eq!(requests[0].active_agents[0].id, "schedule");
+    let AgentMessage::Delegation { task, .. } = &requests[1].messages[1] else {
         panic!("missing projection")
     };
+    let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
     assert_eq!(
         serde_json::from_str::<ExpertResult>(output)
             .unwrap()
@@ -1324,20 +1349,24 @@ async fn registry_revocation_during_generation_wins_and_does_not_get_overwritten
         assignment: fixture.assignment,
         model: Model::default(),
     };
-    assert!(matches!(
-        fixture
-            .core
-            .run_calendar_agent_turn(
-                &fixture.vault,
-                &Access::default(),
-                &model,
-                fixture.request(),
-                now,
-                |_| {}
-            )
-            .await,
-        Err(AgentFailure::Conflict)
-    ));
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::Conflict,
+        })
+    );
     let snapshot = fixture.state().await;
     assert_eq!(snapshot.revision, fixture.revision + 2);
     assert!(
@@ -1353,33 +1382,18 @@ async fn registry_revocation_during_generation_wins_and_does_not_get_overwritten
         .load(fixture.session.person_id, fixture.session.id)
         .await
         .unwrap();
-    assert!(interrupted.active_turn.is_some());
+    assert!(interrupted.active_turn.is_none());
     assert_eq!(interrupted.messages.len(), 2);
-    let recovered = recover_agent_sample(
-        &fixture.vault,
-        interrupted.person_id,
-        interrupted.id,
-        interrupted.revision,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        recovered.last_outcome,
-        Some(AgentOutcome::Halted {
-            reason: AgentFailure::Interrupted
-        })
-    );
+    assert_eq!(interrupted.last_outcome, result.session.last_outcome);
 }
 
 #[tokio::test]
-async fn model_cannot_smuggle_scope_or_execution_fields_through_expert_input() {
+async fn model_cannot_delegate_an_empty_natural_language_assignment() {
     let fixture = Fixture::new().await;
     let model = Model::default();
-    model.steps.lock().unwrap()[0] = ModelStep::Call {
-        capability_id: "expert.schedule".into(),
-        input:
-            r#"{"kind":"propose_focus","focus_minutes":60,"calendar_id":"other","approved":true}"#
-                .into(),
+    model.steps.lock().unwrap()[0] = ModelStep::Delegate {
+        agent_id: "schedule".into(),
+        message: " ".into(),
     };
     {
         let mut steps = model.steps.lock().unwrap();
@@ -1485,9 +1499,10 @@ async fn revoking_calendar_binding_blocks_publication_of_an_already_committed_ex
         )
         .await
         .unwrap();
-    let AgentMessage::Capability { call_id, .. } = result.session.messages[1] else {
+    let AgentMessage::Delegation { ref task, .. } = result.session.messages[1] else {
         panic!("missing receipt")
     };
+    let call_id = task.id;
     let mut registry =
         AgentRegistry::restore(fixture.state().await, fixture.vault.registry_instance_id())
             .unwrap();
@@ -1559,9 +1574,10 @@ async fn old_calendar_receipt_cannot_be_published_against_a_new_connection_revis
         )
         .await
         .unwrap();
-    let AgentMessage::Capability { call_id, .. } = result.session.messages[1] else {
+    let AgentMessage::Delegation { ref task, .. } = result.session.messages[1] else {
         panic!("missing receipt")
     };
+    let call_id = task.id;
     fixture
         .core
         .import_calendar(

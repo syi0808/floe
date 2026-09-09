@@ -155,7 +155,7 @@ async fn run_agent_sample(
 
 async fn run_sample_with_capabilities(
     store: &impl SessionStore,
-    capabilities: &impl CapabilityHost,
+    capabilities: &(impl CapabilityHost + InProcessAgent),
     turn: AgentFixtureTurn,
     cancellation: Cancellation,
     latency: Duration,
@@ -170,8 +170,10 @@ async fn run_sample_with_capabilities(
         policy: &policy,
         budget: AgentBudget::default(),
     };
+    let transport = InProcessA2ATransport::new(capabilities);
+    let router = A2ARouter::new(&transport);
     runtime
-        .run_turn(
+        .run_turn_with_agents(
             AgentCommand {
                 schema_version: AGENT_VERSION,
                 person_id: turn.person_id,
@@ -184,6 +186,7 @@ async fn run_sample_with_capabilities(
                 persona: None,
                 evidence: vec![],
             },
+            &router,
             cancellation,
             emit,
         )
@@ -276,6 +279,28 @@ impl<Keys: crate::VaultKeyProvider> CapabilityHost for PersistedFixtureCapabilit
             return Err(AgentFailure::Conflict);
         }
         self.capabilities.invoke(invocation).await
+    }
+}
+
+#[cfg(unix)]
+impl<Keys: crate::VaultKeyProvider> InProcessAgent for PersistedFixtureCapabilities<'_, Keys> {
+    fn agent_cards(&self, person_id: PersonId) -> Vec<AgentCard> {
+        self.capabilities.agent_cards(person_id)
+    }
+
+    async fn handle_message(
+        &self,
+        request: A2ASendMessageRequest,
+    ) -> Result<A2ATask, AgentFailure> {
+        let current = self
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        if current.revision != self.persisted_revision.load(Ordering::Acquire) {
+            return Err(AgentFailure::Conflict);
+        }
+        self.capabilities.handle_message(request).await
     }
 }
 
@@ -417,24 +442,24 @@ impl ModelRunner for FixtureModel {
         } else if prompt == AgentFixturePrompt::RepeatedCall.text()
             || !matches!(
                 request.messages.last(),
-                Some(AgentMessage::Capability { .. })
+                Some(AgentMessage::Delegation { .. })
             )
         {
-            ModelStep::Call {
-                capability_id: "fixture.schedule.read".into(),
-                input: r#"{"scope":"sample-day"}"#.into(),
+            ModelStep::Delegate {
+                agent_id: "floe.schedule".into(),
+                message: "Review the synthetic sample day and identify relevant commitments and availability.".into(),
             }
         } else {
-            let Some(AgentMessage::Capability {
-                result: Ok(result), ..
-            }) = request.messages.last()
-            else {
+            let Some(AgentMessage::Delegation { task, .. }) = request.messages.last() else {
                 return Ok(ModelResponse { replay: None, schema_version: AGENT_VERSION,
                     output: vec![ ModelStep::Answer { text: "The sample Schedule Expert is unavailable. No connected sources were read or changed.".into() }],
                     used_tokens: 32, cost_micros: 0 });
             };
-            let result: ExpertResult =
-                serde_json::from_str(result).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            let result: ExpertResult = serde_json::from_str(
+                task.data_part(EXPERT_RESULT_MEDIA_TYPE)
+                    .ok_or(AgentFailure::InvalidModelOutput)?,
+            )
+            .map_err(|_| AgentFailure::InvalidModelOutput)?;
             if result.data_class != DataClass::Synthetic
                 || !result
                     .insights
@@ -502,6 +527,7 @@ impl FixtureCapabilities {
                 implementation: PackageImplementation::TimelineRead {
                     data_class: DataClass::Synthetic,
                 },
+                expert_metadata: None,
                 required_tools: vec![],
                 state_schema_version: 1,
             },
@@ -513,6 +539,12 @@ impl FixtureCapabilities {
                 reference: expert.clone(),
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Schedule,
+                expert_metadata: Some(ExpertMetadata {
+                    name: "Schedule Expert".into(),
+                    description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
+                    domain_tags: vec!["schedule".into(), "calendar".into()],
+                    skills: vec!["Provide independent scheduling judgment".into()],
+                }),
                 required_tools: vec![tool.clone()],
                 state_schema_version: 1,
             },
@@ -625,33 +657,49 @@ impl FixtureCapabilities {
 }
 
 impl CapabilityHost for FixtureCapabilities {
-    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+    fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
+        vec![]
+    }
+
+    async fn invoke(&self, _: CapabilityInvocation) -> Result<String, AgentFailure> {
+        Err(AgentFailure::CapabilityDenied)
+    }
+}
+
+impl InProcessAgent for FixtureCapabilities {
+    fn agent_cards(&self, person_id: PersonId) -> Vec<AgentCard> {
         if person_id != self.person_id {
             return vec![];
         }
-        vec![CapabilityDescriptor {
-            schema_version: AGENT_VERSION,
-            id: "fixture.schedule.read".into(),
-            version: "1.0.0".into(),
-            read_only: true,
-            output_data_class: DataClass::Synthetic,
-            input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {"scope": {"const": "sample-day"}},
-                "required": ["scope"],
-                "additionalProperties": false
-            })),
-        }]
+        self.registry
+            .lock()
+            .ok()
+            .and_then(|registry| {
+                registry
+                    .expert_card(
+                        person_id,
+                        self.assignment_id,
+                        registry.revision(),
+                        self.view.handle,
+                    )
+                    .ok()
+            })
+            .into_iter()
+            .collect()
     }
 
-    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
-        if invocation.person_id != self.person_id
-            || invocation.capability_id != "fixture.schedule.read"
-            || serde_json::from_str::<serde_json::Value>(&invocation.input).ok()
-                != Some(serde_json::json!({"scope":"sample-day"}))
+    async fn handle_message(
+        &self,
+        request: A2ASendMessageRequest,
+    ) -> Result<A2ATask, AgentFailure> {
+        if request.person_id != self.person_id
+            || request.agent_id != "floe.schedule"
+            || request.message.role != A2AMessageRole::User
         {
             return Err(AgentFailure::CapabilityDenied);
         }
+        let task_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
+        let assignment = request.message.text()?.to_owned();
         let expected_registry_revision = self
             .registry
             .lock()
@@ -662,25 +710,50 @@ impl CapabilityHost for FixtureCapabilities {
             views: self,
         }
         .invoke(ExpertInvocation {
-            usage: Default::default(),
-            schema_version: invocation.schema_version,
-            invocation_id: invocation.call_id,
+            usage: request.usage,
+            schema_version: request.schema_version,
+            invocation_id: task_id,
             instance_id: self.instance_id,
-            person_id: invocation.person_id,
+            person_id: request.person_id,
             assignment_id: self.assignment_id,
             expected_registry_revision,
             granted_view_handles: vec![self.view.handle],
             allowed_data_classes: vec![DataClass::Synthetic],
-            input: ExpertInput::Briefing { focus_minutes: 60 },
+            input: ExpertInput::Analyze {
+                request: assignment,
+                focus_minutes: Some(60),
+            },
             budget: ExpertBudget {
-                max_output_bytes: invocation.max_output_bytes,
+                max_output_bytes: request.max_output_bytes,
                 ..ExpertBudget::default()
             },
-            deadline: invocation.deadline,
-            cancellation: invocation.cancellation,
+            deadline: request.deadline,
+            cancellation: request.cancellation,
         })
         .await?;
-        serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)
+        let data = serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        Ok(A2ATask {
+            id: task_id,
+            context_id: request.message.context_id,
+            agent_id: request.agent_id,
+            state: A2ATaskState::Completed,
+            history: vec![request.message],
+            artifacts: vec![A2AArtifact {
+                artifact_id: Uuid::new_v4(),
+                name: "Synthetic schedule result".into(),
+                parts: vec![
+                    A2APart::Text {
+                        text: "The synthetic sample contains a commitment and an available window."
+                            .into(),
+                    },
+                    A2APart::Data {
+                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
+                        data,
+                    },
+                ],
+            }],
+            failure: None,
+        })
     }
 }
 

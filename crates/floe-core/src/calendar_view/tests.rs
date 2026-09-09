@@ -725,12 +725,33 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         .await
         .unwrap();
     session.revision = 2;
-    session.messages.push(AgentMessage::Capability {
+    let context_id = Uuid::new_v4();
+    session.messages.push(AgentMessage::Delegation {
         turn_id,
-        call_id: invocation_id,
-        capability_id: "calendar.schedule".into(),
-        input: "focus".into(),
-        result: Ok(serde_json::to_string(&result).unwrap()),
+        task: A2ATask {
+            id: invocation_id,
+            context_id,
+            agent_id: result.package.id.clone(),
+            state: A2ATaskState::Completed,
+            history: vec![A2AMessage {
+                message_id: Uuid::new_v4(),
+                context_id,
+                task_id: Some(invocation_id),
+                role: A2AMessageRole::User,
+                parts: vec![A2APart::Text {
+                    text: "Prepare a bounded scheduling proposal.".into(),
+                }],
+            }],
+            artifacts: vec![A2AArtifact {
+                artifact_id: Uuid::new_v4(),
+                name: "Schedule expert result".into(),
+                parts: vec![A2APart::Data {
+                    media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
+                    data: serde_json::to_string(&result).unwrap(),
+                }],
+            }],
+            failure: None,
+        },
     });
     let staged = registry.lock().unwrap().snapshot();
     vault

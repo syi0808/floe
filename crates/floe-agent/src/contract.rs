@@ -36,6 +36,8 @@ pub struct AgentSession {
     #[serde(default)]
     pub capability_executions: Vec<CapabilityExecution>,
     #[serde(default)]
+    pub delegation_executions: Vec<DelegationExecution>,
+    #[serde(default)]
     pub pending_output: Option<Vec<ModelStep>>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
@@ -80,6 +82,7 @@ impl AgentSession {
             usage: AgentUsage::default(),
             model_attempts: vec![],
             capability_executions: vec![],
+            delegation_executions: vec![],
             pending_output: None,
             active_turn: None,
             last_outcome: None,
@@ -100,6 +103,28 @@ pub struct CapabilityExecution {
     pub result: Option<Result<String, AgentFailure>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<ProviderReplay>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationExecution {
+    pub turn_id: Uuid,
+    pub task_id: Uuid,
+    pub agent_id: String,
+    pub message: String,
+    pub state: DelegationExecutionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::A2ATask>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ProviderReplay>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationExecutionState {
+    Started,
+    Settled,
+    Interrupted,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -173,6 +198,10 @@ pub enum AgentMessage {
         input: String,
         result: Result<String, AgentFailure>,
     },
+    Delegation {
+        turn_id: Uuid,
+        task: crate::A2ATask,
+    },
 }
 
 impl AgentMessage {
@@ -181,7 +210,8 @@ impl AgentMessage {
             Self::Preamble { turn_id, .. }
             | Self::User { turn_id, .. }
             | Self::Assistant { turn_id, .. }
-            | Self::Capability { turn_id, .. } => *turn_id,
+            | Self::Capability { turn_id, .. }
+            | Self::Delegation { turn_id, .. } => *turn_id,
         }
     }
 }
@@ -247,6 +277,10 @@ pub enum AgentEventKind {
     CapabilityStarted {
         call_id: Uuid,
         capability_id: String,
+    },
+    DelegationStarted {
+        task_id: Uuid,
+        agent_id: String,
     },
     MessageCommitted {
         message: AgentMessage,
@@ -374,6 +408,7 @@ pub struct ModelRequest {
     pub context: crate::AgentContext,
     pub messages: Vec<AgentMessage>,
     pub capabilities: Vec<CapabilityDescriptor>,
+    pub active_agents: Vec<crate::AgentCard>,
     pub remaining_tokens: u64,
     pub remaining_cost_micros: u64,
     pub max_output_bytes: usize,
@@ -413,6 +448,7 @@ impl ModelRequest {
             scoped_instructions: ScopedInstructions {
                 purpose: self.policy.purpose.clone(),
                 available_capabilities: self.capabilities.clone(),
+                active_experts: self.active_agents.clone(),
             },
             contextual_data: ContextualData {
                 projection_version: self.context.projection_version,
@@ -446,6 +482,14 @@ impl ModelRequest {
                         expires_at_unix_ms: evidence.expires_at_unix_ms,
                     })
                     .collect(),
+                agent_cards: self
+                    .active_agents
+                    .iter()
+                    .map(|card| AgentCardManifestEntry {
+                        id: card.id.clone(),
+                        version: card.version.clone(),
+                    })
+                    .collect(),
             },
         })
     }
@@ -475,6 +519,7 @@ pub struct ContextualData {
 pub struct ScopedInstructions {
     pub purpose: String,
     pub available_capabilities: Vec<CapabilityDescriptor>,
+    pub active_experts: Vec<crate::AgentCard>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -495,6 +540,14 @@ pub struct RuntimeContext {
 pub struct ContextManifest {
     pub prompt_components: Vec<PromptManifestEntry>,
     pub evidence: Vec<EvidenceManifestEntry>,
+    pub agent_cards: Vec<AgentCardManifestEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCardManifestEntry {
+    pub id: String,
+    pub version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -560,6 +613,30 @@ fn model_messages(message: &AgentMessage, include_capability: bool) -> Vec<serde
             vec![call, output]
         }
         AgentMessage::Capability { .. } | AgentMessage::Preamble { .. } => vec![],
+        AgentMessage::Delegation { task, .. } if include_capability => vec![
+            serde_json::json!({
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": task.id,
+                    "type": "function",
+                    "function": {
+                        "name": "floe.a2a.delegate",
+                        "arguments": {
+                            "agent_id": task.agent_id,
+                            "message": task.history.first().and_then(|message| message.text().ok()).unwrap_or_default(),
+                        }
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": task.id,
+                "capability_id": "floe.a2a.delegate",
+                "status": if task.state == crate::A2ATaskState::Completed { "success" } else { "error" },
+                "content": task,
+            }),
+        ],
+        AgentMessage::Delegation { .. } => vec![],
     }
 }
 
@@ -579,6 +656,10 @@ pub enum ModelStep {
     Call {
         capability_id: String,
         input: String,
+    },
+    Delegate {
+        agent_id: String,
+        message: String,
     },
 }
 
@@ -605,7 +686,21 @@ impl ModelResponse {
     pub fn call_count(&self) -> usize {
         self.output
             .iter()
+            .filter(|step| matches!(step, ModelStep::Call { .. } | ModelStep::Delegate { .. }))
+            .count()
+    }
+
+    pub fn capability_call_count(&self) -> usize {
+        self.output
+            .iter()
             .filter(|step| matches!(step, ModelStep::Call { .. }))
+            .count()
+    }
+
+    pub fn delegation_count(&self) -> usize {
+        self.output
+            .iter()
+            .filter(|step| matches!(step, ModelStep::Delegate { .. }))
             .count()
     }
 

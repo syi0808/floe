@@ -34,7 +34,7 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
             assert_eq!(assignment.private_state, ExpertPrivateState::default());
         }
         assert_eq!(
-            registry.expert_descriptor(
+            registry.expert_card(
                 person,
                 setup.expert_assignment_id,
                 registry.revision(),
@@ -55,17 +55,17 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
         registry
             .set_calendar_view_enabled(registry.revision(), person, setup.view_handle, true)
             .unwrap();
-        assert_eq!(
+        assert!(
             registry
-                .expert_descriptor(
+                .expert_card(
                     person,
                     setup.expert_assignment_id,
                     registry.revision(),
                     setup.view_handle,
                 )
                 .unwrap()
-                .output_data_class,
-            data_class
+                .id
+                .ends_with(".schedule")
         );
     }
     assert_eq!(registry.snapshot().packages.len(), 4);

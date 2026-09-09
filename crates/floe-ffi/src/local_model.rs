@@ -152,6 +152,9 @@ fn prepare(request: &ModelRequest, protection: SessionProtection) -> Result<Valu
     }) {
         return Err(AgentFailure::CapabilityDenied);
     }
+    for card in &request.active_agents {
+        card.validate()?;
+    }
     let envelope = request.context_envelope()?;
     let prompt = json!({
         "scoped_instructions": envelope.scoped_instructions,
@@ -237,6 +240,29 @@ fn decode_step(step: WireStep, request: &ModelRequest) -> Result<ModelStep, Agen
     ) {
         ("answer", Some(text), None, None) if !text.trim().is_empty() => ModelStep::Answer { text },
         ("call", None, Some(capability_id), Some(input)) => {
+            if capability_id == "floe.a2a.delegate" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct DelegationInput {
+                    agent_id: String,
+                    message: String,
+                }
+                let delegation: DelegationInput =
+                    serde_json::from_str(&input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+                if request
+                    .active_agents
+                    .iter()
+                    .any(|card| card.id == delegation.agent_id)
+                    && !delegation.message.trim().is_empty()
+                    && delegation.message.len() <= 4096
+                {
+                    return Ok(ModelStep::Delegate {
+                        agent_id: delegation.agent_id,
+                        message: delegation.message,
+                    });
+                }
+                return Err(AgentFailure::CapabilityDenied);
+            }
             if !request
                 .capabilities
                 .iter()
@@ -431,6 +457,7 @@ mod tests {
                 output_data_class: DataClass::Synthetic,
                 input_schema: None,
             }],
+            active_agents: vec![],
             remaining_tokens: 8192,
             remaining_cost_micros: 0,
             max_output_bytes: 16384,

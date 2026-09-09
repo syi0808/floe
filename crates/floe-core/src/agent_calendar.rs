@@ -105,17 +105,16 @@ impl FloeCore {
             if binding.provider != views.grant().provider || binding.calendar_ids != calendars {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let descriptor = registry.expert_descriptor(
+            let card = registry.expert_card(
                 views.grant().person_id,
                 request.assignment_id,
                 revision,
                 views.grant().handle,
             )?;
-            if descriptor.output_data_class != views.grant().data_class()
-                || !request
-                    .policy
-                    .data_classes
-                    .contains(&descriptor.output_data_class)
+            if !request
+                .policy
+                .data_classes
+                .contains(&views.grant().data_class())
             {
                 return Err(AgentFailure::PolicyDenied);
             }
@@ -127,12 +126,14 @@ impl FloeCore {
                 registry: Mutex::new(registry),
                 revision: AtomicU64::new(revision),
                 assignment_id: request.assignment_id,
-                descriptor,
+                card,
                 deadline,
                 cancellation: request.cancellation,
                 parent: parent.clone(),
             };
             let guarded_model = CalendarModel { turn: &turn, model };
+            let transport = InProcessA2ATransport::new(&turn);
+            let router = A2ARouter::new(&transport);
             let runtime = AgentRuntime {
                 store: &turn,
                 capabilities: &turn,
@@ -142,20 +143,22 @@ impl FloeCore {
             };
             let session = if request.continuation {
                 runtime
-                    .continue_turn(
+                    .continue_turn_with_agents(
                         request.command.person_id,
                         request.command.session_id,
                         request.command.expected_revision,
                         request.context,
+                        &router,
                         turn.cancellation.clone(),
                         emit,
                     )
                     .await?
             } else {
                 runtime
-                    .run_turn(
+                    .run_turn_with_agents(
                         request.command,
                         request.context,
+                        &router,
                         turn.cancellation.clone(),
                         emit,
                     )
@@ -175,18 +178,15 @@ impl FloeCore {
                             _ => None,
                         });
                 for message in &session.messages {
-                    let AgentMessage::Capability {
-                        turn_id,
-                        call_id,
-                        result: Ok(output),
-                        ..
-                    } = message
-                    else {
+                    let AgentMessage::Delegation { turn_id, task } = message else {
                         continue;
                     };
                     if Some(*turn_id) != current_turn {
                         continue;
                     }
+                    let Some(output) = task.data_part(EXPERT_RESULT_MEDIA_TYPE) else {
+                        continue;
+                    };
                     let evidence: ExpertResult =
                         serde_json::from_str(output).map_err(|_| AgentFailure::InvalidInput)?;
                     if evidence.action_proposals.is_empty() {
@@ -195,7 +195,7 @@ impl FloeCore {
                     let reference = ExpertProposalReference {
                         person_id: session.person_id,
                         session_id: session.id,
-                        invocation_id: *call_id,
+                        invocation_id: task.id,
                     };
                     let result = async {
                         turn.validate().await?;
@@ -253,7 +253,7 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     registry: Mutex<AgentRegistry>,
     revision: AtomicU64,
     assignment_id: Uuid,
-    descriptor: CapabilityDescriptor,
+    card: AgentCard,
     deadline: Instant,
     cancellation: Cancellation,
     parent: Cancellation,
@@ -328,6 +328,10 @@ impl<
         let dependent = matches!(
             appended,
             Some(AgentMessage::Assistant { .. } | AgentMessage::Capability { result: Ok(_), .. })
+        ) || matches!(
+            appended,
+            Some(AgentMessage::Delegation { task, .. })
+                if task.state == A2ATaskState::Completed
         );
         if appended.is_some() {
             self.check_running()?;
@@ -354,7 +358,22 @@ impl<
                     Ok(())
                 },
             )
-            .await?;
+            .await;
+        let committed = match committed {
+            Ok(committed) => committed,
+            Err(failure) => {
+                if let Some(snapshot) = self.vault.expert_registry().await? {
+                    let revision = snapshot.revision;
+                    *self
+                        .registry
+                        .lock()
+                        .map_err(|_| AgentFailure::StorageUnavailable)? =
+                        AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
+                    self.revision.store(revision, Ordering::Release);
+                }
+                return Err(failure);
+            }
+        };
         let revision = committed.revision;
         *self
             .registry
@@ -373,23 +392,44 @@ impl<
     Model: ModelRunner + Sync,
 > CapabilityHost for CalendarTurn<'_, Keys, Access, Clock, Model>
 {
-    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+    fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
+        vec![]
+    }
+
+    async fn invoke(&self, _: CapabilityInvocation) -> Result<String, AgentFailure> {
+        Err(AgentFailure::CapabilityDenied)
+    }
+}
+
+impl<
+    Keys: VaultKeyProvider,
+    Access: CalendarReadAccess,
+    Clock: Fn() -> DateTime<Utc> + Sync,
+    Model: ModelRunner + Sync,
+> InProcessAgent for CalendarTurn<'_, Keys, Access, Clock, Model>
+{
+    fn agent_cards(&self, person_id: PersonId) -> Vec<AgentCard> {
         if person_id == self.views.grant().person_id {
-            vec![self.descriptor.clone()]
+            vec![self.card.clone()]
         } else {
             vec![]
         }
     }
 
-    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
-        if invocation.person_id != self.views.grant().person_id
-            || invocation.capability_id != self.descriptor.id
-            || invocation.input.len() > 1024
+    async fn handle_message(
+        &self,
+        request: A2ASendMessageRequest,
+    ) -> Result<A2ATask, AgentFailure> {
+        if request.schema_version != AGENT_VERSION
+            || request.person_id != self.views.grant().person_id
+            || request.agent_id != self.card.id
+            || request.message.role != A2AMessageRole::User
+            || request.message.task_id.is_none()
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let input: ExpertInput =
-            serde_json::from_str(&invocation.input).map_err(|_| AgentFailure::InvalidInput)?;
+        let task_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
+        let assignment = request.message.text()?.to_owned();
         self.validate().await?;
         let result = ExpertHost {
             registry: &self.registry,
@@ -397,28 +437,54 @@ impl<
         }
         .invoke_with_model(
             ExpertInvocation {
-                usage: invocation.usage.clone(),
-                schema_version: invocation.schema_version,
-                invocation_id: invocation.call_id,
+                usage: request.usage.clone(),
+                schema_version: request.schema_version,
+                invocation_id: task_id,
                 instance_id: self.vault.registry_instance_id(),
-                person_id: invocation.person_id,
+                person_id: request.person_id,
                 assignment_id: self.assignment_id,
                 expected_registry_revision: self.revision.load(Ordering::Acquire),
                 granted_view_handles: vec![self.views.grant().handle],
-                allowed_data_classes: vec![self.descriptor.output_data_class],
-                input,
+                allowed_data_classes: vec![self.views.grant().data_class()],
+                input: ExpertInput::Analyze {
+                    request: assignment,
+                    focus_minutes: None,
+                },
                 budget: ExpertBudget {
-                    max_output_bytes: invocation.max_output_bytes,
+                    max_output_bytes: request.max_output_bytes,
                     ..ExpertBudget::default()
                 },
-                deadline: invocation.deadline.min(self.deadline),
-                cancellation: invocation.cancellation,
+                deadline: request.deadline.min(self.deadline),
+                cancellation: request.cancellation,
             },
             self.model,
             &self.policy,
         )
         .await?;
-        serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)
+        let summary = result
+            .summary
+            .clone()
+            .ok_or(AgentFailure::InvalidModelOutput)?;
+        let data = serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        Ok(A2ATask {
+            id: task_id,
+            context_id: request.message.context_id,
+            agent_id: request.agent_id,
+            state: A2ATaskState::Completed,
+            history: vec![request.message],
+            artifacts: vec![A2AArtifact {
+                artifact_id: Uuid::new_v4(),
+                name: "Schedule expert result".into(),
+                parts: vec![
+                    A2APart::Text { text: summary },
+                    A2APart::Data {
+                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
+                        data,
+                    },
+                ],
+            }],
+            failure: None,
+        })
     }
 }
 

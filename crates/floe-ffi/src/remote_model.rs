@@ -92,6 +92,8 @@ fn tool_name(identifier: &str) -> String {
     format!("floe_{hash:016x}")
 }
 
+const DELEGATION_CAPABILITY_ID: &str = "floe.a2a.delegate";
+
 fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailure> {
     let Some(calls) = message
         .get_mut("tool_calls")
@@ -111,12 +113,15 @@ fn rewrite_tool_calls(message: &mut serde_json::Value) -> Result<(), AgentFailur
 }
 
 fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure> {
-    let aliases: std::collections::HashSet<_> = request
+    let mut aliases: std::collections::HashSet<_> = request
         .capabilities
         .iter()
         .map(|capability| tool_name(&capability.id))
         .collect();
     if aliases.len() != request.capabilities.len() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    if !request.active_agents.is_empty() && !aliases.insert(tool_name(DELEGATION_CAPABILITY_ID)) {
         return Err(AgentFailure::InvalidInput);
     }
     let envelope = request.context_envelope()?;
@@ -143,7 +148,7 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
         }
         messages.push(message);
     }
-    let tools: Vec<_> = request.capabilities.iter().map(|capability| json!({
+    let mut tools: Vec<_> = request.capabilities.iter().map(|capability| json!({
         "type": "function",
         "function": {
             "name": tool_name(&capability.id),
@@ -152,6 +157,28 @@ fn model_input(request: &ModelRequest) -> Result<serde_json::Value, AgentFailure
             "strict": false
         }
     })).collect();
+    if !request.active_agents.is_empty() {
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": tool_name(DELEGATION_CAPABILITY_ID),
+                "description": "Delegate a natural-language assignment to one active Expert agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {
+                            "type": "string",
+                            "enum": request.active_agents.iter().map(|card| card.id.clone()).collect::<Vec<_>>()
+                        },
+                        "message": {"type": "string", "minLength": 1, "maxLength": 4096}
+                    },
+                    "required": ["agent_id", "message"],
+                    "additionalProperties": false
+                },
+                "strict": false
+            }
+        }));
+    }
     Ok(json!({"messages": messages, "tools": tools}))
 }
 
@@ -251,6 +278,8 @@ fn decode_output(output: &str) -> Result<AgentOutput, AgentFailure> {
             } if !capability_id.is_empty()
                 && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(input)
                     .is_ok() => {}
+            ModelStep::Delegate { agent_id, message }
+                if !agent_id.is_empty() && !message.trim().is_empty() => {}
             _ => return Err(AgentFailure::ServerModelInvalidOutput),
         }
     }
@@ -353,14 +382,46 @@ impl ModelRunner for ServerModelRunner {
         let mut call_count = 0;
         let mut preambles = vec![];
         for step in &mut output.output {
-            match step {
+            match step.clone() {
+                ModelStep::Call {
+                    capability_id,
+                    input,
+                } if capability_id == tool_name(DELEGATION_CAPABILITY_ID) => {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct DelegationInput {
+                        agent_id: String,
+                        message: String,
+                    }
+                    let delegation: DelegationInput = serde_json::from_str(&input)
+                        .map_err(|_| AgentFailure::ServerModelInvalidOutput)?;
+                    if !request
+                        .active_agents
+                        .iter()
+                        .any(|card| card.id == delegation.agent_id)
+                        || delegation.message.trim().is_empty()
+                    {
+                        return Err(AgentFailure::CapabilityDenied);
+                    }
+                    *step = ModelStep::Delegate {
+                        agent_id: delegation.agent_id,
+                        message: delegation.message,
+                    };
+                    call_count += 1;
+                }
                 ModelStep::Call { capability_id, .. } => {
                     let descriptor = request
                         .capabilities
                         .iter()
-                        .find(|capability| tool_name(&capability.id) == *capability_id)
+                        .find(|capability| tool_name(&capability.id) == capability_id)
                         .ok_or(AgentFailure::CapabilityDenied)?;
-                    *capability_id = descriptor.id.clone();
+                    *step = match step.clone() {
+                        ModelStep::Call { input, .. } => ModelStep::Call {
+                            capability_id: descriptor.id.clone(),
+                            input,
+                        },
+                        _ => unreachable!(),
+                    };
                     call_count += 1;
                 }
                 ModelStep::Preamble { text } => preambles.push(text.clone()),

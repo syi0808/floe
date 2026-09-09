@@ -907,13 +907,13 @@ mod tests {
         )
         .session
         .unwrap();
-        assert!(denied.messages.iter().any(|message| matches!(
-            message,
-            floe_agent::AgentMessage::Capability {
-                result: Err(AgentFailure::CapabilityDenied),
-                ..
-            }
-        )));
+        assert_eq!(denied.messages.len(), 1);
+        assert_eq!(
+            denied.last_outcome,
+            Some(floe_agent::AgentOutcome::Halted {
+                reason: AgentFailure::InvalidModelOutput,
+            })
+        );
         let current = perform(
             &worker,
             person,
@@ -1016,13 +1016,14 @@ mod tests {
                 completed.last_outcome,
                 Some(floe_agent::AgentOutcome::Completed)
             );
-            let floe_agent::AgentMessage::Capability {
-                result: Ok(output), ..
-            } = &completed.messages[1]
-            else {
+            let floe_agent::AgentMessage::Delegation { task, .. } = &completed.messages[1] else {
                 panic!("expected Expert result");
             };
-            serde_json::from_str(output).unwrap()
+            serde_json::from_str(
+                task.data_part(floe_agent::EXPERT_RESULT_MEDIA_TYPE)
+                    .unwrap(),
+            )
+            .unwrap()
         }
         let first = run(&worker, person);
         assert_eq!(first.state_revision, 1);

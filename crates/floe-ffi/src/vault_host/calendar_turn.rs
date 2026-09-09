@@ -1,7 +1,8 @@
 use floe_agent::{
     AgentBudget, AgentCommand, AgentContext, AgentEvent, AgentFailure, AgentMessage, DataClass,
-    ExpertInput, InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
-    ModelStep, TransferConsent, calendar_briefing_prompt, calendar_focus_proposal_prompt,
+    ExpertInsight, InferencePolicyDecision, ModelPlacement, ModelRequest, ModelResponse,
+    ModelRunner, ModelStep, TransferConsent, calendar_briefing_prompt,
+    calendar_focus_proposal_prompt,
 };
 use floe_core::{
     CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
@@ -323,47 +324,87 @@ impl ModelRunner for DeterministicModel {
             return Err(AgentFailure::PolicyDenied);
         }
         let schedule_expert = request.prompt.role == floe_agent::PromptRole::ScheduleExpert;
-        let step = if request
+        let capability_results: Vec<_> = request
             .messages
             .iter()
-            .any(|message| matches!(message, AgentMessage::Capability { .. }))
-        {
-            ModelStep::Answer {
-                text: if schedule_expert {
-                    "The deterministic schedule tool found the bounded Calendar result."
-                } else {
-                    "Synthetic Calendar result recorded. No live personal source was read."
+            .filter_map(|message| match message {
+                AgentMessage::Capability {
+                    capability_id,
+                    result: Ok(output),
+                    ..
+                } => Some((capability_id.as_str(), output.as_str())),
+                _ => None,
+            })
+            .collect();
+        let step = if !schedule_expert {
+            if request
+                .messages
+                .iter()
+                .any(|message| matches!(message, AgentMessage::Delegation { .. }))
+            {
+                ModelStep::Answer {
+                    text: "Synthetic Calendar result recorded. No live personal source was read."
+                        .into(),
                 }
-                .into(),
-            }
-        } else {
-            let input = if schedule_expert {
-                "{}".into()
             } else {
-                serde_json::to_string(&match &self.prompt {
-                    AgentCalendarPromptDto::Briefing { focus_minutes } => ExpertInput::Briefing {
-                        focus_minutes: *focus_minutes,
-                    },
-                    AgentCalendarPromptDto::ProposeFocus { focus_minutes } => {
-                        ExpertInput::ProposeFocus {
-                            focus_minutes: *focus_minutes,
-                        }
-                    }
-                    AgentCalendarPromptDto::FreeText { text } => ExpertInput::Analyze {
-                        request: text.clone(),
-                        focus_minutes: None,
-                    },
-                })
-                .map_err(|_| AgentFailure::InvalidInput)?
-            };
-            ModelStep::Call {
-                capability_id: request
-                    .capabilities
+                let agent_id = request
+                    .active_agents
                     .first()
                     .ok_or(AgentFailure::CapabilityDenied)?
                     .id
-                    .clone(),
-                input,
+                    .clone();
+                let message = match &self.prompt {
+                    AgentCalendarPromptDto::Briefing { focus_minutes } => format!(
+                        "Review today's calendar and provide a briefing, considering whether a {focus_minutes}-minute open window exists."
+                    ),
+                    AgentCalendarPromptDto::ProposeFocus { focus_minutes } => format!(
+                        "Find an available {focus_minutes}-minute window and return a typed proposal for the best option."
+                    ),
+                    AgentCalendarPromptDto::FreeText { text } => text.clone(),
+                };
+                ModelStep::Delegate { agent_id, message }
+            }
+        } else if capability_results.is_empty() {
+            match self.prompt {
+                AgentCalendarPromptDto::ProposeFocus { focus_minutes }
+                | AgentCalendarPromptDto::Briefing { focus_minutes } => ModelStep::Call {
+                    capability_id: "schedule.find_free_windows".into(),
+                    input: serde_json::json!({"minimum_minutes": focus_minutes}).to_string(),
+                },
+                AgentCalendarPromptDto::FreeText { .. } => ModelStep::Call {
+                    capability_id: "calendar.read".into(),
+                    input: "{}".into(),
+                },
+            }
+        } else if matches!(self.prompt, AgentCalendarPromptDto::ProposeFocus { .. })
+            && capability_results.len() == 1
+        {
+            let insights: Vec<ExpertInsight> = serde_json::from_str(capability_results[0].1)
+                .map_err(|_| AgentFailure::InvalidModelOutput)?;
+            let window = insights.iter().find_map(|insight| match insight {
+                ExpertInsight::FocusWindow {
+                    starts_at_unix_ms,
+                    ends_at_unix_ms,
+                } => Some((*starts_at_unix_ms, *ends_at_unix_ms)),
+                _ => None,
+            });
+            match window {
+                Some((starts_at_unix_ms, ends_at_unix_ms)) => ModelStep::Call {
+                    capability_id: "schedule.propose_window".into(),
+                    input: serde_json::json!({
+                        "starts_at_unix_ms": starts_at_unix_ms,
+                        "ends_at_unix_ms": ends_at_unix_ms
+                    })
+                    .to_string(),
+                },
+                None => ModelStep::Answer {
+                    text: "No suitable Calendar window was found.".into(),
+                },
+            }
+        } else {
+            ModelStep::Answer {
+                text: "The deterministic Schedule Expert completed its bounded calendar review."
+                    .into(),
             }
         };
         Ok(ModelResponse {

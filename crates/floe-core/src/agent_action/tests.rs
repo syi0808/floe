@@ -92,6 +92,42 @@ struct Fixture {
     root: tempfile::TempDir,
 }
 
+fn delegation_message(turn_id: Uuid, evidence: &ExpertResult) -> AgentMessage {
+    let context_id = Uuid::new_v4();
+    AgentMessage::Delegation {
+        turn_id,
+        task: A2ATask {
+            id: evidence.invocation_id,
+            context_id,
+            agent_id: evidence.package.id.clone(),
+            state: A2ATaskState::Completed,
+            history: vec![A2AMessage {
+                message_id: Uuid::new_v4(),
+                context_id,
+                task_id: Some(evidence.invocation_id),
+                role: A2AMessageRole::User,
+                parts: vec![A2APart::Text {
+                    text: "Prepare a bounded scheduling proposal.".into(),
+                }],
+            }],
+            artifacts: vec![A2AArtifact {
+                artifact_id: Uuid::new_v4(),
+                name: "Schedule expert result".into(),
+                parts: vec![
+                    A2APart::Text {
+                        text: "A scheduling proposal is available for review.".into(),
+                    },
+                    A2APart::Data {
+                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
+                        data: serde_json::to_string(evidence).unwrap(),
+                    },
+                ],
+            }],
+            failure: None,
+        },
+    }
+}
+
 impl Fixture {
     async fn new() -> Self {
         Self::with_class(
@@ -188,13 +224,9 @@ impl Fixture {
         .await
         .unwrap();
         session.revision = 2;
-        session.messages.push(AgentMessage::Capability {
-            turn_id,
-            call_id: invocation_id,
-            capability_id: "test.schedule.propose".into(),
-            input: "bounded-focus".into(),
-            result: Ok(serde_json::to_string(&evidence).unwrap()),
-        });
+        session
+            .messages
+            .push(delegation_message(turn_id, &evidence));
         let staged = registry.lock().unwrap().snapshot();
         vault
             .commit_expert_session(&session, 1, revision, &staged)
@@ -717,13 +749,9 @@ async fn copied_session_output_without_its_bound_receipt_cannot_mint_an_intent()
             evidence.invocation_id = Uuid::new_v4();
         }
         copied.revision = 1;
-        copied.messages.push(AgentMessage::Capability {
-            turn_id: Uuid::new_v4(),
-            call_id: evidence.invocation_id,
-            capability_id: "forged".into(),
-            input: String::new(),
-            result: Ok(serde_json::to_string(&evidence).unwrap()),
-        });
+        copied
+            .messages
+            .push(delegation_message(Uuid::new_v4(), &evidence));
         fixture.vault.compare_and_swap(&copied, 0).await.unwrap();
         let mut request = fixture.request();
         request.reference.session_id = copied.id;
@@ -760,10 +788,13 @@ async fn committed_receipt_content_and_history_classification_cannot_be_rewritte
         .unwrap();
     let mut changed = original.clone();
     changed.revision += 1;
-    if let AgentMessage::Capability { result, .. } = &mut changed.messages[1] {
+    if let AgentMessage::Delegation { task, .. } = &mut changed.messages[1] {
         let mut evidence = fixture.evidence.clone();
         evidence.action_proposals[0].starts_at_unix_ms += 60_000;
-        *result = Ok(serde_json::to_string(&evidence).unwrap());
+        let A2APart::Data { data, .. } = &mut task.artifacts[0].parts[1] else {
+            panic!("expected typed Expert artifact");
+        };
+        *data = serde_json::to_string(&evidence).unwrap();
     }
     assert_eq!(
         fixture

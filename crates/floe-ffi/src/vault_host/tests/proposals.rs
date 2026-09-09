@@ -39,22 +39,61 @@ impl ModelRunner for Model {
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
-        let step = if request
+        let step = if schedule_expert {
+            let latest = request
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    AgentMessage::Capability {
+                        capability_id,
+                        result: Ok(output),
+                        ..
+                    } => Some((capability_id.as_str(), output.as_str())),
+                    _ => None,
+                });
+            match latest {
+                Some(("schedule.propose_window", _)) => ModelStep::Answer {
+                    text: "Synthetic proposal recorded.".into(),
+                },
+                Some(("schedule.find_free_windows", output)) => {
+                    let insights: Vec<ExpertInsight> = serde_json::from_str(output).unwrap();
+                    let (starts_at_unix_ms, ends_at_unix_ms) = insights
+                        .into_iter()
+                        .find_map(|insight| match insight {
+                            ExpertInsight::FocusWindow {
+                                starts_at_unix_ms,
+                                ends_at_unix_ms,
+                            } => Some((starts_at_unix_ms, ends_at_unix_ms)),
+                            _ => None,
+                        })
+                        .unwrap();
+                    ModelStep::Call {
+                        capability_id: "schedule.propose_window".into(),
+                        input: serde_json::json!({
+                            "starts_at_unix_ms": starts_at_unix_ms,
+                            "ends_at_unix_ms": ends_at_unix_ms,
+                        })
+                        .to_string(),
+                    }
+                }
+                _ => ModelStep::Call {
+                    capability_id: "schedule.find_free_windows".into(),
+                    input: r#"{"minimum_minutes":60}"#.into(),
+                },
+            }
+        } else if request
             .messages
             .iter()
-            .any(|message| matches!(message, AgentMessage::Capability { .. }))
+            .any(|message| matches!(message, AgentMessage::Delegation { .. }))
         {
             ModelStep::Answer {
                 text: "Synthetic proposal recorded.".into(),
             }
         } else {
-            ModelStep::Call {
-                capability_id: request.capabilities[0].id.clone(),
-                input: if schedule_expert {
-                    "{}".into()
-                } else {
-                    serde_json::to_string(&ExpertInput::ProposeFocus { focus_minutes: 60 }).unwrap()
-                },
+            ModelStep::Delegate {
+                agent_id: request.active_agents[0].id.clone(),
+                message: "Find a suitable time for this calendar request.".into(),
             }
         };
         Ok(ModelResponse {
@@ -214,9 +253,9 @@ async fn seed(
         .messages
         .iter()
         .find_map(|message| match message {
-            AgentMessage::Capability {
-                result: Ok(output), ..
-            } => Some(serde_json::from_str(output).unwrap()),
+            AgentMessage::Delegation { task, .. } => Some(
+                serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap(),
+            ),
             _ => None,
         })
         .unwrap();

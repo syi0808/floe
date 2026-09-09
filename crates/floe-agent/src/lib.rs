@@ -1,3 +1,4 @@
+mod a2a;
 mod capability_execution;
 mod contract;
 mod expert;
@@ -10,6 +11,7 @@ mod prompts;
 mod registry;
 mod runtime;
 
+pub use a2a::*;
 pub use contract::*;
 pub use expert::*;
 pub use model_attempt::*;

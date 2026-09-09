@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use floe_agent::{AgentMessage, AgentRegistry, ExpertResult};
+use floe_agent::{AgentMessage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
 use turso::transaction::TransactionBehavior;
 
 use super::*;
@@ -63,8 +63,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .messages
                 .iter()
                 .filter_map(|message| match message {
-                    AgentMessage::Capability { call_id, result: Ok(output), .. }
-                        if *call_id == reference.invocation_id => Some(output),
+                    AgentMessage::Delegation { task, .. }
+                        if task.id == reference.invocation_id =>
+                    {
+                        task.data_part(EXPERT_RESULT_MEDIA_TYPE)
+                    }
                     _ => None,
                 })
                 .collect();

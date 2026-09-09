@@ -18,6 +18,9 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
                 .map_err(|_| AgentFailure::InvalidInput)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    for card in &request.active_agents {
+        card.validate()?;
+    }
     for attempt in 0..2 {
         if request.cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
@@ -73,6 +76,8 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
                 || response.output.is_empty()
                 || response.output.len() > 16
                 || response.call_count() > 8
+                || response.delegation_count() > 1
+                || (response.delegation_count() > 0 && response.capability_call_count() > 0)
             {
                 return Err(AgentFailure::InvalidModelOutput);
             }
@@ -127,6 +132,17 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
                             || validators[index]
                                 .as_ref()
                                 .is_some_and(|validator| !validator.is_valid(&value))
+                        {
+                            return Err(AgentFailure::InvalidModelOutput);
+                        }
+                    }
+                    ModelStep::Delegate { agent_id, message } => {
+                        if !request
+                            .active_agents
+                            .iter()
+                            .any(|card| card.id == *agent_id)
+                            || message.trim().is_empty()
+                            || message.len() > 4096
                         {
                             return Err(AgentFailure::InvalidModelOutput);
                         }

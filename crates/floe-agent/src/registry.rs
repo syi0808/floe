@@ -43,8 +43,21 @@ pub struct AgentPackage {
     pub reference: PackageRef,
     pub publisher: String,
     pub implementation: PackageImplementation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_metadata: Option<ExpertMetadata>,
     pub required_tools: Vec<PackageRef>,
     pub state_schema_version: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertMetadata {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub domain_tags: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 impl AgentPackage {
@@ -55,8 +68,22 @@ impl AgentPackage {
         if !valid_name(&self.reference.id)
             || !valid_name(&self.reference.version)
             || !valid_name(&self.publisher)
+            || (self.reference.kind == PackageKind::Tool && self.expert_metadata.is_some())
         {
             return Err(AgentFailure::InvalidInput);
+        }
+        if let Some(metadata) = &self.expert_metadata {
+            crate::AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
+                id: self.reference.id.clone(),
+                version: self.reference.version.clone(),
+                name: metadata.name.clone(),
+                description: metadata.description.clone(),
+                domain_tags: metadata.domain_tags.clone(),
+                skills: metadata.skills.clone(),
+            }
+            .validate()?;
         }
         match &self.implementation {
             PackageImplementation::TimelineRead { data_class }
@@ -689,13 +716,13 @@ impl AgentRegistry {
             .ok_or(AgentFailure::CapabilityDenied)
     }
 
-    pub fn expert_descriptor(
+    pub fn expert_card(
         &self,
         person_id: PersonId,
         assignment_id: Uuid,
         expected_revision: u64,
         view_handle: Uuid,
-    ) -> Result<crate::CapabilityDescriptor, AgentFailure> {
+    ) -> Result<crate::AgentCard, AgentFailure> {
         let resolved = self.resolve(
             self.instance_id(),
             person_id,
@@ -703,37 +730,40 @@ impl AgentRegistry {
             expected_revision,
             &[view_handle],
         )?;
-        Ok(crate::CapabilityDescriptor {
+        let fallback = match resolved.package.implementation {
+            PackageImplementation::Schedule => ExpertMetadata {
+                name: "Schedule Expert".into(),
+                description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
+                domain_tags: vec!["schedule".into(), "calendar".into()],
+                skills: vec!["Provide independent scheduling judgment".into()],
+            },
+            PackageImplementation::Declarative { .. } => ExpertMetadata {
+                name: resolved.package.reference.id.clone(),
+                description: "Applies its installed domain guidance in an isolated context and returns focused advice.".into(),
+                domain_tags: vec!["custom".into()],
+                skills: vec!["Provide independent domain judgment".into()],
+            },
+            PackageImplementation::TimelineRead { .. } => {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+        };
+        let metadata = resolved
+            .package
+            .expert_metadata
+            .as_ref()
+            .unwrap_or(&fallback);
+        let card = crate::AgentCard {
             schema_version: AGENT_VERSION,
-            id: format!("expert.{}", resolved.package.reference.id),
-            version: resolved.package.reference.version,
-            read_only: true,
-            output_data_class: resolved.data_class,
-            input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["briefing", "propose_focus", "analyze"]},
-                    "focus_minutes": {"type": "integer", "minimum": 1, "maximum": 240},
-                    "request": {"type": "string", "minLength": 1, "maxLength": 2048}
-                },
-                "required": ["kind"],
-                "oneOf": [
-                    {
-                        "properties": {
-                            "kind": {"enum": ["briefing", "propose_focus"]}
-                        },
-                        "required": ["focus_minutes"]
-                    },
-                    {
-                        "properties": {
-                            "kind": {"const": "analyze"}
-                        },
-                        "required": ["request"]
-                    }
-                ],
-                "additionalProperties": false
-            })),
-        })
+            protocol_version: crate::A2A_PROTOCOL_VERSION.into(),
+            id: resolved.package.reference.id.clone(),
+            version: resolved.package.reference.version.clone(),
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            domain_tags: metadata.domain_tags.clone(),
+            skills: metadata.skills.clone(),
+        };
+        card.validate()?;
+        Ok(card)
     }
 
     pub(crate) fn resolve(

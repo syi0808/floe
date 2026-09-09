@@ -45,11 +45,11 @@ impl ModelRunner for BatchScheduleModel {
                     },
                     ModelStep::Call {
                         capability_id: "schedule.find_free_windows".into(),
-                        input: "{}".into(),
+                        input: r#"{"minimum_minutes":60}"#.into(),
                     },
                     ModelStep::Call {
                         capability_id: "schedule.find_free_windows".into(),
-                        input: "{}".into(),
+                        input: r#"{"minimum_minutes":60}"#.into(),
                     },
                 ]
             } else {
@@ -107,38 +107,27 @@ async fn expert_executes_whole_read_batches_with_its_own_budget_and_transcript()
 }
 
 #[test]
-fn expert_descriptors_use_resolved_grants_and_publish_a_bounded_input_schema() {
+fn expert_cards_use_resolved_grants_and_publish_domain_metadata() {
     let fixture = Fixture::new();
     let mut registry = fixture.registry.lock().unwrap();
-    let descriptor = registry
-        .expert_descriptor(
+    let card = registry
+        .expert_card(
             fixture.person,
             fixture.schedule,
             registry.revision(),
             fixture.view.handle,
         )
         .unwrap();
-    assert_eq!(descriptor.id, "expert.schedule");
-    assert_eq!(descriptor.output_data_class, DataClass::Synthetic);
-    let schema = descriptor.input_schema.as_ref().unwrap();
-    assert_eq!(schema["properties"]["focus_minutes"]["maximum"], 240);
-    assert_eq!(schema["type"], "object");
-    assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(schema["oneOf"][1]["properties"]["kind"]["const"], "analyze");
-    let mut legacy = serde_json::to_value(&descriptor).unwrap();
-    legacy.as_object_mut().unwrap().remove("input_schema");
-    assert_eq!(
-        serde_json::from_value::<CapabilityDescriptor>(legacy)
-            .unwrap()
-            .input_schema,
-        None
-    );
+    assert_eq!(card.id, "schedule");
+    assert_eq!(card.name, "Schedule Expert");
+    assert!(card.domain_tags.iter().any(|tag| tag == "calendar"));
+    assert!(!card.description.is_empty());
     let revision = registry.revision();
     registry
         .set_assignment_enabled(revision, fixture.person, fixture.tool, false)
         .unwrap();
     assert_eq!(
-        registry.expert_descriptor(
+        registry.expert_card(
             fixture.person,
             fixture.schedule,
             registry.revision(),
@@ -252,7 +241,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
     let restored = AgentRegistry::restore(old, fixture.instance).unwrap();
     assert!(
         restored
-            .expert_descriptor(
+            .expert_card(
                 fixture.person,
                 fixture.schedule,
                 restored.revision(),
@@ -309,6 +298,7 @@ impl Fixture {
                 implementation: PackageImplementation::TimelineRead {
                     data_class: DataClass::Synthetic,
                 },
+                expert_metadata: None,
                 required_tools: vec![],
                 state_schema_version: 1,
             },
@@ -327,6 +317,7 @@ impl Fixture {
                 },
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Schedule,
+                expert_metadata: None,
                 required_tools: vec![tool_reference.clone()],
                 state_schema_version: 1,
             },
@@ -349,6 +340,7 @@ impl Fixture {
                         minimum_minutes: 30,
                     }],
                 },
+                expert_metadata: None,
                 required_tools: vec![tool_reference],
                 state_schema_version: 1,
             },
@@ -949,7 +941,7 @@ impl ModelRunner for ScheduleModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         let has_capability = !request.capabilities.is_empty();
         let call = self.requests.lock().unwrap().len() + 1;
-        let input = {
+        let (input, general_analysis) = {
             let AgentMessage::User { text, .. } = &request.messages[0] else {
                 return Err(AgentFailure::InvalidInput);
             };
@@ -962,17 +954,28 @@ impl ModelRunner for ScheduleModel {
                 .as_u64()
                 .ok_or(AgentFailure::InvalidInput)?;
             let range_start = start + u64::try_from(call - 1).unwrap() * 86_400_000;
-            serde_json::json!({
+            let general_analysis = task["request"]["kind"] == "analyze";
+            let mut input = serde_json::json!({
                 "range_start_unix_ms": range_start,
                 "range_end_unix_ms": (range_start + 86_400_000).min(end)
-            })
-            .to_string()
+            });
+            if !general_analysis {
+                input["minimum_minutes"] = serde_json::json!(60);
+            }
+            (input.to_string(), general_analysis)
         };
         let capability_id = if has_capability {
             request
                 .capabilities
                 .iter()
-                .find(|capability| capability.id == "schedule.find_free_windows")
+                .find(|capability| {
+                    capability.id
+                        == if general_analysis {
+                            "calendar.read"
+                        } else {
+                            "schedule.find_free_windows"
+                        }
+                })
                 .or_else(|| request.capabilities.first())
                 .unwrap()
                 .id
@@ -1078,7 +1081,8 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
             [
                 "calendar.read",
                 "calendar.search",
-                "schedule.find_free_windows"
+                "schedule.find_free_windows",
+                "schedule.propose_window"
             ]
         );
         assert_eq!(requests[1].messages.len(), 2);
@@ -1087,7 +1091,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
         assert!(
             requests
                 .iter()
-                .all(|request| request.capabilities.len() == 3)
+                .all(|request| request.capabilities.len() == 4)
         );
     }
     assert_eq!(views.reads.load(Ordering::Acquire), 1);
@@ -1117,7 +1121,7 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
 }
 
 #[tokio::test]
-async fn general_schedule_analysis_does_not_advertise_focus_workflow() {
+async fn general_schedule_analysis_selects_calendar_read_without_forcing_free_windows() {
     let fixture = Fixture::new();
     let views = Views {
         view: fixture.view.clone(),
@@ -1151,7 +1155,12 @@ async fn general_schedule_analysis_does_not_advertise_focus_workflow() {
             .capabilities
             .iter()
             .map(|capability| capability.id.as_str())
-            .eq(["calendar.read", "calendar.search"])
+            .eq([
+                "calendar.read",
+                "calendar.search",
+                "schedule.find_free_windows",
+                "schedule.propose_window",
+            ])
     }));
     assert!(requests.iter().all(|request| {
         request.messages.iter().all(|message| {

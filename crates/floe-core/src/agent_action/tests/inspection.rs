@@ -173,13 +173,9 @@ async fn inspection_rejects_cross_person_copied_and_uncommitted_receipts() {
             evidence.invocation_id = Uuid::new_v4();
         }
         copied.revision = 1;
-        copied.messages.push(AgentMessage::Capability {
-            turn_id: Uuid::new_v4(),
-            call_id: evidence.invocation_id,
-            capability_id: "copied".into(),
-            input: String::new(),
-            result: Ok(serde_json::to_string(&evidence).unwrap()),
-        });
+        copied
+            .messages
+            .push(delegation_message(Uuid::new_v4(), &evidence));
         fixture.vault.compare_and_swap(&copied, 0).await.unwrap();
         let mut request = fixture.inspection();
         request.reference.session_id = copied.id;

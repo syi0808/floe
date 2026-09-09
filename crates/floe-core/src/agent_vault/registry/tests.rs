@@ -428,16 +428,24 @@ impl Fixture {
         self.vault.compare_and_swap(&previous, 0).await.unwrap();
         let snapshot = self.vault.expert_registry().await.unwrap().unwrap();
         let capabilities = FixtureCapabilities::from_snapshot(self.person, snapshot).unwrap();
-        let output = capabilities
-            .invoke(CapabilityInvocation {
+        let context_id = Uuid::new_v4();
+        let task = capabilities
+            .handle_message(A2ASendMessageRequest {
                 usage: Default::default(),
                 schema_version: 1,
-                call_id,
                 person_id: self.person,
                 session_id: previous.id,
-                turn_id,
-                capability_id: "fixture.schedule.read".into(),
-                input: r#"{"scope":"sample-day"}"#.into(),
+                parent_turn_id: turn_id,
+                agent_id: "floe.schedule".into(),
+                message: A2AMessage {
+                    message_id: Uuid::new_v4(),
+                    context_id,
+                    task_id: Some(call_id),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Analyze the sample day and propose a schedule.".into(),
+                    }],
+                },
                 max_output_bytes: 16384,
                 deadline: Instant::now() + Duration::from_secs(1),
                 cancellation: Cancellation::default(),
@@ -445,13 +453,8 @@ impl Fixture {
             .await
             .unwrap();
         let mut next = previous.clone();
-        next.messages.push(AgentMessage::Capability {
-            turn_id,
-            call_id,
-            capability_id: "fixture.schedule.read".into(),
-            input: r#"{"scope":"sample-day"}"#.into(),
-            result: Ok(output),
-        });
+        next.messages
+            .push(AgentMessage::Delegation { turn_id, task });
         next.revision += 1;
         (previous, next, capabilities.snapshot().unwrap())
     }
@@ -491,13 +494,10 @@ impl Fixture {
 }
 
 fn expert(session: &AgentSession) -> ExpertResult {
-    let AgentMessage::Capability {
-        result: Ok(output), ..
-    } = &session.messages[1]
-    else {
+    let AgentMessage::Delegation { task, .. } = &session.messages[1] else {
         panic!("expected Expert result");
     };
-    serde_json::from_str(output).unwrap()
+    serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -683,13 +683,13 @@ async fn saved_revocation_and_configuration_cas_do_not_reset_private_state_or_na
             .await
             .unwrap();
     let unavailable = fixture.sample().await;
-    assert!(matches!(
-        &unavailable.messages[1],
-        AgentMessage::Capability {
-            result: Err(AgentFailure::CapabilityDenied),
-            ..
-        }
-    ));
+    assert_eq!(unavailable.messages.len(), 1);
+    assert_eq!(
+        unavailable.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::InvalidModelOutput,
+        })
+    );
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), Some(next));
     assert_eq!(fixture.receipts().await, 1);
 }

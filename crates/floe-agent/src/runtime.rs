@@ -52,6 +52,18 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         command: AgentCommand,
         context: AgentContext,
         cancellation: Cancellation,
+        emit: impl FnMut(AgentEvent),
+    ) -> Result<AgentSession, AgentFailure> {
+        self.run_turn_with_agents(command, context, &NoA2AHost, cancellation, emit)
+            .await
+    }
+
+    pub async fn run_turn_with_agents<Agents: A2AHost>(
+        &self,
+        command: AgentCommand,
+        context: AgentContext,
+        agents: &Agents,
+        cancellation: Cancellation,
         mut emit: impl FnMut(AgentEvent),
     ) -> Result<AgentSession, AgentFailure> {
         if command.schema_version != AGENT_VERSION {
@@ -116,6 +128,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 self.budget,
                 &mut usage,
                 &ledger,
+                agents,
                 &mut emit,
             )
             .await
@@ -175,6 +188,28 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         session_id: Uuid,
         expected_revision: u64,
         context: AgentContext,
+        cancellation: Cancellation,
+        emit: impl FnMut(AgentEvent),
+    ) -> Result<AgentSession, AgentFailure> {
+        self.continue_turn_with_agents(
+            person_id,
+            session_id,
+            expected_revision,
+            context,
+            &NoA2AHost,
+            cancellation,
+            emit,
+        )
+        .await
+    }
+
+    pub async fn continue_turn_with_agents<Agents: A2AHost>(
+        &self,
+        person_id: floe_domain::PersonId,
+        session_id: Uuid,
+        expected_revision: u64,
+        context: AgentContext,
+        agents: &Agents,
         cancellation: Cancellation,
         mut emit: impl FnMut(AgentEvent),
     ) -> Result<AgentSession, AgentFailure> {
@@ -243,6 +278,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 budget,
                 &mut usage,
                 &ledger,
+                agents,
                 &mut emit,
             )
             .await
@@ -497,7 +533,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         }
     }
 
-    async fn drive(
+    async fn drive<Agents: A2AHost>(
         &self,
         session: &mut AgentSession,
         context: &AgentContext,
@@ -507,6 +543,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         budget: AgentBudget,
         usage: &mut AgentUsage,
         ledger: &UsageLedger,
+        agents: &Agents,
         emit: &mut impl FnMut(AgentEvent),
     ) -> Result<(), DriveStop> {
         let (sender, mut journal) = tokio::sync::mpsc::unbounded_channel();
@@ -538,6 +575,17 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             .contains(&descriptor.output_data_class)
                 })
                 .collect();
+            let active_agents: Vec<_> = agents
+                .agent_cards(session.person_id)
+                .into_iter()
+                .map(|card| {
+                    card.validate()?;
+                    Ok(card)
+                })
+                .collect::<Result<_, AgentFailure>>()?;
+            if active_agents.len() > 16 {
+                return Err(AgentFailure::BudgetExceeded.into());
+            }
             emit_event(
                 session,
                 turn_id,
@@ -547,23 +595,48 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 },
                 emit,
             );
+            let replay = session
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    AgentMessage::Capability {
+                        turn_id: message_turn,
+                        call_id,
+                        ..
+                    } if *message_turn == turn_id => session
+                        .capability_executions
+                        .iter()
+                        .find(|execution| {
+                            execution.call_id == *call_id
+                                && execution.scope_id == session.id
+                                && execution.state == CapabilityExecutionState::Settled
+                        })
+                        .and_then(|execution| execution.replay.clone())
+                        .map(|replay| ModelReplay {
+                            call_id: *call_id,
+                            replay,
+                        }),
+                    AgentMessage::Delegation {
+                        turn_id: message_turn,
+                        task,
+                    } if *message_turn == turn_id => session
+                        .delegation_executions
+                        .iter()
+                        .find(|execution| {
+                            execution.task_id == task.id
+                                && execution.state == DelegationExecutionState::Settled
+                        })
+                        .and_then(|execution| execution.replay.clone())
+                        .map(|replay| ModelReplay {
+                            call_id: task.id,
+                            replay,
+                        }),
+                    _ => None,
+                })
+                .collect();
             let request = ModelRequest {
                 usage: ledger.clone(),
-                replay: session
-                    .capability_executions
-                    .iter()
-                    .filter(|execution| {
-                        execution.turn_id == turn_id
-                            && execution.scope_id == session.id
-                            && execution.state == CapabilityExecutionState::Settled
-                    })
-                    .filter_map(|execution| {
-                        execution.replay.clone().map(|replay| ModelReplay {
-                            call_id: execution.call_id,
-                            replay,
-                        })
-                    })
-                    .collect(),
+                replay,
                 schema_version: AGENT_VERSION,
                 prompt: manager_prompt(context.persona.as_ref()).map_err(DriveStop::from)?,
                 person_id: session.person_id,
@@ -573,6 +646,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 context: context.clone(),
                 messages: session.messages.clone(),
                 capabilities: descriptors.clone(),
+                active_agents: active_agents.clone(),
                 remaining_tokens: budget.max_tokens - usage.tokens,
                 remaining_cost_micros: budget.max_cost_micros - usage.cost_micros,
                 max_output_bytes: budget.max_output_bytes,
@@ -580,6 +654,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 cancellation: cancellation.clone(),
             };
             if encoded_len(&request.capabilities)?
+                .saturating_add(encoded_len(&request.active_agents)?)
                 .saturating_add(encoded_len(context)?)
                 .saturating_add(encoded_len(&session.messages)?)
                 .saturating_add(encoded_len(self.policy)?)
@@ -758,6 +833,143 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         check_drive_running(deadline, cancellation)?;
                         continue;
                     }
+                    ModelStep::Delegate { agent_id, message } => {
+                        if usage.capability_calls >= budget.max_capability_calls {
+                            return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
+                        }
+                        let Some(card) = active_agents.iter().find(|card| card.id == agent_id)
+                        else {
+                            return Err(AgentFailure::CapabilityDenied.into());
+                        };
+                        if !agents
+                            .agent_cards(session.person_id)
+                            .iter()
+                            .any(|current| current == card)
+                        {
+                            return Err(AgentFailure::CapabilityUnavailable.into());
+                        }
+                        usage.capability_calls += 1;
+                        let task_id = Uuid::new_v4();
+                        let context_id = Uuid::new_v4();
+                        let request_message = A2AMessage {
+                            message_id: Uuid::new_v4(),
+                            context_id,
+                            task_id: Some(task_id),
+                            role: A2AMessageRole::User,
+                            parts: vec![A2APart::Text {
+                                text: message.clone(),
+                            }],
+                        };
+                        let execution = DelegationExecution {
+                            turn_id,
+                            task_id,
+                            agent_id: agent_id.clone(),
+                            message: message.clone(),
+                            state: DelegationExecutionState::Started,
+                            task: None,
+                            replay: response.replay_for(call_index)?,
+                        };
+                        call_index += 1;
+                        session.delegation_executions.push(execution);
+                        session.usage = *usage;
+                        if let Err(failure) = self.commit(session).await {
+                            session.delegation_executions.pop();
+                            return Err(DriveStop::from_call(failure));
+                        }
+                        emit_event(
+                            session,
+                            turn_id,
+                            AgentEventKind::DelegationStarted {
+                                task_id,
+                                agent_id: agent_id.clone(),
+                            },
+                            emit,
+                        );
+                        let request = A2ASendMessageRequest {
+                            usage: ledger.clone(),
+                            schema_version: AGENT_VERSION,
+                            person_id: session.person_id,
+                            session_id: session.id,
+                            parent_turn_id: turn_id,
+                            agent_id: agent_id.clone(),
+                            message: request_message.clone(),
+                            max_output_bytes: budget.max_output_bytes,
+                            deadline,
+                            cancellation: cancellation.clone(),
+                        };
+                        let result = self
+                            .recorded(
+                                agents.send_message(request),
+                                session,
+                                usage,
+                                &ledger,
+                                &mut journal,
+                                turn_id,
+                                emit,
+                                deadline,
+                                cancellation,
+                            )
+                            .await;
+                        if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) =
+                            result
+                        {
+                            return Err(DriveStop::from_call(result.unwrap_err()));
+                        }
+                        let task = match result {
+                            Ok(task)
+                                if task.id == task_id
+                                    && task.context_id == context_id
+                                    && task.agent_id == agent_id
+                                    && task.state == A2ATaskState::Completed
+                                    && task.failure.is_none()
+                                    && task.result_text().is_ok() =>
+                            {
+                                task
+                            }
+                            Ok(_) => return Err(AgentFailure::InvalidModelOutput.into()),
+                            Err(failure) => A2ATask {
+                                id: task_id,
+                                context_id,
+                                agent_id: agent_id.clone(),
+                                state: A2ATaskState::Failed,
+                                history: vec![request_message],
+                                artifacts: vec![],
+                                failure: Some(failure),
+                            },
+                        };
+                        if encoded_len(&task)? > budget.max_output_bytes {
+                            return Err(AgentFailure::BudgetExceeded.into());
+                        }
+                        let saved = session
+                            .delegation_executions
+                            .iter_mut()
+                            .find(|execution| execution.task_id == task_id)
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        let previous = saved.clone();
+                        saved.state = DelegationExecutionState::Settled;
+                        saved.task = Some(task.clone());
+                        let message = AgentMessage::Delegation { turn_id, task };
+                        session.messages.push(message.clone());
+                        if let Err(failure) = self.commit(session).await {
+                            session.messages.pop();
+                            *session
+                                .delegation_executions
+                                .iter_mut()
+                                .find(|execution| execution.task_id == task_id)
+                                .ok_or(AgentFailure::InvalidInput)? = previous;
+                            return Err(DriveStop::from_call(failure));
+                        }
+                        emit_event(
+                            session,
+                            turn_id,
+                            AgentEventKind::MessageCommitted {
+                                message,
+                                revision: session.revision,
+                            },
+                            emit,
+                        );
+                        continue;
+                    }
                 };
                 ledger.sync(usage);
                 session.usage = *usage;
@@ -770,6 +982,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 session.active_turn = None;
                 session.last_outcome = Some(AgentOutcome::Completed);
                 for execution in &mut session.capability_executions {
+                    execution.replay = None;
+                }
+                for execution in &mut session.delegation_executions {
                     execution.replay = None;
                 }
                 if let Err(failure) = self.commit(session).await {
@@ -812,6 +1027,12 @@ fn interrupt_executions(
     for execution in &mut session.capability_executions {
         if execution.state == CapabilityExecutionState::Started {
             execution.state = CapabilityExecutionState::Interrupted;
+            interrupted = true;
+        }
+    }
+    for execution in &mut session.delegation_executions {
+        if execution.state == DelegationExecutionState::Started {
+            execution.state = DelegationExecutionState::Interrupted;
             interrupted = true;
         }
     }

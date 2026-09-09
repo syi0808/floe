@@ -14,11 +14,22 @@ Date: 2026-09-09. Implementation and automated evidence only; S4 remains **0/14*
 - Added a typed `ContextEnvelope` and manifest for stable prompt components,
   invocation-scoped capability descriptors, contextual evidence, conversation and
   runtime output bounds. Local and remote adapters serialize the same Core assembly.
+- Added registry-backed Expert metadata and an Active Expert Index. The Manager sees
+  bounded Agent Cards, while Experts are no longer published through the Manager's
+  capability registry.
+- Added A2A-aligned `Message`, `Task`, `Artifact` and `Part` contracts plus an
+  in-process router/transport. `SendMessage`, `GetTask` and `CancelTask` share the
+  same transport boundary, including person scoping and active-task cancellation.
+- Manager delegation is a distinct persisted operation with a natural-language
+  assignment, lifecycle journal and terminal Expert artifact. Provider adapters may
+  use a function-call primitive on the wire, but Core never models an Expert as a
+  Tool capability.
 - Generalized `ExpertInput` with `analyze`. Free-text Calendar turns no longer become
   an implicit 60-minute focus request.
-- Schedule Expert can choose `calendar.read`, `calendar.search` and, only for a request
-  with an explicit focus duration, `schedule.find_free_windows`. It may answer without
-  a mandatory Tool call; host budgets and schema validation remain authoritative.
+- Schedule Expert can choose `calendar.read`, `calendar.search`,
+  `schedule.find_free_windows` and `schedule.propose_window` according to the task.
+  No common prompt forces a focus-time workflow; host budgets, schemas and proposal
+  validation remain authoritative.
 - Added a bounded `PlaybookRegistry` and per-invocation discovery session. Only
   eligible roots are initially visible; loading a parent reveals direct child
   summaries. Missing ancestry, cycles, repeated loads, depth and content budgets fail
@@ -35,13 +46,16 @@ Passed.
 
 cargo test --workspace
 All Rust workspace tests passed.
+
+cd server && go test ./...
+All Go server tests passed.
 ```
 
 Coverage includes prompt component validation, custom Manager Persona composition,
-context manifest serialization, generic Schedule analysis without focus capabilities,
-general Calendar read/search descriptors, optional direct Expert answers, nested
-Playbook visibility and hierarchy rejection. The existing Calendar proposal,
-authority, encrypted-session, model-adapter and replay suites remain green.
+context manifest serialization, Agent Card assembly, in-process A2A task lookup and
+cancellation, natural-language delegation, generic Schedule tool selection, typed
+proposal artifacts, nested Playbook visibility and hierarchy rejection. The existing
+Calendar authority, encrypted-session, model-adapter and replay suites remain green.
 
 ## Remaining boundary
 

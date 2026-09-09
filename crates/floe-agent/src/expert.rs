@@ -284,14 +284,15 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             },
             _ => return Err(AgentFailure::CapabilityDenied),
         };
-        let insights = match minimum {
+        let mut insights = match minimum {
             Some(minimum) => analyze_schedule(&view, minimum),
             None => commitment_insights(&view, invocation.budget.max_insights.min(8)),
         };
         if insights.len() > invocation.budget.max_insights.min(8) {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let action_proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. }) {
+        let mut action_proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
+        {
             insights
                 .iter()
                 .filter_map(|insight| match insight {
@@ -311,19 +312,28 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         };
         let (summary, model_calls) = match (&resolved.package.implementation, reasoning) {
             (PackageImplementation::Schedule, ExpertReasoning::Lightweight { model, policy }) => {
-                let (summary, model_calls) = run_schedule_reasoning(
-                    model,
-                    policy,
-                    &invocation,
-                    &view,
-                    &insights,
-                    view.data_class,
-                )
-                .await?;
+                let (summary, model_calls, model_proposals) =
+                    run_schedule_reasoning(model, policy, &invocation, &view, view.data_class)
+                        .await?;
+                if !model_proposals.is_empty() {
+                    action_proposals = model_proposals;
+                    for proposal in &action_proposals {
+                        let insight = ExpertInsight::FocusWindow {
+                            starts_at_unix_ms: proposal.starts_at_unix_ms,
+                            ends_at_unix_ms: proposal.ends_at_unix_ms,
+                        };
+                        if !insights.contains(&insight) {
+                            insights.push(insight);
+                        }
+                    }
+                }
                 (Some(summary), model_calls)
             }
             _ => (None, 0),
         };
+        if insights.len() > invocation.budget.max_insights.min(8) {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         let mut result = ExpertResult {
             schema_version: AGENT_VERSION,
             invocation_id: invocation.invocation_id,
@@ -399,9 +409,8 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
     policy: &InferencePolicyDecision,
     invocation: &ExpertInvocation,
     view: &ExpertTimelineView,
-    insights: &[ExpertInsight],
     data_class: DataClass,
-) -> Result<(String, u32), AgentFailure> {
+) -> Result<(String, u32, Vec<ExpertFocusProposal>), AgentFailure> {
     if invocation.budget.max_model_calls == 0
         || invocation.budget.max_model_calls > 10
         || invocation.budget.max_model_tokens == 0
@@ -410,7 +419,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
         return Err(AgentFailure::BudgetExceeded);
     }
     let turn_id = invocation.invocation_id;
-    let capabilities = schedule_capabilities(data_class, focus_minutes_for(&invocation.input));
+    let capabilities = schedule_capabilities(data_class);
     let task = serde_json::json!({
         "request": &invocation.input,
         "authorized_range": {
@@ -430,6 +439,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
     expert_policy.purpose = "schedule-summary".into();
     expert_policy.performance_class = "fast".into();
     let mut tool_calls = 0;
+    let mut action_proposals = vec![];
     for model_call in 1..=invocation.budget.max_model_calls {
         let available_capabilities = if tool_calls < invocation.budget.max_tool_calls {
             capabilities.clone()
@@ -469,7 +479,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                     if summary.is_empty() || summary.len() > 2048 {
                         return Err(AgentFailure::InvalidModelOutput);
                     }
-                    return Ok((summary.into(), model_call));
+                    return Ok((summary.into(), model_call, action_proposals));
                 }
                 ModelStep::Call {
                     capability_id,
@@ -483,6 +493,19 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         return Err(AgentFailure::InvalidModelOutput);
                     }
                     tool_calls += 1;
+                    if capability_id == "schedule.propose_window" {
+                        if !action_proposals.is_empty() {
+                            return Err(AgentFailure::InvalidModelOutput);
+                        }
+                        let proposal: ScheduleProposalInput = serde_json::from_str(&input)
+                            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+                        validate_schedule_proposal(view, &proposal)?;
+                        action_proposals.push(ExpertFocusProposal {
+                            starts_at_unix_ms: proposal.starts_at_unix_ms,
+                            ends_at_unix_ms: proposal.ends_at_unix_ms,
+                            view_handle: view.handle,
+                        });
+                    }
                     let call_id = Uuid::new_v4();
                     let output = crate::capability_execution::execute_recorded(
                         &invocation.usage,
@@ -502,13 +525,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         Box::pin(async {
                             check_running(invocation)?;
                             validate_view(view, invocation, data_class)?;
-                            schedule_capability_result(
-                                &capability_id,
-                                view,
-                                insights,
-                                focus_minutes_for(&invocation.input),
-                                &input,
-                            )
+                            schedule_capability_result(&capability_id, view, &input)
                         }),
                     )
                     .await??;
@@ -527,6 +544,7 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         result: Ok(output),
                     });
                 }
+                ModelStep::Delegate { .. } => return Err(AgentFailure::CapabilityDenied),
             }
         }
     }
@@ -548,19 +566,22 @@ struct CalendarSearchInput {
     range_end_unix_ms: Option<u64>,
 }
 
-fn focus_minutes_for(input: &ExpertInput) -> Option<u16> {
-    match input {
-        ExpertInput::Briefing { focus_minutes } | ExpertInput::ProposeFocus { focus_minutes } => {
-            Some(*focus_minutes)
-        }
-        ExpertInput::Analyze { focus_minutes, .. } => *focus_minutes,
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreeWindowInput {
+    minimum_minutes: u16,
+    range_start_unix_ms: Option<u64>,
+    range_end_unix_ms: Option<u64>,
 }
 
-fn schedule_capabilities(
-    data_class: DataClass,
-    focus_minutes: Option<u16>,
-) -> Vec<CapabilityDescriptor> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScheduleProposalInput {
+    starts_at_unix_ms: u64,
+    ends_at_unix_ms: u64,
+}
+
+fn schedule_capabilities(data_class: DataClass) -> Vec<CapabilityDescriptor> {
     let range_schema = serde_json::json!({
         "type": "object",
         "properties": {
@@ -596,24 +617,45 @@ fn schedule_capabilities(
             })),
         },
     ];
-    if focus_minutes.is_some() {
-        capabilities.push(CapabilityDescriptor {
-            schema_version: AGENT_VERSION,
-            id: "schedule.find_free_windows".into(),
-            version: "1.0.0".into(),
-            read_only: true,
-            output_data_class: data_class,
-            input_schema: Some(range_schema),
-        });
-    }
+    capabilities.push(CapabilityDescriptor {
+        schema_version: AGENT_VERSION,
+        id: "schedule.find_free_windows".into(),
+        version: "1.0.0".into(),
+        read_only: true,
+        output_data_class: data_class,
+        input_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "minimum_minutes": {"type": "integer", "minimum": 1, "maximum": 240},
+                "range_start_unix_ms": {"type": "integer", "minimum": 0},
+                "range_end_unix_ms": {"type": "integer", "minimum": 1}
+            },
+            "required": ["minimum_minutes"],
+            "additionalProperties": false
+        })),
+    });
+    capabilities.push(CapabilityDescriptor {
+        schema_version: AGENT_VERSION,
+        id: "schedule.propose_window".into(),
+        version: "1.0.0".into(),
+        read_only: true,
+        output_data_class: data_class,
+        input_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "starts_at_unix_ms": {"type": "integer", "minimum": 0},
+                "ends_at_unix_ms": {"type": "integer", "minimum": 1}
+            },
+            "required": ["starts_at_unix_ms", "ends_at_unix_ms"],
+            "additionalProperties": false
+        })),
+    });
     capabilities
 }
 
 fn schedule_capability_result(
     capability_id: &str,
     view: &ExpertTimelineView,
-    full_range_insights: &[ExpertInsight],
-    focus_minutes: Option<u16>,
     input: &str,
 ) -> Result<String, AgentFailure> {
     match capability_id {
@@ -642,20 +684,42 @@ fn schedule_capability_result(
             serde_json::to_string(&bounded).map_err(|_| AgentFailure::InvalidInput)
         }
         "schedule.find_free_windows" => {
-            let focus_minutes = focus_minutes.ok_or(AgentFailure::CapabilityDenied)?;
-            let input: CalendarRangeInput =
+            let input: FreeWindowInput =
                 serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
             if input.range_start_unix_ms.is_none() && input.range_end_unix_ms.is_none() {
-                return serde_json::to_string(full_range_insights)
+                return serde_json::to_string(&analyze_schedule(view, input.minimum_minutes))
                     .map_err(|_| AgentFailure::InvalidInput);
             }
             let bounded =
                 bounded_calendar_view(view, input.range_start_unix_ms, input.range_end_unix_ms)?;
-            serde_json::to_string(&analyze_schedule(&bounded, focus_minutes))
+            serde_json::to_string(&analyze_schedule(&bounded, input.minimum_minutes))
                 .map_err(|_| AgentFailure::InvalidInput)
+        }
+        "schedule.propose_window" => {
+            let proposal: ScheduleProposalInput =
+                serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            validate_schedule_proposal(view, &proposal)?;
+            Ok(serde_json::json!({"accepted": true}).to_string())
         }
         _ => Err(AgentFailure::CapabilityDenied),
     }
+}
+
+fn validate_schedule_proposal(
+    view: &ExpertTimelineView,
+    proposal: &ScheduleProposalInput,
+) -> Result<(), AgentFailure> {
+    if proposal.starts_at_unix_ms < view.range_start_unix_ms
+        || proposal.ends_at_unix_ms > view.range_end_unix_ms
+        || proposal.starts_at_unix_ms >= proposal.ends_at_unix_ms
+        || view.items.iter().any(|item| {
+            proposal.starts_at_unix_ms < item.ends_at_unix_ms
+                && proposal.ends_at_unix_ms > item.starts_at_unix_ms
+        })
+    {
+        return Err(AgentFailure::InvalidModelOutput);
+    }
+    Ok(())
 }
 
 fn bounded_calendar_view(
@@ -734,6 +798,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
             },
             messages: messages.to_vec(),
             capabilities,
+            active_agents: vec![],
             remaining_tokens,
             remaining_cost_micros,
             max_output_bytes: invocation.budget.max_output_bytes.min(4096),
