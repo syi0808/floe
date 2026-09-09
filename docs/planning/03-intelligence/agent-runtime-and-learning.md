@@ -114,6 +114,11 @@ order-independent. Mutations and interactive Review remain sequential.
 
 ## Prompt and context layers
 
+The concrete S5 assembly, Persona/User Model separation, retrieval manifest and
+hierarchical Playbook decision is defined by
+[ADR 0017](../../decisions/0017-agent-context-assembly.md). The outline below remains
+the product-level model.
+
 ```text
 1. Stable: Floe identity, safety, tool/Expert protocol
 2. Scoped: Person policy, session purpose, granted capabilities

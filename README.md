@@ -93,6 +93,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [Conversational Agent, learning, and voice sequence](docs/decisions/0013-conversational-agent-learning-and-voice-sequence.md)
 - [S4 connected Agent sources](docs/decisions/0014-s4-connected-agent-sources.md)
 - [S4 privacy-aware inference](docs/decisions/0015-s4-privacy-aware-inference.md)
+- [Agent context assembly and progressive Playbooks](docs/decisions/0017-agent-context-assembly.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

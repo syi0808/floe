@@ -237,7 +237,9 @@ Personal Memory, searchable Session Archive, procedural Playbook을 별도 저�
 정책으로 다룬다. Hermes의 background review와 Skills/Curator mechanism을 참고하되,
 Floe의 inferred durable write는 기본적으로 공용 Review에 staging한다. 자가개선은
 externalized knowledge 개선이며 model weights, identity, safety policy, permission을
-수정하지 않는다.
+수정하지 않는다. 구체적인 ContextEnvelope, Persona/User Model 경계, retrieval manifest와
+nested Playbook progressive disclosure는
+[ADR 0017](../../decisions/0017-agent-context-assembly.md)을 따른다.
 
 ### Acceptance criteria
 
