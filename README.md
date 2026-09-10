@@ -21,8 +21,9 @@ After S3, delivery validates a headless-capable Manager/Expert semantic loop thr
 an initial conversational inspection panel with bounded
 Calendar, Gmail, Contacts, travel/weather, Screen Time, and Apple Health sources plus
 privacy-aware local/remote model routing (S4), governed
-Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
-cross-device/server (S8) and intervention (S9).
+Memory and self-improvement (S5), connected domain Expert/connector expansion
+(S5.5), voice mode (S6), and local wake-up (S7) before cross-device/server (S8)
+and intervention (S9).
 
 S4 preparatory work now includes a bounded Rust Agent runtime, durable synthetic
 and Calendar-scoped sessions, and a user-invoked conversation panel with progress,
@@ -100,6 +101,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [S4 privacy-aware inference](docs/decisions/0015-s4-privacy-aware-inference.md)
 - [Agent context assembly and progressive Playbooks](docs/decisions/0017-agent-context-assembly.md)
 - [Ambient assistant, domain Experts and capability connectors](docs/decisions/0020-ambient-assistant-expert-connector-model.md)
+- [S5.5 connected domain expansion](docs/decisions/0021-s5-5-connected-domain-expansion.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

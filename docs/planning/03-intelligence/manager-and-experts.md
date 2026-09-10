@@ -197,6 +197,11 @@ Gmail 기반의 최소 Commitments perspective와 deterministic declarative fixt
 계약을 검증한다. Communication과 Wellbeing/Attention은 처음에는 bounded projection으로
 조합할 수 있으며, 독립 판단·권한·평가 corpus가 필요해질 때 별도 Expert로 승격한다.
 
+S5.5는 이 후보들을 실제 제품 domain으로 구현·평가하는 gate다. 각 Expert는 최소 하나의
+cross-source scenario, 독립된 evaluation corpus, bounded View/grant, typed evidence와
+degraded-source behavior를 가져야 한다. 이 기준을 충족하지 못하는 후보는 이름만 Expert로
+승격하지 않고 Tool, View 또는 다른 Expert의 제한된 projection으로 유지한다.
+
 Schedule & Feasibility Expert는 허가된 Calendar View와 read/search/free-window
 capability를 필요에 따라 사용해 근거가 있는 자연어 조언을 Artifact로 Manager에게
 반환한다. 증거와 변경 후보는 prose 안에 숨기지 않고 typed Data Part reference로 함께

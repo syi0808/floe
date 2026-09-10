@@ -364,12 +364,12 @@ See [ADR 0006](../../decisions/0006-slice-driven-delivery.md) and
 
 ## D-037 — Memory and Expert judgment precede distribution
 
-**Status:** Accepted — 2026-09-07; ordering amended by D-038
+**Status:** Accepted — 2026-09-07; ordering amended by D-038 and D-044
 
 Conversational Agent/Expert and governed Memory/learning both precede distribution.
 D-038 places Agent/Expert chat in S4 and Memory/learning in S5 because sessions,
-outcomes and corrections are the first learning evidence. Cross-device/server and
-intervention are now S8/S9.
+outcomes and corrections are the first learning evidence. D-044 inserts connected
+domain breadth as S5.5 before voice. Cross-device/server and intervention remain S8/S9.
 
 ---
 
@@ -466,3 +466,20 @@ S4 keeps text as its initial semantic-loop inspection surface; S6/S7 add voice a
 wake, while S9 validates background Situation detection and proactive delivery.
 
 See [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md).
+
+---
+
+## D-044 — Connected domain breadth precedes voice
+
+**Status:** Accepted — 2026-09-10
+
+S5.5 follows governed Memory and precedes voice. It productizes the planned personal,
+provider-parity, work-context and life-logistics connector cohorts and evaluates
+Schedule & Feasibility, Commitments, Communication, Relationships, Focus & Attention,
+Wellbeing, Work Context and Life Logistics as independent domain judgments. A candidate
+that does not justify an Expert boundary remains a Tool, View or projection.
+
+S6 now depends on S5.5 Accepted. Cross-device delivery remains S8 and autonomous
+background Situation/intervention remains S9.
+
+See [ADR 0021](../../decisions/0021-s5-5-connected-domain-expansion.md).

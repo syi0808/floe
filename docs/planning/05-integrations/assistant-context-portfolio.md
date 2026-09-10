@@ -88,6 +88,20 @@ Provider expansion은 Expert 목록의 확장이 아니다. 아래 source는 기
 연결하고 Schedule & Feasibility, Commitments, Communication, Relationships, Focus &
 Attention, Wellbeing, Work Context와 Life Logistics 중 필요한 판단에 조합한다.
 
+S5.5는 follow-up portfolio를 다음 acceptance wave로 전환한다.
+
+| Wave | Connector/source cohort | Primary Expert consumers |
+| --- | --- | --- |
+| Personal context | Apple Calendar, Gmail, Apple Contacts, location/ETA/weather, Apple Health, Screen Time gate | Schedule & Feasibility, Commitments, Communication, Relationships, Focus & Attention, Wellbeing |
+| Provider parity | Google/Microsoft Calendar and Mail, Android Calendar/Contacts, Health Connect | existing domain Experts through the same Views |
+| Work context | selected Slack/Teams, Drive/OneDrive/Dropbox, GitHub/Linear/Jira/Notion | Commitments, Communication, Relationships, Work Context |
+| Life logistics | reservation mail evidence, travel/flight, delivery and supported Home Assistant adapters | Schedule & Feasibility, Commitments, Life Logistics |
+
+각 wave는 fixture뿐 아니라 유효한 execution host의 live adapter evidence를 남긴다.
+다만 모든 vendor variant가 S5.5 전체를 막지는 않는다. 같은 logical View의 대표 live
+provider, conformance fixture, 미지원/미완료 provider matrix를 함께 유지하고 다음 adapter가
+Manager prompt 변경 없이 추가되는지를 검증한다.
+
 ### Tier B — provider parity and work context
 
 - Google Calendar direct connector
@@ -136,6 +150,10 @@ Before S8, source-cohort composition is tested with contract fixtures while each
 live source is accepted on its native execution host. S4 does not claim that an
 iPhone-only Health/Screen Time View already appears in a macOS briefing; that claim
 requires the S8 cross-device boundary.
+
+S5.5는 S4의 source contract를 위 wave까지 productize하지만 같은 cross-device 제한을
+유지한다. Work/Life connector는 unrestricted organization, drive, home 또는 webhook
+ingestion이 아니라 사용자가 선택한 최소 scope와 on-demand body/content를 기본으로 한다.
 
 ## Official platform constraints
 

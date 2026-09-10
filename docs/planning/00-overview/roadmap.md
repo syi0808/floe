@@ -14,7 +14,8 @@ domain Expert/Tool → 승인 action semantic loop를 먼저 검증한다. S4의
 authentication gate와 local Foundation Model/sLLM 기반 sensitive routing도 함께
 검증한다. S5는 그 대화와
 결과를 source-backed Memory와 procedural Playbook으로 학습하는 통제된 self-improvement를
-추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용해 음성을
+추가한다. S5.5는 계획된 connector cohort와 domain Expert를 productize하고, S6 voice
+mode와 S7 local wake-up이 같은 AgentSession을 재사용해 음성을
 기본 interaction으로 만들고, S8–S9에서 서버·기기와 background situation/intervention으로
 확장한다. 결재·민감 consent·복잡한 비교·recovery/audit가 필요할 때만 UI로 handoff한다.
 이 순서는 Floe의 핵심 제품 가설을 network
@@ -103,6 +104,12 @@ S5는 이 Phase 전체가 아니라 conversation/outcome 기반 Preference/Commi
 procedural Playbook의 evidence, review, retrieval, edit/rollback/delete lifecycle을
 먼저 검증한다.
 
+S5.5는 Memory 이후, voice 이전에 Schedule & Feasibility, Commitments,
+Communication, Relationships, Focus & Attention, Wellbeing, Work Context와 Life
+Logistics 판단을 실제 connector cohort에 연결한다. Personal context → provider parity →
+work context → life logistics wave로 진행하며, provider 수가 아니라 공통 View와
+cross-domain 사용자 scenario를 acceptance 기준으로 삼는다.
+
 ## Phase 3.5 — Expert Ecosystem
 
 - public Expert contract
@@ -120,6 +127,9 @@ S4는 local Schedule & Feasibility Expert의 Calendar increment와 declarative f
 같은 계약으로 실행해 Manager,
 permission, assignment, structured output 경계를 먼저 검증한다. Wasm과 Marketplace는
 이 선행 slice의 완료 조건이 아니다.
+
+S5.5는 이 public boundary 위에서 계획된 built-in domain Expert를 구현·평가한다.
+독립된 domain judgment가 입증되지 않는 후보는 Tool/View/projection으로 남긴다.
 
 ## Phase 4 — Cross-device
 

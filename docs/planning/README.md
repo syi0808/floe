@@ -135,14 +135,16 @@ Phase 순서는 구현 gate가 아니며 필요한 PoC를 해당 slice 착수 �
 5. `03-intelligence/model-layer.md`
 6. `08-engineering/technical-risks.md`
 
-Agent, Memory와 voice slice를 구현하는 경우:
+Agent, Memory, connected Expert와 voice slice를 구현하는 경우:
 
 1. `03-intelligence/agent-runtime-and-learning.md`
 2. `03-intelligence/manager-and-experts.md`
 3. `03-intelligence/expert-extension-model.md`
 4. `02-domain/personal-memory.md`
-5. `01-experience/voice-and-presence.md`
-6. `08-engineering/poc-plan.md`
+5. `05-integrations/assistant-context-portfolio.md`
+6. `05-integrations/initial-connector-set.md`
+7. `01-experience/voice-and-presence.md`
+8. `08-engineering/poc-plan.md`
 
 초기 connector 우선순위를 결정하는 경우:
 

@@ -24,6 +24,21 @@ Sandboxed Component와 server embedding topology는 S4 제외 범위다. 다만 
 contract에 direct database, credential, UI 또는 authoritative Memory write를 넣어
 미래 sandbox를 우회해서는 안 된다.
 
+## S5.5 implementation expansion
+
+S5.5는 runtime class를 늘리는 단계가 아니라 같은 native/declarative contract 위에
+domain breadth를 구현하는 단계다. Schedule & Feasibility, Commitments, Communication,
+Relationships, Focus & Attention, Wellbeing, Work Context와 Life Logistics 각각에 대해:
+
+- versioned Agent Card와 domain evaluation corpus;
+- 최소 권한 View/Tool/Playbook dependency;
+- evidence, uncertainty와 proposal Data Part schema;
+- unavailable/stale/conflicting source behavior;
+- Manager synthesis 및 S3/S5 governance integration;
+
+을 검증한다. Expert별 process나 model instance는 요구하지 않으며 가까운 domain이 구현을
+공유해도 isolation, assignment, budget과 evaluation identity는 구분한다.
+
 ## Target runtime topology
 
 Manager와 Expert는 기본적으로 같은 process에서 실행한다. 서로 직접 함수를 호출하지

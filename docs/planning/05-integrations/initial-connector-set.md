@@ -739,19 +739,35 @@ Time + Commitments + People + Feasibility + Capacity
 → Manager today briefing / S3 proposal
 ```
 
-## P1 — Direct Calendar Reliability
+## S5.5 Wave 2 — Direct Calendar Reliability
 
 8. Google Calendar direct connector
 
 If the primary dogfood calendar is Google, this moves into P0 because it enables always-online schedule management.
 
-## P1 — Android/Windows Completion
+## S5.5 Wave 2 — Android/Windows Completion
 
 9. Health Connect
 10. Android Calendar
 11. Android Contacts
 12. Microsoft Calendar
 13. Microsoft Mail
+
+## S5.5 Wave 3 — Work Context
+
+14. selected Slack or Microsoft Teams channel/thread read
+15. Google Drive, OneDrive or Dropbox search/read on demand
+16. at least one selected GitHub, Linear, Jira or Notion workspace adapter
+
+## S5.5 Wave 4 — Life Logistics
+
+17. reservation/travel/delivery extraction from bounded Mail evidence
+18. at least one live flight, travel or delivery status adapter
+19. supported Home Assistant state and governed action adapter
+
+Wave 3–4의 번호는 구현 순서의 tie-breaker이지 모든 provider를 동시에 ship한다는 뜻이
+아니다. 각 logical View에 대표 live adapter, 공통 conformance와 명시적인 provider
+coverage matrix를 둔다.
 
 ---
 

@@ -58,5 +58,5 @@
     "10-ecosystem/expert-package.md",
     "README.md"
   ],
-  "notes": "Defines an ambient voice-first Manager, provider-neutral Observe/Act capabilities, domain Experts, and UI escalation while retaining text-first S4 validation before voice, wake, distribution, and proactive intervention."
+  "notes": "Defines an ambient voice-first Manager, provider-neutral Observe/Act capabilities, domain Experts, and UI escalation; S5.5 productizes connected domain breadth after governed Memory and before voice, wake, distribution, and proactive intervention."
 }

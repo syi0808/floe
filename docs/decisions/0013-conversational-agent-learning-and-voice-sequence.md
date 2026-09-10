@@ -3,7 +3,8 @@
 - **Date:** 2026-09-07
 - **Status:** accepted; S4 scope amended by
   [ADR 0014](0014-s4-connected-agent-sources.md) and
-  [ADR 0015](0015-s4-privacy-aware-inference.md)
+  [ADR 0015](0015-s4-privacy-aware-inference.md); sequence amended by
+  [ADR 0021](0021-s5-5-connected-domain-expansion.md)
 - **Amends:** [ADR 0012](0012-memory-and-expert-first-slices.md)
 
 ## Context
@@ -33,6 +34,9 @@ authority or file-backed personal-memory semantics.
   corrections as evidence. It separates Personal Memory, session recall and
   procedural Playbook knowledge; all inferred durable changes are staged for Review
   by default and remain versioned, reversible and source-backed.
+- **S5.5 Connected Context and Domain Expert Expansion** productizes the planned
+  connector cohorts and domain Experts after governed Memory is available and before
+  voice becomes the primary interaction.
 - **S6 Transcription and Voice Mode** adds press-to-talk, duplex voice and an
   explicit user-started transcription session, connected to the same S4
   AgentSession and S5 candidate Review boundary.

@@ -10,7 +10,9 @@
 > with S4 scope amended by [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md)
 > and [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md), and long-term
 > interaction/Expert/connector framing amended by
-> [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md)
+> [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md), with
+> S5.5 expansion sequencing added by
+> [ADR 0021](../../decisions/0021-s5-5-connected-domain-expansion.md)
 
 ## 목적과 문서 역할
 
@@ -302,6 +304,90 @@ typed encrypted vault 경계로 조정한
 **제외:** 무검토 inferred write, model fine-tuning/weight update, safety/policy 자가수정,
 Wasm/code Playbook 자동 설치, autonomous consolidation, cross-device Memory sync.
 
+## S5.5 — Connected Context and Domain Expert Expansion
+
+**사용자 결과:** Floe는 일정뿐 아니라 약속, communication, 관계, 집중, wellbeing,
+업무 맥락과 생활 logistics를 provider-neutral View로 종합한다. 사용자는 한 source가
+끊겨도 무엇이 누락됐는지 이해하면서 나머지 근거로 도움을 받을 수 있고, 각 Expert의
+판단 근거와 제안된 action을 동일한 Review/Activity 경계에서 확인한다.
+
+S5.5는 voice UI를 만들기 전에 **말할 가치가 있는 intelligence의 breadth**를 만든다.
+Connector 수 자체가 목표는 아니다. 각 connector는 적어도 하나의 사용자/Expert
+scenario에서 소비되어야 하고, 각 Expert는 provider wrapper가 아닌 독립적인 domain
+판단을 corpus로 입증해야 한다.
+
+**의존성:** S5 Accepted, S4의 common Connector/View/Expert contract와 live source gates,
+S3 action authority. iOS/Android 전용 source는 해당 native host에서 검증하며 S8 이전의
+cross-device delivery를 가정하지 않는다. Background event ingestion은 가능하지만
+autonomous Situation/intervention은 S9까지 활성화하지 않는다.
+
+### Expert acceptance
+
+- **S5.5-E1 — Schedule & Feasibility:** Calendar, Task, ETA, Weather와 허용된 capacity
+  projection을 이용해 충돌, free window, leave-by와 계획 변경의 현실성을 판단한다.
+  mutation은 S3 proposal로만 반환한다.
+- **S5.5-E2 — Commitments:** Mail/Message/Calendar/Task/confirmed Memory에서 약속,
+  deadline, expected reply와 follow-up gap을 source reference와 함께 식별하며 추정과
+  확정을 구분한다.
+- **S5.5-E3 — Communication:** 답변 필요성, 요약, 초안, tone과 적절한 channel을
+  판단한다. 외부 content를 untrusted evidence로 다루고 send는 별도 Act grant와
+  transaction-bound Review를 요구한다.
+- **S5.5-E4 — Relationships:** Contacts identity와 confirmed interaction/Memory
+  projection만으로 사람을 resolve하고 중요한 관계 맥락과 follow-up을 판단한다.
+  address book 복제나 근거 없는 relationship inference를 만들지 않는다.
+- **S5.5-E5 — Focus & Attention:** coarse Attention View, schedule, active work와
+  preference를 사용해 interruption cost와 focus protection을 판단한다. raw app/domain
+  activity나 notification delivery authority를 받지 않는다.
+- **S5.5-E6 — Wellbeing:** local-derived Health/Activity/Sleep projection을 일정과
+  결합해 비진단적 capacity/recovery 영향을 판단한다. raw sample, diagnosis와 remote
+  silent fallback을 허용하지 않는다.
+- **S5.5-E7 — Work Context:** selected files, projects, meetings와 decisions에서 현재
+  blocker, 준비 맥락과 next action을 근거 있게 연결한다. workspace scope 밖 검색이나
+  문서 전체의 상시 prompt 주입을 하지 않는다.
+- **S5.5-E8 — Life Logistics:** 예약, 여행, 배송, 심부름과 지원되는 home state를
+  종합해 준비·변경 후보를 만든다. 금전 결제, 출입/보안과 high-authority home action은
+  별도 정책 없이는 제안 이상으로 진행하지 않는다.
+
+### Connector acceptance
+
+- **S5.5-C1 — Common Observe/Act lifecycle:** 모든 adapter가 versioned capability/View,
+  scope, execution location, freshness, provenance, retention, last success/error와
+  disconnect/reconnect를 제공한다. Observe grant에서 Act authority를 추론하지 않는다.
+- **S5.5-C2 — Personal context cohort:** Apple Calendar, Gmail, Apple Contacts,
+  Core Location, MapKit ETA, WeatherKit, Apple Health derived state와 Screen Time public-API
+  gate가 S4 contract를 넘어 실제 Expert scenario에서 함께 소비된다. Task/Note는
+  Floe-native input으로 명확히 구분한다.
+- **S5.5-C3 — Provider parity:** Google Calendar, Microsoft Calendar/Mail, Android
+  Calendar/Contacts와 Health Connect가 공통 View/capability conformance를 통과한다.
+  같은 logical source의 route arbitration과 deduplication이 provider prompt 없이 동작한다.
+- **S5.5-C4 — Work context cohort:** 선택한 Slack/Teams channel/thread read, Drive 계열
+  file search/read와 적어도 하나의 GitHub/Linear/Jira/Notion project adapter가 bounded
+  Communication/File/Project View로 Work Context scenario를 완성한다.
+- **S5.5-C5 — Life logistics cohort:** mail evidence와 적어도 하나의 live travel,
+  delivery 또는 Home Assistant adapter가 bounded Logistics View를 제공한다. raw arbitrary
+  webhook payload를 Agent context로 직접 승격하지 않는다.
+- **S5.5-C6 — Failure and privacy matrix:** revoke, expired credential, partial fetch,
+  rate limit, stale/no-data, unsupported entitlement/region과 source disagreement를 typed
+  상태로 복구한다. 한 source failure가 전체 Manager turn을 막지 않고 outbound capture가
+  credential, raw Health/Attention, precise location history와 비승인 content 유출 0건을
+  보인다.
+
+### 구현 increment
+
+1. Situation/View/capability descriptor와 source/Expert conformance harness를 고정한다.
+2. S4 personal context cohort를 Expert가 실제 소비하는 production path로 완성한다.
+3. Schedule & Feasibility, Commitments와 Communication corpus/Expert를 구현한다.
+4. Relationships, Focus & Attention과 Wellbeing projection/Expert를 구현한다.
+5. Google/Microsoft/Android/Health Connect parity adapter와 dedup route를 연결한다.
+6. work communication/file/project adapter와 Work Context Expert를 연결한다.
+7. travel/delivery/home adapter와 Life Logistics Expert를 연결한다.
+8. cross-domain synthesis, source disagreement, revoke/failure와 privacy corpus를 검증한다.
+
+**제외:** provider 수 자체를 위한 long-tail connector, unrestricted organization/file
+ingestion, banking/payment, password vault, raw browser/screen history, clinical diagnosis,
+arbitrary webhook promotion, Expert 직접 mutation, Marketplace/Wasm 완성, cross-device
+sync, always-on microphone, wake word와 proactive interruption.
+
 ## S6 — Transcription and Voice Mode
 
 **사용자 결과:** 사용자가 assistant panel에서 press-to-talk로 Floe와 대화하고,
@@ -309,7 +395,7 @@ Wasm/code Playbook 자동 설치, autonomous consolidation, cross-device Memory 
 시간 근거와 함께 검토한다. text, voice와 transcription이 같은 Review/Activity
 경계를 사용한다.
 
-**의존성:** S5 Accepted, streaming/recording STT, TTS와 audio-session PoC. wake
+**의존성:** S5.5 Accepted, streaming/recording STT, TTS와 audio-session PoC. wake
 word는 요구하지 않는다. 첫 전사는 foreground microphone 또는 test audio file로
 제한하고 system-wide meeting audio capture는 provider PoC 결과에 따라 결정한다.
 
