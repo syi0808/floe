@@ -176,3 +176,31 @@ func TestChangedClientAndRejectedRefreshNeverReuseStoredCredential(t *testing.T)
 		t.Fatal("rejected refresh retained unusable credential")
 	}
 }
+
+func TestDriveOAuthUsesSeparateCredentialAndExactReadonlyScope(t *testing.T) {
+	store := &memoryStore{values: map[string]string{}}
+	runtime, err := NewDrive(store, Config{ClientID: "fixture-client"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	result, err := runtime.Action(context.Background(), "login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, _ := url.Parse(result.(map[string]any)["auth_url"].(string))
+	if auth.Query().Get("scope") != driveReadonlyScope || runtime.credentialName != "FLOE_DRIVE_OAUTH" {
+		t.Fatalf("Drive OAuth profile: %s %s", auth.Query().Get("scope"), runtime.credentialName)
+	}
+	bundle := tokenBundle{ClientID: "fixture-client", AccessToken: "drive-access", RefreshToken: "drive-refresh", Scope: driveReadonlyScope, ExpiresAt: time.Now().Add(time.Hour)}
+	encoded, _ := json.Marshal(bundle)
+	store.values["FLOE_DRIVE_OAUTH"] = string(encoded)
+	runtime.cancelLogin()
+	if !runtime.Ready() {
+		t.Fatal("Drive credential was not loaded")
+	}
+	gmail, _ := New(store, Config{ClientID: "fixture-client"})
+	if gmail.Ready() {
+		t.Fatal("Drive credential crossed into Gmail runtime")
+	}
+}

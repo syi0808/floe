@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	defaultAuthURL   = "https://accounts.google.com/o/oauth2/v2/auth"
-	defaultTokenURL  = "https://oauth2.googleapis.com/token"
-	defaultRevokeURL = "https://oauth2.googleapis.com/revoke"
-	credentialName   = "FLOE_GMAIL_OAUTH"
-	readonlyScope    = "https://www.googleapis.com/auth/gmail.readonly"
+	defaultAuthURL     = "https://accounts.google.com/o/oauth2/v2/auth"
+	defaultTokenURL    = "https://oauth2.googleapis.com/token"
+	defaultRevokeURL   = "https://oauth2.googleapis.com/revoke"
+	credentialName     = "FLOE_GMAIL_OAUTH"
+	readonlyScope      = "https://www.googleapis.com/auth/gmail.readonly"
+	driveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
 )
 
 var ErrUnavailable = errors.New("Google authentication unavailable")
@@ -36,8 +37,10 @@ type Store interface {
 }
 
 type Config struct {
-	ClientID     string
-	ClientSecret string
+	ClientID       string
+	ClientSecret   string
+	CredentialName string
+	Scopes         []string
 }
 
 type tokenBundle struct {
@@ -65,14 +68,29 @@ type Runtime struct {
 	flow                         *loginFlow
 	authURL, tokenURL, revokeURL string
 	callbackAddress              string
+	credentialName               string
+	scopes                       []string
 }
 
 func New(store Store, config Config) (*Runtime, error) {
 	if store == nil || !validCredential(config.ClientID, 512) || len(config.ClientSecret) > 2048 || strings.ContainsAny(config.ClientSecret, "\r\n") {
 		return nil, ErrUnavailable
 	}
+	name, scopes := config.CredentialName, append([]string(nil), config.Scopes...)
+	if name == "" && len(scopes) == 0 {
+		name, scopes = credentialName, []string{readonlyScope}
+	}
+	if !validGoogleCredentialProfile(name, scopes) {
+		return nil, ErrUnavailable
+	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, callbackAddress: "127.0.0.1:0"}, nil
+	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, callbackAddress: "127.0.0.1:0", credentialName: name, scopes: scopes}, nil
+}
+
+func NewDrive(store Store, config Config) (*Runtime, error) {
+	config.CredentialName = "FLOE_DRIVE_OAUTH"
+	config.Scopes = []string{driveReadonlyScope}
+	return New(store, config)
 }
 
 func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
@@ -89,7 +107,7 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	}
 	refreshed, err := runtime.tokenRequest(ctx, url.Values{"grant_type": {"refresh_token"}, "client_id": {runtime.config.ClientID}, "refresh_token": {current.RefreshToken}, "client_secret": {runtime.config.ClientSecret}}, current)
 	if errors.Is(err, ErrCredentialExpired) {
-		_ = runtime.store.Delete(credentialName)
+		_ = runtime.store.Delete(runtime.credentialName)
 		runtime.mu.Lock()
 		runtime.tokens = nil
 		runtime.mu.Unlock()
@@ -138,7 +156,7 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	} else if flow != nil && flow.expires.After(time.Now()) {
 		status, authURL = "pending", flow.authURL
 	}
-	return map[string]any{"status": status, "auth_url": authURL, "scope": readonlyScope}, nil
+	return map[string]any{"status": status, "auth_url": authURL, "scope": strings.Join(runtime.scopes, " ")}, nil
 }
 
 func (runtime *Runtime) startLogin() error {
@@ -157,7 +175,7 @@ func (runtime *Runtime) startLogin() error {
 	}
 	redirectURI := "http://" + listener.Addr().String() + "/oauth/google/callback"
 	challenge := sha256.Sum256([]byte(verifier))
-	parameters := url.Values{"client_id": {runtime.config.ClientID}, "response_type": {"code"}, "redirect_uri": {redirectURI}, "scope": {readonlyScope}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}, "access_type": {"offline"}, "prompt": {"consent"}}
+	parameters := url.Values{"client_id": {runtime.config.ClientID}, "response_type": {"code"}, "redirect_uri": {redirectURI}, "scope": {strings.Join(runtime.scopes, " ")}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}, "access_type": {"offline"}, "prompt": {"consent"}}
 	flow := &loginFlow{state: state, verifier: verifier, authURL: runtime.authURL + "?" + parameters.Encode(), redirectURI: redirectURI, expires: time.Now().Add(5 * time.Minute), listener: listener}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/google/callback", func(writer http.ResponseWriter, request *http.Request) { runtime.callback(flow, writer, request) })
@@ -261,7 +279,7 @@ func (runtime *Runtime) tokenRequest(ctx context.Context, form url.Values, previ
 			scope = previous.Scope
 		}
 	}
-	if !validCredential(refresh, 16384) || !hasScope(scope, readonlyScope) {
+	if !validCredential(refresh, 16384) || !hasAllScopes(scope, runtime.scopes) {
 		return nil, ErrCredentialExpired
 	}
 	return &tokenBundle{ClientID: runtime.config.ClientID, AccessToken: output.AccessToken, RefreshToken: refresh, Scope: scope, ExpiresAt: time.Now().Add(time.Duration(output.ExpiresIn) * time.Second)}, nil
@@ -285,7 +303,7 @@ func (runtime *Runtime) logout(ctx context.Context) error {
 			return ErrUnavailable
 		}
 	}
-	if runtime.store.Delete(credentialName) != nil {
+	if runtime.store.Delete(runtime.credentialName) != nil {
 		return ErrUnavailable
 	}
 	runtime.mu.Lock()
@@ -302,12 +320,12 @@ func (runtime *Runtime) load() *tokenBundle {
 		copy := *current
 		return &copy
 	}
-	encoded, err := runtime.store.Get(credentialName)
+	encoded, err := runtime.store.Get(runtime.credentialName)
 	if err != nil || encoded == "" || len(encoded) > 32768 {
 		return nil
 	}
 	var value tokenBundle
-	if json.Unmarshal([]byte(encoded), &value) != nil || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasScope(value.Scope, readonlyScope) || value.ExpiresAt.IsZero() {
+	if json.Unmarshal([]byte(encoded), &value) != nil || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasAllScopes(value.Scope, runtime.scopes) || value.ExpiresAt.IsZero() {
 		return nil
 	}
 	runtime.mu.Lock()
@@ -318,7 +336,7 @@ func (runtime *Runtime) load() *tokenBundle {
 
 func (runtime *Runtime) save(value *tokenBundle) error {
 	encoded, err := json.Marshal(value)
-	if err != nil || runtime.store.Put(credentialName, string(encoded)) != nil {
+	if err != nil || runtime.store.Put(runtime.credentialName, string(encoded)) != nil {
 		return ErrUnavailable
 	}
 	copy := *value
@@ -368,6 +386,18 @@ func hasScope(value, required string) bool {
 		}
 	}
 	return false
+}
+func hasAllScopes(value string, required []string) bool {
+	for _, scope := range required {
+		if !hasScope(value, scope) {
+			return false
+		}
+	}
+	return true
+}
+func validGoogleCredentialProfile(name string, scopes []string) bool {
+	return name == credentialName && len(scopes) == 1 && scopes[0] == readonlyScope ||
+		name == "FLOE_DRIVE_OAUTH" && len(scopes) == 1 && scopes[0] == driveReadonlyScope
 }
 func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"
