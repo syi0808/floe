@@ -182,7 +182,7 @@ void main() {
     );
   }
 
-  testWidgets('Today keeps turns across focus changes and seals when hidden', (
+  testWidgets('Today keeps conversation storage open across lifecycle changes', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 900);
@@ -215,11 +215,15 @@ void main() {
     expect(find.text('Reload conversation'), findsNothing);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     await tester.pumpAndSettle();
-    expect(gateway.locks, 1);
+    expect(gateway.locks, 0);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
-    expect(gateway.unlocks, 1);
+    expect(gateway.locks, 0);
+    expect(gateway.unlocks, 0);
     expect(find.text('Reload conversation'), findsNothing);
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pumpAndSettle();
+    expect(gateway.locks, 0);
   });
 }

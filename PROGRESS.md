@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S4 persistent conversation lifecycle — 2026-09-10
+
+- Removed UI-driven vault locking. Focus changes, app backgrounding, destination
+  changes and closing the assistant surface now preserve the loaded conversation and
+  allow an active turn to continue.
+- Controller disposal stops active work without clearing the conversation or issuing a
+  vault lock; native gateway shutdown remains responsible for releasing storage and
+  key resources when the app exits.
+- Focused assistant widget tests pass across inactive, hidden and resumed lifecycle
+  transitions, and Flutter analysis reports no issues.
+
 ### S4 page-independent conversation redesign — 2026-09-10
 
 - Recorded the corrected ownership in ADR 0023: one Person-scoped assistant

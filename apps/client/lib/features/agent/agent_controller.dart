@@ -731,7 +731,7 @@ final class AgentController extends ChangeNotifier {
     registryController.removeListener(_notify);
     memoryController.removeListener(_notify);
     calendarExpertController.removeListener(_notify);
-    unawaited(closeView());
+    unawaited(stop());
     super.dispose();
   }
 }
