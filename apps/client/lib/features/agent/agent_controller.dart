@@ -10,10 +10,10 @@ import 'agent_memory.dart';
 import 'agent_expert_result.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
-import 'agent_request_id.dart';
 import 'agent_vault_gateway.dart';
 import 'application/agent_registry_controller.dart';
 import 'application/agent_memory_controller.dart';
+import 'application/agent_calendar_expert_controller.dart';
 
 enum AgentProgress {
   idle,
@@ -57,6 +57,25 @@ final class AgentController extends ChangeNotifier {
           vaultState == AgentVaultState.ready,
       onFatalFailure: _fail,
     )..addListener(_notify);
+    calendarExpertController = AgentCalendarExpertController(
+      gateway: gateway is AgentCalendarExpertGateway
+          ? gateway as AgentCalendarExpertGateway
+          : null,
+      registryGateway: gateway is AgentRegistryGateway
+          ? gateway as AgentRegistryGateway
+          : null,
+      registryController: registryController,
+      personId: personId,
+      canOperate: () =>
+          !_busy &&
+          !registryController.busy &&
+          !memoryController.busy &&
+          !_sealed &&
+          !_disposed &&
+          _locking == null &&
+          vaultState == AgentVaultState.ready,
+      onFatalFailure: _fail,
+    )..addListener(_notify);
   }
 
   final AgentFixtureStreamingGateway gateway;
@@ -81,8 +100,9 @@ final class AgentController extends ChangeNotifier {
   AgentRegistryView? get registry => registryController.registry;
   String? get registryFailure => registryController.failure;
   bool get registryLoaded => registryController.loaded;
-  AgentCalendarExperts? calendarExperts;
-  String? calendarExpertFailure;
+  late final AgentCalendarExpertController calendarExpertController;
+  AgentCalendarExperts? get calendarExperts => calendarExpertController.experts;
+  String? get calendarExpertFailure => calendarExpertController.failure;
   late final AgentMemoryController memoryController;
   List<AgentMemoryCandidate>? get memoryCandidates =>
       memoryController.candidates;
@@ -93,7 +113,6 @@ final class AgentController extends ChangeNotifier {
   }
 
   String? get memoryFailure => memoryController.failure;
-  AgentCalendarSetup? _pendingCalendarSetup;
   final Map<String, AgentProposalInspection> _proposals = {};
   final Map<String, String> _proposalFailures = {};
 
@@ -177,240 +196,46 @@ final class AgentController extends ChangeNotifier {
     _proposalFailures.clear();
   }
 
-  AgentCalendarSetup? get pendingCalendarSetup => _pendingCalendarSetup;
+  AgentCalendarSetup? get pendingCalendarSetup =>
+      calendarExpertController.pendingSetup;
   bool get hasCalendarExpertManagement =>
-      hasRegistryManagement && gateway is AgentCalendarExpertGateway;
+      hasRegistryManagement && calendarExpertController.available;
   bool get canManageCalendarExperts =>
-      hasCalendarExpertManagement && canManageRegistry;
+      hasCalendarExpertManagement && calendarExpertController.canManage;
 
-  Future<void> loadCalendarExperts() => _calendarOperation(
-    () => (gateway as AgentCalendarExpertGateway).readCalendarExperts(personId),
-  );
+  Future<void> loadCalendarExperts() => calendarExpertController.load();
 
   Future<void> installCalendarExpert({
     required String provider,
     required List<String> calendarIds,
-  }) async {
-    final current = calendarExperts;
-    if (!canManageCalendarExperts ||
-        current == null ||
-        _pendingCalendarSetup != null) {
-      return;
-    }
-    try {
-      _pendingCalendarSetup = AgentCalendarSetup(
-        personId: personId,
-        instanceId: current.registry.instanceId,
-        expectedRevision: current.registry.revision,
-        setupId: newAgentRequestId(),
-        provider: provider,
-        calendarIds: calendarIds,
-      );
-    } on FormatException {
-      calendarExpertFailure = 'invalid_input';
-      _notify();
-      return;
-    }
-    await retryCalendarSetup();
-  }
+  }) => calendarExpertController.install(
+    provider: provider,
+    calendarIds: calendarIds,
+  );
 
-  Future<void> retryCalendarSetup() async {
-    final pending = _pendingCalendarSetup;
-    if (pending == null) return;
-    await _calendarOperation(
-      () => (gateway as AgentCalendarExpertGateway).installCalendarExpert(
-        pending,
-      ),
-      submitted: pending,
-    );
-    if (_pendingCalendarSetup == null && calendarExperts != null) {
-      await setCalendarAccessEnabled(pending.setupId, true);
-    }
-  }
+  Future<void> retryCalendarSetup() => calendarExpertController.retrySetup();
 
-  void discardUncommittedCalendarSetup() {
-    final current = calendarExperts;
-    final pending = _pendingCalendarSetup;
-    if (!canManageCalendarExperts ||
-        current == null ||
-        pending == null ||
-        current.registry.instanceId != pending.instanceId ||
-        current.setups.any((entry) => entry.setupId == pending.setupId)) {
-      return;
-    }
-    _pendingCalendarSetup = null;
-    _notify();
-  }
+  void discardUncommittedCalendarSetup() =>
+      calendarExpertController.discardUncommittedSetup();
 
-  Future<void> configureCalendarView(String handle, bool enabled) async {
-    final current = calendarExperts;
-    if (current == null || _pendingCalendarSetup != null) return;
-    final before = current.views
-        .where((entry) => entry.handle == handle)
-        .singleOrNull;
-    if (before == null) return;
-    await _calendarOperation(() async {
-      final configured = await (gateway as AgentRegistryGateway)
-          .configureRegistry(
-            current.registry,
-            target: AgentRegistryTarget.calendarView,
-            id: handle,
-            enabled: enabled,
-          );
-      final next = await (gateway as AgentCalendarExpertGateway)
-          .readCalendarExperts(personId);
-      final updated = next.views
-          .where((entry) => entry.handle == handle)
-          .singleOrNull;
-      if (configured.instanceId != current.registry.instanceId ||
-          configured.revision != current.registry.revision + 1 ||
-          next.registry.instanceId != configured.instanceId ||
-          next.registry.revision != configured.revision ||
-          updated == null ||
-          updated.enabled != enabled ||
-          updated.provider != before.provider ||
-          !listEquals(updated.calendarIds, before.calendarIds)) {
-        throw const FormatException('Calendar configuration mismatch');
-      }
-      return next;
-    });
-  }
+  Future<void> configureCalendarView(String handle, bool enabled) =>
+      calendarExpertController.configureView(handle, enabled);
 
   Future<void> setCalendarAccessEnabled(String setupId, bool enabled) =>
-      _configureCalendarAccess(
-        setupId,
-        operation: AgentCalendarAccessOperation.setEnabled,
-        enabled: enabled,
-      );
+      calendarExpertController.setCalendarAccessEnabled(setupId, enabled);
 
   Future<void> changeCalendarAccessScope({
     required String setupId,
     required String provider,
     required List<String> calendarIds,
-  }) async {
-    final replacementSetupId = newAgentRequestId();
-    await _configureCalendarAccess(
-      setupId,
-      operation: AgentCalendarAccessOperation.setScope,
-      provider: provider,
-      replacementSetupId: replacementSetupId,
-      calendarIds: calendarIds,
-    );
-    if (calendarExperts?.setups.any(
-          (entry) => entry.setupId == replacementSetupId,
-        ) ??
-        false) {
-      await setCalendarAccessEnabled(replacementSetupId, true);
-    }
-  }
-
-  Future<void> removeCalendarAccess(String setupId) => _configureCalendarAccess(
-    setupId,
-    operation: AgentCalendarAccessOperation.remove,
+  }) => calendarExpertController.changeCalendarAccessScope(
+    setupId: setupId,
+    provider: provider,
+    calendarIds: calendarIds,
   );
 
-  Future<void> _configureCalendarAccess(
-    String setupId, {
-    required AgentCalendarAccessOperation operation,
-    bool? enabled,
-    String? provider,
-    String? replacementSetupId,
-    List<String>? calendarIds,
-  }) async {
-    final current = calendarExperts;
-    if (current == null ||
-        _pendingCalendarSetup != null ||
-        !current.setups.any((entry) => entry.setupId == setupId)) {
-      return;
-    }
-    final request = AgentCalendarAccessRequest(
-      personId: personId,
-      instanceId: current.registry.instanceId,
-      expectedRevision: current.registry.revision,
-      setupId: setupId,
-      operation: operation,
-      enabled: enabled,
-      provider: provider,
-      replacementSetupId: replacementSetupId,
-      calendarIds: calendarIds,
-    );
-    await _calendarOperation(() async {
-      final next = await (gateway as AgentCalendarExpertGateway)
-          .configureCalendarAccess(request);
-      if (next.registry.instanceId != current.registry.instanceId ||
-          next.registry.revision != current.registry.revision + 1) {
-        throw const FormatException('Calendar access configuration mismatch');
-      }
-      final setup = next.setups
-          .where((entry) => entry.setupId == setupId)
-          .singleOrNull;
-      switch (operation) {
-        case AgentCalendarAccessOperation.setEnabled:
-          if (setup == null || next.accessEnabled(setup) != enabled) {
-            throw const FormatException('Calendar access state mismatch');
-          }
-        case AgentCalendarAccessOperation.setScope:
-          final replacement = next.setups
-              .where((entry) => entry.setupId == replacementSetupId)
-              .singleOrNull;
-          final view = replacement == null
-              ? null
-              : next.views
-                    .where((entry) => entry.handle == replacement.viewHandle)
-                    .singleOrNull;
-          if (setup != null ||
-              view == null ||
-              view.provider != provider ||
-              !listEquals(view.calendarIds, [...calendarIds!]..sort())) {
-            throw const FormatException('Calendar access scope mismatch');
-          }
-        case AgentCalendarAccessOperation.remove:
-          if (setup != null) {
-            throw const FormatException('Calendar access removal mismatch');
-          }
-      }
-      return next;
-    });
-  }
-
-  Future<void> _calendarOperation(
-    Future<AgentCalendarExperts> Function() operation, {
-    AgentCalendarSetup? submitted,
-  }) async {
-    if (!canManageCalendarExperts) return;
-    _begin();
-    calendarExpertFailure = null;
-    _notify();
-    try {
-      final result = await operation();
-      if (_sealed || _disposed) return;
-      if (result.registry.personId != personId) {
-        throw const FormatException('Calendar Person mismatch');
-      }
-      if (submitted != null && result.receiptFor(submitted) == null) {
-        throw const FormatException('Missing Calendar setup receipt');
-      }
-      if (_pendingCalendarSetup case final pending?) {
-        if (result.receiptFor(pending) != null) _pendingCalendarSetup = null;
-      }
-      calendarExperts = result;
-      registryController.replace(result.registry);
-    } on Object catch (error) {
-      if (_sealed || _disposed) return;
-      calendarExperts = null;
-      registryController.clear();
-      calendarExpertFailure = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      if (calendarExpertFailure == 'vault_unavailable' ||
-          calendarExpertFailure == 'interrupted') {
-        _fail(calendarExpertFailure!);
-      }
-    } finally {
-      _end();
-      _notify();
-    }
-  }
+  Future<void> removeCalendarAccess(String setupId) =>
+      calendarExpertController.removeCalendarAccess(setupId);
 
   bool get hasRegistryManagement => usesVault && registryController.available;
 
@@ -458,7 +283,11 @@ final class AgentController extends ChangeNotifier {
   bool get isConnectedConversation => isGeneralConversation;
   bool get isPersonalConversation => isGeneralConversation;
 
-  bool get busy => _busy || registryController.busy || memoryController.busy;
+  bool get busy =>
+      _busy ||
+      registryController.busy ||
+      memoryController.busy ||
+      calendarExpertController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
   bool get canSend =>
@@ -842,10 +671,8 @@ final class AgentController extends ChangeNotifier {
     _sealed = true;
     _clearProposals();
     registryController.clear();
-    calendarExperts = null;
-    calendarExpertFailure = null;
+    calendarExpertController.clear();
     memoryController.clear();
-    _pendingCalendarSetup = null;
     session = null;
     messages = [];
     _lastPrompt = null;
@@ -890,9 +717,8 @@ final class AgentController extends ChangeNotifier {
           'interrupted',
         }.contains(reason)) {
       registryController.clear();
-      calendarExperts = null;
+      calendarExpertController.clear();
       memoryController.clear();
-      _pendingCalendarSetup = null;
       session = null;
       messages = [];
       vaultState = AgentVaultState.unavailable;
@@ -904,6 +730,7 @@ final class AgentController extends ChangeNotifier {
     _disposed = true;
     registryController.removeListener(_notify);
     memoryController.removeListener(_notify);
+    calendarExpertController.removeListener(_notify);
     unawaited(closeView());
     super.dispose();
   }
