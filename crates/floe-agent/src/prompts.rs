@@ -10,8 +10,8 @@ const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 const BEHAVIOR_KERNEL_REVISION: u64 = 2;
-const CAPABILITY_PROTOCOL_REVISION: u64 = 2;
-const MANAGER_ROLE_REVISION: u64 = 2;
+const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
+const MANAGER_ROLE_REVISION: u64 = 3;
 const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -311,7 +311,13 @@ mod tests {
         assert!(
             manager
                 .render()
-                .contains("understanding, choices, or next action")
+                .contains("user-visible work currently underway")
+        );
+        assert!(manager.render().contains("For results"));
+        assert!(
+            manager
+                .render()
+                .contains("Do not explain how the request was understood")
         );
 
         let expert = schedule_expert_prompt();
