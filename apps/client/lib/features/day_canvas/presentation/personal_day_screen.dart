@@ -19,7 +19,6 @@ import '../../../app/floe_squircle.dart';
 import '../../../app/floe_theme.dart';
 import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
-import '../application/ffi_day_gateway.dart';
 import '../application/calendar_gateway.dart';
 import '../application/calendar_action_gateway.dart';
 import '../application/calendar_action_controller.dart';
@@ -34,6 +33,7 @@ import 'calendar_context_rail.dart';
 import 'connector_screen.dart';
 import '../../../app/floe_feedback.dart';
 import '../../server/settings_screen.dart';
+import '../../server/local_server_client.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/agent_controller.dart';
 import '../../agent/agent_calendar_sources.dart';
@@ -61,10 +61,12 @@ class PersonalDayScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     this.agentGateway,
+    this.serverClient,
   });
   final DayGateway gateway;
   final DayQuery query;
   final AgentFixtureStreamingGateway? agentGateway;
+  final LocalServerClient? serverClient;
   @override
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
@@ -98,13 +100,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       )..load();
     }
     screenState = Listenable.merge([controller, ?actionController]);
-    final agentGateway =
-        widget.agentGateway ??
-        switch (widget.gateway) {
-          final FfiDayGateway gateway => gateway.secureAgent,
-          final AgentFixtureStreamingGateway gateway => gateway,
-          _ => null,
-        };
+    final agentGateway = widget.agentGateway;
     if (agentGateway != null) {
       agentController = AgentController(
         gateway: agentGateway,
@@ -252,9 +248,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     }
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
-        client: widget.gateway is FfiDayGateway
-            ? (widget.gateway as FfiDayGateway).serverClient
-            : null,
+        client: widget.serverClient,
         actionController: actionController,
         agentController: agentController,
         calendarSources: _agentCalendarSources,

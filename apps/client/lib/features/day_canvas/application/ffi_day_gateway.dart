@@ -1,16 +1,19 @@
 import 'package:flutter/services.dart';
 
+import '../../../app/local_identity.dart';
 import '../domain/day_models.dart';
 import '../domain/calendar_action.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
 import 'calendar_action_gateway.dart';
+import '../infrastructure/native_calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
 import '../../agent/agent_fixture_gateway.dart';
+import '../../agent/infrastructure/native_agent_fixture_gateway.dart';
 import '../../agent/agent_vault_gateway.dart';
 import '../../../infrastructure/native/native_transport.dart';
 
-const localPersonId = '00000000-0000-4000-8000-000000000001';
+const localPersonId = defaultLocalPersonId;
 
 final class FfiDayGatewayException implements Exception {
   const FfiDayGatewayException(this.code, this.message);
@@ -40,6 +43,10 @@ final class FfiDayGateway
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
   final LocalServerClient serverClient;
+  late final AgentFixtureStreamingGateway _agentFixtureGateway =
+      NativeAgentFixtureGateway(_request);
+  late final NativeCalendarActionGateway _calendarActionGateway =
+      NativeCalendarActionGateway(_request);
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
     resolveRemoteRoute: _remoteRoute,
@@ -124,92 +131,54 @@ final class FfiDayGateway
 
   @override
   Future<AgentFixtureResult> startAgentFixture(String personId) =>
-      _agentFixture(personId, {'kind': 'start'});
+      _agentFixtureGateway.startAgentFixture(personId);
 
   @override
   Future<AgentFixtureResult> resumeAgentFixture(String personId) =>
-      _agentFixture(personId, {'kind': 'resume'});
+      _agentFixtureGateway.resumeAgentFixture(personId);
 
   @override
   Future<AgentRunUpdate> beginAgentFixtureRun(
     AgentSession session,
     AgentFixturePrompt prompt,
-  ) => _agentRun(session, {'kind': 'begin', 'prompt': prompt.wireName});
+  ) => _agentFixtureGateway.beginAgentFixtureRun(session, prompt);
 
   @override
   Future<AgentRunUpdate> pollAgentFixtureRun(
     AgentSession session,
     int afterSequence,
-  ) => _agentRun(session, {'kind': 'poll', 'after_sequence': afterSequence});
+  ) => _agentFixtureGateway.pollAgentFixtureRun(session, afterSequence);
 
   @override
   Future<AgentRunUpdate> stopAgentFixtureRun(AgentSession session) =>
-      _agentRun(session, {'kind': 'stop'});
+      _agentFixtureGateway.stopAgentFixtureRun(session);
 
   @override
   Future<AgentRunUpdate> releaseAgentFixtureRun(AgentSession session) =>
-      _agentRun(session, {'kind': 'release'});
-
-  Future<AgentRunUpdate> _agentRun(
-    AgentSession session,
-    Map<String, Object?> operation,
-  ) async => AgentRunUpdate.fromJson(
-    await _request('agent_fixture_run', {
-      'schema_version': agentSchemaVersion,
-      'person_id': session.personId,
-      'session_id': session.id,
-      'expected_revision': session.revision,
-      'operation': operation,
-    }),
-  );
+      _agentFixtureGateway.releaseAgentFixtureRun(session);
 
   @override
   Future<AgentFixtureResult> loadAgentFixture(
     String personId,
     String sessionId,
-  ) => _agentFixture(personId, {'kind': 'get', 'session_id': sessionId});
+  ) => _agentFixtureGateway.loadAgentFixture(personId, sessionId);
 
   @override
   Future<AgentFixtureResult> runAgentFixture(
     AgentSession session,
     AgentFixturePrompt prompt,
-  ) => _agentFixture(session.personId, {
-    'kind': 'turn',
-    'session_id': session.id,
-    'expected_revision': session.revision,
-    'prompt': prompt.wireName,
-  });
+  ) => _agentFixtureGateway.runAgentFixture(session, prompt);
 
   @override
   Future<AgentFixtureResult> recoverAgentFixture(AgentSession session) =>
-      _agentFixture(session.personId, {
-        'kind': 'recover',
-        'session_id': session.id,
-        'expected_revision': session.revision,
-      });
-
-  Future<AgentFixtureResult> _agentFixture(
-    String personId,
-    Map<String, Object?> operation,
-  ) async => AgentFixtureResult.fromJson(
-    await _request('agent_fixture', {
-      'schema_version': agentSchemaVersion,
-      'person_id': personId,
-      'operation': operation,
-    }),
-  );
+      _agentFixtureGateway.recoverAgentFixture(session);
 
   @override
   Future<List<CalendarAction>> loadCalendarActions(String personId) =>
-      _calendarActions(personId, {'kind': 'list'});
+      _calendarActionGateway.loadCalendarActions(personId);
 
-  Future<CalendarAction> loadCalendarAction(
-    String personId,
-    String actionId,
-  ) async => (await _calendarActions(personId, {
-    'kind': 'get',
-    'action_id': actionId,
-  })).single;
+  Future<CalendarAction> loadCalendarAction(String personId, String actionId) =>
+      _calendarActionGateway.loadCalendarAction(personId, actionId);
 
   @override
   Future<CalendarAction> submitDirectCalendarAction({
@@ -222,17 +191,17 @@ final class FfiDayGateway
     String? eventId,
     int? eventRevision,
     bool delete = false,
-  }) async => (await _calendarActions(personId, {
-    'kind': 'direct',
-    'calendar_id': calendarId,
-    'title': title,
-    'starts_at': startsAt.toUtc().toIso8601String(),
-    'ends_at': endsAt.toUtc().toIso8601String(),
-    'timezone': timezone,
-    'event_id': eventId,
-    'event_revision': eventRevision,
-    'delete': delete,
-  })).single;
+  }) => _calendarActionGateway.submitDirectCalendarAction(
+    personId: personId,
+    calendarId: calendarId,
+    title: title,
+    startsAt: startsAt,
+    endsAt: endsAt,
+    timezone: timezone,
+    eventId: eventId,
+    eventRevision: eventRevision,
+    delete: delete,
+  );
 
   @override
   Future<CalendarAction> proposeCalendarAction({
@@ -242,90 +211,51 @@ final class FfiDayGateway
     required DateTime startsAt,
     required DateTime endsAt,
     required String timezone,
-  }) async => (await _calendarActions(personId, {
-    'kind': 'propose',
-    'calendar_id': calendarId,
-    'title': title,
-    'starts_at': startsAt.toUtc().toIso8601String(),
-    'ends_at': endsAt.toUtc().toIso8601String(),
-    'timezone': timezone,
-  })).single;
+  }) => _calendarActionGateway.proposeCalendarAction(
+    personId: personId,
+    calendarId: calendarId,
+    title: title,
+    startsAt: startsAt,
+    endsAt: endsAt,
+    timezone: timezone,
+  );
 
   @override
   Future<CalendarAction> decideCalendarAction({
     required String personId,
     required String actionId,
     required CalendarActionDecision decision,
-  }) async => (await _calendarActions(personId, {
-    'kind': 'decide',
-    'action_id': actionId,
-    'decision': decision.name,
-  })).single;
-
-  Future<List<CalendarAction>> _calendarActions(
-    String personId,
-    Map<String, dynamic> operation,
-  ) async {
-    final data = await _request('calendar_actions', {
-      'schema_version': nativeProtocolVersion,
-      'person_id': personId,
-      'operation': operation,
-    });
-    return (data['actions']! as List)
-        .map((value) => CalendarAction.fromJson(_asMap(value)))
-        .toList(growable: false);
-  }
+  }) => _calendarActionGateway.decideCalendarAction(
+    personId: personId,
+    actionId: actionId,
+    decision: decision,
+  );
 
   @override
-  Future<bool> calendarWritesEnabled(String personId) async {
-    final data = await _request('calendar_actions', {
-      'schema_version': nativeProtocolVersion,
-      'person_id': personId,
-      'operation': {'kind': 'capabilities'},
-    });
-    return data['writes_enabled'] == true;
-  }
+  Future<bool> calendarWritesEnabled(String personId) =>
+      _calendarActionGateway.calendarWritesEnabled(personId);
 
   @override
-  Future<ActionAuthority> loadActionAuthority(String personId) async {
-    final data = await _request('calendar_actions', {
-      'schema_version': nativeProtocolVersion,
-      'person_id': personId,
-      'operation': {'kind': 'get_authority'},
-    });
-    return ActionAuthority.fromJson(_asMap(data['authority']));
-  }
+  Future<ActionAuthority> loadActionAuthority(String personId) =>
+      _calendarActionGateway.loadActionAuthority(personId);
 
   @override
   Future<ActionAuthority> setCalendarCreateAuthority(
     String personId,
     ActionAuthorityMode mode,
-  ) async {
-    final data = await _request('calendar_actions', {
-      'schema_version': nativeProtocolVersion,
-      'person_id': personId,
-      'operation': {'kind': 'set_authority', 'calendar_create': mode.name},
-    });
-    return ActionAuthority.fromJson(_asMap(data['authority']));
-  }
+  ) => _calendarActionGateway.setCalendarCreateAuthority(personId, mode);
 
   @override
   Future<CalendarAction> executeCalendarAction(
     String personId,
     String actionId,
-  ) async => (await _calendarActions(personId, {
-    'kind': 'execute',
-    'action_id': actionId,
-  })).single;
+  ) => _calendarActionGateway.executeCalendarAction(personId, actionId);
 
   @override
   Future<CalendarAction> recoverCalendarAction(
     String personId,
     String actionId,
-  ) async => (await _calendarActions(personId, {
-    'kind': 'recover',
-    'action_id': actionId,
-  })).single;
+  ) => _calendarActionGateway.recoverCalendarAction(personId, actionId);
 
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async {

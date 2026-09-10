@@ -16,6 +16,9 @@ Future<void> main() async {
     runApp(
       FloeApp(
         gateway: gateway,
+        agentGateway: gateway.secureAgent,
+        serverClient: gateway.serverClient,
+        onDisposeGateway: gateway.close,
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)
             : null,
