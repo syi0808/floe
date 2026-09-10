@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "view_id": "calendar.timeline",
+  "source_handle": "calendar.timeline:39be8175032f5b55bd36b8369f465c47",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "range_start_unix_ms": 1789041600000,
+  "range_end_unix_ms": 1789214400000,
+  "coverage_complete": true,
+  "items": [{"evidence_handle": "calendar.event:75a77cc00629ca2efb1d72287288b4c4", "untrusted_title": "Microsoft planning review", "starts_at_unix_ms": 1789131600000, "ends_at_unix_ms": 1789135200000, "all_day": false}]
+}

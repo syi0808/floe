@@ -289,3 +289,23 @@ fn go_google_calendar_descriptor_conforms_to_the_shared_rust_contract() {
             .all(|capability| capability.authority == CapabilityAuthority::Observe)
     );
 }
+
+#[test]
+fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
+    let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../server/internal/connectors/microsoftcalendar/testdata/ready_snapshot.json"
+    )))
+    .unwrap();
+    assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
+    assert_eq!(snapshot.descriptor.id, "calendar.microsoft");
+    assert_eq!(snapshot.descriptor.provider, "microsoft_calendar");
+    assert_eq!(snapshot.descriptor.views[0].id, "calendar.timeline");
+    assert!(
+        snapshot
+            .descriptor
+            .capabilities
+            .iter()
+            .all(|capability| capability.authority == CapabilityAuthority::Observe)
+    );
+}

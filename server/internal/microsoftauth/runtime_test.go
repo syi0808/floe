@@ -166,3 +166,31 @@ func TestChangedClientAndRejectedRefreshNeverReuseStoredCredential(t *testing.T)
 		t.Fatal("rejected refresh retained unusable credential")
 	}
 }
+
+func TestCalendarOAuthUsesSeparateCredentialAndExactReadonlyScope(t *testing.T) {
+	store := &memoryStore{values: map[string]string{}}
+	runtime, err := NewCalendar(store, Config{ClientID: "fixture-client"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	result, err := runtime.Action(context.Background(), "login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, _ := url.Parse(result.(map[string]any)["auth_url"].(string))
+	if auth.Query().Get("scope") != "offline_access Calendars.Read" || runtime.credentialName != calendarCredentialName {
+		t.Fatalf("Calendar OAuth profile: %s %s", auth.Query().Get("scope"), runtime.credentialName)
+	}
+	bundle := tokenBundle{ClientID: "fixture-client", AccessToken: "calendar-access", RefreshToken: "calendar-refresh", Scope: calendarReadScope, ExpiresAt: time.Now().Add(time.Hour)}
+	encoded, _ := json.Marshal(bundle)
+	store.values[calendarCredentialName] = string(encoded)
+	runtime.cancelLogin()
+	if !runtime.Ready() {
+		t.Fatal("Calendar credential was not loaded")
+	}
+	mail, _ := New(store, Config{ClientID: "fixture-client"})
+	if mail.Ready() {
+		t.Fatal("Calendar credential crossed into Mail runtime")
+	}
+}

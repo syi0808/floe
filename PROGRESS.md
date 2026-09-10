@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Microsoft Calendar adapter foundation — 2026-09-11
+
+- Added a selected-calendar, GET-only Microsoft Graph `calendarView` adapter using the shared strict
+  `calendar.timeline` contract. Opaque pagination is reduced to bounded skip cursors after same-origin
+  validation; body, location, attendees, provider IDs and actions remain excluded.
+- Generalized Microsoft OAuth into isolated Mail and Calendar profiles and added a separate
+  `Calendars.Read` Keychain credential, typed failure/cache snapshots and Go→Rust fixtures.
+- Focused Go race tests/vet and Rust contract tests pass. Startup/dashboard routing and live evidence
+  remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 Google Calendar product route — 2026-09-11
 
 - Wired the isolated Calendar OAuth runtime into startup, private selected-calendar persistence,

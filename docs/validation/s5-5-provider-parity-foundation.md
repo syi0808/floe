@@ -48,6 +48,16 @@
 - Paired clients can request the selected source through `calendar.timeline` with bounded Unix-time
   range, cursor and item limit. Unknown fields and invalid ranges fail closed, source selection is
   never accepted from the request, and the connector snapshot joins the common inventory.
+- Added a Microsoft Graph Calendar adapter for one selected calendar. It reads only `calendarView`
+  with an explicit time range, item limit and selected fields, requests UTC projection, and emits the
+  same common `calendar.timeline` View as Google Calendar. Cancelled events, bodies, locations,
+  attendees and provider identities are not promoted.
+- Microsoft continuation URLs must match the configured Graph origin and calendar-view path. The
+  adapter extracts only bounded `$skiptoken`/`$skip` state and reconstructs the next selected-scope
+  request rather than following a provider URL.
+- Microsoft Calendar has a dedicated `Calendars.Read` OAuth profile and Keychain credential isolated
+  from Microsoft Mail. Static Calendar View and descriptor fixtures pass the shared Rust validators,
+  and typed failures preserve only fresh cached evidence.
 
 ## Automated evidence
 
@@ -57,6 +67,8 @@ go -C server vet ./internal/connectors/microsoftmail
 go -C server test -race ./internal/microsoftauth ./internal/console ./cmd/floe-server
 go -C server vet ./internal/microsoftauth ./internal/console ./cmd/floe-server
 go -C server test -race ./internal/connectors/googlecalendar ./internal/googleauth
+go -C server test -race ./internal/connectors/common ./internal/connectors/microsoftcalendar ./internal/microsoftauth
+go -C server vet ./internal/connectors/common ./internal/connectors/microsoftcalendar ./internal/microsoftauth
 go -C server test -race ./internal/console ./cmd/floe-server
 go -C server vet ./internal/connectors/googlecalendar ./internal/googleauth ./internal/console ./cmd/floe-server
 cargo test -p floe-agent --test communication_context --test connected_context
@@ -66,6 +78,7 @@ node --check server/internal/console/web/app.js
 
 ## Remaining gate
 
-No live Microsoft Graph or Google Calendar evidence was used. Microsoft Calendar, Android
-Calendar/Contacts and Health Connect adapters are absent, and the provider-neutral route table still
-needs the complete parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.
+No live Microsoft Graph or Google Calendar evidence was used. Microsoft Calendar still needs its
+startup/product route; Android Calendar/Contacts and Health Connect adapters are absent, and the
+provider-neutral route table still needs the complete parity cohort. S5.5-C3 remains pending and the
+slice stays **0/14**.

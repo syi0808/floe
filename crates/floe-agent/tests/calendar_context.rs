@@ -12,6 +12,13 @@ fn fixture() -> CalendarContextView {
     .unwrap()
 }
 
+fn microsoft_fixture() -> CalendarContextView {
+    serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/microsoftcalendar/testdata/calendar_view.json"
+    ))
+    .unwrap()
+}
+
 #[test]
 fn google_calendar_view_crosses_the_strict_context_boundary() {
     let view = fixture();
@@ -19,6 +26,20 @@ fn google_calendar_view_crosses_the_strict_context_boundary() {
     let evidence = calendar_context_evidence(&view).unwrap();
     assert_eq!(evidence.data_class, DataClass::Personal);
     assert!(evidence.untrusted_text.contains("Planning review"));
+    assert!(!evidence.untrusted_text.contains("provider-event-id"));
+}
+
+#[test]
+fn microsoft_calendar_view_crosses_the_same_strict_context_boundary() {
+    let view = microsoft_fixture();
+    validate_calendar_context_view(&view, NOW).unwrap();
+    let evidence = calendar_context_evidence(&view).unwrap();
+    assert_eq!(evidence.data_class, DataClass::Personal);
+    assert!(
+        evidence
+            .untrusted_text
+            .contains("Microsoft planning review")
+    );
     assert!(!evidence.untrusted_text.contains("provider-event-id"));
 }
 
