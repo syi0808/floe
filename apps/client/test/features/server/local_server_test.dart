@@ -5,7 +5,7 @@ import 'package:floe_client/features/server/local_server_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/server_credentials.dart';
+import '../../support/server_credentials.dart';
 
 void main() {
   test('addresses stay literal loopback with no path or credentials', () {

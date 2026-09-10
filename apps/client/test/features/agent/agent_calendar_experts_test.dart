@@ -3,8 +3,8 @@ import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_calendar_experts.dart';
-import 'support/agent_registry.dart';
+import '../../support/agent_calendar_experts.dart';
+import '../../support/agent_registry.dart';
 
 void main() {
   test('setup intent is immutable canonical and byte bounded without enabling flags', () {

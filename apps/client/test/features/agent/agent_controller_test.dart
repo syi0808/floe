@@ -2,7 +2,7 @@ import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_gateway.dart';
+import '../../support/agent_gateway.dart';
 
 void main() {
   test(

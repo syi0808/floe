@@ -8,7 +8,7 @@ import 'package:floe_client/features/agent/agent_proposal.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_proposal.dart';
+import '../../support/agent_proposal.dart';
 
 void main() {
   test('proposal evidence matches one exact focus insight and explicit session class', () {

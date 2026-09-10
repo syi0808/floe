@@ -5,7 +5,7 @@ import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_vault_gateway.dart';
+import '../../support/agent_vault_gateway.dart';
 
 void main() {
   test('secure storage setup and unlock happen automatically', () async {

@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_proposal.dart';
+import '../../support/agent_proposal.dart';
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,
@@ -88,7 +88,7 @@ void main() {
         if (width == 520) {
           await expectLater(
             find.byType(AgentPanel),
-            matchesGoldenFile('goldens/agent_proposal_card.png'),
+            matchesGoldenFile('../../goldens/agent_proposal_card.png'),
           );
         }
         await tap(tester, 'Open Calendar action');

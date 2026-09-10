@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/server_credentials.dart';
+import '../../support/server_credentials.dart';
 
 void main() {
   test('purpose, trace and generation contracts use only v1', () async {

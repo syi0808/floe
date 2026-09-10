@@ -384,7 +384,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/agent_action_review.png'),
+        matchesGoldenFile('../../goldens/agent_action_review.png'),
       );
       await tester.ensureVisible(find.text('Technical details'));
       await tester.tap(find.text('Technical details'));

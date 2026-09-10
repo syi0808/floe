@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:floe_client/features/agent/agent_expert_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/expert_result.dart';
+import '../../support/expert_result.dart';
 
 AgentExpertResult? parse(Map<String, Object?> result) =>
     AgentExpertResult.tryParse(

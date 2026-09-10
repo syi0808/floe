@@ -29,7 +29,7 @@ void main() {
     expect(find.text('Selection'), findsOneWidget);
     await expectLater(
       find.byType(DesignSystemCatalog),
-      matchesGoldenFile('goldens/design_system_catalog.png'),
+      matchesGoldenFile('../goldens/design_system_catalog.png'),
     );
   });
 }

@@ -10,8 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_gateway.dart';
-import 'support/agent_vault_gateway.dart';
+import '../../support/agent_gateway.dart';
+import '../../support/agent_vault_gateway.dart';
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,

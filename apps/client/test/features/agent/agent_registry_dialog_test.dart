@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_registry.dart';
+import '../../support/agent_registry.dart';
 
 Widget app(AgentController controller, double scale) => MaterialApp(
   theme: FloeTheme.light,
@@ -75,7 +75,7 @@ void main() {
         if (width == 520) {
           await expectLater(
             find.byType(SettingsScreen),
-            matchesGoldenFile('goldens/agent_registry.png'),
+            matchesGoldenFile('../../goldens/agent_registry.png'),
           );
         }
       },

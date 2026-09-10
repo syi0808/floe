@@ -7,7 +7,7 @@ import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_vault_gateway.dart';
+import '../../support/agent_vault_gateway.dart';
 
 void main() {
   testWidgets('memory settings presents saved memory in user language', (

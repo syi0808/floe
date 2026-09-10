@@ -9,9 +9,9 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'calendar_action_execution_test.dart' show Executor;
-import 'support/server_credentials.dart';
-import 'support/agent_registry.dart';
+import '../day_canvas/calendar_action_execution_test.dart' show Executor;
+import '../../support/server_credentials.dart';
+import '../../support/agent_registry.dart';
 
 void main() {
   testWidgets('assistant permission management lives in Settings', (

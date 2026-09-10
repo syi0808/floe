@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/agent_vault_gateway.dart';
+import '../../support/agent_vault_gateway.dart';
 
 void main() {
   testWidgets('general conversation accepts free-form messages', (
