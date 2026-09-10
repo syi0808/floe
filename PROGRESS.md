@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 work/logistics paired View transport — 2026-09-10
+
+- Added configured-scope GitHub and Home Assistant service boundaries plus authenticated paired
+  routes for Work Context and Life Logistics. Repository/entity selection stays server-owned and
+  route payloads reject all fields except the schema version.
+- Installed runtimes join the common connection inventory without exposing provider configuration.
+  Focused race tests and vet pass for both adapters and the console transport.
+- Startup credential/configuration wiring, client Agent consumption and live provider evidence
+  remain, so S5.5-C4/C5/E7/E8 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 bounded Home Assistant logistics adapter — 2026-09-10
 
 - Added a server-native GET-only Home Assistant adapter for up to 16 explicitly selected benign

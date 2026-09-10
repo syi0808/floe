@@ -29,6 +29,10 @@
   state and opaque evidence handles enter Life Logistics; native entity IDs and attributes do not.
 - The Home Assistant connector publishes one Observe capability and no Act authority. Static Life
   Logistics and snapshot fixtures cross the same Go/Rust strict validators.
+- Added configured-scope service boundaries and paired, authenticated View routes for Work Context
+  and Life Logistics. Requests contain only the schema version: repository and entity selections
+  remain server-owned, unknown fields fail closed, and both snapshots join the common connection
+  inventory when their runtimes are installed.
 
 ## Automated evidence
 
@@ -38,6 +42,8 @@ go -C server test -race ./internal/connectors/github
 go -C server vet ./internal/connectors/github
 go -C server test -race ./internal/connectors/homeassistant
 go -C server vet ./internal/connectors/homeassistant
+go -C server test -race ./internal/console
+go -C server vet ./internal/console
 cargo test -p floe-agent --test connected_context
 ```
 
@@ -46,7 +52,7 @@ fixtures.
 
 ## Remaining gate
 
-GitHub and Home Assistant are not yet credential-managed, scheduled or exposed to a product
-conversation, and no live provider evidence was used. No Slack/Teams, file, travel or delivery
-adapter produces these Views yet. Cross-source scenarios and live evidence remain required.
-S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+GitHub and Home Assistant are not yet credential-managed, installed by server startup or consumed by
+the client Agent, and no live provider evidence was used. No Slack/Teams, file, travel or delivery
+adapter produces these Views yet. Cross-source scenarios and live evidence remain required. S5.5-C4/C5
+and S5.5-E7/E8 remain pending.

@@ -28,6 +28,12 @@ type fakeConnectorRuntime struct {
 	err      error
 }
 
+type fakeContextRuntime struct {
+	snapshot any
+	view     any
+	err      error
+}
+
 func (*fakeConnectorRuntime) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected"}, nil
 }
@@ -37,6 +43,18 @@ func (runtime *fakeConnectorRuntime) ConnectionSnapshot() (any, error) {
 }
 
 func (runtime *fakeConnectorRuntime) ReadCommunicationView(string, int, int) (any, error) {
+	return runtime.view, runtime.err
+}
+
+func (runtime *fakeContextRuntime) ConnectionSnapshot(context.Context) (any, error) {
+	return runtime.snapshot, runtime.err
+}
+
+func (runtime *fakeContextRuntime) ReadWorkContextView(context.Context) (any, error) {
+	return runtime.view, runtime.err
+}
+
+func (runtime *fakeContextRuntime) ReadLogisticsView(context.Context) (any, error) {
 	return runtime.view, runtime.err
 }
 
@@ -346,6 +364,30 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 	}
 	if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25}, ""); response.Code != http.StatusUnauthorized {
 		test.Fatalf("unpaired view read accepted: %d", response.Code)
+	}
+}
+
+func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "github"}}, view: map[string]any{"view_id": "work.context"}})
+	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "home_assistant"}}, view: map[string]any{"view_id": "life.logistics"}})
+
+	for path, viewID := range map[string]string{
+		"/v1/views/work.context":   "work.context",
+		"/v1/views/life.logistics": "life.logistics",
+	} {
+		value := fixture.value(fixture.call(http.MethodPost, path, map[string]any{"schema_version": 1}, token))
+		if value["view"].(map[string]any)["view_id"] != viewID {
+			test.Fatalf("view: %#v", value)
+		}
+		if response := fixture.call(http.MethodPost, path, map[string]any{"schema_version": 1, "write": true}, token); response.Code != http.StatusBadRequest {
+			test.Fatalf("authority field accepted: %s", path)
+		}
+	}
+	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
+	if len(connections) != 2 {
+		test.Fatalf("connections: %#v", connections)
 	}
 }
 

@@ -31,6 +31,16 @@ type ConnectorAuthRuntime interface {
 	ReadCommunicationView(string, int, int) (any, error)
 }
 
+type WorkContextRuntime interface {
+	ConnectionSnapshot(context.Context) (any, error)
+	ReadWorkContextView(context.Context) (any, error)
+}
+
+type LogisticsRuntime interface {
+	ConnectionSnapshot(context.Context) (any, error)
+	ReadLogisticsView(context.Context) (any, error)
+}
+
 type session struct {
 	csrf    string
 	expires time.Time
@@ -49,6 +59,8 @@ type Console struct {
 	vault                                        Vault
 	runtime                                      AuthRuntime
 	gmail                                        ConnectorAuthRuntime
+	work                                         WorkContextRuntime
+	logistics                                    LogisticsRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
 	unavailable                                  map[string]bool
@@ -58,6 +70,18 @@ type Console struct {
 	loginWindow                                  time.Time
 	lastPair                                     time.Time
 	testActive                                   bool
+}
+
+func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.work = runtime
+}
+
+func (console *Console) SetLogistics(runtime LogisticsRuntime) {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.logistics = runtime
 }
 
 func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
@@ -264,6 +288,8 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	}
 	gateway := console.gateway
 	gmail := console.gmail
+	work := console.work
+	logistics := console.logistics
 	console.mu.Unlock()
 	if !allowed {
 		failure(writer, 401, "unauthorized")
@@ -277,6 +303,19 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		connections := []any{}
 		if gmail != nil {
 			snapshot, err := gmail.ConnectionSnapshot()
+			if err != nil {
+				failure(writer, 503, "connections_unavailable")
+				return
+			}
+			connections = append(connections, snapshot)
+		}
+		for _, runtime := range []interface {
+			ConnectionSnapshot(context.Context) (any, error)
+		}{work, logistics} {
+			if runtime == nil {
+				continue
+			}
+			snapshot, err := runtime.ConnectionSnapshot(request.Context())
 			if err != nil {
 				failure(writer, 503, "connections_unavailable")
 				return
@@ -309,9 +348,41 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
 		return
 	}
+	if request.URL.Path == "/v1/views/work.context" {
+		console.serveSelectedView(writer, request, work, func(ctx context.Context) (any, error) {
+			return work.ReadWorkContextView(ctx)
+		})
+		return
+	}
+	if request.URL.Path == "/v1/views/life.logistics" {
+		console.serveSelectedView(writer, request, logistics, func(ctx context.Context) (any, error) {
+			return logistics.ReadLogisticsView(ctx)
+		})
+		return
+	}
 	forward := request.Clone(request.Context())
 	forward.Header.Set("Authorization", "Bearer "+console.internalToken)
 	gateway.ServeHTTP(writer, forward)
+}
+
+func (console *Console) serveSelectedView(writer http.ResponseWriter, request *http.Request, runtime any, read func(context.Context) (any, error)) {
+	if request.Method != http.MethodPost || runtime == nil {
+		failure(writer, 404, "not_found")
+		return
+	}
+	var input struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
+		failure(writer, 400, "validation")
+		return
+	}
+	view, err := read(request.Context())
+	if err != nil {
+		failure(writer, 503, "view_unavailable")
+		return
+	}
+	reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
 }
 
 func (console *Console) servePair(writer http.ResponseWriter, request *http.Request) {
