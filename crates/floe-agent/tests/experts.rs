@@ -395,6 +395,12 @@ impl Fixture {
     fn invocation(&self, assignment_id: Uuid) -> ExpertInvocation {
         ExpertInvocation {
             usage: Default::default(),
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
             schema_version: 1,
             invocation_id: Uuid::new_v4(),
             instance_id: self.instance,

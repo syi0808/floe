@@ -7,6 +7,8 @@ use crate::{
 
 pub const MAX_CONTEXT_MEMORIES: usize = 32;
 pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
+pub const MAX_CONTEXT_EVIDENCE: usize = 64;
+pub const MAX_CONTEXT_EVIDENCE_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,6 +131,33 @@ impl InferencePolicyDecision {
             .any(|evidence| evidence.expires_at_unix_ms <= now_unix_ms)
         {
             return Err(AgentFailure::StaleContext);
+        }
+        let evidence_bytes = context
+            .evidence
+            .iter()
+            .try_fold(0usize, |total, evidence| {
+                total
+                    .checked_add(evidence.untrusted_text.len())
+                    .ok_or(AgentFailure::BudgetExceeded)
+            })?;
+        if context.evidence.len() > MAX_CONTEXT_EVIDENCE
+            || evidence_bytes > MAX_CONTEXT_EVIDENCE_BYTES
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        if context
+            .evidence
+            .iter()
+            .enumerate()
+            .any(|(index, evidence)| {
+                evidence.untrusted_text.trim().is_empty()
+                    || evidence.source_handle.len() > 128
+                    || context.evidence[..index]
+                        .iter()
+                        .any(|other| other.source_handle == evidence.source_handle)
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
         }
         if placement == ModelPlacement::Remote {
             if self.external_transfer_consent != TransferConsent::Granted {

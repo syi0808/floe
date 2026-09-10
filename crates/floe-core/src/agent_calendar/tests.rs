@@ -750,6 +750,66 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
 }
 
 #[tokio::test]
+async fn schedule_expert_consumes_bounded_floe_native_tasks_and_notes() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let task = fixture
+        .core
+        .create_task(
+            fixture.session.person_id,
+            "Prepare the launch checklist",
+            Some(now() + TimeDelta::hours(6)),
+            floe_domain::Priority::High,
+            now(),
+        )
+        .await
+        .unwrap();
+    let note = fixture
+        .core
+        .create_note(
+            fixture.session.person_id,
+            "The launch cannot move past Friday",
+            now(),
+        )
+        .await
+        .unwrap();
+    let model = Model::default();
+
+    fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+    let requests = model.expert_requests.lock().unwrap();
+    assert!(!requests.is_empty());
+    assert!(requests.iter().all(|request| {
+        request.context.evidence.iter().any(|evidence| {
+            evidence.source_handle.starts_with("floe.tasks:")
+                && evidence.untrusted_text.contains(&task.id.to_string())
+                && evidence
+                    .untrusted_text
+                    .contains("Prepare the launch checklist")
+        })
+    }));
+    assert!(requests.iter().all(|request| {
+        request.context.evidence.iter().any(|evidence| {
+            evidence.source_handle.starts_with("floe.notes:")
+                && evidence.untrusted_text.contains(&note.id.to_string())
+                && evidence
+                    .untrusted_text
+                    .contains("The launch cannot move past Friday")
+        })
+    }));
+}
+
+#[tokio::test]
 async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evidence_as_current() {
     let mut fixture = Fixture::new().await;
     let first = fixture

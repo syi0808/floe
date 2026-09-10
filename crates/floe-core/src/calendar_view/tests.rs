@@ -923,6 +923,12 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
     }
     .invoke(ExpertInvocation {
         usage: Default::default(),
+        context: AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        },
         schema_version: 1,
         invocation_id,
         instance_id: vault.registry_instance_id(),

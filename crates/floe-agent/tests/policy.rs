@@ -194,3 +194,32 @@ fn confirmed_memory_requires_personal_scope_and_current_bounded_metadata() {
         Err(AgentFailure::PolicyDenied)
     );
 }
+
+#[test]
+fn context_evidence_is_bounded_and_source_handles_are_unique() {
+    let policy = policy(DataClass::Personal);
+    let mut projected = context(DataClass::Personal);
+    projected.evidence[0].untrusted_text = "x".repeat(MAX_CONTEXT_EVIDENCE_BYTES + 1);
+    assert_eq!(
+        policy.authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &projected,
+            1,
+        ),
+        Err(AgentFailure::BudgetExceeded)
+    );
+
+    let duplicate = context(DataClass::Personal).evidence[0].clone();
+    projected = context(DataClass::Personal);
+    projected.evidence.push(duplicate);
+    assert_eq!(
+        policy.authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &projected,
+            1,
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+}

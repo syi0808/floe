@@ -210,6 +210,12 @@ impl Fixture {
         }
         .invoke(ExpertInvocation {
             usage: Default::default(),
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
             schema_version: 1,
             invocation_id,
             instance_id: vault.registry_instance_id(),

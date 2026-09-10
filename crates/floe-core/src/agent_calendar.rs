@@ -113,6 +113,42 @@ impl FloeCore {
             {
                 return Err(AgentFailure::PolicyDenied);
             }
+            let mut expert_context = request.context.clone();
+            if request.policy.data_classes.contains(&DataClass::Personal) {
+                expert_context.evidence.retain(|evidence| {
+                    !evidence.source_handle.starts_with("floe.tasks:")
+                        && !evidence.source_handle.starts_with("floe.notes:")
+                });
+                let context_now = clock();
+                let task_view = self
+                    .task_context_view(
+                        request.command.person_id,
+                        Uuid::new_v5(&request.command.person_id.0, b"floe.tasks"),
+                        context_now,
+                        16,
+                        8 * 1024,
+                    )
+                    .await?;
+                let note_view = self
+                    .note_context_view(
+                        request.command.person_id,
+                        Uuid::new_v5(&request.command.person_id.0, b"floe.notes"),
+                        context_now,
+                        16,
+                        8 * 1024,
+                    )
+                    .await?;
+                if !task_view.items.is_empty() {
+                    expert_context
+                        .evidence
+                        .push(native_context_evidence(&task_view)?);
+                }
+                if !note_view.items.is_empty() {
+                    expert_context
+                        .evidence
+                        .push(native_context_evidence(&note_view)?);
+                }
+            }
             let turn = CalendarTurn {
                 vault,
                 views,
@@ -123,6 +159,7 @@ impl FloeCore {
                 assignment_id: request.assignment_id,
                 propose_focus: request.propose_focus,
                 card,
+                expert_context,
                 deadline,
                 cancellation: request.cancellation,
                 parent: parent.clone(),
@@ -251,6 +288,7 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     assignment_id: Uuid,
     propose_focus: bool,
     card: AgentCard,
+    expert_context: AgentContext,
     deadline: Instant,
     cancellation: Cancellation,
     parent: Cancellation,
@@ -435,6 +473,7 @@ impl<
         .invoke_with_model(
             ExpertInvocation {
                 usage: request.usage.clone(),
+                context: self.expert_context.clone(),
                 schema_version: request.schema_version,
                 invocation_id: task_id,
                 instance_id: self.vault.registry_instance_id(),

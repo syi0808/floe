@@ -714,6 +714,12 @@ impl InProcessAgent for FixtureCapabilities {
         }
         .invoke(ExpertInvocation {
             usage: request.usage,
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
             schema_version: request.schema_version,
             invocation_id: task_id,
             instance_id: self.instance_id,

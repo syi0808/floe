@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Floe-native context reaches Schedule Expert — 2026-09-10
+
+- Added bounded, versioned Personal Views for durable Floe-native Tasks and Notes. Projections
+  exclude completed/deleted and cross-person records, preserve opaque evidence handles, truncate
+  untrusted text safely and omit domain source metadata.
+- Personal Calendar Agent turns now load these Views into the production Schedule Expert model
+  context. Synthetic turns receive no Personal evidence, while existing model placement and
+  transfer-consent policy remains authoritative.
+- Added aggregate evidence bounds to inference policy and focused coverage for durable reopen,
+  person isolation, item/byte limits and observed Expert requests. The broader personal context
+  cohort is still incomplete, so S5.5 remains **0/14**.
+  [Evidence and limits](docs/validation/s5-5-native-context-expert.md).
+
 ### S5.5 shared Calendar connection inspection — 2026-09-10
 
 - Added a read-only `connections` protocol/FFI operation over the common connector snapshot.

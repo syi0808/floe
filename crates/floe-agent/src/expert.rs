@@ -106,6 +106,7 @@ impl Default for ExpertBudget {
 
 pub struct ExpertInvocation {
     pub usage: crate::UsageLedger,
+    pub context: AgentContext,
     pub schema_version: u32,
     pub invocation_id: Uuid,
     pub instance_id: Uuid,
@@ -1038,12 +1039,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
             session_id: invocation.invocation_id,
             turn_id: messages[0].turn_id(),
             policy: policy.clone(),
-            context: AgentContext {
-                projection_version: policy.projection_version,
-                persona: None,
-                memories: vec![],
-                evidence: vec![],
-            },
+            context: invocation.context.clone(),
             messages: messages.to_vec(),
             capabilities,
             active_agents: vec![],
