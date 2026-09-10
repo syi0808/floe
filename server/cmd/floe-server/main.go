@@ -82,6 +82,11 @@ func main() {
 				log.Fatal("Cannot configure Microsoft OAuth")
 			}
 			defer microsoftAuth.Close()
+			microsoftCalendarAuth, calendarAuthError := microsoftauth.NewCalendar(vault, microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")})
+			if calendarAuthError != nil || management.SetMicrosoftCalendarAuth(microsoftCalendarAuth) != nil {
+				log.Fatal("Cannot configure Microsoft Calendar OAuth")
+			}
+			defer microsoftCalendarAuth.Close()
 			microsoftClient, clientError := microsoftmail.New(microsoftAuth, "primary")
 			if clientError != nil {
 				log.Fatal("Cannot initialize Microsoft Mail connector")

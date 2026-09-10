@@ -4,6 +4,16 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Microsoft Calendar product route — 2026-09-11
+
+- Wired the dedicated Calendar OAuth runtime into startup, private selected-calendar persistence,
+  dashboard lifecycle and common connection inventory.
+- The paired `calendar.timeline` route now tries configured Google then Microsoft providers in fixed
+  order, falling back on typed source failure without provider selection in model prompts.
+- Focused Go race tests/vet and dashboard JavaScript validation pass. Live calendar evidence and
+  Android Calendar/Contacts plus Health Connect remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 bounded Microsoft Calendar adapter foundation — 2026-09-11
 
 - Added a selected-calendar, GET-only Microsoft Graph `calendarView` adapter using the shared strict

@@ -90,6 +90,7 @@ type Console struct {
 	logistics                                    []LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
 	calendarAuth                                 DriveAuthRuntime
+	microsoftCalendarAuth                        DriveAuthRuntime
 	calendars                                    []CalendarRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
@@ -133,6 +134,13 @@ func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	console.calendarAuth = runtime
+	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.microsoftCalendarAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -453,7 +461,14 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, 400, "validation")
 			return
 		}
-		view, err := calendars[0].ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
+		var view any
+		var err error
+		for _, runtime := range calendars {
+			view, err = runtime.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
 			failure(writer, 503, "view_unavailable")
 			return
@@ -593,6 +608,24 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-calendar/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.microsoftCalendarAuth
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "microsoft_calendar_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-calendar/"))
+		if err != nil {
+			failure(writer, 502, "microsoft_calendar_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/calendar/") && request.Method == "POST" {
 		console.mu.Lock()
 		runtime := console.calendarAuth
@@ -730,6 +763,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateGoogleCalendarConnector(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/connector/microsoft-calendar" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateMicrosoftCalendarConnector(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.Method != "POST" {
@@ -840,11 +879,12 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
 	}
 	connectors := map[string]any{
-		"github":          map[string]any{"configured": state.Connectors.GitHub != nil},
-		"slack":           map[string]any{"configured": state.Connectors.Slack != nil},
-		"google_drive":    map[string]any{"configured": state.Connectors.GoogleDrive != nil},
-		"google_calendar": map[string]any{"configured": state.Connectors.GoogleCalendar != nil},
-		"home_assistant":  map[string]any{"configured": state.Connectors.HomeAssistant != nil},
+		"github":             map[string]any{"configured": state.Connectors.GitHub != nil},
+		"slack":              map[string]any{"configured": state.Connectors.Slack != nil},
+		"google_drive":       map[string]any{"configured": state.Connectors.GoogleDrive != nil},
+		"google_calendar":    map[string]any{"configured": state.Connectors.GoogleCalendar != nil},
+		"microsoft_calendar": map[string]any{"configured": state.Connectors.MicrosoftCalendar != nil},
+		"home_assistant":     map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
 	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }

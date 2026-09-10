@@ -10,6 +10,7 @@ import (
 	calendarconnector "floe/server/internal/connectors/googlecalendar"
 	driveconnector "floe/server/internal/connectors/googledrive"
 	homeconnector "floe/server/internal/connectors/homeassistant"
+	microsoftcalendarconnector "floe/server/internal/connectors/microsoftcalendar"
 	slackconnector "floe/server/internal/connectors/slack"
 )
 
@@ -75,6 +76,17 @@ func (console *Console) rebuildConnectorRuntimes() error {
 			return err
 		}
 		service, err := calendarconnector.NewService(client)
+		if err != nil {
+			return err
+		}
+		console.calendars = append(console.calendars, service)
+	}
+	if configured := console.state.Connectors.MicrosoftCalendar; configured != nil && console.microsoftCalendarAuth != nil {
+		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, configured.CalendarID, "primary")
+		if err != nil {
+			return err
+		}
+		service, err := microsoftcalendarconnector.NewService(client)
 		if err != nil {
 			return err
 		}
@@ -255,6 +267,46 @@ func (console *Console) updateGoogleCalendarConnector(writer http.ResponseWriter
 			return
 		}
 		next.Connectors.GoogleCalendar = &googleCalendarConnectorConfig{CalendarID: input.CalendarID}
+	}
+	if console.save(next) != nil {
+		failure(writer, 500, "save_failed")
+		return
+	}
+	console.state = next
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		failure(writer, 500, "invalid_connector_configuration")
+		return
+	}
+	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+func (console *Console) updateMicrosoftCalendarConnector(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Enabled    bool   `json:"enabled"`
+		CalendarID string `json:"calendar_id"`
+	}
+	if !decode(writer, request, &input) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if !input.Enabled {
+		next.Connectors.MicrosoftCalendar = nil
+	} else {
+		if console.microsoftCalendarAuth == nil {
+			failure(writer, 503, "microsoft_calendar_unavailable")
+			return
+		}
+		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, input.CalendarID, "primary")
+		if err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		if _, err := microsoftcalendarconnector.NewService(client); err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		next.Connectors.MicrosoftCalendar = &microsoftCalendarConnectorConfig{CalendarID: input.CalendarID}
 	}
 	if console.save(next) != nil {
 		failure(writer, 500, "save_failed")

@@ -116,6 +116,12 @@ route uses Gmail first when both providers are configured and falls back to Micr
 failure. Dashboard disconnect deletes the local credential; revoke the application's consent in the
 Microsoft account when the remote grant must also be invalidated.
 
+The same Microsoft application registration enables a separate **Microsoft Calendar** login with
+its own `FLOE_MICROSOFT_CALENDAR_OAUTH` Keychain credential and exact `Calendars.Read` scope. Select
+one calendar ID in the dashboard. The paired timeline route tries configured Google Calendar first
+and Microsoft Calendar second, returning the first healthy bounded View without exposing routing
+policy, calendar IDs, bodies, locations or attendees to Agent context.
+
 ## Legacy headless mode
 
 The environment-configured mode below remains for existing development fixtures.

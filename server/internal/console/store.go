@@ -27,11 +27,12 @@ type diskState struct {
 }
 
 type connectorConfigState struct {
-	GitHub         *githubConnectorConfig         `json:"github,omitempty"`
-	Slack          *slackConnectorConfig          `json:"slack,omitempty"`
-	GoogleDrive    *googleDriveConnectorConfig    `json:"google_drive,omitempty"`
-	GoogleCalendar *googleCalendarConnectorConfig `json:"google_calendar,omitempty"`
-	HomeAssistant  *homeAssistantConnectorConfig  `json:"home_assistant,omitempty"`
+	GitHub            *githubConnectorConfig            `json:"github,omitempty"`
+	Slack             *slackConnectorConfig             `json:"slack,omitempty"`
+	GoogleDrive       *googleDriveConnectorConfig       `json:"google_drive,omitempty"`
+	GoogleCalendar    *googleCalendarConnectorConfig    `json:"google_calendar,omitempty"`
+	MicrosoftCalendar *microsoftCalendarConnectorConfig `json:"microsoft_calendar,omitempty"`
+	HomeAssistant     *homeAssistantConnectorConfig     `json:"home_assistant,omitempty"`
 }
 
 type githubConnectorConfig struct {
@@ -49,6 +50,10 @@ type googleDriveConnectorConfig struct {
 }
 
 type googleCalendarConnectorConfig struct {
+	CalendarID string `json:"calendar_id"`
+}
+
+type microsoftCalendarConnectorConfig struct {
 	CalendarID string `json:"calendar_id"`
 }
 
@@ -172,6 +177,10 @@ func cloneState(state diskState) diskState {
 	if state.Connectors.GoogleCalendar != nil {
 		configured := *state.Connectors.GoogleCalendar
 		copy.Connectors.GoogleCalendar = &configured
+	}
+	if state.Connectors.MicrosoftCalendar != nil {
+		configured := *state.Connectors.MicrosoftCalendar
+		copy.Connectors.MicrosoftCalendar = &configured
 	}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value

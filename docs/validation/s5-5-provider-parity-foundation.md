@@ -58,6 +58,12 @@
 - Microsoft Calendar has a dedicated `Calendars.Read` OAuth profile and Keychain credential isolated
   from Microsoft Mail. Static Calendar View and descriptor fixtures pass the shared Rust validators,
   and typed failures preserve only fresh cached evidence.
+- Startup creates Microsoft Mail and Calendar OAuth runtimes independently. The dashboard manages
+  Calendar login and one selected calendar without exposing that selection to paired clients or
+  storing its credential in server state.
+- Microsoft Calendar joins the common connection inventory and `calendar.timeline` endpoint. The
+  route tries configured Google then Microsoft sources in fixed order and falls back only after a
+  provider failure, keeping routing policy and provider names outside model prompts.
 
 ## Automated evidence
 
@@ -78,7 +84,6 @@ node --check server/internal/console/web/app.js
 
 ## Remaining gate
 
-No live Microsoft Graph or Google Calendar evidence was used. Microsoft Calendar still needs its
-startup/product route; Android Calendar/Contacts and Health Connect adapters are absent, and the
-provider-neutral route table still needs the complete parity cohort. S5.5-C3 remains pending and the
-slice stays **0/14**.
+No live Microsoft Graph or Google Calendar evidence was used. Android Calendar/Contacts and Health
+Connect adapters are absent, and the provider-neutral route table still needs the complete parity
+cohort. S5.5-C3 remains pending and the slice stays **0/14**.
