@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 isolated Learner runtime boundary — 2026-09-10
+
+- Added a typed, single-proposal Learner runtime over immutable completed-session
+  digests, evidence turn IDs, current confirmed Memory projections and explicit source
+  revision. It has a separate local-only model port, token/cost/input/output/deadline
+  budgets and cancellation token, with no Capability, Expert, network or mutation port.
+- The model can return no proposal as a normal result. For a Memory proposal, the
+  runtime—not model output—owns extractor/prompt versions, Learner run actor, evidence
+  references and observation time before using the candidate-only sink.
+- Candidate staging now applies source-session revision CAS. A newer foreground turn
+  makes an old review conflict instead of allowing a stale digest to write, while a
+  committed candidate is never hidden by a later cancellation result.
+- Focused Learner tests pass 4/4 and encrypted-vault tests pass 19/19. Durable job
+  enqueue/claim/defer scheduling and a production learner model adapter remain, so
+  this is a runtime boundary rather than a running background service and S5 stays 0/6.
+  [Evidence and limits](docs/validation/s5-learner-runtime.md).
+
 ### S5 Memory Review boundary and settings surface — 2026-09-10
 
 - Added a typed `memory_review` protocol/FFI operation that lists only pending Memory

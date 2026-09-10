@@ -124,6 +124,7 @@ pub enum KnowledgeActor {
 #[serde(deny_unknown_fields)]
 pub struct StageMemoryCandidate {
     pub session_id: Uuid,
+    pub expected_session_revision: u64,
     pub turn_ids: Vec<Uuid>,
     pub observation_kind: LearningObservationKind,
     pub digest: String,

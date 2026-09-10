@@ -67,6 +67,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let result = async {
             let session = self.session_on(&transaction, request.session_id).await?;
+            if session.revision != request.expected_session_revision {
+                return Err(AgentFailure::Conflict);
+            }
             if session.active_turn.is_some()
                 || session.pending_output.is_some()
                 || session.last_outcome != Some(AgentOutcome::Completed)
@@ -454,6 +457,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         Ok(mutations)
+    }
+}
+
+impl<Keys: VaultKeyProvider> floe_agent::MemoryCandidateSink for EncryptedAgentVault<Keys> {
+    fn person_id(&self) -> floe_domain::PersonId {
+        self.person_id
+    }
+
+    async fn stage_memory_candidate(
+        &self,
+        request: StageMemoryCandidate,
+    ) -> Result<KnowledgeCandidate, AgentFailure> {
+        EncryptedAgentVault::stage_memory_candidate(self, request).await
     }
 }
 

@@ -130,6 +130,7 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     let created_at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 1, 0).unwrap();
     let request = StageMemoryCandidate {
         session_id: session.id,
+        expected_session_revision: session.revision,
         turn_ids: vec![turn_id],
         observation_kind: LearningObservationKind::ExplicitRemember,
         digest: "사용자가 회의 시간대 선호를 명시했다.".into(),
@@ -141,6 +142,13 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         actor: KnowledgeActor::User,
         created_at,
     };
+
+    let mut stale_request = request.clone();
+    stale_request.expected_session_revision = 0;
+    assert_eq!(
+        vault.stage_memory_candidate(stale_request).await,
+        Err(AgentFailure::Conflict)
+    );
 
     let candidate = vault.stage_memory_candidate(request.clone()).await.unwrap();
     assert_eq!(candidate.state, KnowledgeCandidateState::Pending);
@@ -204,6 +212,7 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     let revised_candidate = vault
         .stage_memory_candidate(StageMemoryCandidate {
             session_id: session.id,
+            expected_session_revision: session.revision,
             turn_ids: vec![correction_turn_id],
             observation_kind: LearningObservationKind::UserCorrection,
             digest: "사용자가 회의 선호의 구체적인 시작 시각을 정정했다.".into(),
@@ -287,6 +296,7 @@ async fn memory_review_rejects_untrusted_sources_and_non_user_decisions() {
     vault.compare_and_swap(&sample, 0).await.unwrap();
     let request = StageMemoryCandidate {
         session_id: sample.id,
+        expected_session_revision: sample.revision,
         turn_ids: vec![turn_id],
         observation_kind: LearningObservationKind::UserCorrection,
         digest: "fixture evidence".into(),
@@ -316,6 +326,7 @@ async fn memory_review_rejects_untrusted_sources_and_non_user_decisions() {
     let candidate = vault
         .stage_memory_candidate(StageMemoryCandidate {
             session_id: personal.id,
+            expected_session_revision: personal.revision,
             turn_ids: vec![turn_id],
             observation_kind: LearningObservationKind::UserCorrection,
             digest: "사용자가 선호를 정정했다.".into(),
