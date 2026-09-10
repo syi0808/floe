@@ -4,6 +4,20 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S4 page-independent conversation redesign — 2026-09-10
+
+- Recorded the corrected ownership in ADR 0023: one Person-scoped assistant
+  conversation is mounted by a page but is not scoped by it; the Manager and delegated
+  Expert, not Day Canvas, determine which evidence interval the request needs.
+- Added request interval and cursor fields to the internal Timeline read contract.
+  Calendar projection now returns and clips to the requested subrange only when it is
+  inside the currently authorized View, and rejects an attempted range expansion.
+- Focused `floe-agent` and `floe-core` suites pass, including new request-scoped range
+  and out-of-grant coverage.
+- Generic conversation Expert discovery, on-demand connector refresh, pagination and
+  removal of Calendar-specific client/session paths remain. The existing Day Canvas
+  path is therefore migration-only and weekly retrieval is not yet end-to-end fixed.
+
 ### S4 bounded multi-day Calendar query foundation — 2026-09-10
 
 - Generalized Calendar turn and Timeline View validation from a fixed 24-hour day to
