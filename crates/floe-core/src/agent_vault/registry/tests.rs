@@ -571,7 +571,7 @@ async fn key_failure_rolls_back_component_initialization_before_retry() {
 }
 
 #[tokio::test]
-async fn initialization_is_explicit_and_missing_component_is_not_recreated() {
+async fn missing_registry_is_reset_on_reopen_and_requires_explicit_initialization() {
     let mut fixture = Fixture::new().await;
     drop(fixture.vault);
     fixture.vault =
@@ -600,10 +600,16 @@ async fn initialization_is_explicit_and_missing_component_is_not_recreated() {
         Err(AgentFailure::VaultUnavailable)
     );
     drop(fixture.vault);
-    assert!(matches!(
-        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone()).await,
-        Err(AgentFailure::VaultUnavailable)
-    ));
+    fixture.vault =
+        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
+            .await
+            .unwrap();
+    assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
+    fixture
+        .vault
+        .initialize_expert_registry(&snapshot)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

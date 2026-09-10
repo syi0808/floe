@@ -209,7 +209,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         vault.initialize_session_archive().await?;
-        vault.expert_registry().await?;
+        match vault.expert_registry().await {
+            Ok(_) => {}
+            Err(AgentFailure::VaultUnavailable) => {
+                vault.reset_expert_registry().await?;
+            }
+            Err(failure) => return Err(failure),
+        }
         Ok(vault)
     }
 
