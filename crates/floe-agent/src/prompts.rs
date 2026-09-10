@@ -11,6 +11,8 @@ const COMMUNICATION_EXPERT_ROLE: &str = include_str!("../prompts/communication_e
 const RELATIONSHIPS_EXPERT_ROLE: &str = include_str!("../prompts/relationships_expert_role.txt");
 const FOCUS_EXPERT_ROLE: &str = include_str!("../prompts/focus_expert_role.txt");
 const WELLBEING_EXPERT_ROLE: &str = include_str!("../prompts/wellbeing_expert_role.txt");
+const WORK_CONTEXT_EXPERT_ROLE: &str = include_str!("../prompts/work_context_expert_role.txt");
+const LIFE_LOGISTICS_EXPERT_ROLE: &str = include_str!("../prompts/life_logistics_expert_role.txt");
 const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
@@ -31,6 +33,8 @@ pub enum PromptRole {
     RelationshipsExpert,
     FocusAttentionExpert,
     WellbeingExpert,
+    WorkContextExpert,
+    LifeLogisticsExpert,
     Learner,
 }
 
@@ -242,6 +246,24 @@ pub fn wellbeing_expert_prompt() -> PromptAssembly {
         "wellbeing-expert-role",
         1,
         WELLBEING_EXPERT_ROLE,
+    )
+}
+
+pub fn work_context_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::WorkContextExpert,
+        "work-context-expert-role",
+        1,
+        WORK_CONTEXT_EXPERT_ROLE,
+    )
+}
+
+pub fn life_logistics_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::LifeLogisticsExpert,
+        "life-logistics-expert-role",
+        1,
+        LIFE_LOGISTICS_EXPERT_ROLE,
     )
 }
 

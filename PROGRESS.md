@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Work Context and Life Logistics contracts — 2026-09-10
+
+- Added bounded selected-scope Work Context and Life Logistics Views. Strict contracts exclude
+  absolute paths, organization-wide search, full documents, payments, access codes, unlock controls
+  and raw webhook payloads.
+- Added isolated Work Context and Life Logistics Expert roles with evidence-linked blockers,
+  next actions and preparation recommendations. Neither receives capabilities; runtime owns scope,
+  source and expiry metadata and rejects attempted execution fields.
+- Focused View/privacy and Expert tests pass 4/4. Live work/file/project/travel/delivery/home adapters
+  and product delegation remain, so S5.5-C4/C5/E7/E8 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 provider-neutral route arbitration — 2026-09-10
 
 - Added explicit logical-source routing over common connector snapshots. Selection rejects stale or
