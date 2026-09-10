@@ -767,4 +767,167 @@ mod tests {
         assert_eq!(result.findings.len(), 1);
         server.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn portfolio_delegations_read_fresh_views_and_return_typed_artifacts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let cases = [
+            (
+                "/v1/views/work.context",
+                "Work Context Expert",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view_id": "work.context",
+                    "source_handle": "github:fresh",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "scope_handle": "workspace:selected",
+                    "items": [{
+                        "evidence_handle": "github:issue",
+                        "kind": "project",
+                        "title": "Release readiness",
+                        "status": "open",
+                        "blocker": "Missing validation",
+                        "observed_at_unix_ms": now - 2
+                    }]
+                }),
+                serde_json::json!({
+                    "summary": "The release is blocked on validation.",
+                    "insights": [{
+                        "evidence_handle": "github:issue",
+                        "blocker": "Missing validation",
+                        "next_action": "Attach validation evidence.",
+                        "confidence_millis": 1000
+                    }]
+                }),
+            ),
+            (
+                "/v1/views/life.logistics",
+                "Life Logistics Expert",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view_id": "life.logistics",
+                    "source_handle": "home:fresh",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "items": [{
+                        "evidence_handle": "home:sensor",
+                        "kind": "home_state",
+                        "summary": "Window sensor",
+                        "status": "open",
+                        "needs_attention": true
+                    }]
+                }),
+                serde_json::json!({
+                    "summary": "The selected window needs attention.",
+                    "preparations": [{
+                        "evidence_handle": "home:sensor",
+                        "recommendation": "Check the window before leaving.",
+                        "urgency": "soon",
+                        "requires_approval": false
+                    }]
+                }),
+            ),
+        ];
+        let server = tokio::spawn(async move {
+            for (path, role, view, answer) in cases {
+                let (socket, _) = listener.accept().await.unwrap();
+                let (view_request, socket) = request(socket).await;
+                assert!(view_request.starts_with(&format!("POST {path} ")));
+                respond(
+                    socket,
+                    serde_json::json!({"schema_version": 1, "view": view}).to_string(),
+                )
+                .await;
+
+                let (socket, _) = listener.accept().await.unwrap();
+                let (model_request, socket) = request(socket).await;
+                assert!(model_request.starts_with("POST /v1/agent "));
+                assert!(model_request.contains(role));
+                let output = serde_json::json!({
+                    "output": [{"kind": "answer", "text": answer.to_string()}],
+                    "used_tokens": 64,
+                    "call_ids": []
+                })
+                .to_string();
+                respond(
+                    socket,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "purpose": "everyday_assistance",
+                        "output": output,
+                        "trace_id": "0123456789abcdef0123456789abcdef",
+                        "routing": {
+                            "placement": "server_local",
+                            "external_transfer": false,
+                            "replay_source": "a".repeat(64)
+                        }
+                    })
+                    .to_string(),
+                )
+                .await;
+            }
+        });
+        let route = AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        };
+        let model = Model::new(Some(route.clone())).unwrap();
+        let policy = policy(&model, Some(&route));
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+        };
+        let mut results = vec![];
+        for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
+            let task = experts
+                .handle_message(A2ASendMessageRequest {
+                    usage: floe_agent::UsageLedger::default(),
+                    schema_version: AGENT_VERSION,
+                    person_id: PersonId::new(),
+                    session_id: uuid::Uuid::new_v4(),
+                    parent_turn_id: uuid::Uuid::new_v4(),
+                    agent_id: agent_id.into(),
+                    message: floe_agent::A2AMessage {
+                        message_id: uuid::Uuid::new_v4(),
+                        context_id: uuid::Uuid::new_v4(),
+                        task_id: Some(uuid::Uuid::new_v4()),
+                        role: A2AMessageRole::User,
+                        parts: vec![A2APart::Text {
+                            text: "Review the selected context.".into(),
+                        }],
+                    },
+                    max_output_bytes: 16_384,
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                    cancellation: floe_agent::Cancellation::default(),
+                })
+                .await
+                .unwrap();
+            results.push(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap().to_owned());
+        }
+        let work: WorkContextExpertResult = serde_json::from_str(&results[0]).unwrap();
+        let logistics: LifeLogisticsExpertResult = serde_json::from_str(&results[1]).unwrap();
+        assert_eq!(work.scope_handle, "workspace:selected");
+        assert_eq!(work.insights[0].evidence_handle, "github:issue");
+        assert_eq!(logistics.source_handle, "home:fresh");
+        assert_eq!(logistics.preparations[0].evidence_handle, "home:sensor");
+        server.await.unwrap();
+    }
 }

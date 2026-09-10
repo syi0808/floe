@@ -60,7 +60,8 @@ node --check server/internal/console/web/app.js
 ```
 
 The focused View/privacy and Expert contract tests pass, including both cross-language adapter
-fixtures.
+fixtures. A paired synthetic HTTP integration test proves both Work Context and Life Logistics
+delegations fetch fresh Views and return source-linked typed A2A artifacts.
 
 ## Remaining gate
 
