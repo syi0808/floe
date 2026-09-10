@@ -37,7 +37,6 @@ import '../../server/settings_screen.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/agent_controller.dart';
 import '../../agent/agent_calendar_sources.dart';
-import '../../agent/agent_calendar_turn_gateway.dart';
 import '../../agent/agent_panel.dart';
 
 enum _DestinationView { today, tasks, notes, activity, connections, settings }
@@ -104,7 +103,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       agentController = AgentController(
         gateway: agentGateway,
         personId: widget.query.personId,
-        calendarContext: _agentCalendarContext,
       );
     }
   }
@@ -533,20 +531,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     }
     return AgentCalendarSources(
       personId: snapshot.personId,
-      connection: connection,
-    );
-  }
-
-  AgentCalendarConversationContext? _agentCalendarContext() {
-    final snapshot = controller.snapshot;
-    final connection = snapshot?.calendar;
-    if (controller.loadState != DayLoadState.ready ||
-        snapshot == null ||
-        connection == null) {
-      return null;
-    }
-    return AgentCalendarConversationContext(
-      day: controller.query,
       connection: connection,
     );
   }

@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'agent_calendar_experts.dart';
-import 'agent_calendar_session_gateway.dart';
-import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
@@ -26,15 +24,10 @@ enum AgentProgress {
 }
 
 final class AgentController extends ChangeNotifier {
-  AgentController({
-    required this.gateway,
-    required this.personId,
-    this.calendarContext,
-  });
+  AgentController({required this.gateway, required this.personId});
 
   final AgentFixtureStreamingGateway gateway;
   final String personId;
-  final AgentCalendarConversationContext? Function()? calendarContext;
   AgentSession? session;
   List<AgentMessage> messages = [];
   AgentProgress progress = AgentProgress.idle;
@@ -45,13 +38,8 @@ final class AgentController extends ChangeNotifier {
   bool _stopRequested = false;
   AgentSession? _runSession;
   AgentFixturePrompt? _lastPrompt;
-  AgentCalendarPromptKind? _lastCalendarPrompt;
-  String? _lastCalendarText;
   String? _lastConversationText;
-  int _lastFocusMinutes = 60;
-  AgentCalendarTurnRequest? _calendarRun;
   AgentConversationTurnRequest? _conversationRun;
-  AgentCalendarConversationContext? _activeCalendarContext;
   AgentVaultState? vaultState;
   bool _sealed = false;
   Completer<void>? _operationDone;
@@ -602,15 +590,12 @@ final class AgentController extends ChangeNotifier {
   }
 
   bool get usesVault => gateway is AgentVaultGateway;
-  bool get isCalendarConversation => session?.scope != null;
   bool get isGeneralConversation =>
       usesVault &&
       session?.scope == null &&
       session?.dataClasses.singleOrNull == 'personal';
-  bool get isConnectedConversation =>
-      isCalendarConversation || isGeneralConversation;
-  bool get isPersonalConversation =>
-      isCalendarConversation && session?.dataClasses.singleOrNull == 'personal';
+  bool get isConnectedConversation => isGeneralConversation;
+  bool get isPersonalConversation => isGeneralConversation;
 
   bool get busy => _busy;
   bool get running => _runSession != null;
@@ -620,16 +605,13 @@ final class AgentController extends ChangeNotifier {
   bool get canContinue =>
       canSend &&
       session?.continuation != null &&
-      (isCalendarConversation
-          ? _lastCalendarPrompt != null
-          : isGeneralConversation && _lastConversationText != null);
+      isGeneralConversation &&
+      _lastConversationText != null;
   bool get canRetry =>
       canSend &&
       !canContinue &&
       failure != null &&
-      (isCalendarConversation
-          ? _lastCalendarPrompt != null
-          : isGeneralConversation
+      (isGeneralConversation
           ? _lastConversationText != null
           : _lastPrompt != null);
 
@@ -657,33 +639,16 @@ final class AgentController extends ChangeNotifier {
           throw const AgentVaultException('vault_unavailable');
         }
       }
-      final connected = await _connectedCalendarSetup();
-      if (connected case (final context, final setup)) {
-        final calendarGateway = gateway as AgentCalendarSessionGateway;
+      if (gateway case final AgentConversationGateway conversation) {
         final saved = newSession
-            ? await calendarGateway.startCalendarSession(
-                personId,
-                setup.setupId,
-              )
-            : await calendarGateway.resumeCalendarSession(
-                personId,
-                setup.setupId,
-              );
-        _activeCalendarContext = context;
-        _acceptSession(saved, setupId: setup.setupId);
+            ? await conversation.startConversation(personId)
+            : await conversation.resumeConversation(personId);
+        _acceptSession(saved);
       } else {
-        _activeCalendarContext = null;
-        if (gateway case final AgentConversationGateway conversation) {
-          final saved = newSession
-              ? await conversation.startConversation(personId)
-              : await conversation.resumeConversation(personId);
-          _acceptSession(saved);
-        } else {
-          final result = newSession
-              ? await gateway.startAgentFixture(personId)
-              : await gateway.resumeAgentFixture(personId);
-          _acceptSession(result.session);
-        }
+        final result = newSession
+            ? await gateway.startAgentFixture(personId)
+            : await gateway.resumeAgentFixture(personId);
+        _acceptSession(result.session);
       }
       needsReload = false;
     } on Object catch (error) {
@@ -704,14 +669,7 @@ final class AgentController extends ChangeNotifier {
     _notify();
     try {
       final original = session!;
-      if (original.scope case final scope?) {
-        if (gateway is! AgentCalendarSessionGateway) {
-          throw const FormatException('Calendar recovery unavailable');
-        }
-        final saved = await (gateway as AgentCalendarSessionGateway)
-            .recoverCalendarSession(original);
-        _acceptSession(saved, setupId: scope.setupId);
-      } else if (isGeneralConversation && gateway is AgentConversationGateway) {
+      if (isGeneralConversation && gateway is AgentConversationGateway) {
         final saved = await (gateway as AgentConversationGateway)
             .recoverConversation(original);
         _acceptSession(saved);
@@ -733,16 +691,7 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> retry() async {
     if (!canRetry) return;
-    if (isCalendarConversation) {
-      if (_lastCalendarPrompt == AgentCalendarPromptKind.freeText) {
-        await sendCalendarText(_lastCalendarText!);
-      } else {
-        await sendCalendar(
-          _lastCalendarPrompt!,
-          focusMinutes: _lastFocusMinutes,
-        );
-      }
-    } else if (isGeneralConversation) {
+    if (isGeneralConversation) {
       await sendText(_lastConversationText!);
     } else {
       await send(_lastPrompt!);
@@ -751,21 +700,10 @@ final class AgentController extends ChangeNotifier {
 
   Future<void> continueTurn() async {
     if (!canContinue) return;
-    if (isCalendarConversation) {
-      await _sendCalendar(
-        _lastCalendarPrompt!,
-        focusMinutes: _lastFocusMinutes,
-        text: _lastCalendarText,
-        continuation: true,
-      );
-    } else {
-      await _sendConversationText(_lastConversationText!, continuation: true);
-    }
+    await _sendConversationText(_lastConversationText!, continuation: true);
   }
 
-  Future<void> sendText(String text) => isCalendarConversation
-      ? sendCalendarText(text)
-      : _sendConversationText(text);
+  Future<void> sendText(String text) => _sendConversationText(text);
 
   Future<void> _sendConversationText(
     String text, {
@@ -853,55 +791,8 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  Future<(AgentCalendarConversationContext, AgentCalendarSetupReceipt)?>
-  _connectedCalendarSetup() async {
-    final context = calendarContext?.call();
-    if (context == null ||
-        !context.usable ||
-        context.day.personId != personId ||
-        gateway is! AgentCalendarExpertGateway ||
-        gateway is! AgentCalendarSessionGateway ||
-        gateway is! AgentCalendarTurnGateway) {
-      return null;
-    }
-    final overview = await (gateway as AgentCalendarExpertGateway)
-        .readCalendarExperts(personId);
-    if (overview.registry.personId != personId) {
-      throw const FormatException('Calendar Person mismatch');
-    }
-    calendarExperts = overview;
-    registry = overview.registry;
-    registryLoaded = true;
-    final candidates = overview.setups.where((setup) {
-      final view = overview.views
-          .where((entry) => entry.handle == setup.viewHandle)
-          .singleOrNull;
-      if (view == null ||
-          !view.enabled ||
-          view.provider != context.connection.provider ||
-          !view.calendarIds.every(
-            context.connection.selectedCalendarIds.contains,
-          )) {
-        return false;
-      }
-      final linkedIds = [setup.toolInstallationId, setup.expertInstallationId];
-      final assignmentIds = [setup.toolAssignmentId, setup.expertAssignmentId];
-      return linkedIds.every(
-            (id) => overview.registry.installations.any(
-              (entry) => entry.id == id && entry.enabled,
-            ),
-          ) &&
-          assignmentIds.every(
-            (id) => overview.registry.assignments.any(
-              (entry) => entry.id == id && entry.enabled,
-            ),
-          );
-    }).toList()..sort((left, right) => left.setupId.compareTo(right.setupId));
-    return candidates.isEmpty ? null : (context, candidates.first);
-  }
-
   Future<void> send(AgentFixturePrompt prompt) async {
-    if (!canSend || _disposed || isCalendarConversation) return;
+    if (!canSend || _disposed || isGeneralConversation) return;
     final original = session!;
     _runSession = original;
     _lastPrompt = prompt;
@@ -960,166 +851,6 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  Future<void> sendCalendar(
-    AgentCalendarPromptKind prompt, {
-    int focusMinutes = 60,
-  }) => _sendCalendar(prompt, focusMinutes: focusMinutes);
-
-  Future<void> sendCalendarText(String text) {
-    final normalized = text.trim();
-    if (normalized.isEmpty || normalized.length > 8192) return Future.value();
-    return _sendCalendar(AgentCalendarPromptKind.freeText, text: normalized);
-  }
-
-  Future<void> _sendCalendar(
-    AgentCalendarPromptKind prompt, {
-    int focusMinutes = 60,
-    String? text,
-    bool continuation = false,
-  }) async {
-    if (!canSend ||
-        _disposed ||
-        !isCalendarConversation ||
-        gateway is! AgentCalendarTurnGateway ||
-        !(1 <= focusMinutes && focusMinutes <= 240)) {
-      return;
-    }
-    final original = session!;
-    final scope = original.scope!;
-    final context = calendarContext?.call() ?? _activeCalendarContext;
-    final overview = calendarExperts;
-    final setup = overview?.setups
-        .where((entry) => entry.setupId == scope.setupId)
-        .singleOrNull;
-    final view = setup == null
-        ? null
-        : overview?.views
-              .where((entry) => entry.handle == setup.viewHandle)
-              .singleOrNull;
-    if (context == null ||
-        !context.usable ||
-        context.day.personId != personId ||
-        context.connection.provider != scope.provider ||
-        view == null ||
-        !view.enabled ||
-        view.provider != context.connection.provider ||
-        !view.calendarIds.every(
-          context.connection.selectedCalendarIds.contains,
-        )) {
-      failure = 'stale_context';
-      needsReload = true;
-      _notify();
-      return;
-    }
-    final request = AgentCalendarTurnRequest(
-      session: original,
-      day: context.day,
-      startsAt: context.day.startsAt,
-      endsAt: context.day.endsAt,
-      prompt: prompt,
-      focusMinutes: focusMinutes,
-      text: text,
-      continuation: continuation,
-      destination: prompt == AgentCalendarPromptKind.proposeFocus
-          ? AgentCalendarDestination(
-              provider: scope.provider,
-              calendarId: view.calendarIds.first,
-              connectionRevision: context.connection.revision,
-              timezone: _fixedTimezone(context.day.timezoneOffsetSeconds),
-            )
-          : null,
-    );
-    _activeCalendarContext = context;
-    _calendarRun = request;
-    _runSession = original;
-    _lastCalendarPrompt = prompt;
-    _lastCalendarText = text;
-    _lastFocusMinutes = focusMinutes;
-    _begin();
-    _stopRequested = false;
-    failure = null;
-    progress = AgentProgress.model;
-    _notify();
-    var done = false;
-    try {
-      var update = await (gateway as AgentCalendarTurnGateway)
-          .beginCalendarTurn(request);
-      var sequence = 0;
-      while (true) {
-        _validateUpdate(original, update.run, sequence);
-        _acceptEvents(update.run.events);
-        sequence = update.run.nextSequence;
-        if (_stopRequested) progress = AgentProgress.stopping;
-        _notify();
-        if (update.run.done) {
-          done = true;
-          _runSession = null;
-          if (update.run.session case final saved?) {
-            _acceptSession(saved, setupId: scope.setupId);
-            for (final outcome in update.result!.proposals) {
-              if (outcome.action case final action?) {
-                _proposals[outcome
-                    .invocationId] = AgentProposalInspection.fromJson({
-                  'schema_version': 1,
-                  'person_id': personId,
-                  'session_id': saved.id,
-                  'invocation_id': outcome.invocationId,
-                  'action': {
-                    'action_id': action.id,
-                    'execution_id': action.executionId,
-                    'status': action.status.name,
-                    'expires_at': action.expiresAt.toUtc().toIso8601String(),
-                  },
-                });
-              } else if (outcome.failure case final reason?) {
-                _proposalFailures[outcome.invocationId] = reason;
-              }
-            }
-            needsReload = false;
-          } else {
-            _fail(update.run.failure ?? 'storage_unavailable');
-          }
-          break;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        update = await (gateway as AgentCalendarTurnGateway).pollCalendarTurn(
-          request,
-          sequence,
-        );
-      }
-    } on Object catch (error) {
-      _fail(
-        error is AgentVaultException ? error.failure : 'transport_unavailable',
-      );
-    } finally {
-      try {
-        if (!done) {
-          var update = await (gateway as AgentCalendarTurnGateway)
-              .stopCalendarTurn(request);
-          for (var attempt = 0; !update.run.done && attempt < 25; attempt++) {
-            await Future<void>.delayed(const Duration(milliseconds: 80));
-            update = await (gateway as AgentCalendarTurnGateway)
-                .pollCalendarTurn(request, 0);
-          }
-          done = update.run.done;
-        }
-        if (done) {
-          await (gateway as AgentCalendarTurnGateway).releaseCalendarTurn(
-            request,
-          );
-        }
-      } on Object {
-        needsReload = true;
-        failure ??= 'transport_unavailable';
-      }
-      _calendarRun = null;
-      _runSession = null;
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
-    }
-  }
-
   Future<void> stop() async {
     final original = _runSession;
     if (original == null || _stopRequested) return;
@@ -1127,9 +858,7 @@ final class AgentController extends ChangeNotifier {
     progress = AgentProgress.stopping;
     _notify();
     try {
-      if (_calendarRun case final request?) {
-        await (gateway as AgentCalendarTurnGateway).stopCalendarTurn(request);
-      } else if (_conversationRun case final request?) {
+      if (_conversationRun case final request?) {
         await (gateway as AgentConversationGateway).stopConversationTurn(
           request,
         );
@@ -1143,11 +872,9 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  void _acceptSession(AgentSession saved, {String? setupId}) {
+  void _acceptSession(AgentSession saved) {
     if (_sealed) return;
-    if (saved.personId != personId ||
-        (setupId == null) != (saved.scope == null) ||
-        setupId != null && saved.scope?.setupId != setupId) {
+    if (saved.personId != personId || saved.scope != null) {
       throw const FormatException('Agent Person mismatch.');
     }
     _clearProposals();
@@ -1158,33 +885,14 @@ final class AgentController extends ChangeNotifier {
         .whereType<AgentTextMessage>()
         .where((message) => message.kind == AgentMessageKind.user)
         .lastOrNull;
-    if (saved.scope == null) {
-      if (saved.dataClasses.singleOrNull == 'personal') {
-        _lastPrompt = null;
-        _lastConversationText = lastUser?.text;
-      } else {
-        _lastPrompt = AgentFixturePrompt.values
-            .where((prompt) => prompt.sampleText == lastUser?.text)
-            .firstOrNull;
-        _lastConversationText = null;
-      }
-      _lastCalendarPrompt = null;
-      _lastCalendarText = null;
-    } else {
+    if (saved.dataClasses.singleOrNull == 'personal') {
       _lastPrompt = null;
-      _lastCalendarPrompt = switch (lastUser?.text) {
-        final text? when text.startsWith('Brief today\'s calendar') =>
-          AgentCalendarPromptKind.briefing,
-        final text? when text.startsWith('Propose a ') =>
-          AgentCalendarPromptKind.proposeFocus,
-        final text? when text.trim().isNotEmpty =>
-          AgentCalendarPromptKind.freeText,
-        _ => null,
-      };
-      _lastCalendarText =
-          _lastCalendarPrompt == AgentCalendarPromptKind.freeText
-          ? lastUser?.text
-          : null;
+      _lastConversationText = lastUser?.text;
+    } else {
+      _lastPrompt = AgentFixturePrompt.values
+          .where((prompt) => prompt.sampleText == lastUser?.text)
+          .firstOrNull;
+      _lastConversationText = null;
     }
   }
 
@@ -1289,7 +997,6 @@ final class AgentController extends ChangeNotifier {
     _notify();
     await stop();
     await _operationDone?.future;
-    _calendarRun = null;
     _begin();
     try {
       await (gateway as AgentVaultGateway).lockVault(personId);
@@ -1344,13 +1051,4 @@ final class AgentController extends ChangeNotifier {
     unawaited(closeView());
     super.dispose();
   }
-}
-
-String _fixedTimezone(int offsetSeconds) {
-  final duration = Duration(seconds: offsetSeconds);
-  final sign = duration.isNegative ? '-' : '+';
-  final minutes = duration.inMinutes.abs();
-  final hours = (minutes ~/ 60).toString().padLeft(2, '0');
-  final remainder = (minutes % 60).toString().padLeft(2, '0');
-  return 'UTC$sign$hours:$remainder';
 }

@@ -259,7 +259,7 @@ void main() {
         next.session,
         AgentFixturePrompt.repeatedCall,
       );
-      expect(stalled.session.lastOutcome!.failure, 'stalled');
+      expect(stalled.session.lastOutcome!.failure, 'budget_exceeded');
       expect(stalled.session.activeTurn, isNull);
       final retry = await gateway.runAgentFixture(
         stalled.session,

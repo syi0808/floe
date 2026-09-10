@@ -1,8 +1,6 @@
 import 'dart:convert';
 
 import 'agent_calendar_experts.dart';
-import 'agent_calendar_session_gateway.dart';
-import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
@@ -31,8 +29,6 @@ final class NativeAgentVaultGateway
         AgentVaultGateway,
         AgentRegistryGateway,
         AgentProposalGateway,
-        AgentCalendarSessionGateway,
-        AgentCalendarTurnGateway,
         AgentConversationGateway,
         AgentCalendarExpertGateway,
         AgentMemoryGateway,
@@ -43,9 +39,6 @@ final class NativeAgentVaultGateway
   final Future<Map<String, Object?>?> Function()? resolveRemoteRoute;
   _VaultJob? _pending;
   AgentSession? _run;
-  AgentCalendarTurnRequest? _calendarRun;
-  AgentCalendarInferenceRoute? _calendarInferenceRoute;
-  Map<String, Object?>? _calendarRemoteRoute;
   AgentConversationTurnRequest? _conversationRun;
 
   @override
@@ -210,171 +203,6 @@ final class NativeAgentVaultGateway
       identical(left, right) ||
       left.session.personId == right.session.personId &&
           jsonEncode(left.toJson()) == jsonEncode(right.toJson());
-
-  @override
-  Future<AgentCalendarTurnUpdate> beginCalendarTurn(
-    AgentCalendarTurnRequest turn,
-  ) async {
-    final scope = turn.session.scope;
-    if (scope == null || turn.day.personId != turn.session.personId) {
-      throw const FormatException('Calendar turn scope mismatch');
-    }
-    if (_calendarRun != null && !_sameCalendarTurn(_calendarRun!, turn)) {
-      throw const AgentVaultException('conflict');
-    }
-    if (_calendarRun == null) {
-      final remoteRoute = turn.prompt == AgentCalendarPromptKind.freeText
-          ? await resolveRemoteRoute?.call()
-          : null;
-      final inferenceRoute = switch (scope.provider) {
-        'fixture' => AgentCalendarInferenceRoute.deterministicFixture,
-        'event_kit' when remoteRoute != null =>
-          AgentCalendarInferenceRoute.remote,
-        'event_kit' => AgentCalendarInferenceRoute.deviceLocal,
-        _ => throw const FormatException('Unsupported Calendar provider'),
-      };
-      if (_pending != null) await _drain();
-      _pending = _VaultJob(turn.session.personId, newAgentRequestId());
-      _run = turn.session;
-      _calendarRun = turn;
-      _calendarRemoteRoute = remoteRoute;
-      _calendarInferenceRoute = inferenceRoute;
-    }
-    final serialized = turn.toJson();
-    serialized['inference_route'] = _calendarInferenceRoute!.wireName;
-    if (_calendarRemoteRoute != null) {
-      serialized['remote_route'] = _calendarRemoteRoute;
-    }
-    return _calendarUpdate(
-      turn,
-      await _call(_pending!, {
-        'kind': 'submit',
-        'action': {'kind': 'calendar_turn', 'request': serialized},
-      }),
-    );
-  }
-
-  @override
-  Future<AgentCalendarTurnUpdate> pollCalendarTurn(
-    AgentCalendarTurnRequest turn,
-    int afterSequence,
-  ) => _calendarCall(turn, {'kind': 'poll', 'after_sequence': afterSequence});
-
-  @override
-  Future<AgentCalendarTurnUpdate> stopCalendarTurn(
-    AgentCalendarTurnRequest turn,
-  ) => _calendarCall(turn, {'kind': 'stop'});
-
-  @override
-  Future<AgentCalendarTurnUpdate> releaseCalendarTurn(
-    AgentCalendarTurnRequest turn,
-  ) async {
-    final result = await _calendarCall(turn, {'kind': 'release'});
-    _pending = null;
-    _run = null;
-    _calendarRun = null;
-    _calendarInferenceRoute = null;
-    _calendarRemoteRoute = null;
-    return result;
-  }
-
-  Future<AgentCalendarTurnUpdate> _calendarCall(
-    AgentCalendarTurnRequest turn,
-    Map<String, Object?> operation,
-  ) async {
-    if (_calendarRun == null || !_sameCalendarTurn(_calendarRun!, turn)) {
-      throw const AgentVaultException('conflict');
-    }
-    return _calendarUpdate(turn, await _call(_pending!, operation));
-  }
-
-  AgentCalendarTurnUpdate _calendarUpdate(
-    AgentCalendarTurnRequest turn,
-    Map<String, dynamic> result,
-  ) => AgentCalendarTurnUpdate.fromJson(
-    {
-      ...result,
-      'session_id': turn.session.id,
-      'expected_revision': turn.session.revision,
-    },
-    turn,
-    _calendarInferenceRoute!,
-  );
-
-  bool _sameCalendarTurn(
-    AgentCalendarTurnRequest left,
-    AgentCalendarTurnRequest right,
-  ) =>
-      identical(left, right) ||
-      left.session.personId == right.session.personId &&
-          jsonEncode(left.toJson()) == jsonEncode(right.toJson());
-
-  @override
-  Future<AgentSession> startCalendarSession(String personId, String setupId) =>
-      _calendarSession(personId, {
-        'kind': 'start',
-        'setup_id': setupId,
-      }, setupId: setupId);
-
-  @override
-  Future<AgentSession> resumeCalendarSession(String personId, String setupId) =>
-      _calendarSession(personId, {
-        'kind': 'resume',
-        'setup_id': setupId,
-      }, setupId: setupId);
-
-  @override
-  Future<AgentSession> loadCalendarSession(String personId, String sessionId) =>
-      _calendarSession(personId, {
-        'kind': 'get',
-        'session_id': sessionId,
-      }, sessionId: sessionId);
-
-  @override
-  Future<AgentSession> recoverCalendarSession(AgentSession session) async {
-    final scope = session.scope;
-    if (scope == null) throw const FormatException('Not a Calendar session');
-    final saved = await _calendarSession(
-      session.personId,
-      {
-        'kind': 'recover',
-        'session_id': session.id,
-        'expected_revision': session.revision,
-      },
-      sessionId: session.id,
-      setupId: scope.setupId,
-    );
-    if (saved.scope!.provider != scope.provider ||
-        saved.activeTurn != null ||
-        saved.revision !=
-            session.revision + (session.activeTurn == null ? 0 : 1)) {
-      throw const FormatException('Calendar recovery mismatch');
-    }
-    return saved;
-  }
-
-  Future<AgentSession> _calendarSession(
-    String personId,
-    Map<String, Object?> operation, {
-    String? sessionId,
-    String? setupId,
-  }) async {
-    final result = await _perform(personId, {
-      'kind': 'calendar_session',
-      'operation': operation,
-    });
-    final session = AgentSession.fromJson(
-      Map<String, Object?>.from(result['session'] as Map),
-    );
-    if (result['state'] != 'ready' ||
-        session.personId != personId ||
-        session.scope == null ||
-        sessionId != null && session.id != sessionId ||
-        setupId != null && session.scope!.setupId != setupId) {
-      throw const FormatException('Calendar session scope mismatch');
-    }
-    return session;
-  }
 
   @override
   Future<AgentProposalInspection> inspectProposal({
@@ -581,9 +409,6 @@ final class NativeAgentVaultGateway
       if (error.failure != 'not_found') rethrow;
       _pending = null;
       _run = null;
-      _calendarRun = null;
-      _calendarInferenceRoute = null;
-      _calendarRemoteRoute = null;
       _conversationRun = null;
     }
   }
@@ -638,9 +463,6 @@ final class NativeAgentVaultGateway
     final result = await _runCall(session, {'kind': 'release'});
     _pending = null;
     _run = null;
-    _calendarRun = null;
-    _calendarInferenceRoute = null;
-    _calendarRemoteRoute = null;
     _conversationRun = null;
     return result;
   }
@@ -687,9 +509,6 @@ final class NativeAgentVaultGateway
     await _call(job, {'kind': 'release'});
     _pending = null;
     _run = null;
-    _calendarRun = null;
-    _calendarInferenceRoute = null;
-    _calendarRemoteRoute = null;
     _conversationRun = null;
   }
 

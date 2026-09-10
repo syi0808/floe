@@ -10,10 +10,10 @@ enum AgentFixturePrompt {
   final String wireName;
 
   String get sampleText => switch (this) {
-    today => 'Give me a day briefing.',
-    followUp => 'What can Floe change?',
-    repeatedCall => 'Repeat the last read.',
-    unavailable => 'Check model availability.',
+    today => 'Show the sample day briefing.',
+    followUp => 'What can the sample assistant change?',
+    repeatedCall => 'Repeat the sample read without progress.',
+    unavailable => 'Show a sample model connection failure.',
   };
 }
 

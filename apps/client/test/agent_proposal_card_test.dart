@@ -59,7 +59,7 @@ void main() {
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        final gateway = TestProposalGateway();
+        final gateway = TestProposalGateway(dataClass: 'personal');
         final controller = AgentController(
           gateway: gateway,
           personId: proposalPerson,
@@ -124,7 +124,7 @@ void main() {
     testWidgets(
       'recorded $status is displayed without approval or retry controls',
       (tester) async {
-        final gateway = TestProposalGateway()
+        final gateway = TestProposalGateway(dataClass: 'personal')
           ..response = inspectionJson(status: status);
         final controller = AgentController(
           gateway: gateway,
@@ -155,7 +155,7 @@ void main() {
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        final agent = TestProposalGateway();
+        final agent = TestProposalGateway(dataClass: 'personal');
         final day = ProposalDayGateway();
         await tester.pumpWidget(
           app(

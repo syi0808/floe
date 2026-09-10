@@ -1,4 +1,3 @@
-import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
@@ -108,9 +107,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: FloeTheme.light,
-        home: Scaffold(
-          body: const SettingsScreen(client: null),
-        ),
+        home: Scaffold(body: const SettingsScreen(client: null)),
       ),
     );
 

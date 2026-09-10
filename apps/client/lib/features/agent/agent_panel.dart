@@ -112,9 +112,7 @@ class _AgentPanelState extends State<AgentPanel> {
                         child: Text('Floe', style: FloeType.titleLarge),
                       ),
                       FloeButton.icon(
-                        tooltip: controller.isCalendarConversation
-                            ? strings.agentConnectedNewConversation
-                            : strings.agentNewConversation,
+                        tooltip: strings.agentNewConversation,
                         onPressed:
                             !controller.canSend ||
                                 controller.needsReload ||
@@ -144,9 +142,7 @@ class _AgentPanelState extends State<AgentPanel> {
                     ? Padding(
                         padding: const EdgeInsets.all(FloeSpace.base),
                         child: Text(
-                          controller.isCalendarConversation
-                              ? strings.agentConnectedEmpty
-                              : strings.agentConversationEmpty,
+                          strings.agentConversationEmpty,
                           style: FloeType.body.copyWith(
                             color: FloePalette.neutral600,
                           ),
@@ -219,15 +215,11 @@ class _AgentPanelState extends State<AgentPanel> {
           tilePadding: EdgeInsets.zero,
           childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
           title: Text(
-            widget.controller.isCalendarConversation
-                ? strings.agentConnectedSource
-                : strings.agentConversationSource,
+            strings.agentConversationSource,
             style: FloeType.controlLabel,
           ),
           subtitle: Text(
-            widget.controller.isCalendarConversation
-                ? strings.agentConnectedSourceDetails
-                : strings.agentConversationSourceDetails,
+            strings.agentConversationSourceDetails,
             style: FloeType.bodySmall.copyWith(fontSize: 12),
           ),
           children: [
@@ -257,9 +249,7 @@ class _AgentPanelState extends State<AgentPanel> {
     if (result == null) {
       final output = message.output;
       return output == null || output.trimLeft().startsWith('{')
-          ? widget.controller.isCalendarConversation
-                ? strings.agentConnectedSourceUnavailable
-                : strings.agentConversationSourceUnavailable
+          ? strings.agentConversationSourceUnavailable
           : output;
     }
     String clock(DateTime time) =>
@@ -268,28 +258,15 @@ class _AgentPanelState extends State<AgentPanel> {
       strings.agentExpertSource(agentCapabilityTitle(result.expert)),
       for (final insight in result.insights)
         switch (insight.kind) {
-          'commitment' =>
-            widget.controller.isCalendarConversation
-                ? strings.agentConnectedCommitment(
-                    insight.title!,
-                    clock(insight.start!),
-                    clock(insight.end!),
-                  )
-                : strings.agentConversationCommitment(
-                    insight.title!,
-                    clock(insight.start!),
-                    clock(insight.end!),
-                  ),
-          'focus_window' =>
-            widget.controller.isCalendarConversation
-                ? strings.agentConnectedFocusTime(
-                    clock(insight.start!),
-                    clock(insight.end!),
-                  )
-                : strings.agentConversationFocusTime(
-                    clock(insight.start!),
-                    clock(insight.end!),
-                  ),
+          'commitment' => strings.agentConversationCommitment(
+            insight.title!,
+            clock(insight.start!),
+            clock(insight.end!),
+          ),
+          'focus_window' => strings.agentConversationFocusTime(
+            clock(insight.start!),
+            clock(insight.end!),
+          ),
           _ => strings.agentExpertNoFocus,
         },
     ].join('\n');
@@ -425,15 +402,9 @@ class _AgentPanelState extends State<AgentPanel> {
         AgentProgress.loading => strings.agentLoading,
         AgentProgress.expertModel => strings.agentExpertReasoning,
         AgentProgress.correcting => strings.agentCorrectingResponse,
-        AgentProgress.capability =>
-          controller.isCalendarConversation
-              ? strings.agentConnectedReading
-              : strings.agentPreparing,
+        AgentProgress.capability => strings.agentConnectedReading,
         AgentProgress.stopping => strings.agentStopping,
-        _ =>
-          controller.isCalendarConversation
-              ? strings.agentConnectedPreparing
-              : strings.agentPreparing,
+        _ => strings.agentPreparing,
       };
     }
     if (controller.usesVault &&
@@ -466,15 +437,10 @@ class _AgentPanelState extends State<AgentPanel> {
       'quota_exceeded' => strings.agentRemoteQuotaExceeded,
       'policy_denied' => strings.agentModelPolicyDenied,
       'transport_unavailable' => strings.agentTransportUnavailable,
-      'stalled' =>
-        controller.isCalendarConversation
-            ? strings.agentConnectedStalled
-            : strings.agentFailure,
+      'stalled' => strings.agentConnectedStalled,
       'stale_context' => strings.agentConnectedStale,
-      'budget_exceeded' || 'deadline_exceeded' =>
-        controller.isCalendarConversation
-            ? strings.agentConnectedBudget
-            : strings.agentConversationBudget,
+      'budget_exceeded' ||
+      'deadline_exceeded' => strings.agentConversationBudget,
       _ => strings.agentFailure,
     };
     if (failure != null) return failure;
