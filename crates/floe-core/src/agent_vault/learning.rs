@@ -8,7 +8,7 @@ use floe_agent::{
     KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
     LearnerJobSettlement, LearnerJobState, LearnerReviewInput, LearnerReviewJob,
     LearningEvidenceRef, LearningObservation, LearningObservationKind, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, PersonalMemoryKind, StageMemoryCandidate,
+    MAX_CONTEXT_MEMORY_BYTES, PersonalMemoryKind, StageMemoryCandidate, retryable_learner_failure,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -745,15 +745,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     failure,
                 } => {
                     if available_at <= settled_at
-                        || job.attempts >= MAX_LEARNER_JOB_ATTEMPTS
-                        || !retriable_learner_failure(failure)
+                        || !retryable_learner_failure(failure)
                     {
                         return Err(AgentFailure::InvalidInput);
                     }
-                    job.state = LearnerJobState::Deferred;
-                    job.available_at = available_at;
-                    job.claimed_at = None;
-                    job.last_failure = Some(failure);
+                    if job.attempts >= MAX_LEARNER_JOB_ATTEMPTS {
+                        job.state = LearnerJobState::Failed;
+                        job.finished_at = Some(settled_at);
+                        job.last_failure = Some(failure);
+                    } else {
+                        job.state = LearnerJobState::Deferred;
+                        job.available_at = available_at;
+                        job.claimed_at = None;
+                        job.last_failure = Some(failure);
+                    }
                 }
                 LearnerJobSettlement::Failed { failure } => {
                     job.state = LearnerJobState::Failed;
@@ -995,7 +1000,7 @@ fn validate_learner_job(
                 && job.claimed_at.is_none()
                 && job.finished_at.is_none()
                 && job.candidate_id.is_none()
-                && job.last_failure.is_some_and(retriable_learner_failure)
+                && job.last_failure.is_some_and(retryable_learner_failure)
         }
         LearnerJobState::Completed => {
             job.attempts > 0 && job.finished_at.is_some() && job.last_failure.is_none()
@@ -1026,18 +1031,6 @@ fn learner_job_state(state: LearnerJobState) -> &'static str {
         LearnerJobState::Completed => "completed",
         LearnerJobState::Failed => "failed",
     }
-}
-
-fn retriable_learner_failure(failure: AgentFailure) -> bool {
-    matches!(
-        failure,
-        AgentFailure::Cancelled
-            | AgentFailure::DeadlineExceeded
-            | AgentFailure::ModelUnavailable
-            | AgentFailure::LocalModelUnavailable
-            | AgentFailure::QuotaExceeded
-            | AgentFailure::Interrupted
-    )
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {

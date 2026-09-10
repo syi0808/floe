@@ -716,15 +716,31 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
         .enqueue_learner_review(abandoned_input.clone(), lease_start)
         .await
         .unwrap();
+    let mut exhausted = None;
     for attempt in 1..=3 {
+        let claimed_at = lease_start + chrono::Duration::seconds(i64::from(attempt - 1) * 31);
         let claimed = vault
-            .claim_learner_review(
-                lease_start + chrono::Duration::seconds(i64::from(attempt - 1) * 31),
-            )
+            .claim_learner_review(claimed_at)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(claimed.attempts, attempt);
+        if attempt == 3 {
+            exhausted = Some(
+                vault
+                    .settle_learner_review(
+                        claimed.id,
+                        claimed.attempts,
+                        LearnerJobSettlement::Deferred {
+                            available_at: claimed_at + chrono::Duration::seconds(5),
+                            failure: AgentFailure::Cancelled,
+                        },
+                        claimed_at,
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
     }
     let exhausted_at = lease_start + chrono::Duration::seconds(93);
     assert!(
@@ -734,12 +750,16 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
             .unwrap()
             .is_none()
     );
-    let exhausted = vault
-        .enqueue_learner_review(abandoned_input, lease_start)
-        .await
-        .unwrap();
+    let exhausted = exhausted.unwrap();
     assert_eq!(exhausted.state, LearnerJobState::Failed);
-    assert_eq!(exhausted.last_failure, Some(AgentFailure::Stalled));
+    assert_eq!(exhausted.last_failure, Some(AgentFailure::Cancelled));
+    assert_eq!(
+        vault
+            .enqueue_learner_review(abandoned_input, lease_start)
+            .await
+            .unwrap(),
+        exhausted
+    );
 
     drop(vault);
     let reopened = EncryptedAgentVault::open(root.path(), person, keys)

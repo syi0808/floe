@@ -28,6 +28,11 @@ use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 
 mod calendar_turn;
 mod conversation_turn;
+mod learner_worker;
+
+const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
+const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
+const LEARNER_ERROR_DELAY: Duration = Duration::from_secs(5);
 
 pub(crate) struct VaultBridge {
     root: PathBuf,
@@ -70,6 +75,8 @@ struct Worker {
     sender: mpsc::SyncSender<Arc<Job>>,
     active: Mutex<Option<Arc<Job>>>,
     closing: Arc<AtomicBool>,
+    foreground_pending: Arc<AtomicBool>,
+    background: Arc<Mutex<Option<Cancellation>>>,
 }
 
 struct Job {
@@ -103,6 +110,10 @@ impl Worker {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
+        let foreground_pending = Arc::new(AtomicBool::new(false));
+        let worker_foreground_pending = foreground_pending.clone();
+        let background = Arc::new(Mutex::new(None));
+        let worker_background = background.clone();
         std::thread::Builder::new()
             .name("floe-agent-vault".into())
             .spawn(move || {
@@ -110,60 +121,112 @@ impl Worker {
                     .enable_all()
                     .build();
                 let mut vault = None;
-                while let Ok(job) = receiver.recv() {
-                    if worker_closing.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
-                        Ok(runtime) => {
-                            runtime.block_on(execute(&root, &keys, &core, &mut vault, &job))
-                        }
-                        Err(_) => Err(AgentFailure::VaultUnavailable),
-                    }))
-                    .unwrap_or(Err(AgentFailure::Interrupted));
-                    if matches!(
-                        result,
-                        Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
-                    ) {
-                        vault = None;
-                    }
-                    if let Ok(mut progress) = job.progress.lock() {
-                        match result {
-                            Ok((
-                                state,
-                                session,
-                                registry,
-                                calendar_experts,
-                                calendar_turn,
-                                proposal,
-                                memory_review,
-                            )) => {
-                                progress.state = Some(state);
-                                progress.session = session;
-                                progress.registry = registry;
-                                progress.calendar_experts = calendar_experts;
-                                progress.calendar_turn = calendar_turn;
-                                progress.proposal = proposal;
-                                progress.memory_review = memory_review;
+                let mut learner_delay = LEARNER_IDLE_DELAY;
+                loop {
+                    match receiver.recv_timeout(learner_delay) {
+                        Ok(job) => {
+                            learner_delay = LEARNER_IDLE_DELAY;
+                            worker_foreground_pending.store(false, Ordering::Release);
+                            if worker_closing.load(Ordering::Acquire) {
+                                break;
                             }
-                            Err(failure) => {
-                                progress.state = Some(
-                                    if matches!(
-                                        failure,
-                                        AgentFailure::VaultUnavailable | AgentFailure::Interrupted
-                                    ) || !vault
-                                        .as_ref()
-                                        .is_some_and(|(person, _)| *person == job.person)
-                                    {
-                                        AgentVaultStateDto::Unavailable
-                                    } else {
-                                        AgentVaultStateDto::Ready
-                                    },
-                                );
-                                progress.failure = Some(failure);
+                            let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
+                                Ok(runtime) => {
+                                    runtime.block_on(execute(&root, &keys, &core, &mut vault, &job))
+                                }
+                                Err(_) => Err(AgentFailure::VaultUnavailable),
+                            }))
+                            .unwrap_or(Err(AgentFailure::Interrupted));
+                            if matches!(
+                                result,
+                                Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
+                            ) {
+                                vault = None;
+                            }
+                            if let Ok(mut progress) = job.progress.lock() {
+                                match result {
+                                    Ok((
+                                        state,
+                                        session,
+                                        registry,
+                                        calendar_experts,
+                                        calendar_turn,
+                                        proposal,
+                                        memory_review,
+                                    )) => {
+                                        progress.state = Some(state);
+                                        progress.session = session;
+                                        progress.registry = registry;
+                                        progress.calendar_experts = calendar_experts;
+                                        progress.calendar_turn = calendar_turn;
+                                        progress.proposal = proposal;
+                                        progress.memory_review = memory_review;
+                                    }
+                                    Err(failure) => {
+                                        progress.state = Some(
+                                            if matches!(
+                                                failure,
+                                                AgentFailure::VaultUnavailable
+                                                    | AgentFailure::Interrupted
+                                            ) || !vault
+                                                .as_ref()
+                                                .is_some_and(|(person, _)| *person == job.person)
+                                            {
+                                                AgentVaultStateDto::Unavailable
+                                            } else {
+                                                AgentVaultStateDto::Ready
+                                            },
+                                        );
+                                        progress.failure = Some(failure);
+                                    }
+                                }
+                                progress.done = true;
                             }
                         }
-                        progress.done = true;
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if worker_closing.load(Ordering::Acquire) {
+                                break;
+                            }
+                            let Some((_, open_vault)) = vault.as_ref() else {
+                                learner_delay = LEARNER_EMPTY_DELAY;
+                                continue;
+                            };
+                            let cancellation = Cancellation::default();
+                            if let Ok(mut active) = worker_background.lock() {
+                                *active = Some(cancellation.clone());
+                            } else {
+                                learner_delay = LEARNER_ERROR_DELAY;
+                                continue;
+                            }
+                            if worker_foreground_pending.load(Ordering::Acquire) {
+                                if let Ok(mut active) = worker_background.lock() {
+                                    *active = None;
+                                }
+                                continue;
+                            }
+                            let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
+                                Ok(runtime) => {
+                                    runtime.block_on(learner_worker::run(open_vault, cancellation))
+                                }
+                                Err(_) => Err(AgentFailure::VaultUnavailable),
+                            }))
+                            .unwrap_or(Err(AgentFailure::Interrupted));
+                            if let Ok(mut active) = worker_background.lock() {
+                                *active = None;
+                            }
+                            if matches!(
+                                result,
+                                Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
+                            ) {
+                                vault = None;
+                            }
+                            learner_delay = match result {
+                                Ok(true) => LEARNER_IDLE_DELAY,
+                                Ok(false) => LEARNER_EMPTY_DELAY,
+                                Err(_) => LEARNER_ERROR_DELAY,
+                            };
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                     if worker_closing.load(Ordering::Acquire) {
                         break;
@@ -175,6 +238,8 @@ impl Worker {
             sender,
             active: Mutex::new(None),
             closing,
+            foreground_pending,
+            background,
         })
     }
 
@@ -198,9 +263,16 @@ impl Worker {
                     cancellation: Cancellation::default(),
                     progress: Mutex::new(Progress::default()),
                 });
-                self.sender
-                    .try_send(job.clone())
-                    .map_err(|_| AgentFailure::VaultUnavailable)?;
+                self.foreground_pending.store(true, Ordering::Release);
+                if let Ok(background) = self.background.lock() {
+                    if let Some(cancellation) = background.as_ref() {
+                        cancellation.cancel();
+                    }
+                }
+                if self.sender.try_send(job.clone()).is_err() {
+                    self.foreground_pending.store(false, Ordering::Release);
+                    return Err(AgentFailure::VaultUnavailable);
+                }
                 *active = Some(job);
             }
         }
@@ -250,6 +322,11 @@ impl Drop for Worker {
         if let Ok(active) = self.active.lock() {
             if let Some(job) = active.as_ref() {
                 job.cancellation.cancel();
+            }
+        }
+        if let Ok(background) = self.background.lock() {
+            if let Some(cancellation) = background.as_ref() {
+                cancellation.cancel();
             }
         }
     }
@@ -844,6 +921,32 @@ mod tests {
             .request(person, id, AgentVaultOperationDto::Release {})
             .unwrap();
         result
+    }
+
+    #[test]
+    fn accepted_foreground_work_preempts_the_active_learner() {
+        let directory = tempfile::tempdir().unwrap();
+        let person = PersonId::new();
+        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+        let learner = Cancellation::default();
+        *worker.background.lock().unwrap() = Some(learner.clone());
+        let id = Uuid::new_v4();
+
+        worker
+            .request(
+                person,
+                id,
+                AgentVaultOperationDto::Submit {
+                    action: AgentVaultActionDto::Status {},
+                },
+            )
+            .unwrap();
+
+        assert!(learner.is_cancelled());
+        wait(&worker, person, id);
+        worker
+            .request(person, id, AgentVaultOperationDto::Release {})
+            .unwrap();
     }
 
     #[test]

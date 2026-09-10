@@ -4,6 +4,22 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 idle Learner scheduling and foreground preemption — 2026-09-10
+
+- The unlocked Person-vault worker now discovers, claims and runs one device-local
+  Learner review only after foreground work becomes idle, then durably settles the
+  job as completed, deferred or failed. Empty queues back off for 30 seconds and
+  transient worker failures retry after 5 seconds instead of polling continuously.
+- An accepted foreground submission marks itself pending before enqueue and cancels
+  an in-flight Learner token. Cancelled/deadline/unavailable reviews are deferred for
+  a later idle window; a final transient attempt becomes terminal without another run.
+- Foreground completion remains independent from discovery and Learner inference.
+  Candidate staging retains source-revision CAS, and a candidate committed at the
+  cancellation boundary is completed rather than falsely reported as deferred.
+- Full Rust workspace tests pass, including explicit foreground-preemption and durable
+  final-attempt settlement coverage. This completes **S5-A2**; S5 is now **1/6**.
+  [Evidence and limits](docs/validation/s5-idle-learner-worker.md).
+
 ### S5 device-local structured Learner adapter — 2026-09-10
 
 - Added a production `ModelRunner` adapter that converts immutable Learner review
@@ -16,7 +32,7 @@
   token/cost/output/deadline accounting and cancellation remain active, and runtime-owned
   provenance still replaces model-supplied observation time before candidate staging.
 - Full Rust workspace check and test suites pass. Idle worker invocation and foreground
-  preemption remain, so the adapter is not scheduled automatically and S5 stays 0/6.
+  preemption are now implemented separately; this adapter checkpoint itself claimed no criterion.
   [Evidence and limits](docs/validation/s5-local-learner-adapter.md).
 
 ### S5 explicit conversation learning discovery — 2026-09-10

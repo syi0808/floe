@@ -150,6 +150,18 @@ pub enum LearnerJobSettlement {
     },
 }
 
+pub const fn retryable_learner_failure(failure: AgentFailure) -> bool {
+    matches!(
+        failure,
+        AgentFailure::Cancelled
+            | AgentFailure::DeadlineExceeded
+            | AgentFailure::ModelUnavailable
+            | AgentFailure::LocalModelUnavailable
+            | AgentFailure::QuotaExceeded
+            | AgentFailure::Interrupted
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LearnerBudget {
     pub max_input_bytes: usize,
