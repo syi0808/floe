@@ -4,6 +4,20 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Gmail Observe adapter foundation — 2026-09-10
+
+- Added a server-native Gmail REST adapter for bounded search, metadata, separately authorized
+  on-demand body reads and history-based changes. Remote endpoints require TLS; redirects and
+  environment proxies are disabled; identifiers, cursors, pages and envelopes are bounded.
+- Added typed credential/rate-limit/checkpoint/provider failures and a common read-only connector
+  descriptor for `mail.communication` plus ephemeral `mail.body`. No mail mutation authority or
+  provider-native ID enters its snapshot.
+- Race-enabled fixtures cover the HTTP and authority boundary, and the emitted descriptor passes
+  the shared Rust conformance validator. Google OAuth, durable indexing,
+  local-console registration, live mailbox evidence and Commitments/Communication Expert
+  consumption remain, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 Floe-native context reaches Schedule Expert — 2026-09-10
 
 - Added bounded, versioned Personal Views for durable Floe-native Tasks and Notes. Projections

@@ -176,3 +176,21 @@ fn strict_wire_contract_rejects_unknown_fields() {
 
     assert!(serde_json::from_value::<SituationDescriptor>(value).is_err());
 }
+
+#[test]
+fn go_gmail_descriptor_conforms_to_the_shared_rust_contract() {
+    let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../server/internal/connectors/gmail/testdata/ready_snapshot.json"
+    )))
+    .unwrap();
+    assert!(validate_connector_snapshot(&snapshot, 1_789_000_000_000).is_empty());
+    assert_eq!(snapshot.descriptor.id, "gmail");
+    assert!(
+        snapshot
+            .descriptor
+            .capabilities
+            .iter()
+            .all(|capability| capability.authority == CapabilityAuthority::Observe)
+    );
+}
