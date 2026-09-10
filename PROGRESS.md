@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Gmail context capability — 2026-09-10
+
+- Added a paired, read-only Communication View route over the private Gmail metadata index.
+  Requests are POST-only with bounded query/cursor/limit fields; disconnected or revoked sources
+  publish no content, and no body, credential, provider ID or mail action is exposed.
+- Added a strict Rust Communication View projection and cross-language fixture. The conversational
+  Agent advertises `mail.communication.read` only when its paired server route exists, validates
+  every returned View and treats provider text as untrusted capability data.
+- Focused Go and Rust tests pass, including authentication, malformed/authority escalation,
+  stale/duplicate/oversized View rejection and an authenticated end-to-end HTTP read. Dedicated
+  Commitments/Communication Expert evaluation remains, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 shared Gmail connection inspection — 2026-09-10
 
 - Added paired-client `GET /v1/connections` transport for server-owned connector snapshots.

@@ -38,6 +38,13 @@
 - The Flutter client validates a bounded v1 connection envelope and then applies the existing strict
   common snapshot parser. Data & privacy merges server Gmail and device Calendar status, preserves
   healthy cards when only one execution location fails and refreshes both sources together.
+- Added paired `POST /v1/views/mail.communication` access to the metadata projection. Its strict
+  request contains only schema version, query, cursor and limit; it is unavailable when the source
+  is disconnected/revoked and exposes no body or mutation authority.
+- Added a strict Rust Communication View parser plus a server-backed
+  `mail.communication.read` Observe capability. The capability appears only with a paired server
+  route, validates freshness, size, count, pagination, labels and unique evidence handles, and
+  returns provider text as untrusted capability data for a model-selected read.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -54,6 +61,8 @@ go vet ./internal/connectors/gmail
 go test -race ./internal/googleauth ./internal/console
 cd ..
 cargo test -p floe-agent --test connected_context
+cargo test -p floe-agent --test communication_context
+cargo test -p floe-ffi communication_view_read_is_authenticated_bounded_and_validated --lib
 cd apps/client
 flutter test test/features/server/local_server_http_test.dart \
   test/features/server/settings_screen_test.dart \
@@ -70,8 +79,8 @@ cover bootstrap catch-up, label changes, deletions, atomic checkpoints and `404`
 
 ## Remaining gate
 
-The authenticated console owns one local Gmail connection, scheduled synchronization and shared
-connection-health presentation, but no live mailbox run has been recorded. The paired route carries
-only connection metadata; it intentionally does not expose Communication View items. The Rust Agent
-runtime does not yet consume that View. S5.5-C1, S5.5-C2 and implementation-order items 2–3 remain
-pending.
+The authenticated console owns one local Gmail connection, scheduled synchronization, shared
+connection-health presentation and an on-demand Communication View capability, but no live mailbox
+run has been recorded. The Manager can select the bounded Observe capability; dedicated
+Commitments/Communication Expert packages, their evaluation corpus and cross-source scenarios are
+not yet implemented. S5.5-C1, S5.5-C2 and implementation-order items 2–3 remain pending.

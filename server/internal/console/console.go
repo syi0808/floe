@@ -28,6 +28,7 @@ type AuthRuntime interface {
 type ConnectorAuthRuntime interface {
 	Action(context.Context, string) (any, error)
 	ConnectionSnapshot() (any, error)
+	ReadCommunicationView(string, int, int) (any, error)
 }
 
 type session struct {
@@ -283,6 +284,29 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			connections = append(connections, snapshot)
 		}
 		reply(writer, 200, map[string]any{"schema_version": 1, "connections": connections})
+		return
+	}
+	if request.URL.Path == "/v1/views/mail.communication" {
+		if request.Method != http.MethodPost || gmail == nil {
+			failure(writer, 404, "not_found")
+			return
+		}
+		var input struct {
+			SchemaVersion int    `json:"schema_version"`
+			Query         string `json:"query"`
+			Cursor        int    `json:"cursor"`
+			Limit         int    `json:"limit"`
+		}
+		if !decode(writer, request, &input) || input.SchemaVersion != 1 || len(input.Query) > 512 || input.Cursor < 0 || input.Limit < 1 || input.Limit > 100 {
+			failure(writer, 400, "validation")
+			return
+		}
+		view, err := gmail.ReadCommunicationView(input.Query, input.Cursor, input.Limit)
+		if err != nil {
+			failure(writer, 503, "view_unavailable")
+			return
+		}
+		reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
 		return
 	}
 	forward := request.Clone(request.Context())

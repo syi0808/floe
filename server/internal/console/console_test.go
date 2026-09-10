@@ -24,6 +24,7 @@ type fakeAuthRuntime struct{ ready bool }
 
 type fakeConnectorRuntime struct {
 	snapshot any
+	view     any
 	err      error
 }
 
@@ -33,6 +34,10 @@ func (*fakeConnectorRuntime) Action(context.Context, string) (any, error) {
 
 func (runtime *fakeConnectorRuntime) ConnectionSnapshot() (any, error) {
 	return runtime.snapshot, runtime.err
+}
+
+func (runtime *fakeConnectorRuntime) ReadCommunicationView(string, int, int) (any, error) {
+	return runtime.view, runtime.err
 }
 
 type blockingAuthRuntime struct {
@@ -306,6 +311,41 @@ func TestConnectorSnapshotFailureIsRedacted(test *testing.T) {
 	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
 	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private connector failure") {
 		test.Fatalf("unsafe failure: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	view := map[string]any{
+		"schema_version": 1,
+		"view_id":        "mail.communication",
+		"source_handle":  "mail:fixture",
+		"items":          []any{},
+	}
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{view: view})
+
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{
+		"schema_version": 1,
+		"query":          "follow up",
+		"cursor":         0,
+		"limit":          25,
+	}, token))
+	if value["view"].(map[string]any)["view_id"] != "mail.communication" {
+		test.Fatalf("view: %#v", value)
+	}
+	for _, body := range []map[string]any{
+		{"schema_version": 2, "query": "", "cursor": 0, "limit": 25},
+		{"schema_version": 1, "query": "", "cursor": -1, "limit": 25},
+		{"schema_version": 1, "query": "", "cursor": 0, "limit": 101},
+		{"schema_version": 1, "query": "", "cursor": 0, "limit": 25, "authority": "send"},
+	} {
+		if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", body, token); response.Code != http.StatusBadRequest {
+			test.Fatalf("invalid view request accepted: %#v", body)
+		}
+	}
+	if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25}, ""); response.Code != http.StatusUnauthorized {
+		test.Fatalf("unpaired view read accepted: %d", response.Code)
 	}
 }
 

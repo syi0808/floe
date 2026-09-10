@@ -163,6 +163,17 @@ func (service *Service) ConnectionSnapshot() (any, error) {
 	return service.Snapshot()
 }
 
+func (service *Service) ReadCommunicationView(query string, cursor, limit int) (any, error) {
+	snapshot, err := service.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.Connection.State != "ready" && snapshot.Connection.State != "degraded" {
+		return nil, ErrUnavailable
+	}
+	return service.index.Communication(query, cursor, limit, service.clock())
+}
+
 func failureFor(err error) string {
 	switch {
 	case errors.Is(err, ErrCredentialExpired):

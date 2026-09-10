@@ -76,6 +76,14 @@ func TestServicePersistsLifecycleDegradesAndDisconnectClearsViews(t *testing.T) 
 	if ready.Connection.State != "ready" || ready.Connection.LastSuccessAtUnixMS == nil || len(ready.Views) != 1 {
 		t.Fatalf("ready: %#v", ready)
 	}
+	viewValue, err := service.ReadCommunicationView("reply", 0, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := viewValue.(CommunicationView)
+	if len(view.Items) != 1 || view.Items[0].Subject != "Reply needed" {
+		t.Fatalf("view: %#v", view)
+	}
 
 	reopened, err := newService(directory, "account-1", "newer_than:30d", auth, client)
 	if err != nil {
@@ -104,6 +112,9 @@ func TestServicePersistsLifecycleDegradesAndDisconnectClearsViews(t *testing.T) 
 	revokedSnapshot := revoked.(map[string]any)["connection"].(Snapshot)
 	if revokedSnapshot.Connection.State != "revoked" || len(revokedSnapshot.Views) != 0 {
 		t.Fatalf("revoked: %#v", revoked)
+	}
+	if _, err := reopened.ReadCommunicationView("", 0, 25); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("revoked view read: %v", err)
 	}
 	auth.tokenError = nil
 	if _, err := reopened.Action(context.Background(), "logout"); err != nil {

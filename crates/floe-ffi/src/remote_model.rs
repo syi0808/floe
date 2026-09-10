@@ -1,8 +1,9 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
-    ModelStep, SessionProtection,
+    AGENT_VERSION, AgentFailure, CommunicationView, MAX_COMMUNICATION_BYTES,
+    MAX_COMMUNICATION_ITEMS, ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+    SessionProtection, validate_communication_view,
 };
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
@@ -39,6 +40,84 @@ impl ServerModelRunner {
             ModelPlacement::DeviceLocal
         };
         Ok(Self { route, placement })
+    }
+
+    pub async fn read_communication_view(
+        &self,
+        query: &str,
+        cursor: usize,
+        limit: usize,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CommunicationView, AgentFailure> {
+        if query.len() > 512 || cursor > 10_000 || !(1..=MAX_COMMUNICATION_ITEMS).contains(&limit) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if timeout.is_zero() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        let client = Client::builder()
+            .timeout(timeout.min(Duration::from_secs(10)))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
+        let send = client
+            .post(format!(
+                "{}/v1/views/mail.communication",
+                self.route.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(&self.route.bearer_token)
+            .json(&json!({
+                "schema_version": AGENT_VERSION,
+                "query": query,
+                "cursor": cursor,
+                "limit": limit,
+            }))
+            .send();
+        let response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            response = send => response.map_err(|error| if error.is_timeout() { AgentFailure::DeadlineExceeded } else { AgentFailure::CapabilityUnavailable })?,
+        };
+        match response.status() {
+            StatusCode::BAD_REQUEST => return Err(AgentFailure::InvalidInput),
+            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
+            StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
+            status if !status.is_success() => return Err(AgentFailure::CapabilityUnavailable),
+            _ => {}
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if bytes.len() > MAX_COMMUNICATION_BYTES + 4096 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Response {
+            schema_version: u32,
+            view: CommunicationView,
+        }
+        let response: Response =
+            serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if response.schema_version != AGENT_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|_| AgentFailure::StaleContext)?;
+        validate_communication_view(
+            &response.view,
+            i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
+            limit,
+            MAX_COMMUNICATION_BYTES,
+        )?;
+        Ok(response.view)
     }
 }
 
@@ -480,6 +559,10 @@ impl ModelRunner for ServerModelRunner {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     #[test]
     fn replay_groups_all_calls_and_results_and_rejects_partial_batches() {
         let route = route();
@@ -551,6 +634,96 @@ mod tests {
             external: true,
             allow_external: false,
         }
+    }
+
+    #[tokio::test]
+    async fn communication_view_read_is_authenticated_bounded_and_validated() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let expected_length = loop {
+                let mut chunk = [0_u8; 4096];
+                let read = socket.read(&mut chunk).await.unwrap();
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if request.len() >= header_end + 4 + content_length {
+                        break header_end + 4 + content_length;
+                    }
+                }
+            };
+            let request = String::from_utf8(request[..expected_length].to_vec()).unwrap();
+            assert!(request.starts_with("POST /v1/views/mail.communication HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret_token_value_that_is_long_enough")
+            );
+            assert!(request.contains(r#""query":"reply""#));
+            assert!(!request.contains("send"));
+            let body = serde_json::json!({
+                "schema_version": 1,
+                "view": {
+                    "schema_version": 1,
+                    "view_id": "mail.communication",
+                    "source_handle": "mail:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "items": [{
+                        "evidence_handle": "mail:message",
+                        "thread_handle": "mail:thread",
+                        "received_unix_ms": now - 2,
+                        "from": "alex@example.com",
+                        "to": "person@example.com",
+                        "subject": "Reply needed",
+                        "snippet": "Please reply by Friday",
+                        "labels": ["INBOX"]
+                    }]
+                }
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let mut route = route();
+        route.base_url = format!("http://{address}");
+        let model = ServerModelRunner::new(route).unwrap();
+        let view = model
+            .read_communication_view(
+                "reply",
+                0,
+                25,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(view.items[0].subject, "Reply needed");
+        server.await.unwrap();
     }
 
     #[test]

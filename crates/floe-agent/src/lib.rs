@@ -1,5 +1,6 @@
 mod a2a;
 mod capability_execution;
+mod communication_context;
 mod connected_context;
 mod contract;
 mod expert;
@@ -16,6 +17,7 @@ mod registry;
 mod runtime;
 
 pub use a2a::*;
+pub use communication_context::*;
 pub use connected_context::*;
 pub use contract::*;
 pub use expert::*;

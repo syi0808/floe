@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "view_id": "mail.communication",
+  "source_handle": "mail:a4127c7a74b7a33c80cc6abe2f7535ab12d1c25c1f22c545f0227d8a8f523681",
+  "observed_at_unix_ms": 1789000000000,
+  "expires_at_unix_ms": 1789000300000,
+  "coverage_complete": true,
+  "items": [
+    {
+      "evidence_handle": "mail:b2f8f4e47fd274185d7f52ec304e77a026858516d9671198d90456e0c18f491e",
+      "thread_handle": "mail:48a845afadb633af875d632668f1c4afb1748cb6edc006e0d6fc1b977f039182",
+      "received_unix_ms": 1788999900000,
+      "from": "Alex <alex@example.com>",
+      "to": "person@example.com",
+      "subject": "Please confirm the launch review by Friday",
+      "snippet": "Can you confirm that you will send the review notes by Friday?",
+      "labels": ["INBOX", "IMPORTANT"]
+    }
+  ]
+}
