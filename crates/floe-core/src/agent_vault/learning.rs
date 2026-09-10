@@ -26,6 +26,7 @@ const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
 const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
 const MAX_LEARNER_DISCOVERY_SESSIONS: i64 = 64;
 const MAX_LEARNER_DIGEST_TEXT_BYTES: usize = 1536;
+const MAX_MEMORY_OVERVIEW_ITEMS: usize = 100;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn initialize_learning_store(&self) -> Result<(), AgentFailure> {
@@ -242,6 +243,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(candidates)
     }
 
+    pub async fn pending_memory_candidate_count(&self) -> Result<usize, AgentFailure> {
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT COUNT(*) FROM knowledge_candidates WHERE person_id = ? AND state = 'pending' AND json_extract(payload, '$.kind') = 'memory'",
+                [self.person_id.to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        let count = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(storage)?;
+        self.check_access()?;
+        usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)
+    }
+
     pub async fn decide_knowledge_candidate(
         &self,
         candidate_id: Uuid,
@@ -413,6 +434,47 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         Ok(revisions)
+    }
+
+    pub async fn personal_memory_overview(
+        &self,
+        limit: usize,
+    ) -> Result<(usize, Vec<KnowledgeRevision>), AgentFailure> {
+        if limit == 0 || limit > MAX_MEMORY_OVERVIEW_ITEMS {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let connection = self.connection()?;
+        let mut count_rows = connection
+            .query(
+                "SELECT COUNT(*) FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active'",
+                [self.person_id.to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        let total = count_rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(storage)?;
+        drop(count_rows);
+        let total = usize::try_from(total).map_err(|_| AgentFailure::VaultUnavailable)?;
+        let mut rows = connection
+            .query(
+                "SELECT payload FROM knowledge_revisions WHERE person_id = ? AND kind = 'memory' AND state = 'active' ORDER BY json_extract(payload, '$.created_at') DESC, target_id LIMIT ?",
+                (self.person_id.to_string(), i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?),
+            )
+            .await
+            .map_err(storage)?;
+        let mut revisions = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let revision: KnowledgeRevision = decode(&row.get::<String>(0).map_err(storage)?)?;
+            validate_revision(&revision, self.person_id)?;
+            revisions.push(revision);
+        }
+        self.check_access()?;
+        Ok((total, revisions))
     }
 
     pub async fn personal_memory_context(

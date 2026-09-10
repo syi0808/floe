@@ -8,6 +8,7 @@ import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
+import 'agent_memory.dart';
 import 'agent_expert_result.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
@@ -62,6 +63,8 @@ final class AgentController extends ChangeNotifier {
   String? calendarExpertFailure;
   List<AgentMemoryCandidate>? memoryCandidates;
   String? memoryReviewFailure;
+  AgentMemoryOverview? memoryOverview;
+  String? memoryFailure;
   AgentCalendarSetup? _pendingCalendarSetup;
   final Map<String, AgentProposalInspection> _proposals = {};
   final Map<String, String> _proposalFailures = {};
@@ -388,6 +391,45 @@ final class AgentController extends ChangeNotifier {
       usesVault && gateway is AgentRegistryGateway;
 
   bool get hasMemoryReview => usesVault && gateway is AgentMemoryReviewGateway;
+  bool get hasMemory => usesVault && gateway is AgentMemoryGateway;
+  bool get canReadMemory =>
+      hasMemory &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      vaultState == AgentVaultState.ready;
+
+  Future<void> loadMemory() async {
+    if (!canReadMemory) return;
+    _begin();
+    memoryFailure = null;
+    _notify();
+    try {
+      final overview = await (gateway as AgentMemoryGateway).readMemory(
+        personId,
+      );
+      if (_sealed || _disposed) return;
+      if (overview.personId != personId) {
+        throw const FormatException('Memory overview Person mismatch');
+      }
+      memoryOverview = overview;
+    } on Object catch (error) {
+      if (_sealed || _disposed) return;
+      memoryOverview = null;
+      memoryFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      if (memoryFailure == 'vault_unavailable' ||
+          memoryFailure == 'interrupted') {
+        _fail(memoryFailure!);
+      }
+    } finally {
+      _end();
+      _notify();
+    }
+  }
+
   bool get canReviewMemory =>
       hasMemoryReview &&
       !_busy &&
@@ -401,7 +443,10 @@ final class AgentController extends ChangeNotifier {
   Future<void> decideMemoryCandidate(
     String candidateId,
     AgentMemoryDecision decision,
-  ) => _memoryReviewOperation(candidateId: candidateId, decision: decision);
+  ) async {
+    await _memoryReviewOperation(candidateId: candidateId, decision: decision);
+    if (memoryReviewFailure == null) await loadMemory();
+  }
 
   Future<void> _memoryReviewOperation({
     String? candidateId,
@@ -1234,6 +1279,8 @@ final class AgentController extends ChangeNotifier {
     calendarExpertFailure = null;
     memoryCandidates = null;
     memoryReviewFailure = null;
+    memoryOverview = null;
+    memoryFailure = null;
     _pendingCalendarSetup = null;
     session = null;
     messages = [];
@@ -1283,6 +1330,7 @@ final class AgentController extends ChangeNotifier {
       registryLoaded = false;
       calendarExperts = null;
       memoryCandidates = null;
+      memoryOverview = null;
       _pendingCalendarSetup = null;
       session = null;
       messages = [];

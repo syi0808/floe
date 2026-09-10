@@ -164,6 +164,7 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
             .as_slice(),
         std::slice::from_ref(&candidate)
     );
+    assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 1);
     assert!(vault.active_personal_memories().await.unwrap().is_empty());
 
     let decided_at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 2, 0).unwrap();
@@ -189,6 +190,7 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
             .unwrap()
             .is_empty()
     );
+    assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 0);
     assert_eq!(
         vault.active_personal_memories().await.unwrap().as_slice(),
         std::slice::from_ref(&revision)
@@ -245,6 +247,14 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     assert_eq!(
         vault.active_personal_memories().await.unwrap().as_slice(),
         std::slice::from_ref(&active_revision)
+    );
+    assert_eq!(
+        vault.personal_memory_overview(1).await.unwrap(),
+        (1, vec![active_revision.clone()])
+    );
+    assert_eq!(
+        vault.personal_memory_overview(0).await,
+        Err(AgentFailure::InvalidInput)
     );
     let context = vault
         .personal_memory_context(Utc.with_ymd_and_hms(2026, 9, 10, 12, 9, 0).unwrap())

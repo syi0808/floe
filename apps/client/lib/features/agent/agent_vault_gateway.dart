@@ -6,6 +6,7 @@ import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
+import 'agent_memory.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
@@ -34,6 +35,7 @@ final class NativeAgentVaultGateway
         AgentCalendarTurnGateway,
         AgentConversationGateway,
         AgentCalendarExpertGateway,
+        AgentMemoryGateway,
         AgentMemoryReviewGateway {
   NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
 
@@ -45,6 +47,18 @@ final class NativeAgentVaultGateway
   AgentCalendarInferenceRoute? _calendarInferenceRoute;
   Map<String, Object?>? _calendarRemoteRoute;
   AgentConversationTurnRequest? _conversationRun;
+
+  @override
+  Future<AgentMemoryOverview> readMemory(String personId) async {
+    final result = await _perform(personId, {'kind': 'memory'});
+    final memory = AgentMemoryOverview.fromJson(
+      Map<String, Object?>.from(result['memory'] as Map),
+    );
+    if (result['state'] != 'ready' || memory.personId != personId) {
+      throw const FormatException('Memory overview scope mismatch');
+    }
+    return memory;
+  }
 
   @override
   Future<AgentMemoryReviewOverview> readMemoryReview(String personId) =>

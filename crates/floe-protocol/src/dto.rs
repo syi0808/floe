@@ -61,6 +61,7 @@ pub enum AgentVaultActionDto {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         decision: Option<AgentMemoryReviewDecisionDto>,
     },
+    Memory {},
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -227,6 +228,41 @@ pub struct AgentMemoryReviewOverviewDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentMemoryOverviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub saved_count: usize,
+    pub pending_count: usize,
+    pub memories: Vec<AgentMemorySummaryDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentMemorySummaryDto {
+    pub target_id: String,
+    pub revision: u64,
+    pub statement: String,
+    pub memory_kind: floe_agent::PersonalMemoryKind,
+    pub epistemic_status: floe_agent::EpistemicStatus,
+    pub confidence_millis: u16,
+    pub source_count: usize,
+    pub origin: AgentMemoryOriginDto,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMemoryOriginDto {
+    UserProvided,
+    Learned,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentProposalActionDto {
     pub action_id: String,
     pub execution_id: String,
@@ -274,6 +310,8 @@ pub struct AgentVaultResultDto {
     pub proposal: Option<AgentProposalInspectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_review: Option<AgentMemoryReviewOverviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<AgentMemoryOverviewDto>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 

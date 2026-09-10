@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 user-facing saved Memory view — 2026-09-10
+
+- Added a read-only, Person-scoped Memory overview contract over active confirmed
+  revisions. It returns an exact saved/pending count and at most 100 newest saved
+  summaries without reusing the model retrieval projection or exposing raw sessions.
+- Data & privacy now shows a Memory summary card that opens a dedicated Memory settings
+  page. The page combines pending Review with a user-language Saved memories list,
+  friendly category/origin labels and empty/loading/error states; confidence and IDs
+  remain out of the primary presentation.
+- Dart projections reject malformed versions, duplicate IDs, invalid kinds, confidence,
+  sources and temporal ranges. Controller state clears on vault lock/unavailability and
+  approval refreshes committed saved Memory rather than applying optimistic UI state.
+- Full Rust workspace tests pass. Focused Flutter gateway/widget/settings tests pass
+  14/14; analyzer reports only the existing unused test import. Edit, Forget, details,
+  controls and pagination remain, so S5 stays **1/6**.
+  [Evidence and limits](docs/validation/s5-memory-settings-view.md).
+
 ### S5 idle Learner scheduling and foreground preemption — 2026-09-10
 
 - The unlocked Person-vault worker now discovers, claims and runs one device-local

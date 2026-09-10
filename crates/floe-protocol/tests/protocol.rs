@@ -288,6 +288,19 @@ fn memory_review_transport_accepts_only_user_decisions_on_candidate_ids() {
     }
 }
 
+#[test]
+fn memory_overview_transport_is_read_only() {
+    let inspect = json!({"kind": "memory"});
+    let parsed: AgentVaultActionDto = serde_json::from_value(inspect.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
+
+    for field in ["target_id", "statement", "delete", "actor", "person_id"] {
+        let mut forged = inspect.clone();
+        forged[field] = json!("untrusted");
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}
+
 fn id(value: &str) -> Uuid {
     Uuid::parse_str(value).unwrap()
 }

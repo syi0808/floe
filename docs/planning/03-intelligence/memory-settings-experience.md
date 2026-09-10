@@ -1,6 +1,6 @@
 # User-facing Memory settings
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-10
 - **Scope:** S5 Personal Memory inspection and management
 - **Related:** [ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md)
@@ -175,8 +175,8 @@ owns Person scope, actor, decision time, hashes, mutation records and tombstones
 
 ## Implementation increments
 
-1. Add bounded active-Memory overview/query DTOs and encrypted-vault tests.
-2. Add controller projections and the dedicated read-only Memory page.
+1. **Complete:** add bounded active-Memory overview/query DTOs and encrypted-vault tests.
+2. **Complete:** add controller projections and the dedicated read-only Memory page.
 3. Move pending Review into the page and add before/after/source metadata.
 4. Add revision-checked explicit user Edit with mutation history.
 5. Add tombstone-first Forget and deletion propagation.

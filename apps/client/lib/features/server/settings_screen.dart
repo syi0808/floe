@@ -12,14 +12,14 @@ import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
 import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
-import '../agent/agent_memory_review_settings.dart';
+import '../agent/agent_memory_settings.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
 
-enum _SettingsPage { actions, dataPrivacy, remoteServer }
+enum _SettingsPage { actions, dataPrivacy, memory, remoteServer }
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -55,7 +55,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void didUpdateWidget(SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_availablePages.contains(selectedPage)) {
+    if (!_availablePages.contains(selectedPage) &&
+        !(selectedPage == _SettingsPage.memory &&
+            widget.agentController != null)) {
       selectedPage = _availablePages.first;
     }
   }
@@ -76,6 +78,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       serverClient: widget.client,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
+      onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
+    ),
+    _SettingsPage.memory => AgentMemorySettings(
+      controller: widget.agentController!,
+      onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
     _SettingsPage.remoteServer => _RemoteServerSettings(client: widget.client),
   };
@@ -114,7 +121,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       horizontal: narrow,
       controller: narrow ? navigationScrollController : null,
       pages: _availablePages,
-      selected: selectedPage,
+      selected: selectedPage == _SettingsPage.memory
+          ? _SettingsPage.dataPrivacy
+          : selectedPage,
       onSelected: (page) => setState(() => selectedPage = page),
     );
     final content = AnimatedSwitcher(
@@ -221,12 +230,14 @@ class _DataPrivacy extends StatefulWidget {
   const _DataPrivacy({
     required this.controller,
     required this.serverClient,
+    required this.onManageMemory,
     this.calendarSources,
     this.calendarSourceChanges,
   });
 
   final AgentController controller;
   final LocalServerClient? serverClient;
+  final VoidCallback onManageMemory;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
 
@@ -239,6 +250,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool registryRequested = false;
   bool calendarRequested = false;
   bool memoryRequested = false;
+  bool savedMemoryRequested = false;
 
   AgentController get controller => widget.controller;
 
@@ -258,6 +270,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       registryRequested = false;
       calendarRequested = false;
       memoryRequested = false;
+      savedMemoryRequested = false;
       _load();
     }
   }
@@ -268,7 +281,9 @@ class _DataPrivacyState extends State<_DataPrivacy> {
 
   Future<void> _load() async {
     if (loading ||
-        !controller.canManageRegistry && !controller.canReviewMemory) {
+        !controller.canManageRegistry &&
+            !controller.canReviewMemory &&
+            !controller.canReadMemory) {
       return;
     }
     loading = true;
@@ -287,6 +302,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         controller.canReviewMemory) {
       memoryRequested = true;
       await controller.loadMemoryReview();
+    }
+    if (controller.hasMemory &&
+        !savedMemoryRequested &&
+        controller.canReadMemory) {
+      savedMemoryRequested = true;
+      await controller.loadMemory();
     }
     loading = false;
   }
@@ -323,9 +344,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                 )
               : const Text('No connected data sources are available yet.'),
         ),
-        if (controller.hasMemoryReview) ...[
+        if (controller.hasMemory) ...[
           const SizedBox(height: FloeSpace.lg),
-          AgentMemoryReviewSettings(controller: controller),
+          AgentMemorySettingsCard(
+            controller: controller,
+            onManage: widget.onManageMemory,
+          ),
         ],
         const SizedBox(height: FloeSpace.lg),
         _AiProcessing(client: widget.serverClient),
@@ -834,11 +858,13 @@ class _SettingsNavigation extends StatelessWidget {
           icon: switch (page) {
             _SettingsPage.actions => LucideIcons.slidersHorizontal,
             _SettingsPage.dataPrivacy => LucideIcons.shieldCheck,
+            _SettingsPage.memory => LucideIcons.brain,
             _SettingsPage.remoteServer => LucideIcons.server,
           },
           label: switch (page) {
             _SettingsPage.actions => 'Action permissions',
             _SettingsPage.dataPrivacy => 'Data & privacy',
+            _SettingsPage.memory => 'Memory',
             _SettingsPage.remoteServer => 'Remote server',
           },
           selected: page == selected,
