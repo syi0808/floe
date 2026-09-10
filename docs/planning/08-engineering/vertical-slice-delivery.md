@@ -8,7 +8,9 @@
 > [ADR 0012](../../decisions/0012-memory-and-expert-first-slices.md) and
 > [ADR 0013](../../decisions/0013-conversational-agent-learning-and-voice-sequence.md),
 > with S4 scope amended by [ADR 0014](../../decisions/0014-s4-connected-agent-sources.md)
-> and [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md)
+> and [ADR 0015](../../decisions/0015-s4-privacy-aware-inference.md), and long-term
+> interaction/Expert/connector framing amended by
+> [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md)
 
 ## 목적과 문서 역할
 
@@ -22,14 +24,15 @@ Phase는 제품 범위 지도, slice는 구현·검증·인수 단위다. 모든
 
 ## 중심 시나리오
 
-> 사용자가 Floe와 대화한다. Manager가 Schedule Expert와 도구를 사용해 오늘
-> 일정을 이해하고 근거 있는 작업을 제안한다. 대화와 결과에서 검토 가능한 Memory와
-> Playbook 개선이 쌓이며, 같은 세션을 이후 voice와 wake-up으로 호출한다.
+> 사용자는 하나의 Floe와 주로 음성으로 대화하고, Floe는 허가된 기기·서비스 변화에서
+> 도움이 필요한 상황을 조용히 파악한다. Manager가 domain Expert와 도구를 사용해
+> 근거 있는 조언 또는 작업을 제안하고, 명시적 결재가 필요할 때만 UI로 handoff한다.
+> 초기 text surface와 이후 voice/wake/background delivery는 같은 session 계약을 쓴다.
 
 ```text
 Calendar Connector → 정규화·출처·Person-scoped store
                                       ↓
-Chat → Manager Agent Loop → bounded Views → Schedule Expert / Tools
+Text/Voice/Event → Manager Loop → bounded Views → Domain Experts / Tools
                                       ↓
 Session Evidence → Memory / Playbook Candidate → Review → Confirmed Knowledge
                                       ↓
@@ -42,14 +45,16 @@ Voice Session → Local Wake-up ────────┘
 
 첫 루프는 macOS, 한 Person, Calendar connector 하나의 전체 캘린더와
 일정 생성 action 하나로 제한한다. Flutter는 화면과 승인 입력을 담당하고
-canonical 변경은 Rust typed command를 거친다. S4는 먼저 chat, Agent loop와
+canonical 변경은 Rust typed command를 거친다. S4는 먼저 text inspection surface,
+Agent loop와
 Expert host를 연결한다. S5는 그 대화와 결과를 source-backed Memory 및
 procedural Playbook 후보로 컴파일한다. Expert는 제한된 view와 capability를 사용하며
 connector 자격증명이나 DB에 직접 접근하지 않는다.
 
 사용자와 대화하고 Expert 결과를 취합하는 Manager agent와 OS lifecycle을 담당하는
 Device Agent를 구분한다. S4는 전자의 orchestration contract를, S7은 후자의
-local wake lifecycle을 검증한다. S1–S6는 앱 실행 중 동작해도 된다.
+local wake lifecycle을 검증한다. Background Situation과 proactive delivery는 S9의
+intervention gate이며 S1–S6는 앱 실행 중 동작해도 된다.
 
 ## S1 — Connected Calendar Read
 
@@ -113,11 +118,17 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 ## S4 — Conversational Connected Agent and Expert Foundation
 
-**사용자 결과:** 사용자가 Day Canvas의 assistant panel에서 Floe와 여러 turn을
-대화한다. Manager는 Calendar, Gmail과 기기에서 허용된 attention/health context를
+**사용자 결과:** 사용자는 초기 Day Canvas assistant panel에서 Floe와 여러 turn을
+대화하며, 장기 voice/background surface도 재사용할 headless-capable semantic loop를
+검증한다. Manager는 Calendar, Gmail과 기기에서 허용된 attention/health context를
 Contacts, 다음 일정의 위치·ETA·날씨와 함께 전문 Expert를 통해 종합해 오늘
 일정 질문에 답하거나 적절한 일정 작업을 제안한다. 사용자는 각 source와 실행 과정을
 확인·중단하며 나중에 같은 대화를 재개한다.
+
+이 panel은 장기 제품의 기본 home이 아니다. Voice는 S6/S7에서 동일한 session/command
+계약에 연결되고, background Situation과 proactive delivery는 S9에서 검증한다. S4는
+Expert 결과와 mutation proposal을 UI 존재 여부와 분리하고, UI를 consent, approval,
+근거 확인과 recovery를 위한 escalation surface로 유지한다.
 
 **의존성:** S3 Accepted, S1 calendar view, P0-I Agent/Expert contract harness,
 P0-F의 session store at-rest/key boundary, P0-C Gmail, P0-K Apple context와
@@ -125,8 +136,9 @@ P0-L privacy-aware inference gate.
 sync/account server나 resident Device Agent 없이 macOS 앱과 local Agent host에서
 먼저 검증한다. model runner가 기기 밖에 있으면 inference class와 전송 동의를 따른다.
 
-첫 범위는 text chat, 한 Person, built-in Schedule/Communication/Health Expert의
-최소 projection, deterministic declarative fixture Expert와 Calendar read/create,
+첫 범위는 text chat, 한 Person, built-in Schedule & Feasibility Expert의 Calendar
+increment, Gmail 기반 Commitments perspective, 제한된 Communication/Wellbeing/Attention
+projection, deterministic declarative fixture Expert와 Calendar read/create,
 Gmail read/search, Contacts identity, location/ETA/weather와 device attention/health
 read capability로 제한한다. source 선정 근거는
 [Assistant Context Portfolio](../05-integrations/assistant-context-portfolio.md), runtime 계약은
@@ -147,7 +159,8 @@ A2A-aligned Message/Task/Artifact contract다.
   contract를 사용한다. stable/scoped/contextual/conversation/runtime context layer와
   내부 message/tool-call representation은 provider나 UI 구현에 종속되지 않는다.
 - **S4-A3:** registry가 Tool과 Expert package/version, installation, Person assignment,
-  enablement와 private state를 관리한다. built-in Schedule Expert와 declarative
+  enablement와 private state를 관리한다. built-in Schedule & Feasibility Expert의
+  `floe.schedule` Calendar increment와 declarative
   fixture가 동일한 bounded ExpertInvocation/ExpertResult contract로 실행된다.
 - **S4-A4:** Expert는 granted Timeline view와 capabilities만 사용하고 DB, credential,
   raw source에 접근하지 않는다. structured insight/proposal만 Manager에게 반환하며
@@ -214,7 +227,8 @@ A2A-aligned Message/Task/Artifact contract다.
 3. fixture/local/remote model adapter와 명시적 inference policy decision을 연결한다.
 4. Codex authentication feasibility와 supported remote fallback을 live 검증한다.
 5. registry/assignment와 Expert 구현을 같은 host contract로 실행한다.
-6. common ConnectorConnection/View fixture를 Communication/Health/Schedule Expert에 연결한다.
+6. common ConnectorConnection/View fixture를 Schedule & Feasibility와 Commitments
+   perspective에 연결하고 Communication/Wellbeing/Attention projection을 제한한다.
 7. live Gmail read/search와 on-demand body를 local Go connector로 검증한다.
 8. Contacts identity와 location/ETA/weather 기반 next-event feasibility를 연결한다.
 9. physical Apple device에서 Screen Time gate와 Health derived-only connector를 검증한다.

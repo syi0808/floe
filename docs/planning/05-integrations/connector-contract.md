@@ -39,6 +39,30 @@ interface FloeConnector {
 
 실제 언어/형식은 미정이며 위 코드는 semantic sketch다.
 
+## Observe, Act and Interact
+
+Connector manifest의 capability는 최소한 다음 authority class를 구분한다.
+
+```text
+Observe
+  sync/change/read → bounded provider-neutral View
+
+Act
+  typed proposal → Policy/Review/Validation/Executor → execute
+
+Interact provider
+  invoke/listen/report/notify/show
+```
+
+Observe와 Act grant는 별도다. Observe 결과는 source, scope, freshness, retention,
+sensitivity와 provenance를 포함하며 credential이나 provider-native object를 Agent/Expert에
+노출하지 않는다. Act는 read grant에서 추론할 수 없고 항상 governed action boundary를
+통과한다.
+
+Voice, notification, lock screen, watch, car와 visual UI는 사용자를 호출하고 결과를
+전달하는 Interact provider다. Connections 화면에 함께 나타날 수 있지만 data connector와
+동일한 credential, lifecycle 또는 execution authority를 갖는다고 가정하지 않는다.
+
 ## Capability-driven
 
 모든 connector가 동일 기능을 지원한다고 가정하지 않는다.

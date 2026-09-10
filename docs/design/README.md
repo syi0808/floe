@@ -51,7 +51,9 @@ validation surfaces. The PNG files below remain composition history only.
 
 ## Product-wide invariants
 
-- Day Canvas is the primary experience; collection views support it.
+- Voice and rare useful interventions are the long-term primary experience. Day
+  Canvas and collection views provide context, explicit decisions, inspection and
+  recovery when a visual surface is useful.
 - Event, Task, Note, Commitment, and Intervention retain separate semantics.
 - Floe proposes; deterministic policy and user confirmation govern mutations.
 - Only one assistant entry and at most one surfaced suggestion compete for attention.

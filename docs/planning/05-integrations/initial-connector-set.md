@@ -20,6 +20,37 @@ Voice, Location, Travel Time, Weather, Device Activity, Notification은 Connecto
 아니라 Device/Context Provider로 분리한다. Connections UI에 함께 보여도 runtime
 authority와 retention class를 동일하다고 가정하지 않는다.
 
+## Long-term capability model
+
+제품에서 보이는 integration 이름과 Agent runtime이 사용하는 계약을 분리한다.
+Gmail, EventKit, WeatherKit 같은 provider adapter는 raw object나 credential을 Expert에
+주지 않고 provider-neutral capability와 bounded View를 등록한다.
+
+```text
+Observe capability
+  source state/change → scoped View + provenance + freshness
+
+Act capability
+  typed proposal → Policy/Review/Validation/Executor → external mutation
+
+Interact provider
+  voice / notification / lock screen / watch / car / visual UI
+```
+
+- **Observe**는 Calendar, Mail, Contacts, location/ETA/weather, health, attention,
+  files/projects, travel/home 같은 근거를 최소 범위로 제공한다.
+- **Act**는 calendar 변경, message send, task completion, reservation/device/home
+  control처럼 외부 상태를 바꾼다. Observe grant와 별도이며 read access가 write
+  authority를 암시하지 않는다.
+- **Interact**는 사용자를 부르고 듣고 보고하거나 visual surface로 handoff하는
+  invocation/delivery 계층이다. 일반 data connector와 lifecycle 및 권한이 다르다.
+
+Expert는 이 capability를 provider가 아니라 domain 판단에 따라 조합한다. 예를 들어
+Schedule & Feasibility는 Apple/Google Calendar를 구분하는 prompt 대신 공통 Calendar
+View와 ETA/Weather View를 사용한다. Commitments는 Gmail, Outlook이나 향후 지원되는
+message source를 같은 evidence contract로 소비한다. 자세한 제품 경계는
+[ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md)을 따른다.
+
 ---
 
 # 1. Initial Logical Domains
@@ -29,7 +60,10 @@ Connector Domains
 ├─ Calendar
 ├─ Mail
 ├─ Contacts
-└─ Health
+├─ Health
+├─ Files / Projects          # follow-up portfolio
+├─ Travel / Delivery        # follow-up portfolio
+└─ Home                     # follow-up portfolio
 
 Floe-native Domains
 ├─ Tasks
@@ -47,6 +81,8 @@ Device Providers
 ```
 
 이 구분을 통해 integration 범위를 불필요하게 넓히지 않는다.
+Floe-native Task/Note/Memory/Review/Activity/AgentSession은 같은 context/event fabric에
+참여할 수 있지만 external connector로 표시하지 않는다.
 
 ---
 
@@ -103,7 +139,7 @@ S4에서는 limited/full/denied access와 선택 변경을 지원하고 contact 
 - message/thread metadata
 - body read on demand
 - mailbox changes
-- Communication Expert input
+- Commitments/Communication perspective input
 - commitment / event / people Memory Candidate extraction
 
 초기에는 **메일 전송보다 읽기/검색/변화 감지**를 우선한다.
@@ -728,7 +764,7 @@ If the primary dogfood calendar is Google, this moves into P0 because it enables
 ```text
 Calendar connector
 → events
-→ Schedule Expert
+→ Schedule & Feasibility Expert
 → Day Canvas
 ```
 
@@ -737,7 +773,7 @@ Calendar connector
 ```text
 Gmail
 → new/relevant message
-→ Communication Expert
+→ Commitments perspective
 → commitment candidate
 → Personal Memory / Task
 ```
@@ -758,7 +794,7 @@ HealthKit / Health Connect
 → local health state
 +
 Calendar
-→ Health/Schedule Experts
+→ Wellbeing + Schedule & Feasibility perspectives
 → Manager intervention
 ```
 
@@ -769,7 +805,7 @@ Calendar location
 + Contacts
 + current location / ETA
 + event-window Weather
-→ Schedule Expert
+→ Schedule & Feasibility Expert
 → Manager leave-by / preparation answer
 ```
 

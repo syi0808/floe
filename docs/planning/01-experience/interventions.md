@@ -16,6 +16,10 @@ Predict
 Intervene
 ```
 
+`Intervene`는 insight를 만든다는 뜻이 아니라 사용자의 attention을 사용할 가치가
+있다고 Manager와 policy가 별도로 결정했다는 뜻이다. Background Expert 결과의 기본
+delivery는 UI가 아니라 **silence/defer**다.
+
 ## 종류
 
 ### Inform
@@ -56,18 +60,22 @@ recent interruption count
 
 ## UI presentation hierarchy
 
-Intervention이 사용자에게 전달되기로 결정된 뒤에도 표현 강도는 단계적으로 유지한다.
+Intervention이 사용자에게 전달되기로 결정된 뒤에는 먼저 channel과 표현 강도를
+선택한다.
 
 ```text
-Passive entry
-  ↓ policy-approved suggestion
-Contextual suggestion card or anchored timeline button
-  ↓ user invocation or acceptance
-Assistant panel
+silence / defer
+  ↓ delivery is justified
+voice report | quiet notification | passive visual entry
+  ↓ more context or a decision is required
+structured report / comparison / approval UI
   ↓ consequential mutation
-Explicit confirmation
+explicit transaction-bound confirmation
 ```
 
+- 음성은 장기적인 기본 conversational channel이며 visual UI보다 먼저 고려한다.
+- UI는 consent, consequential approval, 복잡한 비교, provenance, recovery와 audit에
+  실질적인 가치가 있을 때만 연다.
 - 한 viewport에서 능동 제안은 최대 1개만 확장한다.
 - overview content 위에 mascot 말풍선을 띄우지 않는다. 단, 특정 time block과 직접 관련된 제안은 표준 icon-only Floe squircle button 하나로 anchor할 수 있다.
 - 제안이 있다는 이유만으로 modal을 자동으로 열지 않는다.
@@ -79,16 +87,21 @@ Explicit confirmation
 Expert가 insight를 생성했다고 바로 사용자에게 전달하지 않는다.
 
 ```text
-Health Expert
-Schedule Expert
-Communication Expert
+Wellbeing Expert
+Schedule & Feasibility Expert
+Commitments / Communication Expert
        ↓
      Manager
        ↓
 interruption decision
        ↓
-      User
+     User
 ```
+
+Expert는 notification이나 음성을 직접 발송하지 않는다. Manager는 여러 Expert 결과와
+현재 conversation, attention state, recent interruption을 합쳐 delivery를 선택한다.
+서로 연관된 결과는 한 번의 비서 보고로 합치며 provider/Expert별 알림으로 분리하지
+않는다.
 
 ## 학습 가능성
 

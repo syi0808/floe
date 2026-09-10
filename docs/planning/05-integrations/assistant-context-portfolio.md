@@ -30,7 +30,8 @@ Weather              → 이동/준비에 영향을 주는 외부 조건
 Apple Health         → local-derived capacity signal
 Screen Time gate     → 가능할 때만 local-derived attention signal
                          ↓
-            Schedule / Communication / Health Experts
+       Schedule & Feasibility / Commitments perspectives
+       + bounded Communication / Wellbeing / Attention context
                          ↓
                     Manager briefing
                          ↓
@@ -82,6 +83,10 @@ These participate in the same briefing but do not pretend to be external connect
 - Screen Time: derived aggregate only; no raw app/domain timeline in Agent context.
 
 ## Follow-up portfolio
+
+Provider expansion은 Expert 목록의 확장이 아니다. 아래 source는 기존 domain View에
+연결하고 Schedule & Feasibility, Commitments, Communication, Relationships, Focus &
+Attention, Wellbeing, Work Context와 Life Logistics 중 필요한 판단에 조합한다.
 
 ### Tier B — provider parity and work context
 

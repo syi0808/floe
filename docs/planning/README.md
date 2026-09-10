@@ -8,6 +8,9 @@
 **Floe는 사용자의 시간, 할 일, 기록, 건강, 인간관계와 개인사를 장기적으로 이해하고, 사용자의 주요 기기에서 조용히 곁에 존재하는 오픈소스 개인 비서다.**
 
 Floe의 제품 중심은 Agent Framework나 채팅 UI가 아니다.
+장기적으로 사용자는 하나의 ambient Manager와 주로 음성으로 관계를 맺고, visual UI는
+명시적 결재·consent·복잡한 비교·근거 확인·recovery가 필요할 때만 나타난다. 내부
+Expert는 provider가 아니라 삶의 판단 domain을 담당한다.
 
 핵심 자산은 다음 네 가지다.
 

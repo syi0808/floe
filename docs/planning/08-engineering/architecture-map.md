@@ -54,9 +54,19 @@ Business domain은 reusable model interface를 사용한다.
 
 Provider가 Health/Memory 의미를 알아서는 안 된다.
 
+### Context/Event → Manager → Interact
+
+허가된 connector와 device provider 변화는 bounded Situation 후보가 된다. Manager가
+domain Expert 판단을 종합하고 intervention policy를 통과시킨 뒤에만 voice,
+notification 또는 visual UI로 전달한다. UI process가 background intelligence의
+소유자가 되어서는 안 된다.
+
 ### Integration → normalized Floe data
 
 외부 API schema가 Floe Timeline/Memory를 지배하지 않는다.
+Integration은 read/write를 하나의 암묵적 권한으로 묶지 않고 provider-neutral Observe
+View와 Act capability로 분리한다. Voice/notification/UI는 data connector가 아니라
+Interact provider다.
 
 ### Device → provider contract
 

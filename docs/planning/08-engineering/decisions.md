@@ -375,7 +375,7 @@ intervention are now S8/S9.
 
 ## D-038 — Chat is the first Agent integration surface
 
-**Status:** Accepted — 2026-09-07
+**Status:** Accepted — 2026-09-07; product framing amended by D-043
 
 S4 validates a transport-neutral, interruptible and budgeted Manager Agent loop,
 durable chat sessions, extensible Tool/Expert registries and one Schedule Expert
@@ -448,3 +448,21 @@ directly. Pinning blocks autonomous edits, hard delete and autonomous consolidat
 remain disabled, and user deletion propagates through provenance with tombstones.
 
 See [ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md).
+
+---
+
+## D-043 — Floe is an ambient voice-first assistant
+
+**Status:** Accepted — 2026-09-10
+
+One Manager owns conversation, Expert delegation, intervention timing and final
+expression. Voice is the long-term primary interaction channel; UI appears when
+consent, consequential approval, complex comparison, provenance, recovery or audit
+benefits from a screen. Experts follow life-decision domains rather than providers.
+Connectors expose separate Observe/Act capabilities, while voice, notification and
+visual surfaces are Interact providers. Silence is a first-class Manager outcome.
+
+S4 keeps text as its initial semantic-loop inspection surface; S6/S7 add voice and
+wake, while S9 validates background Situation detection and proactive delivery.
+
+See [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md).

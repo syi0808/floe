@@ -2,6 +2,28 @@
 
 > Status: Core intelligence model
 
+## 장기 제품 모델
+
+Floe는 UI 안에서 대기하는 여러 chatbot이 아니라 **하나의 ambient personal chief of
+staff**다. 사용자가 말하면 같은 Manager가 대화를 이어가고, 허가된 기기·서비스의
+변화가 있을 때는 background context/event boundary가 상황 후보를 만든다. Manager는
+필요한 domain Expert에게만 판단을 위임한 뒤 아무것도 하지 않거나, 적절한 순간에
+음성으로 보고하거나, 결재·근거 확인이 필요한 경우에만 UI로 escalates한다.
+
+```text
+user speech or supported context change
+→ bounded Situation
+→ Manager triage
+→ domain Expert delegation when useful
+→ evidence-backed result
+→ silence | voice | notification | approval/report UI
+```
+
+Voice는 장기적인 기본 interaction channel이지만 별도 Expert가 아니다. UI 역시
+Manager의 본체가 아니라 consent, approval, 복잡한 비교, provenance, recovery와 audit를
+위한 escalation surface다. 이 구분은
+[ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md)을 따른다.
+
 ## 첫 구현 검증 범위
 
 [S4 Conversational Agent and Expert Foundation](../08-engineering/vertical-slice-delivery.md)는
@@ -30,7 +52,10 @@ Agent loop, session, registry, budget와 learning port의 구현 계약은
 
 ### Schedule Expert 실행 모델
 
-Schedule Expert는 단순 API wrapper가 아니라 **bounded domain subagent**로 실행한다.
+Schedule Expert는 장기적으로 **Schedule & Feasibility** 영역을 담당하는 첫 bounded
+domain subagent다. `floe.schedule` identity는 유지하면서 Calendar뿐 아니라 허가된
+ETA, 날씨, commitments와 coarse capacity projection을 종합할 수 있다. 현재 S4
+increment는 그중 Calendar 경계를 먼저 실행한다.
 Manager는 사용자 conversation history를 유지하고, Schedule Expert에는 현재
 요청에서 파생한 자연어 delegation message와 허가된 View만 전달한다. Expert의 내부
 모델 turn은 Manager conversation에 합쳐지지 않는다.
@@ -90,11 +115,15 @@ Manager Secretary
 Manager Role은 다음 책임과 성공 조건만 안정 지침으로 가진다.
 
 - 사용자의 현재 요청을 이해하고 필요한 근거와 capability를 선택한다.
+- 명시적 요청과 background change를 모두 bounded Situation으로 받아 관련성·긴급도와
+  현재 attention을 평가한다.
 - 여러 View, Memory와 Expert 결과를 구분하여 종합하고 불확실성을 보존한다.
 - 활성 Expert 설명을 바탕으로 독립적인 도메인 판단이 유용할 때만 위임한다.
 - Expert에 목표·관련 맥락·제약·기대 결과를 자연어로 전달하되 최종 판단과 사용자
   응답을 소유한다.
 - 외부 변경은 typed proposal로 만들고 Policy/Review/Executor 경계를 지킨다.
+- 결과가 있어도 개입하지 않거나 미룰 수 있으며, voice/notification/UI 중 가장 낮은
+  충분한 표현 강도를 선택한다.
 - 활성 Persona에 따라 일관된 말투로 간결하고 유용하게 응답한다.
 
 특정 tool 호출 순서, 대표 업무 workflow, schema 사본과 runtime budget 숫자는
@@ -109,8 +138,8 @@ model call마다 설치 활성화, Person assignment, 호환성, 권한과 현�
 
 ```text
 Available experts
-- Schedule Expert (`floe.schedule`): 일정, 충돌, 시간 가용성과 계획의 현실성을
-  검토하는 전문가. 일정 관점의 독립적인 판단이 필요할 때 위임한다.
+- Schedule & Feasibility (`floe.schedule`): 일정, 충돌, 시간 가용성, 이동 제약과
+  계획의 현실성을 검토하는 전문가. 시간 관점의 독립적인 판단이 필요할 때 위임한다.
 ```
 
 각 항목은 versioned Agent Card의 compact projection인 `id`, `name`, `description`,
@@ -145,18 +174,33 @@ Expert Role은 담당 domain, Manager에게 반환할 판단의 성공 조건, �
 권한을 확장하지 않으며, 사용할 수 없는 capability를 가정하지 않는다. 일반 실행은
 모델의 판단에 맡기고 반복 가능한 절차가 실제로 필요할 때만 Playbook을 읽는다.
 
-Schedule Expert는 일정의 조회·충돌·가용성·우선순위와 변경 후보를 분석한다. 허가된
-Calendar View와 read/search/free-window capability를 필요에 따라 사용해 근거가 있는
-자연어 조언을 Artifact로 Manager에게 반환한다. 증거와 변경 후보는 prose 안에
-숨기지 않고 typed Data Part reference로 함께 전달한다. 집중 시간 확보는 가능한
-요청 유형 중 하나일 뿐 기본 목표가 아니다.
+Expert boundary는 provider나 API가 아니라 사용자의 삶에서 반복되는 **판단 영역**을
+따른다. 따라서 Calendar/Gmail/Slack/Screen Time/HealthKit Expert를 만들지 않는다.
 
-초기 후보:
+| Expert | 독립적으로 판단하는 영역 | 대표 bounded View |
+| --- | --- | --- |
+| Schedule & Feasibility | 일정, 충돌, 가용 시간, 이동 제약과 계획 변경의 현실성 | Calendar, Task, ETA, Weather, limited capacity |
+| Commitments | 약속, 마감, 답변 기대와 source 사이의 후속 조치 누락 | Mail, Messages, Calendar, Task, confirmed Memory |
+| Communication | 답변 필요성, 요약, 초안, tone과 전달 channel | Mail, Messages, People, Relationship projection |
+| Relationships | identity, 상호작용 맥락, cadence와 중요한 follow-up | Contacts identity, interaction evidence, confirmed Memory |
+| Focus & Attention | interruption cost, 집중 보호와 context-switch pressure | Attention, Calendar, active work, preferences |
+| Wellbeing | 비진단적 capacity/recovery와 지속 가능한 일정 영향 | derived Health, activity, sleep and schedule projection |
+| Work Context | 프로젝트, 문서, 결정, 회의, blocker와 next action | Files, project systems, Calendar, Task |
+| Life Logistics | 예약, 여행, 배송, 심부름과 지원되는 home context/action | Mail evidence, travel, delivery, home state |
 
-- Health Expert
-- Schedule Expert
-- Communication Expert
-- Personal Context 관련 전문 로직
+이는 여덟 모델이나 package를 한 번에 실행·배포한다는 뜻이 아니다. 초기에는 가까운
+판단을 한 implementation에서 수행할 수 있지만 Agent Card, permission과 결과에는 어떤
+domain perspective였는지를 보존한다.
+
+S4는 `floe.schedule`을 Schedule & Feasibility의 첫 vertical slice로 유지하고,
+Gmail 기반의 최소 Commitments perspective와 deterministic declarative fixture로 공통
+계약을 검증한다. Communication과 Wellbeing/Attention은 처음에는 bounded projection으로
+조합할 수 있으며, 독립 판단·권한·평가 corpus가 필요해질 때 별도 Expert로 승격한다.
+
+Schedule & Feasibility Expert는 허가된 Calendar View와 read/search/free-window
+capability를 필요에 따라 사용해 근거가 있는 자연어 조언을 Artifact로 Manager에게
+반환한다. 증거와 변경 후보는 prose 안에 숨기지 않고 typed Data Part reference로 함께
+전달한다. 집중 시간 확보는 가능한 요청 유형 중 하나일 뿐 기본 목표가 아니다.
 
 ## Expert는 항상 떠 있는 Agent가 아니다
 
@@ -165,9 +209,12 @@ Calendar View와 read/search/free-window capability를 필요에 따라 사용�
 기본은 event-driven.
 
 ```text
-HealthChanged → Health Expert
-CalendarChanged → Schedule Expert
-NewEmail → Communication Expert
+CalendarChanged → Schedule & Feasibility candidate
+NewEmail → Commitments/Communication candidate
+AttentionChanged → Focus & Attention candidate
+HealthStateChanged → Wellbeing candidate
+       ↓
+Manager relevance/intervention decision
 ```
 
 ## Expert와 Skill의 차이
@@ -187,8 +234,8 @@ Expert만 자신의 격리된 context에서 허가된 Skill을 실행한다.
 Health Skill
 → health 데이터를 읽는다.
 
-Health Expert
-→ 그 데이터가 현재 사용자에게 어떤 의미인지 판단한다.
+Wellbeing Expert
+→ 제한된 derived health state가 현재 계획에 어떤 의미인지 판단한다.
 ```
 
 ## Expert Memory View
@@ -198,9 +245,10 @@ Health Expert
 ```text
 Full Personal Memory
 ├─ Manager → broad contextual view
-├─ Health Expert → health-relevant projection
-├─ Schedule Expert → time/commitments
-└─ Communication Expert → communication context
+├─ Wellbeing → health-relevant projection
+├─ Schedule & Feasibility → time/commitments
+├─ Relationships → people/relationship projection
+└─ Communication → communication context
 ```
 
 ## 사용자에게 여러 비서가 보이지 않도록 한다
@@ -211,7 +259,7 @@ Manager가 개입 타이밍과 표현을 통합한다.
 
 ## Extensible Expert Layer
 
-Health/Schedule/Communication are built-in Experts, but `Expert` itself is a public extensibility boundary.
+Built-in domain Experts and third-party Experts share one public extensibility boundary.
 
 ```text
 Agent Directory / Agent Cards

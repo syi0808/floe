@@ -31,7 +31,7 @@ Optional Tiny/Local Model
       ↓
 Derived Health State
       ↓
-Health Expert / Manager
+Wellbeing Expert / Manager
 ```
 
 ## 휴리스틱 우선
@@ -75,9 +75,9 @@ Derived state도 건강 관련 민감 정보일 수 있다.
 
 Privacy policy가 별도로 결정해야 한다.
 
-## Health Expert
+## Wellbeing Expert
 
-Health Expert는 사용자의 현재 schedule/workload와 건강 state를 결합해:
+Wellbeing Expert는 사용자의 현재 schedule/workload와 derived health state를 결합해:
 
 - 일정 강도
 - 휴식 필요
@@ -85,3 +85,7 @@ Health Expert는 사용자의 현재 schedule/workload와 건강 state를 결합
 - 장기 변화
 
 등의 판단 후보를 Manager에게 제공한다.
+
+HealthKit/Health Connect는 source 이름이며 Expert identity가 아니다. Expert는 진단하거나
+raw sample을 해석하는 provider wrapper가 아니라, coarse non-diagnostic capacity와
+recovery가 사용자의 하루에 주는 의미만 판단한다.

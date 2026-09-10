@@ -2,7 +2,11 @@
 
 Floe is an open-source personal assistant that helps a person’s day run well by understanding their timeline, current state, and durable personal context.
 
-The product is not an agent framework, automation builder, chat wrapper, or dashboard. Its primary experience is a calm **Day Canvas**, fast capture, and rare, useful interventions.
+The product is not an agent framework, automation builder, chat wrapper, or dashboard.
+Its long-term primary experience is one ambient assistant reached mainly through
+voice and rare, useful interventions. Visual surfaces such as the calm **Day Canvas**
+appear for context, explicit approval, inspection and recovery rather than becoming
+the assistant's primary home.
 
 ## Status
 
@@ -13,7 +17,8 @@ S1 has an EventKit read implementation and fixture end-to-end coverage; live
 permission/read validation is still pending. The Go model gateway and local connection
 console remain reusable infrastructure without a focus-time product feature;
 unfinished Personal Day work remains tracked separately in [progress](PROGRESS.md).
-After S3, delivery validates conversational Agent/Expert chat with bounded
+After S3, delivery validates a headless-capable Manager/Expert semantic loop through
+an initial conversational inspection panel with bounded
 Calendar, Gmail, Contacts, travel/weather, Screen Time, and Apple Health sources plus
 privacy-aware local/remote model routing (S4), governed
 Memory and self-improvement (S5), voice mode (S6), and local wake-up (S7) before
@@ -94,6 +99,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [S4 connected Agent sources](docs/decisions/0014-s4-connected-agent-sources.md)
 - [S4 privacy-aware inference](docs/decisions/0015-s4-privacy-aware-inference.md)
 - [Agent context assembly and progressive Playbooks](docs/decisions/0017-agent-context-assembly.md)
+- [Ambient assistant, domain Experts and capability connectors](docs/decisions/0020-ambient-assistant-expert-connector-model.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

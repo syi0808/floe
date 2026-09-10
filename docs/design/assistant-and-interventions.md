@@ -4,7 +4,12 @@
 
 ## Principle
 
-Floe is always available but not always speaking. Presentation follows the intervention budget in [`docs/planning/01-experience/interventions.md`](../planning/01-experience/interventions.md); the UI does not promote every generated insight.
+Floe is always available but not always speaking. Voice is the long-term primary
+conversation channel; visual presentation is an escalation surface for consent,
+approval, complex comparison, provenance, recovery and audit. Presentation follows
+the intervention budget in [`docs/planning/01-experience/interventions.md`](../planning/01-experience/interventions.md);
+the UI does not promote every generated insight or automatically open when an Expert
+finishes work.
 
 ## Presentation levels
 
@@ -28,9 +33,15 @@ Suggestions do not mutate data. Accepting one may open a shared review request.
 
 ### Active
 
-Open an assistant panel when the user invokes Floe or accepts a suggestion. Use a sheet on narrow layouts and a contextual panel on wide layouts. Conversation history is subordinate to the task at hand; the product does not become a full-screen chat by default.
+Open an assistant panel when the user explicitly chooses a visual conversation,
+accepts a visual suggestion, needs evidence/details, or is handed off from voice for
+a decision that benefits from a screen. Use a sheet on narrow layouts and a contextual
+panel on wide layouts. Conversation history is subordinate to the task at hand; the
+product does not become a full-screen chat by default. Invoking Floe by voice does not
+open the panel unless visual context is needed.
 
-S4 chat uses this same panel. It provides:
+S4 uses this same panel as its initial inspection, accessibility and fallback surface.
+It provides:
 
 - a persistent composer with send, stop and retry states;
 - ordered streaming without treating partial output as a completed message;
@@ -46,6 +57,10 @@ duplicating tool execution.
 ### Confirmation
 
 Before an external or consequential mutation, state the proposed action, target, time, and relevant side effects. The primary button names the action. `Cancel` or `Keep current` must remain available.
+
+Voice may confirm only a policy-eligible action with an unambiguous response bound to
+that exact proposal. Sensitive, high-impact or visually ambiguous proposals hand off
+to this confirmation UI rather than interpreting casual speech as approval.
 
 The default view answers the user's decision, not the executor's schema: what will
 change, when, and where. Present the user's title and readable local time first;

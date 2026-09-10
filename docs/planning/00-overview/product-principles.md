@@ -52,7 +52,10 @@ Domain별 proposal은 사용자 기능이 아니다. 현재 판단이 필요한 
 
 사용자는 하나의 Floe와 관계를 맺는다.
 
-내부 Health Expert, Schedule Expert, Communication Expert 등이 존재하더라도 기본적으로 직접 사용자에게 각자 말을 걸지 않는다.
+내부 Schedule & Feasibility, Commitments, Communication, Relationships, Focus &
+Attention, Wellbeing, Work Context, Life Logistics Expert가 존재하더라도 직접
+사용자에게 각자 말을 걸지 않는다. Expert는 provider 담당자가 아니라 domain 판단
+agent이며 Manager만 최종 표현과 개입을 소유한다.
 
 ```text
 Experts → Manager Secretary → User
@@ -63,6 +66,13 @@ Experts → Manager Secretary → User
 대화는 context를 매번 입력하기 위한 인터페이스가 아니다.
 
 Floe가 이미 알고 있는 Timeline, State, Memory를 바탕으로 사용자의 짧은 질문을 해석해야 한다.
+
+## 3.1 Voice First, UI When Necessary
+
+장기적인 기본 대화는 voice이며 UI는 assistant의 home이 아니다. 명시적 승인, 민감한
+consent, 복잡한 비교, provenance, recovery와 audit처럼 화면이 안전성과 이해를
+실질적으로 높일 때만 visual surface로 handoff한다. 접근성과 환경 제약을 위해 text는
+동일한 AgentSession의 first-class fallback으로 유지한다.
 
 ## 4. Proactive, but Quiet
 

@@ -8,12 +8,16 @@ Phase는 장기 제품 범위 지도이며 순차 구현 gate가 아니다.
 [ADR 0006](../../decisions/0006-slice-driven-delivery.md)에 따라 실제 구현은
 [S1–S9 vertical slices](../08-engineering/vertical-slice-delivery.md)로 진행한다.
 S1–S3에서 connector → app → 승인 실행 기반을 검증하고, S4에서 Calendar/Gmail과
-device-local Screen Time/Apple Health context를 사용하는 Chat 기반 Manager Agent →
-Expert/Tool → 승인 action 루프, Codex authentication gate와 local Foundation
-Model/sLLM 기반 sensitive routing을 먼저 검증한다. S5는 그 대화와
+device-local Screen Time/Apple Health context를 사용하는 headless-capable Manager →
+domain Expert/Tool → 승인 action semantic loop를 먼저 검증한다. S4의 text panel은
+이 loop의 초기 inspection/accessibility surface이지 장기 제품의 중심이 아니다. Codex
+authentication gate와 local Foundation Model/sLLM 기반 sensitive routing도 함께
+검증한다. S5는 그 대화와
 결과를 source-backed Memory와 procedural Playbook으로 학습하는 통제된 self-improvement를
-추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용한 뒤,
-S8–S9에서 서버·기기·개입으로 확장한다. 이 순서는 Floe의 핵심 제품 가설을 network
+추가한다. S6 voice mode와 S7 local wake-up이 같은 AgentSession을 재사용해 음성을
+기본 interaction으로 만들고, S8–S9에서 서버·기기와 background situation/intervention으로
+확장한다. 결재·민감 consent·복잡한 비교·recovery/audit가 필요할 때만 UI로 handoff한다.
+이 순서는 Floe의 핵심 제품 가설을 network
 topology보다 먼저 실패시켜 보기 위한 것이다. Phase 0 PoC는 필요한 경계의 구현 전에
 수행하며 보안·권한 검증을 생략하지 않는다.
 
@@ -62,13 +66,18 @@ Slice가 일부 경계를 검증해도 해당 Phase 전체가 완료되는 것�
 - Screen Time public-API feasibility
 - HealthKit
 - Health Connect
-- Health Expert
-- Schedule Expert
+- Wellbeing Expert direction
+- Schedule & Feasibility Expert
 - Communication Expert의 최소 버전
+- Commitments perspective
 
 검증 질문:
 
 > 연결된 데이터로 기존 생산성 앱이 못하던 판단을 실제로 할 수 있는가?
+
+장기 Expert boundary는 provider가 아니라 Schedule & Feasibility, Commitments,
+Communication, Relationships, Focus & Attention, Wellbeing, Work Context, Life Logistics
+같은 판단 domain을 따른다. 이 목록은 모든 Expert를 이 Phase에서 구현한다는 뜻이 아니다.
 
 S4는 모든 connector breadth가 아니라 Today briefing에 필요한 Time,
 Commitments, People, Feasibility, Capacity cohort를 먼저 검증한다. 선정과 제외 근거는
@@ -107,7 +116,8 @@ procedural Playbook의 evidence, review, retrieval, edit/rollback/delete lifecyc
 
 Marketplace discovery/commerce itself can come later; the runtime contract should stabilize earlier.
 
-S4는 local Schedule Expert와 declarative fixture를 같은 계약으로 실행해 Manager,
+S4는 local Schedule & Feasibility Expert의 Calendar increment와 declarative fixture를
+같은 계약으로 실행해 Manager,
 permission, assignment, structured output 경계를 먼저 검증한다. Wasm과 Marketplace는
 이 선행 slice의 완료 조건이 아니다.
 
@@ -128,6 +138,7 @@ permission, assignment, structured output 경계를 먼저 검증한다. Wasm과
 - improved speaker recognition
 - meeting transcription
 - device handoff/arbitration
+- background Situation detection over explicitly granted source changes
 - proactive intervention tuning
 
 ## Phase 6 — Hosted / Self-host Ecosystem

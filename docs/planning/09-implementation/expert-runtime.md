@@ -5,6 +5,8 @@
 > Manager–Expert transport follows
 > [ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md). The S4 typed
 > invocation is an implemented migration baseline, not the target Manager API.
+> Product-domain boundaries and ambient delivery follow
+> [ADR 0020](../../decisions/0020-ambient-assistant-expert-connector-model.md).
 
 ## S4 implementation baseline
 
@@ -14,7 +16,8 @@ S4는 이 문서의 모든 execution class를 한 번에 구현하지 않는다.
 - package/version, installation, Person assignment와 enable/revoke registry
 - bounded `ExpertInvocation` / `ExpertResult`와 per-assignment private state
 - read-only Timeline/Memory view handles와 deny-by-default capability dispatch
-- native Schedule Expert와 deterministic declarative fixture adapter
+- native `floe.schedule` Schedule & Feasibility Calendar increment와 deterministic
+  declarative fixture adapter
 - timeout/output/budget validation, trace와 failure isolation
 
 Sandboxed Component와 server embedding topology는 S4 제외 범위다. 다만 S4의 host
@@ -69,9 +72,10 @@ Used by first-party Experts that need deep integration or maximum performance.
 
 Examples:
 
-- Health Expert
-- Schedule Expert
-- Communication Expert
+- Schedule & Feasibility Expert
+- Commitments / Communication Experts
+- Relationships / Focus & Attention / Wellbeing Experts
+- Work Context / Life Logistics Experts
 
 Implementation may live in Go server or Rust Device Core depending on execution placement.
 

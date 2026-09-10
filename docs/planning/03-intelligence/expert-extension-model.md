@@ -305,7 +305,7 @@ StateSuggestion
 Examples:
 
 ```text
-Health Expert
+Wellbeing Expert
 → InterventionCandidate("오늘 운동 강도를 낮추는 편이 좋음")
 
 Job Search Expert
