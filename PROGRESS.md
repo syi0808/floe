@@ -4,6 +4,24 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 Memory Review boundary and settings surface — 2026-09-10
+
+- Added a typed `memory_review` protocol/FFI operation that lists only pending Memory
+  candidates from an unlocked Person vault and accepts only approve/reject decisions.
+  The host supplies the `User` actor and decision time; callers cannot inject payloads,
+  actors, evidence, or direct revision writes.
+- Approval and rejection reuse the encrypted atomic candidate/decision/revision ledger.
+  A committed decision is not reported as cancelled afterward, and Playbook candidates
+  cannot cross the Memory-specific review endpoint.
+- Added strict Dart projections, controller lifecycle clearing, and a Data & privacy
+  settings card with source count plus explicit Approve/Reject controls.
+- Full Rust workspace tests and build pass. Focused Flutter tests pass 2/2; analyzer
+  reports only a pre-existing unused test import. The full Flutter suite still has
+  unrelated baseline fixture timing, stale Registry expectations, and golden diffs.
+- Conversation extraction, background Learner, rollback UI, curation and deletion
+  propagation remain; therefore S5 stays at 0/6.
+  [Evidence and limits](docs/validation/s5-memory-review.md).
+
 ### S5 confirmed Memory context retrieval — 2026-09-10
 
 - General encrypted Personal conversations now load active confirmed Memory into a
@@ -14,8 +32,9 @@
   Experts receive no ambient Personal Memory.
 - Focused Agent policy/runtime tests pass 44/44 and encrypted-vault tests pass 19/19;
   full Rust workspace tests/check and formatting pass.
-- Relevance ranking, durable per-attempt manifests, conversation extraction, Review
-  FFI/UI and background Learner remain. S5-A1–A6 stay pending.
+- Relevance ranking, durable per-attempt manifests, conversation extraction and
+  background Learner remain. Review FFI/UI is now implemented separately; S5-A1–A6
+  stay pending.
   [Evidence and limits](docs/validation/s5-memory-context-retrieval.md).
 
 ### S5 governed Memory persistence foundation — 2026-09-10

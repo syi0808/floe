@@ -7,6 +7,7 @@ import 'agent_calendar_session_gateway.dart';
 import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_memory_review.dart';
 import 'agent_expert_result.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
@@ -59,6 +60,8 @@ final class AgentController extends ChangeNotifier {
   bool registryLoaded = false;
   AgentCalendarExperts? calendarExperts;
   String? calendarExpertFailure;
+  List<AgentMemoryCandidate>? memoryCandidates;
+  String? memoryReviewFailure;
   AgentCalendarSetup? _pendingCalendarSetup;
   final Map<String, AgentProposalInspection> _proposals = {};
   final Map<String, String> _proposalFailures = {};
@@ -383,6 +386,61 @@ final class AgentController extends ChangeNotifier {
 
   bool get hasRegistryManagement =>
       usesVault && gateway is AgentRegistryGateway;
+
+  bool get hasMemoryReview => usesVault && gateway is AgentMemoryReviewGateway;
+  bool get canReviewMemory =>
+      hasMemoryReview &&
+      !_busy &&
+      !_sealed &&
+      !_disposed &&
+      _locking == null &&
+      vaultState == AgentVaultState.ready;
+
+  Future<void> loadMemoryReview() => _memoryReviewOperation();
+
+  Future<void> decideMemoryCandidate(
+    String candidateId,
+    AgentMemoryDecision decision,
+  ) => _memoryReviewOperation(candidateId: candidateId, decision: decision);
+
+  Future<void> _memoryReviewOperation({
+    String? candidateId,
+    AgentMemoryDecision? decision,
+  }) async {
+    if (!canReviewMemory || (candidateId == null) != (decision == null)) return;
+    _begin();
+    memoryReviewFailure = null;
+    _notify();
+    try {
+      final review = candidateId == null
+          ? await (gateway as AgentMemoryReviewGateway).readMemoryReview(
+              personId,
+            )
+          : await (gateway as AgentMemoryReviewGateway).decideMemoryCandidate(
+              personId: personId,
+              candidateId: candidateId,
+              decision: decision!,
+            );
+      if (_sealed || _disposed) return;
+      if (review.personId != personId) {
+        throw const FormatException('Memory review Person mismatch');
+      }
+      memoryCandidates = review.candidates;
+    } on Object catch (error) {
+      if (_sealed || _disposed) return;
+      memoryReviewFailure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      if (memoryReviewFailure == 'vault_unavailable' ||
+          memoryReviewFailure == 'interrupted') {
+        _fail(memoryReviewFailure!);
+      }
+    } finally {
+      _end();
+      _notify();
+    }
+  }
+
   bool get canManageRegistry =>
       hasRegistryManagement &&
       !_busy &&
@@ -1174,6 +1232,8 @@ final class AgentController extends ChangeNotifier {
     registryLoaded = false;
     calendarExperts = null;
     calendarExpertFailure = null;
+    memoryCandidates = null;
+    memoryReviewFailure = null;
     _pendingCalendarSetup = null;
     session = null;
     messages = [];
@@ -1222,6 +1282,7 @@ final class AgentController extends ChangeNotifier {
       registry = null;
       registryLoaded = false;
       calendarExperts = null;
+      memoryCandidates = null;
       _pendingCalendarSetup = null;
       session = null;
       messages = [];

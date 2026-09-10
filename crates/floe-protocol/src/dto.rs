@@ -57,6 +57,24 @@ pub enum AgentVaultActionDto {
     ConversationTurn {
         request: AgentConversationTurnRequestDto,
     },
+    MemoryReview {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<AgentMemoryReviewDecisionDto>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentMemoryReviewDecisionDto {
+    pub candidate_id: String,
+    pub decision: AgentMemoryReviewDecisionKindDto,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMemoryReviewDecisionKindDto {
+    Approve,
+    Reject,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -199,6 +217,16 @@ pub struct AgentProposalInspectionDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentMemoryReviewOverviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub candidates: Vec<floe_agent::KnowledgeCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<floe_agent::KnowledgeDecisionResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentProposalActionDto {
     pub action_id: String,
     pub execution_id: String,
@@ -244,6 +272,8 @@ pub struct AgentVaultResultDto {
     pub calendar_turn: Option<AgentCalendarTurnResultDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<AgentProposalInspectionDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_review: Option<AgentMemoryReviewOverviewDto>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 

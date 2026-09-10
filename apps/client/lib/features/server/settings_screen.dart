@@ -12,6 +12,7 @@ import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
 import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
+import '../agent/agent_memory_review_settings.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -237,6 +238,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool loading = false;
   bool registryRequested = false;
   bool calendarRequested = false;
+  bool memoryRequested = false;
 
   AgentController get controller => widget.controller;
 
@@ -255,6 +257,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       controller.addListener(_controllerChanged);
       registryRequested = false;
       calendarRequested = false;
+      memoryRequested = false;
       _load();
     }
   }
@@ -264,9 +267,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _load() async {
-    if (loading || !controller.canManageRegistry) return;
+    if (loading ||
+        !controller.canManageRegistry && !controller.canReviewMemory) {
+      return;
+    }
     loading = true;
-    if (!registryRequested) {
+    if (controller.canManageRegistry && !registryRequested) {
       registryRequested = true;
       await controller.loadRegistry();
     }
@@ -275,6 +281,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         controller.canManageCalendarExperts) {
       calendarRequested = true;
       await controller.loadCalendarExperts();
+    }
+    if (controller.hasMemoryReview &&
+        !memoryRequested &&
+        controller.canReviewMemory) {
+      memoryRequested = true;
+      await controller.loadMemoryReview();
     }
     loading = false;
   }
@@ -311,6 +323,10 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                 )
               : const Text('No connected data sources are available yet.'),
         ),
+        if (controller.hasMemoryReview) ...[
+          const SizedBox(height: FloeSpace.lg),
+          AgentMemoryReviewSettings(controller: controller),
+        ],
         const SizedBox(height: FloeSpace.lg),
         _AiProcessing(client: widget.serverClient),
         if (controller.vaultState != AgentVaultState.ready) ...[

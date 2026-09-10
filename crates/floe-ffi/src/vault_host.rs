@@ -12,7 +12,10 @@ use std::{
     time::Duration,
 };
 
-use floe_agent::{AgentEvent, AgentFailure, AgentSession, Cancellation, SessionStore};
+use floe_agent::{
+    AgentEvent, AgentFailure, AgentSession, Cancellation, KnowledgeActor, KnowledgeDecisionKind,
+    KnowledgeKind, SessionStore,
+};
 use floe_core::{
     AgentFixtureTurn, CalendarActionState, EncryptedAgentVault, ExpertCalendarInspection,
     ExpertProposalReference, FloeCore, KeyringVaultKeys, VaultKeyProvider, recover_agent_sample,
@@ -87,6 +90,7 @@ struct Progress {
     calendar_experts: Option<floe_agent::CalendarExpertOverview>,
     calendar_turn: Option<AgentCalendarTurnResultDto>,
     proposal: Option<AgentProposalInspectionDto>,
+    memory_review: Option<AgentMemoryReviewOverviewDto>,
     failure: Option<AgentFailure>,
 }
 
@@ -132,6 +136,7 @@ impl Worker {
                                 calendar_experts,
                                 calendar_turn,
                                 proposal,
+                                memory_review,
                             )) => {
                                 progress.state = Some(state);
                                 progress.session = session;
@@ -139,6 +144,7 @@ impl Worker {
                                 progress.calendar_experts = calendar_experts;
                                 progress.calendar_turn = calendar_turn;
                                 progress.proposal = proposal;
+                                progress.memory_review = memory_review;
                             }
                             Err(failure) => {
                                 progress.state = Some(
@@ -224,6 +230,7 @@ impl Worker {
             calendar_experts: progress.calendar_experts.clone(),
             calendar_turn: progress.calendar_turn.clone(),
             proposal: progress.proposal.clone(),
+            memory_review: progress.memory_review.clone(),
             failure: progress.failure,
         };
         drop(progress);
@@ -262,6 +269,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         Option<floe_agent::CalendarExpertOverview>,
         Option<AgentCalendarTurnResultDto>,
         Option<AgentProposalInspectionDto>,
+        Option<AgentMemoryReviewOverviewDto>,
     ),
     AgentFailure,
 > {
@@ -278,7 +286,15 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::Status {} => {
             if let Some((_, vault)) = current {
                 vault.check_access()?;
-                return Ok((AgentVaultStateDto::Ready, None, None, None, None, None));
+                return Ok((
+                    AgentVaultStateDto::Ready,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
                 Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
@@ -287,7 +303,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None, None, None, None, None))
+            Ok((state, None, None, None, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -300,7 +316,15 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None, None, None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::Unlock {} => {
             if current.is_some() {
@@ -308,11 +332,27 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
             *current = Some((job.person, vault));
-            Ok((AgentVaultStateDto::Ready, None, None, None, None, None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
-            Ok((AgentVaultStateDto::Locked, None, None, None, None, None))
+            Ok((
+                AgentVaultStateDto::Locked,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::Session { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -372,6 +412,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
+                None,
             ))
         }
         AgentVaultActionDto::Registry { change } => {
@@ -387,7 +428,15 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
             }
-            Ok((AgentVaultStateDto::Ready, None, registry, None, None, None))
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                registry,
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         AgentVaultActionDto::CalendarExperts { setup } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
@@ -407,6 +456,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 Some(overview),
                 None,
                 None,
+                None,
             ))
         }
         AgentVaultActionDto::CalendarAccess { change } => {
@@ -422,6 +472,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 Some(overview),
+                None,
                 None,
                 None,
             ))
@@ -465,6 +516,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
+                None,
             ))
         }
         AgentVaultActionDto::CalendarTurn { request } => {
@@ -494,6 +546,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 Some(result),
+                None,
                 None,
             ))
         }
@@ -526,6 +579,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
+                None,
             ))
         }
         AgentVaultActionDto::ConversationTurn { request } => {
@@ -551,6 +605,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             Ok((
                 AgentVaultStateDto::Ready,
                 Some(session),
+                None,
                 None,
                 None,
                 None,
@@ -591,6 +646,67 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 Some(proposal),
+                None,
+            ))
+        }
+        AgentVaultActionDto::MemoryReview { decision } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            let pending = vault.pending_knowledge_candidates().await?;
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            let decision = match decision {
+                Some(request) => {
+                    let candidate_id = session_uuid(&request.candidate_id)?;
+                    if !pending.iter().any(|candidate| {
+                        candidate.id == candidate_id && candidate.kind == KnowledgeKind::Memory
+                    }) {
+                        return Err(AgentFailure::NotFound);
+                    }
+                    Some(
+                        vault
+                            .decide_knowledge_candidate(
+                                candidate_id,
+                                match request.decision {
+                                    AgentMemoryReviewDecisionKindDto::Approve => {
+                                        KnowledgeDecisionKind::Approve
+                                    }
+                                    AgentMemoryReviewDecisionKindDto::Reject => {
+                                        KnowledgeDecisionKind::Reject
+                                    }
+                                },
+                                KnowledgeActor::User,
+                                chrono::Utc::now(),
+                            )
+                            .await?,
+                    )
+                }
+                None => None,
+            };
+            let candidates = if decision.is_some() {
+                vault.pending_knowledge_candidates().await?
+            } else {
+                pending
+            }
+            .into_iter()
+            .filter(|candidate| candidate.kind == KnowledgeKind::Memory)
+            .collect();
+            Ok((
+                AgentVaultStateDto::Ready,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(AgentMemoryReviewOverviewDto {
+                    schema_version: PROTOCOL_VERSION,
+                    person_id: job.person.to_string(),
+                    candidates,
+                    decision,
+                }),
             ))
         }
     }
@@ -638,6 +754,7 @@ mod tests {
     mod calendar_experts;
     mod calendar_sessions;
     mod calendar_turns;
+    mod memory_review;
     mod proposals;
 
     impl Worker {

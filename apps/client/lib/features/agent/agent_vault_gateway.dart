@@ -5,6 +5,7 @@ import 'agent_calendar_session_gateway.dart';
 import 'agent_calendar_turn_gateway.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
+import 'agent_memory_review.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
@@ -32,7 +33,8 @@ final class NativeAgentVaultGateway
         AgentCalendarSessionGateway,
         AgentCalendarTurnGateway,
         AgentConversationGateway,
-        AgentCalendarExpertGateway {
+        AgentCalendarExpertGateway,
+        AgentMemoryReviewGateway {
   NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
@@ -43,6 +45,37 @@ final class NativeAgentVaultGateway
   AgentCalendarInferenceRoute? _calendarInferenceRoute;
   Map<String, Object?>? _calendarRemoteRoute;
   AgentConversationTurnRequest? _conversationRun;
+
+  @override
+  Future<AgentMemoryReviewOverview> readMemoryReview(String personId) =>
+      _memoryReview(personId, null);
+
+  @override
+  Future<AgentMemoryReviewOverview> decideMemoryCandidate({
+    required String personId,
+    required String candidateId,
+    required AgentMemoryDecision decision,
+  }) => _memoryReview(personId, {
+    'candidate_id': candidateId,
+    'decision': decision.name,
+  });
+
+  Future<AgentMemoryReviewOverview> _memoryReview(
+    String personId,
+    Map<String, Object?>? decision,
+  ) async {
+    final result = await _perform(personId, {
+      'kind': 'memory_review',
+      'decision': ?decision,
+    });
+    final review = AgentMemoryReviewOverview.fromJson(
+      Map<String, Object?>.from(result['memory_review'] as Map),
+    );
+    if (result['state'] != 'ready' || review.personId != personId) {
+      throw const FormatException('Memory review scope mismatch');
+    }
+    return review;
+  }
 
   @override
   Future<AgentSession> startConversation(String personId) =>

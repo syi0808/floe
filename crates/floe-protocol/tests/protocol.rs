@@ -265,6 +265,29 @@ fn proposal_inspection_transport_accepts_only_a_recorded_reference() {
     }
 }
 
+#[test]
+fn memory_review_transport_accepts_only_user_decisions_on_candidate_ids() {
+    let inspect = json!({"kind": "memory_review"});
+    let parsed: AgentVaultActionDto = serde_json::from_value(inspect.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), inspect);
+
+    let decide = json!({
+        "kind": "memory_review",
+        "decision": {
+            "candidate_id": Uuid::new_v4(),
+            "decision": "approve"
+        }
+    });
+    let parsed: AgentVaultActionDto = serde_json::from_value(decide.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), decide);
+
+    for field in ["actor", "payload", "statement", "person_id", "execute"] {
+        let mut forged = decide.clone();
+        forged["decision"][field] = json!("untrusted");
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}
+
 fn id(value: &str) -> Uuid {
     Uuid::parse_str(value).unwrap()
 }
