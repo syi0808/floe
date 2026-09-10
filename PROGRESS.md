@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Google Calendar adapter foundation — 2026-09-11
+
+- Added a selected-calendar, GET-only Google Calendar adapter with a strict `calendar.timeline`
+  View. It bounds range, pagination, payload and event count while excluding descriptions,
+  locations, attendees, provider IDs and all action authority.
+- Added an isolated Calendar OAuth credential with the exact read-only scope, typed failure/cache
+  snapshots, and Go→Rust View/connector conformance fixtures.
+- Focused Go race tests/vet and Rust contract tests pass. Startup/dashboard routing and live Google
+  Calendar evidence remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 calendar parity contract path — 2026-09-11
 
 - Extended the durable calendar domain and Schedule Expert setup contract with explicit Google,

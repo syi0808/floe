@@ -32,6 +32,16 @@
 - Microsoft snapshots join the paired connection inventory. The paired Communication View route
   prefers Gmail deterministically and falls back to Microsoft only when Gmail is absent or fails,
   keeping provider selection outside model prompts and avoiding unnecessary mailbox fan-out.
+- Added a server-native Google Calendar adapter for one selected calendar. It performs a bounded
+  GET-only event read for at most 32 days and 128 items, uses canonical UTC query bounds, and exposes
+  only opaque evidence, bounded untrusted title, start/end and all-day state. Descriptions,
+  locations, attendees, provider IDs and write authority stay outside the View.
+- Added a strict provider-neutral `calendar.timeline` wire View and Rust validator with freshness,
+  range, cursor, item, duplicate and byte bounds. The Google adapter's static View and connector
+  snapshot cross both Rust boundaries.
+- Google Calendar OAuth uses a dedicated Keychain credential and the exact Calendar read-only scope,
+  separate from Gmail and Drive credentials. Typed credential, permission, rate-limit and partial
+  failures retain a prior View only while fresh.
 
 ## Automated evidence
 
@@ -40,12 +50,16 @@ go -C server test -race ./internal/connectors/microsoftmail
 go -C server vet ./internal/connectors/microsoftmail
 go -C server test -race ./internal/microsoftauth ./internal/console ./cmd/floe-server
 go -C server vet ./internal/microsoftauth ./internal/console ./cmd/floe-server
+go -C server test -race ./internal/connectors/googlecalendar ./internal/googleauth
+go -C server vet ./internal/connectors/googlecalendar ./internal/googleauth
 cargo test -p floe-agent --test communication_context --test connected_context
+cargo test -p floe-agent --test calendar_context
 node --check server/internal/console/web/app.js
 ```
 
 ## Remaining gate
 
 No live Microsoft Graph evidence was used. Google Calendar, Microsoft Calendar, Android
-Calendar/Contacts and Health Connect adapters are also absent, and the provider-neutral route table
-still needs the complete parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.
+startup/product routing and live evidence remain; Microsoft Calendar, Android Calendar/Contacts and
+Health Connect adapters are also absent. The provider-neutral route table still needs the complete
+parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.

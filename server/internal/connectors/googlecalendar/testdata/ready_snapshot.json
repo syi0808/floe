@@ -1,0 +1,13 @@
+{
+  "descriptor": {
+    "schema_version": 1,
+    "id": "calendar.google",
+    "version": "1.0.0",
+    "provider": "google_calendar",
+    "execution": {"kind": "server"},
+    "capabilities": [{"schema_version": 1, "id": "calendar.events.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/calendar.readonly"], "output_view_id": "calendar.timeline"}],
+    "views": [{"schema_version": 1, "id": "calendar.timeline", "version": "1.0.0", "data_class": "personal", "retention": "ephemeral", "freshness_ttl_ms": 300000, "max_items": 128, "max_bytes": 65536, "provenance_required": true}]
+  },
+  "connection": {"schema_version": 1, "connector_id": "calendar.google", "state": "ready", "granted_scopes": ["https://www.googleapis.com/auth/calendar.readonly"], "observed_at_unix_ms": 1789128000000, "last_success_at_unix_ms": 1789128000000},
+  "views": [{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:0fd917c376cb350d0133c803c998d734", "observed_at_unix_ms": 1789128000000, "expires_at_unix_ms": 1789128300000, "item_count": 1, "byte_count": 640, "provenance_count": 1}]
+}

@@ -1,4 +1,5 @@
 mod a2a;
+mod calendar_context;
 mod capability_execution;
 mod communication_context;
 mod connected_context;
@@ -23,6 +24,7 @@ mod registry;
 mod runtime;
 
 pub use a2a::*;
+pub use calendar_context::*;
 pub use communication_context::*;
 pub use connected_context::*;
 pub use context_routing::*;

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "view_id": "calendar.timeline",
+  "source_handle": "calendar.timeline:0fd917c376cb350d0133c803c998d734",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "range_start_unix_ms": 1789041600000,
+  "range_end_unix_ms": 1789214400000,
+  "coverage_complete": true,
+  "items": [
+    {
+      "evidence_handle": "calendar.event:e4c18f346cf902e318cd3a56436781ea",
+      "untrusted_title": "Planning review",
+      "starts_at_unix_ms": 1789131600000,
+      "ends_at_unix_ms": 1789135200000,
+      "all_day": false
+    }
+  ]
+}

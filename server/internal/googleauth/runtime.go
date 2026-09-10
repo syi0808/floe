@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	defaultAuthURL     = "https://accounts.google.com/o/oauth2/v2/auth"
-	defaultTokenURL    = "https://oauth2.googleapis.com/token"
-	defaultRevokeURL   = "https://oauth2.googleapis.com/revoke"
-	credentialName     = "FLOE_GMAIL_OAUTH"
-	readonlyScope      = "https://www.googleapis.com/auth/gmail.readonly"
-	driveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
+	defaultAuthURL        = "https://accounts.google.com/o/oauth2/v2/auth"
+	defaultTokenURL       = "https://oauth2.googleapis.com/token"
+	defaultRevokeURL      = "https://oauth2.googleapis.com/revoke"
+	credentialName        = "FLOE_GMAIL_OAUTH"
+	readonlyScope         = "https://www.googleapis.com/auth/gmail.readonly"
+	driveReadonlyScope    = "https://www.googleapis.com/auth/drive.readonly"
+	calendarReadonlyScope = "https://www.googleapis.com/auth/calendar.readonly"
 )
 
 var ErrUnavailable = errors.New("Google authentication unavailable")
@@ -90,6 +91,12 @@ func New(store Store, config Config) (*Runtime, error) {
 func NewDrive(store Store, config Config) (*Runtime, error) {
 	config.CredentialName = "FLOE_DRIVE_OAUTH"
 	config.Scopes = []string{driveReadonlyScope}
+	return New(store, config)
+}
+
+func NewCalendar(store Store, config Config) (*Runtime, error) {
+	config.CredentialName = "FLOE_GOOGLE_CALENDAR_OAUTH"
+	config.Scopes = []string{calendarReadonlyScope}
 	return New(store, config)
 }
 
@@ -397,7 +404,8 @@ func hasAllScopes(value string, required []string) bool {
 }
 func validGoogleCredentialProfile(name string, scopes []string) bool {
 	return name == credentialName && len(scopes) == 1 && scopes[0] == readonlyScope ||
-		name == "FLOE_DRIVE_OAUTH" && len(scopes) == 1 && scopes[0] == driveReadonlyScope
+		name == "FLOE_DRIVE_OAUTH" && len(scopes) == 1 && scopes[0] == driveReadonlyScope ||
+		name == "FLOE_GOOGLE_CALENDAR_OAUTH" && len(scopes) == 1 && scopes[0] == calendarReadonlyScope
 }
 func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"
