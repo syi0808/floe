@@ -104,6 +104,49 @@ void main() {
     expect(find.text('Refresh wellbeing'), findsOneWidget);
   });
 
+  testWidgets('Android Calendar selection is explicit and device-local', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    final androidContext = _AndroidContext(includeCalendar: true);
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(
+              client: null,
+              agentController: controller,
+              androidContext: androidContext,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final allow = find.byKey(const ValueKey('android-calendar-allow'));
+    await tester.ensureVisible(allow);
+    await tester.tap(allow);
+    await tester.pumpAndSettle();
+    expect(androidContext.calendarPermissionRequests, 1);
+
+    final calendar = find.byKey(const ValueKey('android-calendar-work'));
+    await tester.ensureVisible(calendar);
+    await tester.tap(calendar);
+    await tester.pumpAndSettle();
+    expect(androidContext.selected, {'work'});
+    expect(androidContext.calendarReads, 1);
+    expect(find.text('Ready'), findsOneWidget);
+  });
+
   testWidgets('settings navigation switches between separate pages', (
     tester,
   ) async {
@@ -395,26 +438,72 @@ void main() {
 }
 
 final class _AndroidContext implements AndroidContextApi {
-  bool ready = false;
+  _AndroidContext({this.includeCalendar = false});
+
+  final bool includeCalendar;
+  bool healthReady = false;
+  bool calendarGranted = false;
+  bool calendarReady = false;
   int permissionRequests = 0;
+  int calendarPermissionRequests = 0;
   int wellbeingReads = 0;
+  int calendarReads = 0;
+  Set<String> selected = {};
 
   @override
   Future<List<Map<String, dynamic>>> connections() async => [
-    _healthConnection(ready: ready),
+    _healthConnection(ready: healthReady),
+    if (includeCalendar)
+      _androidCalendarConnection(
+        granted: calendarGranted,
+        ready: calendarReady,
+      ),
   ];
 
   @override
   Future<bool> requestPermission(AndroidContextSource source) async {
-    expect(source, AndroidContextSource.health);
-    permissionRequests += 1;
+    if (source == AndroidContextSource.health) {
+      permissionRequests += 1;
+    } else if (source == AndroidContextSource.calendar) {
+      calendarPermissionRequests += 1;
+      calendarGranted = true;
+    }
     return true;
+  }
+
+  @override
+  Future<List<AndroidCalendarOption>> listCalendars() async => [
+    AndroidCalendarOption.fromJson({
+      'calendar_id': 'work',
+      'display_name': 'Work',
+    }),
+  ];
+
+  @override
+  Future<List<String>> selectedCalendars() async => selected.toList();
+
+  @override
+  Future<List<String>> setSelectedCalendars(List<String> calendarIds) async {
+    selected = calendarIds.toSet();
+    return calendarIds;
+  }
+
+  @override
+  Future<Map<String, dynamic>> readCalendar({
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    String cursor = '',
+    int limit = 128,
+  }) async {
+    calendarReads += 1;
+    calendarReady = true;
+    return <String, dynamic>{};
   }
 
   @override
   Future<Map<String, dynamic>> readWellbeing() async {
     wellbeingReads += 1;
-    ready = true;
+    healthReady = true;
     return {
       'schema_version': 1,
       'view_id': 'wellbeing.derived',
@@ -481,6 +570,73 @@ Map<String, dynamic> _healthConnection({required bool ready}) => {
             'schema_version': 1,
             'view_id': 'wellbeing.derived',
             'source_handle': 'wellbeing:test',
+            'observed_at_unix_ms': 1000,
+            'expires_at_unix_ms': 301000,
+            'item_count': 1,
+            'byte_count': 256,
+            'provenance_count': 1,
+          },
+        ]
+      : <Object?>[],
+};
+
+Map<String, dynamic> _androidCalendarConnection({
+  required bool granted,
+  required bool ready,
+}) => {
+  'descriptor': {
+    'schema_version': 1,
+    'id': 'calendar.android',
+    'version': '1.0.0',
+    'provider': 'android_calendar',
+    'execution': {'kind': 'device', 'device_id': 'android-test'},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': 'calendar.events.read',
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': ['android.permission.READ_CALENDAR'],
+        'output_view_id': 'calendar.timeline',
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': 'calendar.timeline',
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'ephemeral',
+        'freshness_ttl_ms': 300000,
+        'max_items': 128,
+        'max_bytes': 65536,
+        'provenance_required': true,
+      },
+    ],
+  },
+  'connection': {
+    'schema_version': 1,
+    'connector_id': 'calendar.android',
+    'state': ready
+        ? 'ready'
+        : granted
+        ? 'pending'
+        : 'revoked',
+    'granted_scopes': granted ? ['android.permission.READ_CALENDAR'] : [],
+    'observed_at_unix_ms': 2000,
+    if (ready) 'last_success_at_unix_ms': 2000,
+    if (!granted)
+      'last_failure': {
+        'kind': 'permission_denied',
+        'observed_at_unix_ms': 2000,
+      },
+  },
+  'views': ready
+      ? [
+          {
+            'schema_version': 1,
+            'view_id': 'calendar.timeline',
+            'source_handle': 'calendar:test',
             'observed_at_unix_ms': 1000,
             'expires_at_unix_ms': 301000,
             'item_count': 1,

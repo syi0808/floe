@@ -22,7 +22,7 @@ Future<void> main() async {
         agentGateway: gateway.secureAgent,
         serverClient: gateway.serverClient,
         androidContext: Platform.isAndroid
-            ? AndroidContextGateway(calendarIds: const [])
+            ? AndroidContextGateway()
             : null,
         onDisposeGateway: gateway.close,
         builder: kDebugMode

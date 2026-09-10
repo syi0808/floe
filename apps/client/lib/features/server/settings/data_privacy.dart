@@ -31,10 +31,14 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool serverConnectionsRequested = false;
   bool androidConnectionsRequested = false;
   bool androidHealthBusy = false;
+  bool androidCalendarBusy = false;
   List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
+  List<AndroidCalendarOption>? androidCalendars;
+  Set<String> androidSelectedCalendars = {};
   Object? serverConnectionFailure;
   Object? androidConnectionFailure;
+  Object? androidCalendarFailure;
 
   AgentController get controller => widget.controller;
 
@@ -66,6 +70,9 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       androidConnectionsRequested = false;
       androidConnections = null;
       androidConnectionFailure = null;
+      androidCalendars = null;
+      androidSelectedCalendars = {};
+      androidCalendarFailure = null;
     }
     _load();
   }
@@ -138,6 +145,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           values.map(AgentConnection.fromJson),
         );
         androidConnectionFailure = null;
+        await _loadAndroidCalendarConfiguration(androidConnections!);
       } on Object catch (error) {
         androidConnections = const [];
         androidConnectionFailure = error;
@@ -153,9 +161,99 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     serverConnectionFailure = null;
     androidConnectionsRequested = false;
     androidConnectionFailure = null;
+    androidCalendarFailure = null;
     if (widget.serverClient != null) serverConnections = null;
     if (widget.androidContext != null) androidConnections = null;
     await _load();
+  }
+
+  Future<void> _loadAndroidCalendarConfiguration(
+    List<AgentConnection> connections,
+  ) async {
+    final gateway = widget.androidContext;
+    AgentConnection? calendar;
+    for (final connection in connections) {
+      if (connection.descriptor.provider == 'android_calendar') {
+        calendar = connection;
+        break;
+      }
+    }
+    if (gateway == null ||
+        calendar == null ||
+        calendar.state == AgentConnectionState.revoked ||
+        calendar.state == AgentConnectionState.unsupported) {
+      androidCalendars = null;
+      androidSelectedCalendars = {};
+      return;
+    }
+    try {
+      final calendars = await gateway.listCalendars();
+      final selected = await gateway.selectedCalendars();
+      androidCalendars = List.unmodifiable(calendars);
+      androidSelectedCalendars = selected.toSet();
+      androidCalendarFailure = null;
+    } on Object catch (error) {
+      androidCalendars = const [];
+      androidSelectedCalendars = {};
+      androidCalendarFailure = error;
+    }
+  }
+
+  Future<void> _allowAndroidCalendar(AgentConnection connection) async {
+    final gateway = widget.androidContext;
+    if (gateway == null || androidCalendarBusy) return;
+    setState(() {
+      androidCalendarBusy = true;
+      androidCalendarFailure = null;
+    });
+    try {
+      if (connection.state == AgentConnectionState.revoked) {
+        final granted = await gateway.requestPermission(
+          AndroidContextSource.calendar,
+        );
+        if (!granted) {
+          throw StateError('Android Calendar access was not granted.');
+        }
+      }
+      androidConnectionsRequested = false;
+      await _load();
+    } on Object catch (error) {
+      androidCalendarFailure = error;
+    } finally {
+      if (mounted) setState(() => androidCalendarBusy = false);
+    }
+  }
+
+  Future<void> _toggleAndroidCalendar(AndroidCalendarOption calendar) async {
+    final gateway = widget.androidContext;
+    if (gateway == null || androidCalendarBusy) return;
+    final selected = {...androidSelectedCalendars};
+    if (!selected.remove(calendar.id)) {
+      if (selected.length == 4) return;
+      selected.add(calendar.id);
+    }
+    setState(() {
+      androidCalendarBusy = true;
+      androidCalendarFailure = null;
+    });
+    try {
+      androidSelectedCalendars = (await gateway.setSelectedCalendars(
+        selected.toList(),
+      )).toSet();
+      if (androidSelectedCalendars.isNotEmpty) {
+        final now = DateTime.now().toUtc();
+        await gateway.readCalendar(
+          rangeStart: now,
+          rangeEnd: now.add(const Duration(days: 14)),
+        );
+      }
+      androidConnectionsRequested = false;
+      await _load();
+    } on Object catch (error) {
+      androidCalendarFailure = error;
+    } finally {
+      if (mounted) setState(() => androidCalendarBusy = false);
+    }
   }
 
   Future<void> _refreshAndroidWellbeing(AgentConnection connection) async {
@@ -216,9 +314,16 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           widget.androidContext != null && deviceConnections == null ||
           widget.serverClient != null && remoteConnections == null;
       AgentConnection? healthConnection;
+      AgentConnection? androidCalendarConnection;
       for (final connection in connections) {
         if (connection.descriptor.provider == 'health_connect') {
           healthConnection = connection;
+          break;
+        }
+      }
+      for (final connection in connections) {
+        if (connection.descriptor.provider == 'android_calendar') {
+          androidCalendarConnection = connection;
           break;
         }
       }
@@ -249,9 +354,67 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     failed:
                         controller.connectionFailure != null ||
                         serverConnectionFailure != null ||
-                        androidConnectionFailure != null,
+                        androidConnectionFailure != null ||
+                        androidCalendarFailure != null,
                     onRefresh: _refreshConnections,
                   ),
+                if (androidCalendarConnection != null) ...[
+                  const SizedBox(height: FloeSpace.base),
+                  Text(
+                    'Choose up to four Android calendars. Selection stays on this device and reads never change Calendar.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  if (androidCalendarConnection.state ==
+                      AgentConnectionState.revoked)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FloeButton.outlined(
+                        key: const ValueKey('android-calendar-allow'),
+                        onPressed: () =>
+                            _allowAndroidCalendar(androidCalendarConnection!),
+                        loading: androidCalendarBusy,
+                        child: const Text('Allow Android Calendar'),
+                      ),
+                    )
+                  else if (androidCalendars case final calendars?)
+                    if (calendars.isEmpty)
+                      const Text('No readable Android calendars are available.')
+                    else
+                      Wrap(
+                        spacing: FloeSpace.xs,
+                        runSpacing: FloeSpace.xs,
+                        children: [
+                          for (final calendar in calendars)
+                            if (androidSelectedCalendars.contains(calendar.id))
+                              FloeButton.filled(
+                                key: ValueKey(
+                                  'android-calendar-${calendar.id}',
+                                ),
+                                size: FloeButtonSize.compact,
+                                onPressed: androidCalendarBusy
+                                    ? null
+                                    : () => _toggleAndroidCalendar(calendar),
+                                child: Text(calendar.displayName),
+                              )
+                            else
+                              FloeButton.outlined(
+                                key: ValueKey(
+                                  'android-calendar-${calendar.id}',
+                                ),
+                                size: FloeButtonSize.compact,
+                                onPressed:
+                                    androidCalendarBusy ||
+                                        androidSelectedCalendars.length == 4
+                                    ? null
+                                    : () => _toggleAndroidCalendar(calendar),
+                                child: Text(calendar.displayName),
+                              ),
+                        ],
+                      ),
+                ],
                 if (healthConnection != null) ...[
                   const SizedBox(height: FloeSpace.sm),
                   Text(

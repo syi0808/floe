@@ -8,14 +8,20 @@ const _channel = MethodChannel('floe/android_context');
 abstract interface class AndroidContextApi {
   Future<List<Map<String, dynamic>>> connections();
   Future<bool> requestPermission(AndroidContextSource source);
+  Future<List<AndroidCalendarOption>> listCalendars();
+  Future<List<String>> selectedCalendars();
+  Future<List<String>> setSelectedCalendars(List<String> calendarIds);
+  Future<Map<String, dynamic>> readCalendar({
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    String cursor = '',
+    int limit = 128,
+  });
   Future<Map<String, dynamic>> readWellbeing();
 }
 
 final class AndroidContextGateway implements AndroidContextApi {
-  AndroidContextGateway({required List<String> calendarIds})
-    : _calendarIds = List.unmodifiable(calendarIds);
-
-  final List<String> _calendarIds;
+  AndroidContextGateway();
 
   @override
   Future<List<Map<String, dynamic>>> connections() async {
@@ -41,6 +47,43 @@ final class AndroidContextGateway implements AndroidContextApi {
     return value['granted']! as bool;
   }
 
+  @override
+  Future<List<AndroidCalendarOption>> listCalendars() async {
+    _requireAndroid();
+    final values = await _channel.invokeListMethod<Object?>('listCalendars');
+    final calendars = (values ?? const <Object?>[])
+        .map(AndroidCalendarOption.fromJson)
+        .toList(growable: false);
+    if (calendars.length > 32 ||
+        calendars.map((value) => value.id).toSet().length != calendars.length) {
+      throw const FormatException('Invalid Android calendar list.');
+    }
+    return calendars;
+  }
+
+  @override
+  Future<List<String>> selectedCalendars() async {
+    _requireAndroid();
+    return _calendarIds(
+      await _channel.invokeListMethod<Object?>('selectedCalendars'),
+    );
+  }
+
+  @override
+  Future<List<String>> setSelectedCalendars(List<String> calendarIds) async {
+    _requireAndroid();
+    final response = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>('setSelectedCalendars', {
+        'calendar_ids': calendarIds,
+      }),
+    );
+    if (response.keys.toSet().difference({'calendar_ids'}).isNotEmpty) {
+      throw const FormatException('Invalid Android calendar selection.');
+    }
+    return _calendarIds(response['calendar_ids']);
+  }
+
+  @override
   Future<Map<String, dynamic>> readCalendar({
     required DateTime rangeStart,
     required DateTime rangeEnd,
@@ -52,7 +95,6 @@ final class AndroidContextGateway implements AndroidContextApi {
       await _channel.invokeMapMethod<Object?, Object?>('readCalendar', {
         'range_start_unix_ms': rangeStart.toUtc().millisecondsSinceEpoch,
         'range_end_unix_ms': rangeEnd.toUtc().millisecondsSinceEpoch,
-        'calendar_ids': _calendarIds,
         'cursor': cursor,
         'limit': limit,
       }),
@@ -87,6 +129,26 @@ final class AndroidContextGateway implements AndroidContextApi {
       throw UnsupportedError('Android context is available only on Android.');
     }
   }
+}
+
+final class AndroidCalendarOption {
+  AndroidCalendarOption.fromJson(Object? value) {
+    final json = _strictMap(value);
+    if (json.keys.toSet().difference({
+          'calendar_id',
+          'display_name',
+        }).isNotEmpty ||
+        !json.keys.toSet().containsAll({'calendar_id', 'display_name'}) ||
+        !_validOpaque(json['calendar_id'], maximum: 512) ||
+        !_validOpaque(json['display_name'], maximum: 256)) {
+      throw const FormatException('Invalid Android calendar option.');
+    }
+    id = json['calendar_id']! as String;
+    displayName = (json['display_name']! as String).trim();
+  }
+
+  late final String id;
+  late final String displayName;
 }
 
 enum AndroidContextSource { calendar, contacts, health }
@@ -280,3 +342,29 @@ int _integer(Object? value) {
 
 bool _validHandle(Object? value) =>
     value is String && value.trim().isNotEmpty && value.length <= 128;
+
+bool _validOpaque(Object? value, {required int maximum}) =>
+    value is String &&
+    value.trim().isNotEmpty &&
+    value.length <= maximum &&
+    !value.contains('\u0000') &&
+    !value.contains('\r') &&
+    !value.contains('\n');
+
+List<String> _calendarIds(Object? value) {
+  if (value is! List || value.length > 4) {
+    throw const FormatException('Invalid Android calendar selection.');
+  }
+  final result = value
+      .map((item) {
+        if (!_validOpaque(item, maximum: 512)) {
+          throw const FormatException('Invalid Android calendar identifier.');
+        }
+        return item! as String;
+      })
+      .toList(growable: false);
+  if (result.toSet().length != result.length) {
+    throw const FormatException('Duplicate Android calendar identifier.');
+  }
+  return result;
+}

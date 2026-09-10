@@ -55,6 +55,9 @@ internal class AndroidContextChannel(
         when (call.method) {
             "connections" -> runWorker(result) { connectionSnapshots() }
             "requestPermission" -> requestPermission(call, result)
+            "listCalendars" -> runWorker(result) { listCalendars() }
+            "selectedCalendars" -> result.success(selectedCalendarIds())
+            "setSelectedCalendars" -> runWorker(result) { setSelectedCalendars(arguments(call)) }
             "readCalendar" -> runWorker(result) { readCalendar(arguments(call)) }
             "readContacts" -> runWorker(result) { readContacts(arguments(call)) }
             "readWellbeing" -> runWorker(result) { readWellbeing() }
@@ -140,7 +143,7 @@ internal class AndroidContextChannel(
         val limit = arguments.int("limit")
         val offset = arguments.string("cursor").ifEmpty { "0" }.toIntOrNull()
             ?: throw ContextFailure("invalid_input", "Calendar cursor is invalid.")
-        val calendarIds = arguments.stringList("calendar_ids")
+        val calendarIds = selectedCalendarIds()
         if (start < 0 || end <= start || end - start > MAX_RANGE_MS || limit !in 1..MAX_CALENDAR_ITEMS || offset !in 0..10_000 || calendarIds.isEmpty() || calendarIds.size > 4 || calendarIds.toSet().size != calendarIds.size || calendarIds.any { !validOpaque(it, 512) }) {
             throw ContextFailure("invalid_input", "Calendar request is outside the bounded scope.")
         }
@@ -180,6 +183,54 @@ internal class AndroidContextChannel(
         calendarLastSuccess = observed
         return view
     }
+
+    private fun listCalendars(): List<Map<String, Any?>> {
+        requirePermission(Manifest.permission.READ_CALENDAR)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) throw ContextFailure("unsupported", "Bounded provider queries require Android 8 or later.")
+        val query = Bundle().apply {
+            putString(ContentResolverKeys.SELECTION, "${CalendarContract.Calendars.VISIBLE} = ?")
+            putStringArray(ContentResolverKeys.SELECTION_ARGS, arrayOf("1"))
+            putStringArray(ContentResolverKeys.SORT_COLUMNS, arrayOf(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME))
+            putInt(ContentResolverKeys.SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_ASCENDING)
+            putInt(ContentResolverKeys.LIMIT, MAX_AVAILABLE_CALENDARS + 1)
+        }
+        val projection = arrayOf(CalendarContract.Calendars._ID, CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
+        val calendars = mutableListOf<Map<String, Any?>>()
+        activity.contentResolver.query(CalendarContract.Calendars.CONTENT_URI, projection, query, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (calendars.size == MAX_AVAILABLE_CALENDARS) break
+                val identifier = cursor.requiredString(0, 512)
+                val name = cursor.getString(1)?.trim().orEmpty().take(MAX_CALENDAR_NAME_CHARS)
+                if (name.isEmpty()) continue
+                calendars += mapOf("calendar_id" to identifier, "display_name" to name)
+            }
+        } ?: throw ContextFailure("unavailable", "Calendar provider returned no cursor.")
+        return calendars
+    }
+
+    private fun setSelectedCalendars(arguments: Map<String, Any?>): Map<String, Any?> {
+        val requested = arguments.stringList("calendar_ids")
+        if (requested.size > MAX_SELECTED_CALENDARS || requested.toSet().size != requested.size || requested.any { !validOpaque(it, 512) }) {
+            throw ContextFailure("invalid_input", "Calendar selection is invalid.")
+        }
+        val available = listCalendars().map { it["calendar_id"] as String }.toSet()
+        if (!available.containsAll(requested)) throw ContextFailure("invalid_input", "Calendar selection is unavailable.")
+        val canonical = requested.sorted()
+        if (canonical != selectedCalendarIds()) {
+            activity.getSharedPreferences("floe_context", Activity.MODE_PRIVATE).edit().putStringSet(CALENDAR_SELECTION_KEY, canonical.toSet()).apply()
+            calendarLastView = null
+            calendarLastSuccess = null
+        }
+        return mapOf("calendar_ids" to canonical)
+    }
+
+    private fun selectedCalendarIds(): List<String> = activity.getSharedPreferences("floe_context", Activity.MODE_PRIVATE)
+        .getStringSet(CALENDAR_SELECTION_KEY, emptySet())
+        .orEmpty()
+        .filter { validOpaque(it, 512) }
+        .distinct()
+        .sorted()
+        .take(MAX_SELECTED_CALENDARS)
 
     private fun calendarItem(cursor: Cursor): Map<String, Any?> {
         val identifier = cursor.requiredString(0, 512)
@@ -310,13 +361,14 @@ internal class AndroidContextChannel(
 
     private fun connectionSnapshots(): List<Map<String, Any?>> {
         val observed = System.currentTimeMillis()
-        calendarLastView = if (granted(Manifest.permission.READ_CALENDAR)) freshView(calendarLastView, observed) else null
+        val calendarConfigured = selectedCalendarIds().isNotEmpty()
+        calendarLastView = if (granted(Manifest.permission.READ_CALENDAR) && calendarConfigured) freshView(calendarLastView, observed) else null
         contactsLastView = if (granted(Manifest.permission.READ_CONTACTS)) freshView(contactsLastView, observed) else null
         val healthStatus = healthStatus()
         val healthGranted = if (healthStatus == HealthConnectClient.SDK_AVAILABLE) healthGrantedPermissions() else emptySet()
         healthLastView = if (healthGranted?.containsAll(HEALTH_PERMISSIONS) == true) freshView(healthLastView, observed) else null
         return listOf(
-            connectionSnapshot("calendar.android", "android_calendar", "calendar.events.read", Manifest.permission.READ_CALENDAR, "calendar.timeline", 128, 65_536, calendarLastView, calendarLastSuccess, "items", observed),
+            connectionSnapshot("calendar.android", "android_calendar", "calendar.events.read", Manifest.permission.READ_CALENDAR, "calendar.timeline", 128, 65_536, calendarLastView, calendarLastSuccess, "items", observed, configured = calendarConfigured),
             connectionSnapshot("contacts.android", "android_contacts", "contacts.identity.read", Manifest.permission.READ_CONTACTS, "people.identity", 64, 32_768, contactsLastView, contactsLastSuccess, "identities", observed),
             healthConnectionSnapshot(healthStatus, healthGranted, observed),
         )
@@ -374,7 +426,7 @@ internal class AndroidContextChannel(
         )
     }
 
-    private fun connectionSnapshot(connector: String, provider: String, capability: String, permission: String, viewId: String, maxItems: Int, maxBytes: Int, lastView: Map<String, Any?>?, lastSuccess: Long?, itemsKey: String, observed: Long): Map<String, Any?> {
+    private fun connectionSnapshot(connector: String, provider: String, capability: String, permission: String, viewId: String, maxItems: Int, maxBytes: Int, lastView: Map<String, Any?>?, lastSuccess: Long?, itemsKey: String, observed: Long, configured: Boolean = true): Map<String, Any?> {
         val allowed = granted(permission)
         val lastObserved = lastView?.get("observed_at_unix_ms") as? Long
         val lastExpires = lastView?.get("expires_at_unix_ms") as? Long
@@ -384,6 +436,7 @@ internal class AndroidContextChannel(
             "connector_id" to connector,
             "state" to when {
                 !allowed -> "revoked"
+                !configured -> "pending"
                 lastView == null && lastSuccess == null -> "pending"
                 fresh -> "ready"
                 else -> "unavailable"
@@ -518,6 +571,8 @@ internal class AndroidContextChannel(
         const val FRESHNESS_MS = 300_000L
         const val MAX_RANGE_MS = 32L * 86_400_000L
         const val MAX_CALENDAR_ITEMS = 128
+        const val MAX_AVAILABLE_CALENDARS = 32
+        const val MAX_SELECTED_CALENDARS = 4
         const val MAX_CONTACT_ITEMS = 64
         const val MAX_HEALTH_RECORDS = 100
         const val HEALTH_DEDUPLICATION_STRATEGY = 1
@@ -526,6 +581,8 @@ internal class AndroidContextChannel(
         const val MAX_PEOPLE_BYTES = 32_768
         const val MAX_WELLBEING_BYTES = 32_768
         const val MAX_TITLE_CHARS = 256
+        const val MAX_CALENDAR_NAME_CHARS = 256
         const val MAX_CONTACT_NAME_CHARS = 256
+        const val CALENDAR_SELECTION_KEY = "selected_calendar_ids"
     }
 }

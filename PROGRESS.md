@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Android Calendar settings route — 2026-09-11
+
+- Added a bounded native calendar catalog and a device-private selection of at most four visible
+  calendars. The persisted selection is validated against the provider catalog and now owns every
+  Android Calendar read; callers cannot inject calendar IDs per request.
+- Data & privacy requests Calendar consent only after user action, exposes provider names without
+  account metadata, persists explicit selections and triggers a bounded 14-day read to publish the
+  lifecycle View. Selection changes invalidate prior in-memory context.
+- Kotlin compilation, focused Flutter analyzer/widget/contract tests and the design-system guard
+  pass. Physical-device provider evidence and release permission-rationale/store setup remain, so
+  S5.5-C3 stays pending and the slice remains **0/14**.
+
 ### S5.5 Android Health Connect settings route — 2026-09-11
 
 - Wired Android connector snapshots into the shared Data & privacy connection inventory alongside

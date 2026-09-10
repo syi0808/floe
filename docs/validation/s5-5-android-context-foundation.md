@@ -12,6 +12,10 @@
 - Calendar reads use the public CalendarContract Instances provider, one adapter-owned allowlist of
   at most four calendar IDs, a maximum 32-day range, a maximum 128 items and bounded offset cursors.
   Queries execute on a single background worker and results return on the UI thread.
+- The adapter lists at most 32 visible calendars as local ID/display-name choices and persists at
+  most four selections in Android private preferences. A selection must exist in the current native
+  provider catalog; changing it invalidates the prior View and last-success marker. Read requests no
+  longer accept calendar IDs, so a caller cannot override configured scope per turn.
 - Calendar projection emits only opaque evidence, bounded untrusted title, start/end and all-day
   state through the same strict `calendar.timeline` wire contract used by Google and Microsoft.
   Native calendar/event IDs, descriptions, locations, attendees and write authority are excluded.
@@ -36,6 +40,10 @@
   Calendar, Contacts and Health Connect lifecycle snapshots join the shared local/server connection
   inventory. Health consent and the first derived Wellbeing read happen only from an explicit
   settings button, after which the UI reloads the native lifecycle state.
+- The same settings surface requests Android Calendar permission only after user action, shows the
+  bounded native catalog without account metadata, and writes explicit selections through the
+  native validator. Selecting a calendar triggers a 14-day bounded read and updated connection
+  snapshot; at four selected calendars, further choices fail closed until one is removed.
 - Android fixtures cross the shared Rust Calendar, People and connected-context validators. The
   Health fixture additionally crosses the shared Wellbeing validator. The Android debug APK
   compiles with the native provider code and permission declarations included. Health Connect
@@ -49,13 +57,13 @@ flutter analyze lib/infrastructure/native/android_context_gateway.dart \
 flutter test test/infrastructure/native/android_context_gateway_test.dart
 flutter test test/features/server/settings_screen_test.dart \
   test/features/agent/agent_connections_test.dart
+flutter test test/design_system/design_system_usage_test.dart
 flutter build apk --debug
 cargo test -p floe-agent --test calendar_context --test personal_context --test connected_context
 ```
 
 ## Remaining gate
 
-No physical Android device permission/read evidence was captured, and the Android settings surface
-does not yet list or persist selected calendar IDs. Health permission declarations and the in-app
-permission-rationale destination still require release/store configuration and physical-device
-validation. Therefore S5.5-C3 remains pending and the slice stays **0/14**.
+No physical Android device permission/read evidence was captured. Health permission declarations
+and the in-app permission-rationale destination still require release/store configuration and
+physical-device validation. Therefore S5.5-C3 remains pending and the slice stays **0/14**.

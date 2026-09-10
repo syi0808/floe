@@ -91,4 +91,21 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('Android calendar choices exclude provider account metadata', () {
+    final option = AndroidCalendarOption.fromJson({
+      'calendar_id': 'work',
+      'display_name': 'Work',
+    });
+    expect(option.id, 'work');
+    expect(option.displayName, 'Work');
+    expect(
+      () => AndroidCalendarOption.fromJson({
+        'calendar_id': 'work',
+        'display_name': 'Work',
+        'account_name': 'private@example.com',
+      }),
+      throwsFormatException,
+    );
+  });
 }
