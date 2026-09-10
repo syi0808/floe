@@ -33,9 +33,9 @@ The full Flutter suite also completes 207 tests. Five pre-existing failures rema
 three registry-settings expectations for a surface no longer mounted by Settings,
 and two unrelated sub-percent golden differences.
 
-## Remaining boundary
+## Follow-up cleanup
 
-The Rust protocol and FFI still accept migration-only Calendar session/turn actions.
-The generic conversation does not call them. Removing those server-side compatibility
-DTOs and adding end-to-end “today, then this week” native evidence coverage are the
-next cleanup and acceptance increments.
+The migration-only Rust protocol and FFI Calendar session/turn actions were removed
+in the following increment. The protocol now rejects both action kinds, and the
+encrypted vault no longer creates Calendar-scoped conversations. End-to-end “today,
+then this week” native evidence coverage remains the next acceptance increment.

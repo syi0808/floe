@@ -26,9 +26,9 @@ use uuid::Uuid;
 
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 
-mod calendar_turn;
 mod conversation_turn;
 mod learner_worker;
+mod schedule_conversation;
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
@@ -95,7 +95,6 @@ struct Progress {
     session: Option<AgentSession>,
     registry: Option<floe_agent::RegistryOverview>,
     calendar_experts: Option<floe_agent::CalendarExpertOverview>,
-    calendar_turn: Option<AgentCalendarTurnResultDto>,
     proposal: Option<AgentProposalInspectionDto>,
     memory_review: Option<AgentMemoryReviewOverviewDto>,
     memory: Option<AgentMemoryOverviewDto>,
@@ -151,7 +150,6 @@ impl Worker {
                                         session,
                                         registry,
                                         calendar_experts,
-                                        calendar_turn,
                                         proposal,
                                         memory_review,
                                         memory,
@@ -160,7 +158,6 @@ impl Worker {
                                         progress.session = session;
                                         progress.registry = registry;
                                         progress.calendar_experts = calendar_experts;
-                                        progress.calendar_turn = calendar_turn;
                                         progress.proposal = proposal;
                                         progress.memory_review = memory_review;
                                         progress.memory = memory;
@@ -303,7 +300,6 @@ impl Worker {
             session: progress.session.clone(),
             registry: progress.registry.clone(),
             calendar_experts: progress.calendar_experts.clone(),
-            calendar_turn: progress.calendar_turn.clone(),
             proposal: progress.proposal.clone(),
             memory_review: progress.memory_review.clone(),
             memory: progress.memory.clone(),
@@ -348,7 +344,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         Option<AgentSession>,
         Option<floe_agent::RegistryOverview>,
         Option<floe_agent::CalendarExpertOverview>,
-        Option<AgentCalendarTurnResultDto>,
         Option<AgentProposalInspectionDto>,
         Option<AgentMemoryReviewOverviewDto>,
         Option<AgentMemoryOverviewDto>,
@@ -376,7 +371,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                     None,
                     None,
                     None,
-                    None,
                 ));
             }
             let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
@@ -386,7 +380,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }
                 _ => AgentVaultStateDto::Unavailable,
             };
-            Ok((state, None, None, None, None, None, None, None))
+            Ok((state, None, None, None, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
             if current.is_some() {
@@ -401,7 +395,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             *current = Some((job.person, vault));
             Ok((
                 AgentVaultStateDto::Ready,
-                None,
                 None,
                 None,
                 None,
@@ -424,14 +417,12 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
-                None,
             ))
         }
         AgentVaultActionDto::Lock {} => {
             *current = None;
             Ok((
                 AgentVaultStateDto::Locked,
-                None,
                 None,
                 None,
                 None,
@@ -499,7 +490,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
-                None,
             ))
         }
         AgentVaultActionDto::Registry { change } => {
@@ -519,7 +509,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 AgentVaultStateDto::Ready,
                 None,
                 registry,
-                None,
                 None,
                 None,
                 None,
@@ -545,7 +534,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
-                None,
             ))
         }
         AgentVaultActionDto::CalendarAccess { change } => {
@@ -561,82 +549,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 Some(overview),
-                None,
-                None,
-                None,
-                None,
-            ))
-        }
-        AgentVaultActionDto::CalendarSession { operation } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let session = match operation {
-                AgentCalendarSessionOperationDto::Start { setup_id } => {
-                    vault
-                        .create_calendar_session(session_uuid(setup_id)?, job.cancellation.clone())
-                        .await?
-                }
-                AgentCalendarSessionOperationDto::Resume { setup_id } => {
-                    vault
-                        .resume_calendar_session(session_uuid(setup_id)?, job.cancellation.clone())
-                        .await?
-                }
-                AgentCalendarSessionOperationDto::Get { session_id } => {
-                    vault.calendar_session(session_uuid(session_id)?).await?
-                }
-                AgentCalendarSessionOperationDto::Recover {
-                    session_id,
-                    expected_revision,
-                } => {
-                    vault
-                        .recover_calendar_session(
-                            session_uuid(session_id)?,
-                            *expected_revision,
-                            job.cancellation.clone(),
-                        )
-                        .await?
-                }
-            };
-            if job.cancellation.is_cancelled() {
-                return Err(AgentFailure::Cancelled);
-            }
-            Ok((
-                AgentVaultStateDto::Ready,
-                Some(session),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ))
-        }
-        AgentVaultActionDto::CalendarTurn { request } => {
-            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            let (session, result) = calendar_turn::run(
-                core,
-                vault,
-                job.person,
-                request,
-                job.cancellation.clone(),
-                |event| {
-                    if let Ok(mut progress) = job.progress.lock() {
-                        if progress.events.len() < 2048 {
-                            progress.events.push(event);
-                        } else {
-                            job.cancellation.cancel();
-                        }
-                    } else {
-                        job.cancellation.cancel();
-                    }
-                },
-            )
-            .await?;
-            Ok((
-                AgentVaultStateDto::Ready,
-                Some(session),
-                None,
-                None,
-                Some(result),
                 None,
                 None,
                 None,
@@ -667,7 +579,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             Ok((
                 AgentVaultStateDto::Ready,
                 Some(session),
-                None,
                 None,
                 None,
                 None,
@@ -704,7 +615,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
-                None,
             ))
         }
         AgentVaultActionDto::InspectProposal {
@@ -736,7 +646,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             };
             Ok((
                 AgentVaultStateDto::Ready,
-                None,
                 None,
                 None,
                 None,
@@ -796,7 +705,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 None,
                 None,
                 None,
-                None,
                 Some(AgentMemoryReviewOverviewDto {
                     schema_version: PROTOCOL_VERSION,
                     person_id: job.person.to_string(),
@@ -842,7 +750,6 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok((
                 AgentVaultStateDto::Ready,
-                None,
                 None,
                 None,
                 None,
@@ -900,8 +807,6 @@ mod tests {
     use std::{collections::HashMap, sync::Condvar, time::Instant};
 
     mod calendar_experts;
-    mod calendar_sessions;
-    mod calendar_turns;
     mod memory_review;
     mod proposals;
 

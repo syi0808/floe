@@ -17,44 +17,6 @@ use crate::{
 mod calendar_setup;
 
 #[tokio::test]
-async fn calendar_session_insert_rolls_back_when_the_post_insert_key_check_fails() {
-    let fixture = Fixture::new().await;
-    let setup_id = Uuid::new_v4();
-    fixture
-        .vault
-        .install_calendar_expert(
-            CalendarExpertSetup {
-                instance_id: fixture.vault.registry_instance_id(),
-                expected_revision: 0,
-                setup_id,
-                provider: floe_domain::CalendarProvider::EventKit,
-                calendar_ids: vec!["synthetic-insert-check".into()],
-            },
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
-    fixture.keys.0.fail_on_read.store(4, Ordering::Release);
-    assert_eq!(
-        fixture
-            .vault
-            .create_calendar_session(setup_id, Cancellation::default())
-            .await,
-        Err(AgentFailure::VaultUnavailable)
-    );
-    assert!(fixture.keys.0.blocked.load(Ordering::Acquire));
-    let connection = fixture.vault.database.connect().unwrap();
-    let mut rows = connection
-        .query("SELECT count(*) FROM agent_sessions", ())
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
-        0
-    );
-}
-
-#[tokio::test]
 async fn expert_atomic_commit_cannot_rebind_an_existing_conversation() {
     let fixture = Fixture::new().await;
     let mut session = fixture.vault.create_sample_session().await.unwrap();

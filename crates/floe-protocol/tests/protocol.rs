@@ -110,109 +110,13 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[test]
-fn calendar_session_transport_cannot_supply_classification_grants_or_model_input() {
-    let action = json!({"kind": "calendar_session", "operation": {
-        "kind": "start", "setup_id": Uuid::new_v4(),
-    }});
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    for field in [
-        "person_id",
-        "provider",
-        "data_classes",
-        "calendar_ids",
-        "view_handle",
-        "prompt",
-        "model",
+fn calendar_scoped_conversation_actions_are_not_part_of_the_protocol() {
+    for action in [
+        json!({"kind": "calendar_session", "operation": {"kind": "start", "setup_id": Uuid::new_v4()}}),
+        json!({"kind": "calendar_turn", "request": {"session_id": Uuid::new_v4()}}),
     ] {
-        let mut forged = action.clone();
-        forged["operation"][field] = json!("untrusted");
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+        assert!(serde_json::from_value::<AgentVaultActionDto>(action).is_err());
     }
-    let legacy = floe_agent::AgentSession::new(floe_domain::PersonId::new());
-    let wire = serde_json::to_value(&legacy).unwrap();
-    assert!(wire.get("scope").is_none());
-    assert_eq!(
-        serde_json::from_value::<floe_agent::AgentSession>(wire).unwrap(),
-        legacy
-    );
-}
-
-#[test]
-fn calendar_turn_transport_requires_explicit_inference_route_and_destination() {
-    let action = json!({
-        "kind": "calendar_turn",
-        "request": {
-            "session_id": Uuid::new_v4(),
-            "expected_revision": 3,
-            "prompt": {"kind": "propose_focus", "focus_minutes": 60},
-            "inference_route": "device_local",
-            "day": {
-                "start_date": "2026-09-08",
-                "end_date_exclusive": "2026-09-09",
-                "timezone_offset_seconds": 32400
-            },
-            "starts_at": "2026-09-08T00:00:00Z",
-            "ends_at": "2026-09-08T12:00:00Z",
-            "destination": {
-                "provider": "event_kit",
-                "calendar_id": "explicit-calendar",
-                "connection_revision": 9,
-                "timezone": "Asia/Seoul"
-            }
-        }
-    });
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), action);
-    let mut multi_day = action.clone();
-    multi_day["request"]["day"]["end_date_exclusive"] = json!("2026-09-15");
-    multi_day["request"]["ends_at"] = json!("2026-09-14T15:00:00Z");
-    assert!(serde_json::from_value::<AgentVaultActionDto>(multi_day).is_ok());
-    for field in [
-        "person_id",
-        "view_handle",
-        "assignment_id",
-        "allowed_placements",
-        "external_transfer_consent",
-        "credential",
-    ] {
-        let mut forged = action.clone();
-        forged["request"][field] = json!("untrusted");
-        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
-    }
-}
-
-#[test]
-fn free_text_calendar_turn_accepts_only_a_redacted_server_route() {
-    let action = json!({
-        "kind": "calendar_turn",
-        "request": {
-            "session_id": Uuid::new_v4(),
-            "expected_revision": 3,
-            "prompt": {"kind": "free_text", "text": "What is next?"},
-            "inference_route": "remote",
-            "day": {
-                "start_date": "2026-09-08",
-                "end_date_exclusive": "2026-09-09",
-                "timezone_offset_seconds": 32400
-            },
-            "starts_at": "2026-09-08T00:00:00Z",
-            "ends_at": "2026-09-08T12:00:00Z",
-            "destination": null,
-            "remote_route": {
-                "base_url": "http://127.0.0.1:8431",
-                "bearer_token": "secret_token_value_that_is_long_enough",
-                "purpose": "everyday_assistance",
-                "external": true,
-                "allow_external": false
-            }
-        }
-    });
-    let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
-    assert_eq!(serde_json::to_value(&parsed).unwrap(), action);
-    let rendered = format!("{parsed:?}");
-    assert!(!rendered.contains("secret_token_value_that_is_long_enough"));
-    assert!(rendered.contains("[REDACTED]"));
 }
 
 #[test]

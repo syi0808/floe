@@ -37,7 +37,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         memories: vault.personal_memory_context(chrono::Utc::now()).await?,
         evidence: vec![],
     };
-    if let Some(session) = super::calendar_turn::run_conversation(
+    if let Some(session) = super::schedule_conversation::try_run_with_schedule_expert(
         core,
         vault,
         person_id,

@@ -83,8 +83,8 @@ Migration is vertical to avoid silently removing Calendar behavior:
 2. Let the generic Person conversation discover and delegate to installed Experts.
 3. Move connector refresh behind the Observe call.
 4. Switch the client to the generic conversation on every surface.
-5. Remove Calendar session/turn and Day Canvas context plumbing after compatibility
-   tests and proposal review use the generic path.
+5. Remove Calendar session/turn and Day Canvas context plumbing after proposal review
+   uses the generic path. **Completed 2026-09-10.**
 
 The temporary multi-day Calendar turn support remains useful contract coverage, but
 is not the target client architecture and must not be expanded with UI-side natural
@@ -104,7 +104,8 @@ language range parsing.
 
 ## Consequences
 
-- The current Calendar-specific session and turn DTOs become migration-only APIs.
+- Calendar-specific session and turn DTOs are removed rather than retained as a
+  second conversation API.
 - Connector reads move closer to capability execution; eager Day Canvas sync remains
   a canvas projection concern only.
 - Source-scope grants can survive multiple turns, while evidence Views stay bounded,

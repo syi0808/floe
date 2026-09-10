@@ -81,14 +81,8 @@ impl FloeCore {
             };
             let deadline = Instant::now() + Duration::from_millis(effective_budget.deadline_ms);
             check_running(deadline, &request.cancellation)?;
-            if let Some(scope) = saved.scope {
-                let setup = vault.calendar_session_setup(&saved).await?;
-                if setup.expert_assignment_id != request.assignment_id
-                    || setup.view_handle != request.grant.handle
-                    || scope.data_class() != request.grant.data_class()
-                {
-                    return Err(AgentFailure::CapabilityDenied);
-                }
+            if saved.scope.is_some() {
+                return Err(AgentFailure::PolicyDenied);
             }
             let views = CalendarTimelineViews::new(self, access, request.grant, clock)?;
             vault.check_access()?;

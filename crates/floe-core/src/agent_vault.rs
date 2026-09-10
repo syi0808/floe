@@ -16,7 +16,6 @@ use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-mod calendar_sessions;
 mod expert_actions;
 mod keyring;
 mod learning;

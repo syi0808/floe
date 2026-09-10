@@ -18,9 +18,6 @@ use floe_core::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
 use floe_domain::PersonId;
 use uuid::Uuid;
 
-#[path = "agent_vault/calendar_sessions.rs"]
-mod calendar_sessions;
-
 #[derive(Clone, Default)]
 struct Keys(Arc<KeyState>);
 
