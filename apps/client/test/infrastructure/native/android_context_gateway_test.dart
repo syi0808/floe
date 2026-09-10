@@ -64,4 +64,31 @@ void main() {
     ];
     expect(() => validateAndroidPeopleView(leaked), throwsFormatException);
   });
+
+  test('Health Connect projection exposes only derived wellbeing', () {
+    final view = <String, dynamic>{
+      'schema_version': 1,
+      'view_id': 'wellbeing.derived',
+      'source_handle': 'wellbeing:android',
+      'observed_at_unix_ms': 1000,
+      'expires_at_unix_ms': 301000,
+      'capacity': 'typical',
+      'recovery': 'recovered',
+      'confidence_millis': 700,
+      'evidence_handles': <String>['health.sleep.window:first'],
+    };
+    expect(() => validateAndroidWellbeingView(view), returnsNormally);
+
+    final leaked = Map<String, dynamic>.from(view)
+      ..['heart_rate_samples'] = <int>[72, 74];
+    expect(() => validateAndroidWellbeingView(leaked), throwsFormatException);
+
+    final invalidUnknown = Map<String, dynamic>.from(view)
+      ..['capacity'] = 'unknown'
+      ..['recovery'] = 'unknown';
+    expect(
+      () => validateAndroidWellbeingView(invalidUnknown),
+      throwsFormatException,
+    );
+  });
 }

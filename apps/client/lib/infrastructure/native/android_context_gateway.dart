@@ -64,6 +64,15 @@ final class AndroidContextGateway {
     return view;
   }
 
+  Future<Map<String, dynamic>> readWellbeing() async {
+    _requireAndroid();
+    final view = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>('readWellbeing'),
+    );
+    validateAndroidWellbeingView(view);
+    return view;
+  }
+
   void _requireAndroid() {
     if (!Platform.isAndroid) {
       throw UnsupportedError('Android context is available only on Android.');
@@ -71,7 +80,7 @@ final class AndroidContextGateway {
   }
 }
 
-enum AndroidContextSource { calendar, contacts }
+enum AndroidContextSource { calendar, contacts, health }
 
 @visibleForTesting
 void validateAndroidCalendarView(Map<String, dynamic> view) {
@@ -200,6 +209,50 @@ void validateAndroidPeopleView(Map<String, dynamic> view) {
         evidence.any((value) => !_validHandle(value))) {
       throw const FormatException('Invalid Android People identity.');
     }
+  }
+}
+
+@visibleForTesting
+void validateAndroidWellbeingView(Map<String, dynamic> view) {
+  const keys = {
+    'schema_version',
+    'view_id',
+    'source_handle',
+    'observed_at_unix_ms',
+    'expires_at_unix_ms',
+    'capacity',
+    'recovery',
+    'confidence_millis',
+    'evidence_handles',
+  };
+  const capacities = {'reduced', 'typical', 'strong', 'unknown'};
+  const recoveries = {'needs_recovery', 'typical', 'recovered', 'unknown'};
+  if (view.keys.toSet().difference(keys).isNotEmpty ||
+      !view.keys.toSet().containsAll(keys) ||
+      view['schema_version'] != 1 ||
+      view['view_id'] != 'wellbeing.derived' ||
+      !_validHandle(view['source_handle']) ||
+      !capacities.contains(view['capacity']) ||
+      !recoveries.contains(view['recovery']) ||
+      view['evidence_handles'] is! List) {
+    throw const FormatException('Invalid Android Wellbeing View.');
+  }
+  final observed = _integer(view['observed_at_unix_ms']);
+  final expires = _integer(view['expires_at_unix_ms']);
+  final confidence = _integer(view['confidence_millis']);
+  final evidence = view['evidence_handles']! as List<Object?>;
+  final unknown =
+      view['capacity'] == 'unknown' && view['recovery'] == 'unknown';
+  if (observed < 0 ||
+      expires <= observed ||
+      expires - observed > 300000 ||
+      confidence < 0 ||
+      confidence > 1000 ||
+      evidence.length > 16 ||
+      evidence.any((value) => !_validHandle(value)) ||
+      (unknown && (confidence != 0 || evidence.isNotEmpty)) ||
+      (!unknown && (confidence == 0 || evidence.isEmpty))) {
+    throw const FormatException('Invalid Android Wellbeing View envelope.');
   }
 }
 

@@ -311,7 +311,7 @@ fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
 }
 
 #[test]
-fn android_calendar_and_contacts_descriptors_conform_to_the_shared_contract() {
+fn android_context_descriptors_conform_to_the_shared_contract() {
     for (source, connector, provider) in [
         (
             include_str!(concat!(
@@ -328,6 +328,14 @@ fn android_calendar_and_contacts_descriptors_conform_to_the_shared_contract() {
             )),
             "contacts.android",
             "android_contacts",
+        ),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../apps/client/android/fixtures/health_connect_snapshot.json"
+            )),
+            "health.android",
+            "health_connect",
         ),
     ] {
         let snapshot: ConnectorSnapshot = serde_json::from_str(source).unwrap();

@@ -1,8 +1,8 @@
 # S5.5 Android Context Foundation
 
 > Date: 2026-09-11
-> Acceptance status: Android Calendar/Contacts production code and build evidence; physical-device
-> and Health Connect evidence pending
+> Acceptance status: Android Calendar/Contacts/Health Connect production code and build evidence;
+> physical-device evidence pending
 
 ## Delivered boundary
 
@@ -22,11 +22,20 @@
   revoked/permission-denied, ready and stale lifecycle states. Last-success and View snapshots are
   published only after an actual successful read; cached Views remain in memory and disappear after
   their five-minute expiry.
+- Health Connect uses the stable AndroidX 1.1 client and requests only Sleep, Steps and Exercise
+  read permissions. It runs one bounded, deduplicated 36-hour read per record type on the existing
+  worker and derives coarse capacity/recovery states locally. Raw records, counts, durations,
+  measurements, notes, routes and provider identifiers never cross the native channel.
+- The Health connector exposes derived-only retention and typed unsupported, permission-revoked,
+  source-unavailable, ready and stale lifecycle states. Its View cache is memory-only and follows
+  the same five-minute expiry boundary.
 - Added a Dart gateway that binds calendar selection at adapter construction and strictly validates
   native View keys, versions, freshness, ranges, counts, duplicates and evidence handles before
   returning context to Flutter callers.
 - Android fixtures cross the shared Rust Calendar, People and connected-context validators. The
-  Android debug APK compiles with the native provider code and permission declarations included.
+  Health fixture additionally crosses the shared Wellbeing validator. The Android debug APK
+  compiles with the native provider code and permission declarations included. Health Connect
+  raises the Android minimum SDK from 24 to 26, matching the library and bounded-provider floor.
 
 ## Automated evidence
 
@@ -41,6 +50,6 @@ cargo test -p floe-agent --test calendar_context --test personal_context --test 
 ## Remaining gate
 
 No physical Android device permission/read evidence was captured, and no Android settings surface
-currently persists the selected calendar IDs. Health Connect availability, consent and locally
-derived Wellbeing projection remain unimplemented. Therefore S5.5-C3 remains pending and the slice
-stays **0/14**.
+currently persists selected calendar IDs or initiates the Health Connect consent/read flow. Store
+permission declarations and the in-app permission rationale still require release configuration.
+Therefore S5.5-C3 remains pending and the slice stays **0/14**.

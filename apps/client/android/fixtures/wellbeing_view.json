@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "view_id": "wellbeing.derived",
+  "source_handle": "wellbeing:92ed93c73dd2ff5e197ab61914378fa3",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "capacity": "typical",
+  "recovery": "recovered",
+  "confidence_millis": 700,
+  "evidence_handles": ["health.sleep.window:0ef8d68870539d52e0d9af2bb846a59e", "health.steps.window:1de0dc16a76afcb32624274177728e85"]
+}

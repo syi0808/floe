@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Android Health Connect adapter path — 2026-09-11
+
+- Added a Health Connect 1.1 adapter with explicit Sleep, Steps and Exercise read consent, bounded
+  deduplicated reads and device-local derivation into the strict `wellbeing.derived` View. Raw
+  records, health measurements and provider identifiers never cross the native channel.
+- Added device-executed, Observe-only connector lifecycle snapshots with derived-only retention,
+  typed unsupported/revoked/unavailable/stale states and in-memory five-minute View expiry.
+- The Android debug compile, focused Flutter validators and Rust cross-language fixture tests pass.
+  Physical-device consent/read evidence and Android settings wiring remain, so S5.5-C3 stays
+  pending and the slice remains **0/14**. [Evidence and limits](docs/validation/s5-5-android-context-foundation.md).
+
 ### S5.5 Android Calendar and Contacts adapter path — 2026-09-11
 
 - Added an Android MethodChannel adapter over public CalendarContract Instances and ContactsContract
@@ -12,7 +23,7 @@
   calendar list. Contacts emits `people.identity` using display names and opaque handles only; notes,
   provider IDs, event details and all write authority remain excluded.
 - The debug APK builds, focused Flutter validation tests and Rust cross-language conformance tests
-  pass. Physical-device evidence and Health Connect remain, so S5.5-C3 stays pending and the slice
+  pass. Physical-device evidence and settings wiring remain, so S5.5-C3 stays pending and the slice
   remains **0/14**. [Evidence and limits](docs/validation/s5-5-android-context-foundation.md).
 
 ### S5.5 Microsoft Calendar product route — 2026-09-11

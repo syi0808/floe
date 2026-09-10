@@ -38,6 +38,18 @@ fn android_people_fixture_crosses_the_shared_identity_boundary() {
 }
 
 #[test]
+fn health_connect_fixture_crosses_the_derived_wellbeing_boundary() {
+    let view: WellbeingView = serde_json::from_str(include_str!(
+        "../../../apps/client/android/fixtures/wellbeing_view.json"
+    ))
+    .unwrap();
+    validate_wellbeing_view(&view, 1_789_128_000_000).unwrap();
+    let evidence = personal_context_evidence(&view).unwrap();
+    assert!(!evidence.untrusted_text.contains("heart_rate"));
+    assert!(!evidence.untrusted_text.contains("raw"));
+}
+
+#[test]
 fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
     let people = people();
     validate_people_view(&people, NOW).unwrap();
