@@ -4,6 +4,22 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 connected context conformance foundation — 2026-09-10
+
+- Added strict versioned descriptors for connector execution location, Observe/Act/Interact
+  authority, provider-neutral Views and explicit-foreground Situations. View descriptors
+  carry data class, retention, freshness, item/byte bounds and provenance requirements.
+- Added typed connection snapshots for scopes, last success/failure and
+  ready/degraded/disconnected/revoked/unsupported states without exposing credentials or
+  provider-native objects.
+- Added a provider-neutral fixture harness that rejects authority mixing, missing grants,
+  credential projections, stale/oversized Views and incomplete provenance. Cross-source
+  evaluation keeps a required View usable while reporting a degraded optional source.
+- Focused `floe-agent` conformance tests pass 5/5; full Rust workspace check and tests
+  pass. No live connector, Expert production path or durable disconnect/reconnect
+  lifecycle is connected yet, so S5.5 remains Planned at **0/14**.
+  [Evidence and limits](docs/validation/s5-5-connected-context-conformance.md).
+
 ### S4 persistent conversation lifecycle — 2026-09-10
 
 - Removed UI-driven vault locking. Focus changes, app backgrounding, destination
@@ -311,7 +327,7 @@ verified criteria, not estimated implementation percentages.
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
 | S5 — Memory/self-improvement | Planned; foundations started | Encrypted Session Archive plus staged Memory candidate/revision ledger fixtures | 0/6 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
-| S5.5 — Connected domains | Planned | Architecture and portfolio plan only | 0/14 | S5 Accepted; live source/provider host access; connector/Expert corpora | Complete one cross-domain briefing with degraded-source recovery |
+| S5.5 — Connected domains | Planned; foundation started | Versioned connector/View/Situation descriptors and fixture conformance harness | 0/14 | S5 Accepted; live source/provider host access; connector/Expert corpora | Complete one cross-domain briefing with degraded-source recovery |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5.5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
 | S8 — Cross-device/server | Planned | None | 0/4 | S7 Accepted; sync/security PoCs | Same result on two devices |
