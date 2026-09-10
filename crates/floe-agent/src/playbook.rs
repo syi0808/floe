@@ -228,6 +228,7 @@ fn validate_playbook(playbook: &Playbook) -> Result<(), AgentFailure> {
         || index.summary.trim().is_empty()
         || index.summary.len() > 512
         || index.roles.is_empty()
+        || index.roles.contains(&PromptRole::Learner)
         || playbook.body.instructions.trim().is_empty()
         || playbook.body.instructions.len() > MAX_LOADED_PLAYBOOK_BYTES
         || playbook.body.children.len() > MAX_VISIBLE_PLAYBOOKS
@@ -323,6 +324,17 @@ mod tests {
                 playbook("first", Some("second"), &["second"]),
                 playbook("second", Some("first"), &["first"]),
             ]),
+            Err(AgentFailure::InvalidInput)
+        ));
+    }
+
+    #[test]
+    fn learner_role_cannot_receive_playbooks() {
+        let mut learner_playbook = playbook("memory-curation", None, &[]);
+        learner_playbook.index.roles = vec![PromptRole::Learner];
+
+        assert!(matches!(
+            PlaybookRegistry::new(vec![learner_playbook]),
             Err(AgentFailure::InvalidInput)
         ));
     }

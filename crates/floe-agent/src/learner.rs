@@ -7,9 +7,11 @@ use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, AgentOutcome, Cancellation, ContextMemory, KNOWLEDGE_VERSION, KnowledgeActor,
-    KnowledgeCandidate, LearningObservationKind, ModelPlacement, PersonalMemoryValue,
-    StageMemoryCandidate,
+    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentOutcome, AgentUsage,
+    Cancellation, ContextMemory, DataClass, InferencePolicyDecision, KNOWLEDGE_VERSION,
+    KnowledgeActor, KnowledgeCandidate, LearningObservationKind, ModelPlacement, ModelRequest,
+    ModelRunner, ModelStep, PersonalMemoryValue, StageMemoryCandidate, TransferConsent,
+    UsageLedger, generate_with_recovery, learner_prompt,
 };
 
 const MAX_LEARNER_VERSION_BYTES: usize = 128;
@@ -94,6 +96,16 @@ pub struct LearnerReviewOutput {
     pub cost_micros: u64,
 }
 
+#[derive(Clone)]
+pub struct LearnerModelRequest {
+    pub input: LearnerReviewInput,
+    pub remaining_tokens: u64,
+    pub remaining_cost_micros: u64,
+    pub max_output_bytes: usize,
+    pub deadline: Instant,
+    pub cancellation: Cancellation,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LearnerJobState {
@@ -152,7 +164,7 @@ impl Default for LearnerBudget {
         Self {
             max_input_bytes: 16 * 1024,
             max_output_bytes: 4 * 1024,
-            max_model_tokens: 2_048,
+            max_model_tokens: 8_192,
             max_model_cost_micros: 50_000,
             deadline_ms: 15_000,
         }
@@ -164,8 +176,106 @@ pub trait LearnerModel {
 
     fn review(
         &self,
-        input: LearnerReviewInput,
+        request: LearnerModelRequest,
     ) -> impl Future<Output = Result<LearnerReviewOutput, AgentFailure>> + Send;
+}
+
+pub struct StructuredLearnerModel<Model> {
+    model: Model,
+}
+
+impl<Model> StructuredLearnerModel<Model> {
+    pub const fn new(model: Model) -> Self {
+        Self { model }
+    }
+}
+
+impl<Model: ModelRunner + Sync> LearnerModel for StructuredLearnerModel<Model> {
+    fn placement(&self) -> ModelPlacement {
+        self.model.placement()
+    }
+
+    async fn review(
+        &self,
+        request: LearnerModelRequest,
+    ) -> Result<LearnerReviewOutput, AgentFailure> {
+        if self.model.placement() != ModelPlacement::DeviceLocal {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let turn_id = request
+            .input
+            .turn_ids
+            .last()
+            .copied()
+            .ok_or(AgentFailure::InvalidInput)?;
+        let response = generate_with_recovery(
+            &self.model,
+            ModelRequest {
+                usage: UsageLedger::new(
+                    request.remaining_tokens,
+                    request.remaining_cost_micros,
+                    AgentUsage::default(),
+                ),
+                replay: vec![],
+                schema_version: AGENT_VERSION,
+                prompt: learner_prompt(),
+                person_id: request.input.person_id,
+                session_id: request.input.session_id,
+                turn_id,
+                policy: InferencePolicyDecision {
+                    purpose: "governed-memory-review".into(),
+                    data_classes: vec![DataClass::Personal],
+                    allowed_placements: vec![ModelPlacement::DeviceLocal],
+                    performance_class: "background".into(),
+                    projection_version: 1,
+                    external_transfer_consent: TransferConsent::NotGranted,
+                    bounded_sensitive_projection: false,
+                },
+                context: AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: request.input.current_memories,
+                    evidence: vec![],
+                },
+                messages: vec![AgentMessage::User {
+                    turn_id,
+                    text: request.input.digest,
+                }],
+                capabilities: vec![],
+                active_agents: vec![],
+                remaining_tokens: request.remaining_tokens,
+                remaining_cost_micros: request.remaining_cost_micros,
+                max_output_bytes: request.max_output_bytes,
+                deadline: request.deadline,
+                cancellation: request.cancellation,
+            },
+        )
+        .await?;
+        if response.replay.is_some() || response.output.len() != 1 {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        let ModelStep::Answer { text } = &response.output[0] else {
+            return Err(AgentFailure::InvalidModelOutput);
+        };
+        let answer: StructuredLearnerAnswer =
+            serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
+        if answer.schema_version != KNOWLEDGE_VERSION {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(LearnerReviewOutput {
+            schema_version: answer.schema_version,
+            proposal: answer.proposal,
+            used_tokens: response.used_tokens,
+            cost_micros: response.cost_micros,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredLearnerAnswer {
+    schema_version: u32,
+    proposal: Option<LearnerMemoryProposal>,
 }
 
 pub trait MemoryCandidateSink {
@@ -202,7 +312,14 @@ impl<Model: LearnerModel + Sync, Sink: MemoryCandidateSink + Sync> LearnerRuntim
         let output = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
             _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure::DeadlineExceeded),
-            output = self.model.review(input.clone()) => output?,
+            output = self.model.review(LearnerModelRequest {
+                input: input.clone(),
+                remaining_tokens: self.budget.max_model_tokens,
+                remaining_cost_micros: self.budget.max_model_cost_micros,
+                max_output_bytes: self.budget.max_output_bytes,
+                deadline,
+                cancellation: cancellation.clone(),
+            }) => output?,
         };
         self.validate_output(&output)?;
         let Some(mut proposal) = output.proposal else {
@@ -285,7 +402,7 @@ mod tests {
 
     use crate::{
         EpistemicStatus, KnowledgeCandidateState, KnowledgeKind, KnowledgeOperation,
-        KnowledgePayload, LearningEvidenceRef, PersonalMemoryKind,
+        KnowledgePayload, LearningEvidenceRef, ModelResponse, PersonalMemoryKind,
     };
 
     use super::*;
@@ -298,12 +415,32 @@ mod tests {
 
     struct PendingModel;
 
+    struct Runner {
+        placement: ModelPlacement,
+        response: ModelResponse,
+        requests: Mutex<Vec<ModelRequest>>,
+    }
+
+    impl ModelRunner for Runner {
+        fn placement(&self) -> ModelPlacement {
+            self.placement
+        }
+
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+            self.requests.lock().unwrap().push(request);
+            Ok(self.response.clone())
+        }
+    }
+
     impl LearnerModel for PendingModel {
         fn placement(&self) -> ModelPlacement {
             ModelPlacement::DeviceLocal
         }
 
-        async fn review(&self, _: LearnerReviewInput) -> Result<LearnerReviewOutput, AgentFailure> {
+        async fn review(
+            &self,
+            _: LearnerModelRequest,
+        ) -> Result<LearnerReviewOutput, AgentFailure> {
             std::future::pending().await
         }
     }
@@ -313,7 +450,10 @@ mod tests {
             self.placement
         }
 
-        async fn review(&self, _: LearnerReviewInput) -> Result<LearnerReviewOutput, AgentFailure> {
+        async fn review(
+            &self,
+            _: LearnerModelRequest,
+        ) -> Result<LearnerReviewOutput, AgentFailure> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             Ok(self.output.clone())
         }
@@ -409,6 +549,114 @@ mod tests {
             }),
             used_tokens: 120,
             cost_micros: 10,
+        }
+    }
+
+    fn model_request(input: LearnerReviewInput) -> LearnerModelRequest {
+        LearnerModelRequest {
+            input,
+            remaining_tokens: LearnerBudget::default().max_model_tokens,
+            remaining_cost_micros: LearnerBudget::default().max_model_cost_micros,
+            max_output_bytes: LearnerBudget::default().max_output_bytes,
+            deadline: Instant::now() + Duration::from_secs(1),
+            cancellation: Cancellation::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn structured_learner_uses_a_local_restricted_request() {
+        let input = input();
+        let expected = proposal(input.observed_at);
+        let answer = serde_json::json!({
+            "schema_version": KNOWLEDGE_VERSION,
+            "proposal": expected.proposal.clone(),
+        })
+        .to_string();
+        let runner = Runner {
+            placement: ModelPlacement::DeviceLocal,
+            response: ModelResponse {
+                replay: None,
+                schema_version: AGENT_VERSION,
+                output: vec![ModelStep::Answer { text: answer }],
+                used_tokens: 120,
+                cost_micros: 10,
+            },
+            requests: Mutex::new(vec![]),
+        };
+        let model = StructuredLearnerModel::new(runner);
+
+        let output = model.review(model_request(input.clone())).await.unwrap();
+
+        assert_eq!(output, expected);
+        let requests = model.model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].prompt.role, crate::PromptRole::Learner);
+        assert_eq!(requests[0].person_id, input.person_id);
+        assert_eq!(requests[0].session_id, input.session_id);
+        assert_eq!(requests[0].turn_id, input.turn_ids[0]);
+        assert_eq!(requests[0].policy.purpose, "governed-memory-review");
+        assert_eq!(
+            requests[0].policy.allowed_placements,
+            vec![ModelPlacement::DeviceLocal]
+        );
+        assert_eq!(requests[0].policy.data_classes, vec![DataClass::Personal]);
+        assert_eq!(
+            requests[0].policy.external_transfer_consent,
+            TransferConsent::NotGranted
+        );
+        assert_eq!(requests[0].policy.performance_class, "background");
+        assert!(requests[0].context.persona.is_none());
+        assert!(requests[0].capabilities.is_empty());
+        assert!(requests[0].active_agents.is_empty());
+        assert!(matches!(
+            requests[0].messages.as_slice(),
+            [AgentMessage::User { text, .. }] if text == &input.digest
+        ));
+    }
+
+    #[tokio::test]
+    async fn structured_learner_rejects_remote_and_unstructured_output() {
+        for (placement, output, expected_calls) in [
+            (
+                ModelPlacement::Remote,
+                "{\"schema_version\":1,\"proposal\":null}",
+                0,
+            ),
+            (
+                ModelPlacement::DeviceLocal,
+                "```json\n{\"schema_version\":1,\"proposal\":null}\n```",
+                1,
+            ),
+            (
+                ModelPlacement::DeviceLocal,
+                "{\"schema_version\":1,\"proposal\":null,\"reason\":\"no\"}",
+                1,
+            ),
+        ] {
+            let runner = Runner {
+                placement,
+                response: ModelResponse {
+                    replay: None,
+                    schema_version: AGENT_VERSION,
+                    output: vec![ModelStep::Answer {
+                        text: output.into(),
+                    }],
+                    used_tokens: 1,
+                    cost_micros: 0,
+                },
+                requests: Mutex::new(vec![]),
+            };
+            let model = StructuredLearnerModel::new(runner);
+
+            assert_eq!(
+                model.review(model_request(input())).await,
+                Err(if placement == ModelPlacement::Remote {
+                    AgentFailure::PolicyDenied
+                } else {
+                    AgentFailure::InvalidModelOutput
+                })
+            );
+            assert_eq!(model.model.requests.lock().unwrap().len(), expected_calls);
         }
     }
 

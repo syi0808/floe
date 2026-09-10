@@ -4,6 +4,21 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 device-local structured Learner adapter — 2026-09-10
+
+- Added a production `ModelRunner` adapter that converts immutable Learner review
+  input into a dedicated local-model request with a background policy, Personal-only
+  data classification, no external-transfer consent and no capabilities or experts.
+- The Learner has a separate role/protocol prompt, receives confirmed Memory only as
+  contextual data, and cannot receive persona or Playbook instructions. Its only valid
+  response is one strict, versioned JSON answer containing zero or one Memory proposal.
+- Model placement is checked before dispatch. Generic model response validation,
+  token/cost/output/deadline accounting and cancellation remain active, and runtime-owned
+  provenance still replaces model-supplied observation time before candidate staging.
+- Full Rust workspace check and test suites pass. Idle worker invocation and foreground
+  preemption remain, so the adapter is not scheduled automatically and S5 stays 0/6.
+  [Evidence and limits](docs/validation/s5-local-learner-adapter.md).
+
 ### S5 explicit conversation learning discovery — 2026-09-10
 
 - Added a narrow deterministic trigger for explicit remember/forget and correction

@@ -1,0 +1,8 @@
+No capabilities, tools, experts, delegation, network, credentials, or external actions are available.
+
+Return exactly one JSON object as the answer text. It must have schema_version 1 and a proposal field.
+
+For no change:
+{"schema_version":1,"proposal":null}
+
+For a Memory proposal, proposal must contain only observation_kind, value, target_id, and base_revision. The value must contain kind, statement, epistemic_status, confidence_millis, valid_from, valid_until, and observed_at. Use null for absent optional values. Do not wrap JSON in Markdown.

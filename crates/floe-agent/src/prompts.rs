@@ -6,6 +6,8 @@ const BEHAVIOR_KERNEL: &str = include_str!("../prompts/behavior_kernel.txt");
 const CAPABILITY_PROTOCOL: &str = include_str!("../prompts/capability_protocol.txt");
 const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
 const SCHEDULE_EXPERT_ROLE: &str = include_str!("../prompts/schedule_expert_role.txt");
+const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
+const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -13,6 +15,7 @@ const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 pub enum PromptRole {
     Manager,
     ScheduleExpert,
+    Learner,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -110,7 +113,7 @@ impl PromptAssembly {
             .iter()
             .filter(|component| component.kind == PromptComponentKind::Persona)
             .count();
-        if persona_count > 1 || (self.role == PromptRole::ScheduleExpert && persona_count != 0) {
+        if persona_count > 1 || (self.role != PromptRole::Manager && persona_count != 0) {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(())
@@ -166,6 +169,26 @@ pub fn schedule_expert_prompt() -> PromptAssembly {
                 PromptComponentKind::CapabilityProtocol,
                 "capability-protocol",
                 CAPABILITY_PROTOCOL,
+            ),
+        ],
+    }
+}
+
+pub fn learner_prompt() -> PromptAssembly {
+    PromptAssembly {
+        schema_version: AGENT_VERSION,
+        role: PromptRole::Learner,
+        components: vec![
+            product_component(
+                PromptComponentKind::BehaviorKernel,
+                "behavior-kernel",
+                BEHAVIOR_KERNEL,
+            ),
+            product_component(PromptComponentKind::Role, "learner-role", LEARNER_ROLE),
+            product_component(
+                PromptComponentKind::CapabilityProtocol,
+                "learner-protocol",
+                LEARNER_PROTOCOL,
             ),
         ],
     }
@@ -271,6 +294,18 @@ mod tests {
                 .any(|component| component.kind == PromptComponentKind::Persona)
         );
         assert!(!expert.render().contains("find_free_windows"));
+
+        let learner = learner_prompt();
+        assert_eq!(learner.role, PromptRole::Learner);
+        assert_eq!(learner.validate(), Ok(()));
+        assert!(
+            !learner
+                .components
+                .iter()
+                .any(|component| component.kind == PromptComponentKind::Persona)
+        );
+        assert!(learner.render().contains("Return exactly one JSON object"));
+        assert!(learner.render().contains("No capabilities"));
     }
 
     #[test]
