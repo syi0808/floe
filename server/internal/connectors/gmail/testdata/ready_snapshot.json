@@ -9,11 +9,13 @@
       {"schema_version": 1, "id": "mail.search", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "mail.communication"},
       {"schema_version": 1, "id": "mail.threads.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "mail.communication"},
       {"schema_version": 1, "id": "mail.messages.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "mail.body"},
-      {"schema_version": 1, "id": "mail.changes", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "mail.communication"}
+      {"schema_version": 1, "id": "mail.changes", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "mail.communication"},
+      {"schema_version": 1, "id": "mail.logistics.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["https://www.googleapis.com/auth/gmail.readonly"], "output_view_id": "life.logistics"}
     ],
     "views": [
       {"schema_version": 1, "id": "mail.communication", "version": "1.0.0", "data_class": "personal", "retention": "index_on_demand", "freshness_ttl_ms": 300000, "max_items": 100, "max_bytes": 65536, "provenance_required": true},
-      {"schema_version": 1, "id": "mail.body", "version": "1.0.0", "data_class": "personal", "retention": "ephemeral", "freshness_ttl_ms": 60000, "max_items": 1, "max_bytes": 32768, "provenance_required": true}
+      {"schema_version": 1, "id": "mail.body", "version": "1.0.0", "data_class": "personal", "retention": "ephemeral", "freshness_ttl_ms": 60000, "max_items": 1, "max_bytes": 32768, "provenance_required": true},
+      {"schema_version": 1, "id": "life.logistics", "version": "1.0.0", "data_class": "personal", "retention": "short_lived_cache", "freshness_ttl_ms": 300000, "max_items": 48, "max_bytes": 65536, "provenance_required": true}
     ]
   },
   "connection": {

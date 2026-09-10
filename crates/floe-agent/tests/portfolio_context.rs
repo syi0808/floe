@@ -130,3 +130,14 @@ fn google_drive_work_view_crosses_the_go_rust_contract() {
     assert_eq!(view.items[0].kind, WorkItemKind::SelectedFile);
     assert_eq!(view.items[0].title, "Launch notes");
 }
+
+#[test]
+fn gmail_logistics_view_crosses_the_go_rust_contract() {
+    let view: LogisticsView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/gmail/testdata/logistics_view.json"
+    ))
+    .unwrap();
+    validate_logistics_view(&view, 1_789_128_000_000).unwrap();
+    assert_eq!(view.items[0].kind, LogisticsItemKind::Delivery);
+    assert_eq!(view.items[0].status, "mail_candidate");
+}

@@ -132,7 +132,7 @@ func TestRejectsUntrustedEndpointsAndInputsBeforeNetwork(t *testing.T) {
 
 func TestDescriptorSeparatesObserveFromFutureActionsAndRedactsNativeIDs(t *testing.T) {
 	descriptor := ConnectorDescriptor()
-	if len(descriptor.Capabilities) != 4 || len(descriptor.Views) != 2 {
+	if len(descriptor.Capabilities) != 5 || len(descriptor.Views) != 3 {
 		t.Fatalf("unexpected descriptor: %#v", descriptor)
 	}
 	for _, capability := range descriptor.Capabilities {

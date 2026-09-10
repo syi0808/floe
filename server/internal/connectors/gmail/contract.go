@@ -83,10 +83,12 @@ func ConnectorDescriptor() Descriptor {
 			capability("mail.threads.read", "mail.communication"),
 			capability("mail.messages.read", "mail.body"),
 			capability("mail.changes", "mail.communication"),
+			capability("mail.logistics.read", "life.logistics"),
 		},
 		Views: []ViewDescriptor{
 			{SchemaVersion: 1, ID: "mail.communication", Version: "1.0.0", DataClass: "personal", Retention: "index_on_demand", FreshnessTTLMS: 300_000, MaxItems: 100, MaxBytes: 65_536, ProvenanceRequired: true},
 			{SchemaVersion: 1, ID: "mail.body", Version: "1.0.0", DataClass: "personal", Retention: "ephemeral", FreshnessTTLMS: 60_000, MaxItems: 1, MaxBytes: MaxBodyBytes, ProvenanceRequired: true},
+			{SchemaVersion: 1, ID: "life.logistics", Version: "1.0.0", DataClass: "personal", Retention: "short_lived_cache", FreshnessTTLMS: 300_000, MaxItems: maxLogisticsItems, MaxBytes: 65_536, ProvenanceRequired: true},
 		},
 	}
 }

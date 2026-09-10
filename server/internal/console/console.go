@@ -30,6 +30,7 @@ type ConnectorAuthRuntime interface {
 	Action(context.Context, string) (any, error)
 	ConnectionSnapshot() (any, error)
 	ReadCommunicationView(string, int, int) (any, error)
+	ReadLogisticsView(context.Context) (common.LogisticsView, error)
 }
 
 type WorkContextRuntime interface {
@@ -37,9 +38,13 @@ type WorkContextRuntime interface {
 	ReadWorkContextView(context.Context) (common.WorkContextView, error)
 }
 
+type LogisticsViewReader interface {
+	ReadLogisticsView(context.Context) (common.LogisticsView, error)
+}
+
 type LogisticsRuntime interface {
+	LogisticsViewReader
 	ConnectionSnapshot(context.Context) (any, error)
-	ReadLogisticsView(context.Context) (any, error)
 }
 
 type DriveAuthRuntime interface {
@@ -66,7 +71,7 @@ type Console struct {
 	runtime                                      AuthRuntime
 	gmail                                        ConnectorAuthRuntime
 	work                                         []WorkContextRuntime
-	logistics                                    LogisticsRuntime
+	logistics                                    []LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
@@ -92,7 +97,11 @@ func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
 func (console *Console) SetLogistics(runtime LogisticsRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	console.logistics = runtime
+	if runtime == nil {
+		console.logistics = nil
+	} else {
+		console.logistics = []LogisticsRuntime{runtime}
+	}
 }
 
 func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
@@ -310,7 +319,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	gateway := console.gateway
 	gmail := console.gmail
 	work := append([]WorkContextRuntime(nil), console.work...)
-	logistics := console.logistics
+	logistics := append([]LogisticsRuntime(nil), console.logistics...)
 	console.mu.Unlock()
 	if !allowed {
 		failure(writer, 401, "unauthorized")
@@ -332,12 +341,12 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		}
 		runtimes := make([]interface {
 			ConnectionSnapshot(context.Context) (any, error)
-		}, 0, len(work)+1)
+		}, 0, len(work)+len(logistics))
 		for _, runtime := range work {
 			runtimes = append(runtimes, runtime)
 		}
-		if logistics != nil {
-			runtimes = append(runtimes, logistics)
+		for _, runtime := range logistics {
+			runtimes = append(runtimes, runtime)
 		}
 		for _, runtime := range runtimes {
 			if runtime == nil {
@@ -381,14 +390,50 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		return
 	}
 	if request.URL.Path == "/v1/views/life.logistics" {
-		console.serveSelectedView(writer, request, logistics, func(ctx context.Context) (any, error) {
-			return logistics.ReadLogisticsView(ctx)
-		})
+		readers := make([]LogisticsViewReader, 0, len(logistics)+1)
+		if gmail != nil {
+			readers = append(readers, gmail)
+		}
+		for _, runtime := range logistics {
+			readers = append(readers, runtime)
+		}
+		console.serveLogisticsView(writer, request, readers)
 		return
 	}
 	forward := request.Clone(request.Context())
 	forward.Header.Set("Authorization", "Bearer "+console.internalToken)
 	gateway.ServeHTTP(writer, forward)
+}
+
+func (console *Console) serveLogisticsView(writer http.ResponseWriter, request *http.Request, runtimes []LogisticsViewReader) {
+	if request.Method != http.MethodPost || len(runtimes) == 0 {
+		failure(writer, 404, "not_found")
+		return
+	}
+	var input struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
+		failure(writer, 400, "validation")
+		return
+	}
+	views := make([]common.LogisticsView, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		view, err := runtime.ReadLogisticsView(request.Context())
+		if err == nil {
+			views = append(views, view)
+		}
+	}
+	if len(views) == 0 {
+		failure(writer, 503, "view_unavailable")
+		return
+	}
+	view, err := common.MergeLogisticsViews(views, time.Now().UnixMilli())
+	if err != nil {
+		failure(writer, 503, "view_unavailable")
+		return
+	}
+	reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
 }
 
 func (console *Console) serveWorkContextView(writer http.ResponseWriter, request *http.Request, runtimes []WorkContextRuntime) {
@@ -415,26 +460,6 @@ func (console *Console) serveWorkContextView(writer http.ResponseWriter, request
 		return
 	}
 	view, err := common.MergeWorkContextViews(views, time.Now().UnixMilli())
-	if err != nil {
-		failure(writer, 503, "view_unavailable")
-		return
-	}
-	reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
-}
-
-func (console *Console) serveSelectedView(writer http.ResponseWriter, request *http.Request, runtime any, read func(context.Context) (any, error)) {
-	if request.Method != http.MethodPost || runtime == nil {
-		failure(writer, 404, "not_found")
-		return
-	}
-	var input struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
-		failure(writer, 400, "validation")
-		return
-	}
-	view, err := read(request.Context())
 	if err != nil {
 		failure(writer, 503, "view_unavailable")
 		return

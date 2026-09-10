@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"floe/server/internal/connectors/common"
 )
 
 type AuthRuntime interface {
@@ -155,6 +157,14 @@ func (service *Service) Snapshot() (Snapshot, error) {
 		}
 		encoded, _ := json.Marshal(view)
 		snapshot.Views = []ViewSnapshot{{SchemaVersion: 1, ViewID: "mail.communication", SourceHandle: view.SourceHandle, ObservedAtUnixMS: view.ObservedAtUnixMS, ExpiresAtUnixMS: view.ExpiresAtUnixMS, ItemCount: len(view.Items), ByteCount: len(encoded), ProvenanceCount: len(view.Items)}}
+		logistics, err := service.index.Logistics(now)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if len(logistics.Items) > 0 {
+			encoded, _ := json.Marshal(logistics)
+			snapshot.Views = append(snapshot.Views, ViewSnapshot{SchemaVersion: 1, ViewID: "life.logistics", SourceHandle: logistics.SourceHandle, ObservedAtUnixMS: logistics.ObservedAtUnixMS, ExpiresAtUnixMS: logistics.ExpiresAtUnixMS, ItemCount: len(logistics.Items), ByteCount: len(encoded), ProvenanceCount: len(logistics.Items)})
+		}
 	}
 	return snapshot, nil
 }
@@ -172,6 +182,17 @@ func (service *Service) ReadCommunicationView(query string, cursor, limit int) (
 		return nil, ErrUnavailable
 	}
 	return service.index.Communication(query, cursor, limit, service.clock())
+}
+
+func (service *Service) ReadLogisticsView(context.Context) (common.LogisticsView, error) {
+	snapshot, err := service.Snapshot()
+	if err != nil {
+		return common.LogisticsView{}, err
+	}
+	if snapshot.Connection.State != "ready" && snapshot.Connection.State != "degraded" {
+		return common.LogisticsView{}, ErrUnavailable
+	}
+	return service.index.Logistics(service.clock())
 }
 
 func failureFor(err error) string {

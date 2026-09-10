@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "view_id": "life.logistics",
+  "source_handle": "mail:2878adf2d3916771030d2d9d88ca0d48",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "items": [{
+    "evidence_handle": "mail:11658a6d3821ac58f2680cfb793e70fd",
+    "kind": "delivery",
+    "summary": "Your package is out for delivery",
+    "status": "mail_candidate",
+    "needs_attention": false
+  }]
+}

@@ -57,6 +57,13 @@
 - Drive uses a separate PKCE OAuth credential and exact Drive read-only scope, isolated from the
   Gmail OAuth bundle. The dashboard manages browser login and folder selection independently, and
   Drive joins the same multi-provider Work Context route and typed failure lifecycle.
+- Gmail metadata now projects explicit reservation, travel, delivery and errand phrases into
+  bounded Logistics candidates. Classification never asserts that an event occurred: each item is
+  marked `mail_candidate`, carries only subject-level summary and opaque evidence, and has no parsed
+  payment, access code or action authority.
+- Gmail candidates and Home Assistant state merge behind the Life Logistics route with deterministic
+  aggregate provenance, duplicate rejection, earliest-expiry enforcement and partial-source
+  tolerance. Gmail's connector descriptor now declares this additional Observe-only View.
 
 ## Automated evidence
 
@@ -72,6 +79,8 @@ go -C server test -race ./internal/connectors/slack
 go -C server vet ./internal/connectors/slack
 go -C server test -race ./internal/connectors/googledrive ./internal/googleauth
 go -C server vet ./internal/connectors/googledrive ./internal/googleauth
+go -C server test -race ./internal/connectors/common ./internal/connectors/gmail
+go -C server vet ./internal/connectors/common ./internal/connectors/gmail
 cargo test -p floe-agent --test connected_context
 cargo test -p floe-ffi
 cargo test --workspace
@@ -85,5 +94,5 @@ delegations fetch fresh Views and return source-linked typed A2A artifacts.
 ## Remaining gate
 
 No live provider evidence was used. The Agent path is stateless rather than a durable registry
-assignment. No Teams, travel or delivery adapter produces these Views yet. Cross-source scenarios
-and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+assignment. No Teams or dedicated live travel/delivery provider adapter exists yet. Broader
+cross-domain scenarios and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.

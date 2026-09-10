@@ -33,9 +33,10 @@ func (*fakeDriveAuth) Action(context.Context, string) (any, error) {
 }
 
 type fakeConnectorRuntime struct {
-	snapshot any
-	view     any
-	err      error
+	snapshot      any
+	view          any
+	logisticsView any
+	err           error
 }
 
 type fakeContextRuntime struct {
@@ -56,6 +57,16 @@ func (runtime *fakeConnectorRuntime) ReadCommunicationView(string, int, int) (an
 	return runtime.view, runtime.err
 }
 
+func (runtime *fakeConnectorRuntime) ReadLogisticsView(context.Context) (common.LogisticsView, error) {
+	if runtime.err != nil {
+		return common.LogisticsView{}, runtime.err
+	}
+	encoded, _ := json.Marshal(runtime.logisticsView)
+	var view common.LogisticsView
+	_ = json.Unmarshal(encoded, &view)
+	return view, nil
+}
+
 func (runtime *fakeContextRuntime) ConnectionSnapshot(context.Context) (any, error) {
 	return runtime.snapshot, runtime.err
 }
@@ -70,8 +81,14 @@ func (runtime *fakeContextRuntime) ReadWorkContextView(context.Context) (common.
 	return view, nil
 }
 
-func (runtime *fakeContextRuntime) ReadLogisticsView(context.Context) (any, error) {
-	return runtime.view, runtime.err
+func (runtime *fakeContextRuntime) ReadLogisticsView(context.Context) (common.LogisticsView, error) {
+	if runtime.err != nil {
+		return common.LogisticsView{}, runtime.err
+	}
+	encoded, _ := json.Marshal(runtime.view)
+	var view common.LogisticsView
+	_ = json.Unmarshal(encoded, &view)
+	return view, nil
 }
 
 type blockingAuthRuntime struct {
@@ -388,7 +405,7 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	_, token := fixture.pair()
 	now := time.Now().UnixMilli()
 	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "github"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
-	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "home_assistant"}}, view: map[string]any{"view_id": "life.logistics"}})
+	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "home_assistant"}}, view: map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": "home:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 
 	for path, viewID := range map[string]string{
 		"/v1/views/work.context":   "work.context",
@@ -428,6 +445,22 @@ func TestWorkContextRouteMergesHealthyProvidersAndToleratesOneFailure(test *test
 	response = fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
 	if len(response["view"].(map[string]any)["items"].([]any)) != 1 || strings.Contains(fmt.Sprint(response), "private provider failure") {
 		test.Fatalf("partial view: %#v", response)
+	}
+}
+
+func TestLogisticsRouteMergesMailAndHomeEvidence(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	now := time.Now().UnixMilli()
+	view := func(source, evidence, kind string) map[string]any {
+		return map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": source, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": kind, "summary": "Selected evidence", "status": "observed", "needs_attention": false}}}
+	}
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{logisticsView: view("mail:a", "mail:item", "delivery")})
+	fixture.console.SetLogistics(&fakeContextRuntime{view: view("home:b", "home:item", "home_state")})
+	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
+	merged := response["view"].(map[string]any)
+	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "logistics:") {
+		test.Fatalf("merged logistics: %#v", merged)
 	}
 }
 

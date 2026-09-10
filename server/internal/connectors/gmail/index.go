@@ -9,12 +9,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"floe/server/internal/connectors/common"
 )
 
 const (
-	indexVersion  = 1
-	maxIndexItems = 10_000
-	maxIndexBytes = 8 * 1024 * 1024
+	indexVersion      = 1
+	maxIndexItems     = 10_000
+	maxIndexBytes     = 8 * 1024 * 1024
+	maxLogisticsItems = 48
 )
 
 type Index struct {
@@ -206,6 +209,73 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 		return CommunicationView{}, ErrInvalidResponse
 	}
 	return view, nil
+}
+
+func (index *Index) Logistics(now time.Time) (common.LogisticsView, error) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	matches := make([]Metadata, 0, maxLogisticsItems)
+	for _, message := range index.state.Messages {
+		if logisticsKind(message.Subject+"\n"+message.Snippet) != "" {
+			matches = append(matches, message)
+		}
+	}
+	sort.Slice(matches, func(left, right int) bool {
+		if matches[left].ReceivedMS == matches[right].ReceivedMS {
+			return matches[left].ID < matches[right].ID
+		}
+		return matches[left].ReceivedMS > matches[right].ReceivedMS
+	})
+	view := common.LogisticsView{
+		SchemaVersion: 1, ViewID: "life.logistics", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: len(matches) <= maxLogisticsItems, Items: []common.LogisticsItem{},
+	}
+	view.SourceHandle, _ = SourceHandle(index.connectionID, "logistics:"+index.state.HistoryID)
+	for _, message := range matches[:min(len(matches), maxLogisticsItems)] {
+		summary := strings.TrimSpace(message.Subject)
+		if summary == "" {
+			summary = strings.TrimSpace(message.Snippet)
+		}
+		if len(summary) > 512 {
+			summary = boundedText(summary, 512)
+		}
+		evidence, _ := SourceHandle(index.connectionID, "message:"+message.ID)
+		view.Items = append(view.Items, common.LogisticsItem{EvidenceHandle: evidence, Kind: logisticsKind(message.Subject + "\n" + message.Snippet), Summary: summary, Status: "mail_candidate", NeedsAttention: false})
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil || len(encoded) > 65_536 {
+		return common.LogisticsView{}, ErrInvalidResponse
+	}
+	return view, nil
+}
+
+func logisticsKind(value string) string {
+	value = strings.ToLower(value)
+	for _, candidate := range []struct {
+		kind  string
+		terms []string
+	}{
+		{"delivery", []string{"out for delivery", "has been delivered", "shipment", "tracking number", "your package", "your parcel", "배송", "택배"}},
+		{"travel", []string{"flight confirmation", "boarding pass", "flight itinerary", "train ticket", "hotel confirmation", "항공", "탑승"}},
+		{"reservation", []string{"reservation confirmed", "booking confirmation", "your reservation", "예약"}},
+		{"errand", []string{"ready for pickup", "appointment reminder", "수령", "방문 예약"}},
+	} {
+		for _, term := range candidate.terms {
+			if strings.Contains(value, term) {
+				return candidate.kind
+			}
+		}
+	}
+	return ""
+}
+
+func boundedText(value string, maximum int) string {
+	if len(value) <= maximum {
+		return value
+	}
+	for maximum > 0 && maximum < len(value) && value[maximum]&0xc0 == 0x80 {
+		maximum--
+	}
+	return strings.TrimSpace(value[:maximum])
 }
 
 func (index *Index) commit(next indexState) error {

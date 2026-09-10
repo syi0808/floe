@@ -23,7 +23,7 @@ func TestServiceKeepsEntityAllowlistOutsideViewRequests(test *testing.T) {
 	}
 	service.clock = func() time.Time { return time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC) }
 	view, err := service.ReadLogisticsView(context.Background())
-	if err != nil || view.(LogisticsView).Items[0].Summary != "Temperature" {
+	if err != nil || view.Items[0].Summary != "Temperature" {
 		test.Fatalf("view: %#v %v", view, err)
 	}
 	if _, err := service.ConnectionSnapshot(context.Background()); err != nil {

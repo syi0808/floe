@@ -189,6 +189,13 @@ fn go_gmail_descriptor_conforms_to_the_shared_rust_contract() {
     assert!(
         snapshot
             .descriptor
+            .views
+            .iter()
+            .any(|view| view.id == "life.logistics")
+    );
+    assert!(
+        snapshot
+            .descriptor
             .capabilities
             .iter()
             .all(|capability| capability.authority == CapabilityAuthority::Observe)

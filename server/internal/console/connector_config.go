@@ -76,7 +76,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		if err != nil {
 			return err
 		}
-		console.logistics = service
+		console.logistics = append(console.logistics, service)
 	}
 	return nil
 }

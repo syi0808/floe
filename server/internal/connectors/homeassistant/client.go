@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"floe/server/internal/connectors/common"
 )
 
 const maxEntities = 16
@@ -46,23 +48,8 @@ type stateResponse struct {
 	} `json:"attributes"`
 }
 
-type LogisticsItem struct {
-	EvidenceHandle string `json:"evidence_handle"`
-	Kind           string `json:"kind"`
-	Summary        string `json:"summary"`
-	Status         string `json:"status"`
-	NeedsAttention bool   `json:"needs_attention"`
-}
-
-type LogisticsView struct {
-	SchemaVersion    int             `json:"schema_version"`
-	ViewID           string          `json:"view_id"`
-	SourceHandle     string          `json:"source_handle"`
-	ObservedAtUnixMS int64           `json:"observed_at_unix_ms"`
-	ExpiresAtUnixMS  int64           `json:"expires_at_unix_ms"`
-	CoverageComplete bool            `json:"coverage_complete"`
-	Items            []LogisticsItem `json:"items"`
-}
+type LogisticsItem = common.LogisticsItem
+type LogisticsView = common.LogisticsView
 
 func New(tokens TokenSource, baseURL, connectionID string) (*Client, error) {
 	if tokens == nil || !validIdentifier(connectionID) {

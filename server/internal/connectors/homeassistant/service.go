@@ -32,7 +32,7 @@ func NewService(client *Client, entities []string) (*Service, error) {
 	return &Service{client: client, entities: selected, clock: time.Now}, nil
 }
 
-func (service *Service) ReadLogisticsView(ctx context.Context) (any, error) {
+func (service *Service) ReadLogisticsView(ctx context.Context) (common.LogisticsView, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	view, err := service.client.Logistics(ctx, service.entities, service.clock())

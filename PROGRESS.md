@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 mail and home Life Logistics composition — 2026-09-11
+
+- Gmail metadata now emits bounded reservation/travel/delivery/errand candidates only for explicit
+  phrases. Candidates remain epistemically marked `mail_candidate` and expose no body, provider ID,
+  payment, access code or action authority.
+- Added provider-neutral Logistics merging so Gmail evidence and Home Assistant state reach one Life
+  Logistics Expert route with duplicate rejection, earliest expiry and partial-source tolerance.
+  The Gmail descriptor and Go→Rust fixtures include the new Observe-only Logistics View.
+- Focused Go race tests/vet and Rust contract tests pass. Live Gmail plus Home Assistant/travel or
+  delivery evidence remains required, so S5.5-C5/E8 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 bounded Google Drive file adapter — 2026-09-11
 
 - Added an ephemeral Google Drive adapter for one selected folder. It lists at most eight recent

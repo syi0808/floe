@@ -3,6 +3,7 @@ package gmail
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,5 +112,27 @@ func TestIndexRejectsCorruptAndCrossConnectionState(t *testing.T) {
 	}
 	if _, err := OpenIndex(directory, "account-1"); err == nil {
 		t.Fatal("accepted cross-connection state")
+	}
+}
+
+func TestIndexProjectsOnlyExplicitLogisticsMailCandidates(t *testing.T) {
+	directory := t.TempDir()
+	os.Chmod(directory, 0700)
+	index, _ := OpenIndex(directory, "account-1")
+	delivery := indexed("m1", "t1", "Your package is out for delivery", 30)
+	travel := indexed("m2", "t2", "Flight confirmation ICN to SFO", 20)
+	ordinary := indexed("m3", "t3", "Software package review", 10)
+	if err := index.ApplyFull([]Metadata{delivery, travel, ordinary}, "40"); err != nil {
+		t.Fatal(err)
+	}
+	view, err := index.Logistics(time.Unix(1_789_128_000, 0))
+	if err != nil || len(view.Items) != 2 || view.Items[0].Kind != "delivery" || view.Items[1].Kind != "travel" {
+		t.Fatalf("view: %#v %v", view, err)
+	}
+	encoded := fmt.Sprintf("%#v", view)
+	for _, private := range []string{"account-1", "m1", "t1"} {
+		if strings.Contains(encoded, private) {
+			t.Fatalf("provider identity leaked: %s", private)
+		}
 	}
 }
