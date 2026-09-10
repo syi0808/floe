@@ -29,10 +29,12 @@
 
 ```sh
 cargo test -p floe-agent --test mail_experts
+cargo test -p floe-ffi commitments_delegation_reads_fresh_view_and_returns_typed_artifact --lib
 cargo test --workspace
 ```
 
-The focused corpus passes 3/3 and the Rust workspace passes. The corpus is synthetic and does not
+The focused corpus passes 3/3, the composed paired-server View → isolated Commitments model → typed
+A2A artifact test passes, and the Rust workspace passes. The evidence is synthetic and does not
 claim model quality or live Gmail acceptance.
 
 ## Remaining gate

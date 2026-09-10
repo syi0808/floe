@@ -376,7 +376,46 @@ impl InProcessAgent for ConversationMailExperts<'_> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
+
+    async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
+        let mut bytes = Vec::new();
+        let length = loop {
+            let mut chunk = [0_u8; 4096];
+            let read = socket.read(&mut chunk).await.unwrap();
+            bytes.extend_from_slice(&chunk[..read]);
+            let text = String::from_utf8_lossy(&bytes);
+            if let Some(header_end) = text.find("\r\n\r\n") {
+                let content_length = text[..header_end]
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if bytes.len() >= header_end + 4 + content_length {
+                    break header_end + 4 + content_length;
+                }
+            }
+        };
+        (String::from_utf8(bytes[..length].to_vec()).unwrap(), socket)
+    }
+
+    async fn respond(mut socket: tokio::net::TcpStream, body: String) {
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn configured_daily_route_takes_priority_over_the_device_model() {
@@ -461,5 +500,136 @@ mod tests {
             })
             .await;
         assert_eq!(result, Err(AgentFailure::InvalidInput));
+    }
+
+    #[tokio::test]
+    async fn commitments_delegation_reads_fresh_view_and_returns_typed_artifact() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (view_request, socket) = request(socket).await;
+            assert!(view_request.starts_with("POST /v1/views/mail.communication "));
+            respond(
+                socket,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view": {
+                        "schema_version": 1,
+                        "view_id": "mail.communication",
+                        "source_handle": "mail:fresh",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 299_999,
+                        "coverage_complete": true,
+                        "items": [{
+                            "evidence_handle": "mail:request",
+                            "thread_handle": "mail:thread",
+                            "received_unix_ms": now - 2,
+                            "from": "alex@example.com",
+                            "to": "person@example.com",
+                            "subject": "Confirm by Friday",
+                            "snippet": "Please confirm the review by Friday.",
+                            "labels": ["INBOX"]
+                        }]
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let (model_request, socket) = request(socket).await;
+            assert!(model_request.starts_with("POST /v1/agent "));
+            assert!(model_request.contains("Commitments Expert"));
+            assert!(model_request.contains("Confirm by Friday"));
+            let answer = serde_json::json!({
+                "summary": "A reply and Friday commitment are requested.",
+                "findings": [{
+                    "evidence_handle": "mail:request",
+                    "kind": "request_to_user",
+                    "statement": "Confirm the review by Friday.",
+                    "epistemic_status": "observed",
+                    "confidence_millis": 1000
+                }]
+            })
+            .to_string();
+            let output = serde_json::json!({
+                "output": [{"kind": "answer", "text": answer}],
+                "used_tokens": 64,
+                "call_ids": []
+            })
+            .to_string();
+            respond(
+                socket,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "purpose": "everyday_assistance",
+                    "output": output,
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "routing": {
+                        "placement": "server_local",
+                        "external_transfer": false,
+                        "replay_source": "a".repeat(64)
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+        });
+        let route = AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        };
+        let model = Model::new(Some(route.clone())).unwrap();
+        let policy = policy(&model, Some(&route));
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let experts = ConversationMailExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+        };
+        let task_id = uuid::Uuid::new_v4();
+        let task = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id: PersonId::new(),
+                session_id: uuid::Uuid::new_v4(),
+                parent_turn_id: uuid::Uuid::new_v4(),
+                agent_id: COMMITMENTS_AGENT_ID.into(),
+                message: floe_agent::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(task_id),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Check my latest mail for commitments.".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.state, A2ATaskState::Completed);
+        let data = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
+        let result: CommitmentsExpertResult = serde_json::from_str(data).unwrap();
+        assert_eq!(result.source_handle, "mail:fresh");
+        assert_eq!(result.findings.len(), 1);
+        server.await.unwrap();
     }
 }
