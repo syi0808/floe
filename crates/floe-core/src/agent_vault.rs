@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 mod calendar_sessions;
 mod expert_actions;
 mod keyring;
+mod learning;
 mod registry;
 mod session_archive;
 pub use keyring::KeyringVaultKeys;
@@ -137,6 +138,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(unavailable)?;
         connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
         vault.initialize_session_archive().await?;
+        vault.initialize_learning_store().await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -209,6 +211,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(unavailable)?;
         vault.initialize_session_archive().await?;
+        vault.initialize_learning_store().await?;
         match vault.expert_registry().await {
             Ok(_) => {}
             Err(AgentFailure::VaultUnavailable) => {

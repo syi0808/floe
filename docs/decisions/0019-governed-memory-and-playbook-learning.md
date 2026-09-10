@@ -1,6 +1,6 @@
 # ADR 0019: Govern self-improvement through staged knowledge changes
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-10
 - **Scope:** S5 Personal Memory and Playbook learning lifecycle
 - **Extends:** ADR 0017 context assembly
@@ -84,8 +84,8 @@ KnowledgeMutation {
 }
 ```
 
-`contentHash + extractorVersion + candidate kind + targetId` forms the idempotency
-key for an extraction result. Replaying a session or retrying a model call therefore
+`contentHash + extractor/prompt version + candidate kind + targetId` forms the
+idempotency key for an extraction result. Replaying a session or retrying a model call therefore
 cannot create another pending or active copy of the same proposal. Unknown schema or
 extractor versions fail closed rather than being reinterpreted.
 

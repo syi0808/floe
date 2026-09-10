@@ -437,7 +437,7 @@ See [ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md).
 
 ## D-042 — Learning proposes; Core governs knowledge changes
 
-**Status:** Proposed — 2026-09-10
+**Status:** Accepted — 2026-09-10
 
 S5 uses Hermes Agent's isolated background review, staged write, origin tracking,
 pinning and recoverable Curator mechanisms as the primary implementation reference.

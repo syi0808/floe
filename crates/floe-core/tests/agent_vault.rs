@@ -12,6 +12,7 @@ use std::{
     },
 };
 
+use chrono::{TimeZone, Utc};
 use floe_agent::*;
 use floe_core::{EncryptedAgentVault, VaultKey, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -80,6 +81,268 @@ fn assert_no_plaintext(directory: &Path, markers: &[&str]) {
             }
         }
     }
+}
+
+fn memory_value(statement: &str) -> PersonalMemoryValue {
+    PersonalMemoryValue {
+        kind: PersonalMemoryKind::Preference,
+        statement: statement.into(),
+        epistemic_status: EpistemicStatus::Fact,
+        confidence_millis: 1000,
+        valid_from: None,
+        valid_until: None,
+        observed_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
+    let root = private_root();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    let correction_turn_id = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id,
+            text: "회의는 오전보다 오후를 선호한다고 기억해줘".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id,
+            text: "검토할 기억으로 준비했어요.".into(),
+        },
+        AgentMessage::User {
+            turn_id: correction_turn_id,
+            text: "정확히는 14시 이후 회의를 선호해.".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: correction_turn_id,
+            text: "정정 내용을 별도 검토 항목으로 준비할게요.".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 0).await.unwrap();
+    let created_at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 1, 0).unwrap();
+    let request = StageMemoryCandidate {
+        session_id: session.id,
+        turn_ids: vec![turn_id],
+        observation_kind: LearningObservationKind::ExplicitRemember,
+        digest: "사용자가 회의 시간대 선호를 명시했다.".into(),
+        value: memory_value("사용자는 회의를 오전보다 오후에 선호한다."),
+        target_id: None,
+        base_revision: None,
+        extractor_version: "memory.fixture.v1".into(),
+        prompt_version: "explicit-memory.v1".into(),
+        actor: KnowledgeActor::User,
+        created_at,
+    };
+
+    let candidate = vault.stage_memory_candidate(request.clone()).await.unwrap();
+    assert_eq!(candidate.state, KnowledgeCandidateState::Pending);
+    assert_eq!(
+        vault.stage_memory_candidate(request).await.unwrap(),
+        candidate
+    );
+    assert_eq!(
+        vault
+            .pending_knowledge_candidates()
+            .await
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&candidate)
+    );
+    assert!(vault.active_personal_memories().await.unwrap().is_empty());
+
+    let decided_at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 2, 0).unwrap();
+    let result = vault
+        .decide_knowledge_candidate(
+            candidate.id,
+            KnowledgeDecisionKind::Approve,
+            KnowledgeActor::User,
+            decided_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.candidate.state, KnowledgeCandidateState::Approved);
+    let revision = result.revision.unwrap();
+    assert_eq!(revision.revision, 1);
+    assert_eq!(revision.state, KnowledgeRevisionState::Active);
+    assert_eq!(result.mutation.as_ref().unwrap().to_revision, 1);
+    assert!(result.mutation.as_ref().unwrap().from_revision.is_none());
+    assert!(
+        vault
+            .pending_knowledge_candidates()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        vault.active_personal_memories().await.unwrap().as_slice(),
+        std::slice::from_ref(&revision)
+    );
+    assert_eq!(
+        vault.knowledge_mutations(revision.target_id).await.unwrap(),
+        [result.mutation.unwrap()]
+    );
+    assert_eq!(
+        vault
+            .decide_knowledge_candidate(
+                candidate.id,
+                KnowledgeDecisionKind::Approve,
+                KnowledgeActor::User,
+                decided_at,
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    let revised_candidate = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: session.id,
+            turn_ids: vec![correction_turn_id],
+            observation_kind: LearningObservationKind::UserCorrection,
+            digest: "사용자가 회의 선호의 구체적인 시작 시각을 정정했다.".into(),
+            value: memory_value("사용자는 회의를 14시 이후에 선호한다."),
+            target_id: Some(revision.target_id),
+            base_revision: Some(1),
+            extractor_version: "memory.fixture.v1".into(),
+            prompt_version: "explicit-memory.v1".into(),
+            actor: KnowledgeActor::User,
+            created_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 7, 0).unwrap(),
+        })
+        .await
+        .unwrap();
+    let revised = vault
+        .decide_knowledge_candidate(
+            revised_candidate.id,
+            KnowledgeDecisionKind::Approve,
+            KnowledgeActor::User,
+            Utc.with_ymd_and_hms(2026, 9, 10, 12, 8, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+    let active_revision = revised.revision.unwrap();
+    assert_eq!(active_revision.revision, 2);
+    assert_eq!(revised.mutation.as_ref().unwrap().from_revision, Some(1));
+    assert_eq!(
+        revised.mutation.as_ref().unwrap().rollback_revision,
+        Some(1)
+    );
+    assert_eq!(
+        vault.active_personal_memories().await.unwrap().as_slice(),
+        std::slice::from_ref(&active_revision)
+    );
+
+    drop(vault);
+    let vault = EncryptedAgentVault::open(root.path(), person, keys)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.active_personal_memories().await.unwrap(),
+        [active_revision]
+    );
+    assert_eq!(
+        vault
+            .knowledge_mutations(revision.target_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn memory_review_rejects_untrusted_sources_and_non_user_decisions() {
+    let root = private_root();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys)
+        .await
+        .unwrap();
+    let mut sample = vault.create_sample_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    sample.messages = vec![AgentMessage::User {
+        turn_id,
+        text: "fixture preference".into(),
+    }];
+    sample.revision = 1;
+    sample.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&sample, 0).await.unwrap();
+    let request = StageMemoryCandidate {
+        session_id: sample.id,
+        turn_ids: vec![turn_id],
+        observation_kind: LearningObservationKind::UserCorrection,
+        digest: "fixture evidence".into(),
+        value: memory_value("fixture-derived memory must not persist"),
+        target_id: None,
+        base_revision: None,
+        extractor_version: "memory.fixture.v1".into(),
+        prompt_version: "correction.v1".into(),
+        actor: KnowledgeActor::Learner {
+            run_id: Uuid::new_v4(),
+        },
+        created_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 3, 0).unwrap(),
+    };
+    assert_eq!(
+        vault.stage_memory_candidate(request).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+
+    let mut personal = vault.create_session().await.unwrap();
+    personal.messages = vec![AgentMessage::User {
+        turn_id,
+        text: "personal preference".into(),
+    }];
+    personal.revision = 1;
+    personal.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&personal, 0).await.unwrap();
+    let candidate = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: personal.id,
+            turn_ids: vec![turn_id],
+            observation_kind: LearningObservationKind::UserCorrection,
+            digest: "사용자가 선호를 정정했다.".into(),
+            value: memory_value("사용자는 오후 회의를 선호한다."),
+            target_id: None,
+            base_revision: None,
+            extractor_version: "memory.fixture.v1".into(),
+            prompt_version: "correction.v1".into(),
+            actor: KnowledgeActor::Learner {
+                run_id: Uuid::new_v4(),
+            },
+            created_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 4, 0).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .decide_knowledge_candidate(
+                candidate.id,
+                KnowledgeDecisionKind::Approve,
+                KnowledgeActor::System,
+                Utc.with_ymd_and_hms(2026, 9, 10, 12, 5, 0).unwrap(),
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    let rejected = vault
+        .decide_knowledge_candidate(
+            candidate.id,
+            KnowledgeDecisionKind::Reject,
+            KnowledgeActor::User,
+            Utc.with_ymd_and_hms(2026, 9, 10, 12, 6, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.candidate.state, KnowledgeCandidateState::Rejected);
+    assert!(rejected.revision.is_none());
+    assert!(rejected.mutation.is_none());
+    assert!(vault.active_personal_memories().await.unwrap().is_empty());
 }
 
 #[tokio::test]

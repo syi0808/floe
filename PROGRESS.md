@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 governed Memory persistence foundation — 2026-09-10
+
+- Accepted ADR 0019 after reviewing Hermes Agent's background review, staged-write,
+  origin, pin and Curator implementation. Floe adapts the mechanism so a Learner can
+  propose but never activate authoritative knowledge.
+- Added typed LearningObservation, Memory candidate, decision, immutable revision and
+  mutation-ledger contracts in the encrypted Person vault. Duplicate extraction is
+  idempotent across retries, and revisions retain base hashes and rollback material.
+- Only completed Personal sessions can stage evidence. Synthetic sources and non-user
+  decisions fail closed; pending/rejected candidates never appear as active Memory.
+- Focused encrypted-vault tests now pass 19/19. Full Rust workspace tests/check and
+  formatting pass, including create/revise/reject/reopen coverage.
+- Conversation extraction, shared Review UI/FFI, ContextEnvelope retrieval, background
+  Learner, rollback execution, curation and deletion propagation remain. This is a
+  foundation checkpoint and does not satisfy S5-A1–A6.
+  [Evidence and limits](docs/validation/s5-governed-memory-foundation.md).
+
 ### S5 encrypted Session Archive foundation — 2026-09-10
 
 - Added Person-vault-local conversation search across live and compacted sessions.
@@ -120,7 +137,7 @@ verified criteria, not estimated implementation percentages.
 | S1 — Calendar read | Implementing | Live timed-event PoC; dual scope, partial recovery, disconnect and DST automated checks | 0/4 | Controlled permission/DST/recurrence/lifecycle gates | Finish controlled live matrix |
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
-| S5 — Memory/self-improvement | Planned; foundation started | Encrypted session search, compaction and exact recovery fixture | 0/5 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
+| S5 — Memory/self-improvement | Planned; foundations started | Encrypted Session Archive plus staged Memory candidate/revision ledger fixtures | 0/6 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
 | S8 — Cross-device/server | Planned | None | 0/4 | S7 Accepted; sync/security PoCs | Same result on two devices |
