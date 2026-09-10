@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 durable Learner review queue — 2026-09-10
+
+- Added an encrypted Person-scoped queue for immutable Learner inputs. Enqueue is
+  content-idempotent, assigns the trusted run ID internally and replays the original
+  queued/terminal record rather than creating duplicate background work.
+- Claim uses a 30-second lease with attempt identity. Explicit defer records a typed
+  transient failure and future availability; abandoned leases recover after restart,
+  while a third abandoned attempt becomes terminal instead of remaining stuck.
+- Every claim revalidates the exact completed Personal source session, revision and
+  evidence turns before model work. A newer foreground revision fails the queued job
+  as stale. Completion can reference only a candidate created by that Learner run over
+  the same source turns.
+- Focused encrypted-vault queue tests pass 2/2 alongside Learner runtime tests 4/4.
+  Idle worker scheduling, foreground-triggered cancellation and a production local
+  Learner adapter remain; S5 stays at 0/6.
+  [Evidence and limits](docs/validation/s5-learner-queue.md).
+
 ### S5 isolated Learner runtime boundary — 2026-09-10
 
 - Added a typed, single-proposal Learner runtime over immutable completed-session
@@ -17,8 +34,8 @@
   makes an old review conflict instead of allowing a stale digest to write, while a
   committed candidate is never hidden by a later cancellation result.
 - Focused Learner tests pass 4/4 and encrypted-vault tests pass 19/19. Durable job
-  enqueue/claim/defer scheduling and a production learner model adapter remain, so
-  this is a runtime boundary rather than a running background service and S5 stays 0/6.
+  persistence is now implemented separately; idle scheduling and a production learner
+  model adapter remain, so this is not yet a running background service and S5 stays 0/6.
   [Evidence and limits](docs/validation/s5-learner-runtime.md).
 
 ### S5 Memory Review boundary and settings surface — 2026-09-10

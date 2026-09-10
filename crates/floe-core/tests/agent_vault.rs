@@ -569,6 +569,232 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
 }
 
 #[tokio::test]
+async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
+    let root = private_root();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id,
+            text: "Remember that I prefer focused mornings".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id,
+            text: "I will prepare that for review".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 0).await.unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 9, 10, 13, 0, 0).unwrap();
+    let input = LearnerReviewInput {
+        schema_version: KNOWLEDGE_VERSION,
+        run_id: Uuid::new_v4(),
+        person_id: person,
+        session_id: session.id,
+        session_revision: session.revision,
+        turn_ids: vec![turn_id],
+        outcome: AgentOutcome::Completed,
+        digest: "User explicitly asked to remember a morning focus preference".into(),
+        current_memories: vec![],
+        observed_at: now,
+    };
+
+    let queued = vault
+        .enqueue_learner_review(input.clone(), now)
+        .await
+        .unwrap();
+    assert_eq!(queued.state, LearnerJobState::Queued);
+    assert_eq!(queued.input.run_id, queued.id);
+    assert_eq!(
+        vault
+            .enqueue_learner_review(
+                LearnerReviewInput {
+                    run_id: Uuid::new_v4(),
+                    ..input.clone()
+                },
+                now
+            )
+            .await
+            .unwrap(),
+        queued
+    );
+
+    let first = vault.claim_learner_review(now).await.unwrap().unwrap();
+    assert_eq!(first.state, LearnerJobState::Running);
+    assert_eq!(first.attempts, 1);
+    assert!(vault.claim_learner_review(now).await.unwrap().is_none());
+    let retry_at = now + chrono::Duration::minutes(1);
+    let deferred = vault
+        .settle_learner_review(
+            first.id,
+            first.attempts,
+            LearnerJobSettlement::Deferred {
+                available_at: retry_at,
+                failure: AgentFailure::Cancelled,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(deferred.state, LearnerJobState::Deferred);
+    assert!(
+        vault
+            .claim_learner_review(retry_at - chrono::Duration::milliseconds(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let second = vault.claim_learner_review(retry_at).await.unwrap().unwrap();
+    assert_eq!(second.attempts, 2);
+    assert_eq!(
+        vault
+            .settle_learner_review(
+                second.id,
+                second.attempts,
+                LearnerJobSettlement::Completed {
+                    candidate_id: Some(Uuid::new_v4()),
+                },
+                retry_at,
+            )
+            .await,
+        Err(AgentFailure::NotFound)
+    );
+    let candidate_id = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: session.id,
+            expected_session_revision: session.revision,
+            turn_ids: vec![turn_id],
+            observation_kind: LearningObservationKind::ExplicitRemember,
+            digest: second.input.digest.clone(),
+            value: memory_value("User prefers focused mornings"),
+            target_id: None,
+            base_revision: None,
+            extractor_version: "memory-extractor-v1".into(),
+            prompt_version: "memory-review-v1".into(),
+            actor: KnowledgeActor::Learner {
+                run_id: second.input.run_id,
+            },
+            created_at: second.input.observed_at,
+        })
+        .await
+        .unwrap()
+        .id;
+    let completed = vault
+        .settle_learner_review(
+            second.id,
+            second.attempts,
+            LearnerJobSettlement::Completed {
+                candidate_id: Some(candidate_id),
+            },
+            retry_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.state, LearnerJobState::Completed);
+    assert_eq!(completed.candidate_id, Some(candidate_id));
+    assert!(
+        vault
+            .claim_learner_review(retry_at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let lease_start = retry_at + chrono::Duration::minutes(1);
+    let abandoned_input = LearnerReviewInput {
+        run_id: Uuid::new_v4(),
+        digest: "A distinct explicit memory request".into(),
+        ..input.clone()
+    };
+    vault
+        .enqueue_learner_review(abandoned_input.clone(), lease_start)
+        .await
+        .unwrap();
+    for attempt in 1..=3 {
+        let claimed = vault
+            .claim_learner_review(
+                lease_start + chrono::Duration::seconds(i64::from(attempt - 1) * 31),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.attempts, attempt);
+    }
+    let exhausted_at = lease_start + chrono::Duration::seconds(93);
+    assert!(
+        vault
+            .claim_learner_review(exhausted_at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let exhausted = vault
+        .enqueue_learner_review(abandoned_input, lease_start)
+        .await
+        .unwrap();
+    assert_eq!(exhausted.state, LearnerJobState::Failed);
+    assert_eq!(exhausted.last_failure, Some(AgentFailure::Stalled));
+
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(root.path(), person, keys)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.enqueue_learner_review(input, now).await.unwrap(),
+        completed
+    );
+}
+
+#[tokio::test]
+async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
+    let root = private_root();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.messages = vec![AgentMessage::User {
+        turn_id,
+        text: "Remember this".into(),
+    }];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 0).await.unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 9, 10, 14, 0, 0).unwrap();
+    let input = LearnerReviewInput {
+        schema_version: KNOWLEDGE_VERSION,
+        run_id: Uuid::new_v4(),
+        person_id: person,
+        session_id: session.id,
+        session_revision: 1,
+        turn_ids: vec![turn_id],
+        outcome: AgentOutcome::Completed,
+        digest: "Explicit remember request".into(),
+        current_memories: vec![],
+        observed_at: now,
+    };
+    let queued = vault
+        .enqueue_learner_review(input.clone(), now)
+        .await
+        .unwrap();
+    session.revision = 2;
+    vault.compare_and_swap(&session, 1).await.unwrap();
+
+    assert!(vault.claim_learner_review(now).await.unwrap().is_none());
+    let failed = vault.enqueue_learner_review(input, now).await.unwrap();
+    assert_eq!(failed.id, queued.id);
+    assert_eq!(failed.state, LearnerJobState::Failed);
+    assert_eq!(failed.last_failure, Some(AgentFailure::StaleContext));
+}
+
+#[tokio::test]
 async fn vaults_enforce_person_revision_version_and_size_boundaries() {
     let root = private_root();
     let person = PersonId::new();

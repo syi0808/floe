@@ -6,6 +6,7 @@ use floe_agent::{
     KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision,
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
     KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+    LearnerJobSettlement, LearnerJobState, LearnerReviewInput, LearnerReviewJob,
     LearningEvidenceRef, LearningObservation, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     PersonalMemoryKind, StageMemoryCandidate,
 };
@@ -20,6 +21,8 @@ const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
 const MAX_VERSION_BYTES: usize = 128;
+const LEARNER_JOB_LEASE_SECONDS: i64 = 30;
+const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn initialize_learning_store(&self) -> Result<(), AgentFailure> {
@@ -50,6 +53,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         ).await.map_err(storage)?;
         connection.execute(
             "CREATE TABLE IF NOT EXISTS knowledge_mutations (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL UNIQUE, target_id TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL)",
+            (),
+        ).await.map_err(storage)?;
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS learner_review_jobs (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))",
+            (),
+        ).await.map_err(storage)?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS learner_review_jobs_ready ON learner_review_jobs(person_id, state, available_at)",
             (),
         ).await.map_err(storage)?;
         Ok(())
@@ -458,6 +469,237 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()?;
         Ok(mutations)
     }
+
+    pub async fn enqueue_learner_review(
+        &self,
+        mut input: LearnerReviewInput,
+        available_at: DateTime<Utc>,
+    ) -> Result<LearnerReviewJob, AgentFailure> {
+        validate_learner_input(&input, self.person_id)?;
+        input.digest = input.digest.trim().to_owned();
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let idempotency_key = hash(&(
+                self.person_id,
+                input.session_id,
+                input.session_revision,
+                &input.turn_ids,
+                input.outcome,
+                &input.digest,
+            ))?;
+            if let Some(job) = learner_job_by_key(&transaction, self.person_id, &idempotency_key).await? {
+                return Ok(job);
+            }
+            validate_learner_source(&transaction, &input).await?;
+            let job_id = Uuid::new_v4();
+            input.run_id = job_id;
+            let job = LearnerReviewJob {
+                schema_version: KNOWLEDGE_VERSION,
+                id: job_id,
+                idempotency_key,
+                input,
+                state: LearnerJobState::Queued,
+                attempts: 0,
+                available_at,
+                claimed_at: None,
+                finished_at: None,
+                candidate_id: None,
+                last_failure: None,
+            };
+            transaction.execute(
+                "INSERT INTO learner_review_jobs (id, person_id, idempotency_key, state, attempts, available_at, payload) VALUES (?, ?, ?, 'queued', 0, ?, ?)",
+                (
+                    job.id.to_string(),
+                    self.person_id.to_string(),
+                    job.idempotency_key.clone(),
+                    timestamp(job.available_at),
+                    payload(&job)?,
+                ),
+            ).await.map_err(storage)?;
+            self.check_access()?;
+            Ok(job)
+        }.await;
+        finish_transaction(transaction, result).await
+    }
+
+    pub async fn claim_learner_review(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Option<LearnerReviewJob>, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let mut rows = transaction.query(
+                "SELECT state, attempts, available_at, payload FROM learner_review_jobs WHERE person_id = ? AND ((state IN ('queued', 'deferred') AND available_at <= ?) OR (state = 'running' AND available_at <= ?)) ORDER BY available_at, id LIMIT 1",
+                (
+                    self.person_id.to_string(),
+                    timestamp(now),
+                    timestamp(now),
+                ),
+            ).await.map_err(storage)?;
+            let Some(row) = rows.next().await.map_err(storage)? else {
+                self.check_access()?;
+                return Ok(None);
+            };
+            let stored_state = row.get::<String>(0).map_err(storage)?;
+            let stored_attempts = row.get::<i64>(1).map_err(storage)?;
+            let stored_available_at = row.get::<String>(2).map_err(storage)?;
+            let mut job: LearnerReviewJob = decode(&row.get::<String>(3).map_err(storage)?)?;
+            drop(rows);
+            validate_learner_job(&job, self.person_id)?;
+            if stored_state != learner_job_state(job.state)
+                || stored_attempts != i64::from(job.attempts)
+                || stored_available_at != timestamp(job.available_at)
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            if job.attempts >= MAX_LEARNER_JOB_ATTEMPTS {
+                job.state = LearnerJobState::Failed;
+                job.finished_at = Some(now);
+                job.last_failure = Some(AgentFailure::Stalled);
+                transaction.execute(
+                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ?",
+                    (payload(&job)?, job.id.to_string()),
+                ).await.map_err(storage)?;
+                self.check_access()?;
+                return Ok(None);
+            }
+            if let Err(failure) = validate_learner_source(&transaction, &job.input).await {
+                if !matches!(
+                    failure,
+                    AgentFailure::StaleContext
+                        | AgentFailure::NotFound
+                        | AgentFailure::PolicyDenied
+                ) {
+                    return Err(failure);
+                }
+                job.state = LearnerJobState::Failed;
+                job.finished_at = Some(now);
+                job.last_failure = Some(failure);
+                transaction.execute(
+                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ?",
+                    (payload(&job)?, job.id.to_string()),
+                ).await.map_err(storage)?;
+                self.check_access()?;
+                return Ok(None);
+            }
+            job.state = LearnerJobState::Running;
+            job.attempts = job.attempts.checked_add(1).ok_or(AgentFailure::VaultUnavailable)?;
+            job.claimed_at = Some(now);
+            job.available_at = now + chrono::Duration::seconds(LEARNER_JOB_LEASE_SECONDS);
+            job.finished_at = None;
+            job.last_failure = None;
+            let changed = transaction.execute(
+                "UPDATE learner_review_jobs SET state = 'running', attempts = ?, available_at = ?, payload = ? WHERE id = ?",
+                (
+                    i64::from(job.attempts),
+                    timestamp(job.available_at),
+                    payload(&job)?,
+                    job.id.to_string(),
+                ),
+            ).await.map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            self.check_access()?;
+            Ok(Some(job))
+        }.await;
+        finish_transaction(transaction, result).await
+    }
+
+    pub async fn settle_learner_review(
+        &self,
+        job_id: Uuid,
+        expected_attempt: u8,
+        settlement: LearnerJobSettlement,
+        settled_at: DateTime<Utc>,
+    ) -> Result<LearnerReviewJob, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let mut job = learner_job_by_id(&transaction, self.person_id, job_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if job.state != LearnerJobState::Running || job.attempts != expected_attempt {
+                return Err(AgentFailure::Conflict);
+            }
+            match settlement {
+                LearnerJobSettlement::Completed { candidate_id } => {
+                    if let Some(candidate_id) = candidate_id {
+                        let candidate =
+                            candidate_by_id(&transaction, self.person_id, candidate_id).await?;
+                        let expected_sources = job
+                            .input
+                            .turn_ids
+                            .iter()
+                            .map(|turn_id| LearningEvidenceRef {
+                                session_id: job.input.session_id,
+                                turn_id: *turn_id,
+                            })
+                            .collect::<Vec<_>>();
+                        if candidate.actor
+                            != (KnowledgeActor::Learner {
+                                run_id: job.input.run_id,
+                            })
+                            || candidate.source_refs != expected_sources
+                        {
+                            return Err(AgentFailure::PolicyDenied);
+                        }
+                    }
+                    job.state = LearnerJobState::Completed;
+                    job.finished_at = Some(settled_at);
+                    job.candidate_id = candidate_id;
+                    job.last_failure = None;
+                }
+                LearnerJobSettlement::Deferred {
+                    available_at,
+                    failure,
+                } => {
+                    if available_at <= settled_at
+                        || job.attempts >= MAX_LEARNER_JOB_ATTEMPTS
+                        || !retriable_learner_failure(failure)
+                    {
+                        return Err(AgentFailure::InvalidInput);
+                    }
+                    job.state = LearnerJobState::Deferred;
+                    job.available_at = available_at;
+                    job.claimed_at = None;
+                    job.last_failure = Some(failure);
+                }
+                LearnerJobSettlement::Failed { failure } => {
+                    job.state = LearnerJobState::Failed;
+                    job.finished_at = Some(settled_at);
+                    job.last_failure = Some(failure);
+                }
+            }
+            let changed = transaction.execute(
+                "UPDATE learner_review_jobs SET state = ?, available_at = ?, payload = ? WHERE id = ? AND state = 'running' AND attempts = ?",
+                (
+                    learner_job_state(job.state),
+                    timestamp(job.available_at),
+                    payload(&job)?,
+                    job.id.to_string(),
+                    i64::from(expected_attempt),
+                ),
+            ).await.map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            self.check_access()?;
+            Ok(job)
+        }.await;
+        finish_transaction(transaction, result).await
+    }
 }
 
 impl<Keys: VaultKeyProvider> floe_agent::MemoryCandidateSink for EncryptedAgentVault<Keys> {
@@ -506,6 +748,210 @@ fn validate_stage_request(request: &StageMemoryCandidate) -> Result<(), AgentFai
         return Err(AgentFailure::InvalidInput);
     }
     Ok(())
+}
+
+fn validate_learner_input(
+    input: &LearnerReviewInput,
+    person_id: floe_domain::PersonId,
+) -> Result<(), AgentFailure> {
+    let unique_turns = input.turn_ids.iter().collect::<HashSet<_>>();
+    let unique_memories = input
+        .current_memories
+        .iter()
+        .map(|memory| memory.target_id)
+        .collect::<HashSet<_>>();
+    if input.schema_version != KNOWLEDGE_VERSION
+        || input.person_id != person_id
+        || input.outcome != AgentOutcome::Completed
+        || input.session_revision == 0
+        || input.turn_ids.is_empty()
+        || input.turn_ids.len() > MAX_EVIDENCE_REFS
+        || unique_turns.len() != input.turn_ids.len()
+        || input.digest.trim().is_empty()
+        || input.digest.len() > MAX_OBSERVATION_DIGEST_BYTES
+        || input.current_memories.len() > MAX_CONTEXT_MEMORIES
+        || unique_memories.len() != input.current_memories.len()
+        || input.current_memories.iter().any(|memory| {
+            memory.revision == 0
+                || memory.statement.trim().is_empty()
+                || memory.confidence_millis > 1000
+                || memory.source_refs.is_empty()
+        })
+        || serde_json::to_vec(input)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
+            > 16 * 1024
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
+async fn validate_learner_source(
+    transaction: &turso::transaction::Transaction<'_>,
+    input: &LearnerReviewInput,
+) -> Result<(), AgentFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT revision, payload FROM agent_sessions WHERE id = ?",
+            [input.session_id.to_string()],
+        )
+        .await
+        .map_err(storage)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::NotFound)?;
+    let expected_revision =
+        i64::try_from(input.session_revision).map_err(|_| AgentFailure::InvalidInput)?;
+    if row.get::<i64>(0).map_err(storage)? != expected_revision {
+        return Err(AgentFailure::StaleContext);
+    }
+    let session: floe_agent::AgentSession = decode(&row.get::<String>(1).map_err(storage)?)?;
+    if session.id != input.session_id
+        || session.person_id != input.person_id
+        || session.revision != input.session_revision
+        || session.scope.is_some()
+        || session.data_classes != [DataClass::Personal]
+        || session.active_turn.is_some()
+        || session.pending_output.is_some()
+        || session.last_outcome != Some(input.outcome)
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let evidence = session
+        .messages
+        .iter()
+        .map(floe_agent::AgentMessage::turn_id)
+        .collect::<HashSet<_>>();
+    if input
+        .turn_ids
+        .iter()
+        .any(|turn_id| !evidence.contains(turn_id))
+    {
+        return Err(AgentFailure::NotFound);
+    }
+    Ok(())
+}
+
+fn validate_learner_job(
+    job: &LearnerReviewJob,
+    person_id: floe_domain::PersonId,
+) -> Result<(), AgentFailure> {
+    let valid_lifecycle = match job.state {
+        LearnerJobState::Queued => {
+            job.attempts == 0
+                && job.claimed_at.is_none()
+                && job.finished_at.is_none()
+                && job.candidate_id.is_none()
+                && job.last_failure.is_none()
+        }
+        LearnerJobState::Running => {
+            (1..=MAX_LEARNER_JOB_ATTEMPTS).contains(&job.attempts)
+                && job.claimed_at.is_some()
+                && job.finished_at.is_none()
+                && job.candidate_id.is_none()
+                && job.last_failure.is_none()
+        }
+        LearnerJobState::Deferred => {
+            (1..MAX_LEARNER_JOB_ATTEMPTS).contains(&job.attempts)
+                && job.claimed_at.is_none()
+                && job.finished_at.is_none()
+                && job.candidate_id.is_none()
+                && job.last_failure.is_some_and(retriable_learner_failure)
+        }
+        LearnerJobState::Completed => {
+            job.attempts > 0 && job.finished_at.is_some() && job.last_failure.is_none()
+        }
+        LearnerJobState::Failed => {
+            job.attempts <= MAX_LEARNER_JOB_ATTEMPTS
+                && job.finished_at.is_some()
+                && job.candidate_id.is_none()
+                && job.last_failure.is_some()
+        }
+    };
+    if job.schema_version != KNOWLEDGE_VERSION
+        || job.idempotency_key.is_empty()
+        || job.attempts > MAX_LEARNER_JOB_ATTEMPTS
+        || job.input.run_id != job.id
+        || !valid_lifecycle
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    validate_learner_input(&job.input, person_id).map_err(|_| AgentFailure::VaultUnavailable)
+}
+
+fn learner_job_state(state: LearnerJobState) -> &'static str {
+    match state {
+        LearnerJobState::Queued => "queued",
+        LearnerJobState::Running => "running",
+        LearnerJobState::Deferred => "deferred",
+        LearnerJobState::Completed => "completed",
+        LearnerJobState::Failed => "failed",
+    }
+}
+
+fn retriable_learner_failure(failure: AgentFailure) -> bool {
+    matches!(
+        failure,
+        AgentFailure::Cancelled
+            | AgentFailure::DeadlineExceeded
+            | AgentFailure::ModelUnavailable
+            | AgentFailure::LocalModelUnavailable
+            | AgentFailure::QuotaExceeded
+            | AgentFailure::Interrupted
+    )
+}
+
+fn timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
+}
+
+async fn learner_job_by_key(
+    transaction: &turso::transaction::Transaction<'_>,
+    person_id: floe_domain::PersonId,
+    idempotency_key: &str,
+) -> Result<Option<LearnerReviewJob>, AgentFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT payload FROM learner_review_jobs WHERE person_id = ? AND idempotency_key = ?",
+            (person_id.to_string(), idempotency_key.to_owned()),
+        )
+        .await
+        .map_err(storage)?;
+    rows.next()
+        .await
+        .map_err(storage)?
+        .map(|row| {
+            let job: LearnerReviewJob = decode(&row.get::<String>(0).map_err(storage)?)?;
+            validate_learner_job(&job, person_id)?;
+            Ok(job)
+        })
+        .transpose()
+}
+
+async fn learner_job_by_id(
+    transaction: &turso::transaction::Transaction<'_>,
+    person_id: floe_domain::PersonId,
+    job_id: Uuid,
+) -> Result<Option<LearnerReviewJob>, AgentFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT payload FROM learner_review_jobs WHERE person_id = ? AND id = ?",
+            (person_id.to_string(), job_id.to_string()),
+        )
+        .await
+        .map_err(storage)?;
+    rows.next()
+        .await
+        .map_err(storage)?
+        .map(|row| {
+            let job: LearnerReviewJob = decode(&row.get::<String>(0).map_err(storage)?)?;
+            validate_learner_job(&job, person_id)?;
+            Ok(job)
+        })
+        .transpose()
 }
 
 fn valid_version(value: &str) -> bool {
