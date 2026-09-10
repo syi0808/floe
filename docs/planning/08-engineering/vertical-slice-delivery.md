@@ -120,8 +120,9 @@ OS 권한은 예외로 허용한다. 앱의 외부 쓰기 기능은 포함하지
 
 ## S4 — Conversational Connected Agent and Expert Foundation
 
-**사용자 결과:** 사용자는 초기 Day Canvas assistant panel에서 Floe와 여러 turn을
-대화하며, 장기 voice/background surface도 재사용할 headless-capable semantic loop를
+**사용자 결과:** 사용자는 초기에는 Day Canvas에 표시된 assistant panel에서 Floe와 여러
+turn을 대화하지만, conversation 자체는 어떤 페이지에도 종속되지 않는다. 장기
+voice/background surface도 재사용할 headless-capable semantic loop를
 검증한다. Manager는 Calendar, Gmail과 기기에서 허용된 attention/health context를
 Contacts, 다음 일정의 위치·ETA·날씨와 함께 전문 Expert를 통해 종합해 오늘
 일정 질문에 답하거나 적절한 일정 작업을 제안한다. 사용자는 각 source와 실행 과정을
@@ -160,13 +161,18 @@ A2A-aligned Message/Task/Artifact contract다.
 - **S4-A2:** Flutter, fixture와 model adapter가 같은 versioned AgentCommand/Event
   contract를 사용한다. stable/scoped/contextual/conversation/runtime context layer와
   내부 message/tool-call representation은 provider나 UI 구현에 종속되지 않는다.
+  client conversation request는 `DayQuery`나 source-specific evidence range를 요구하지
+  않고, 설치된 Expert와 request-scoped Observe capability는 같은 Person session에서
+  동작한다.
 - **S4-A3:** registry가 Tool과 Expert package/version, installation, Person assignment,
   enablement와 private state를 관리한다. built-in Schedule & Feasibility Expert의
   `floe.schedule` Calendar increment와 declarative
   fixture가 동일한 bounded ExpertInvocation/ExpertResult contract로 실행된다.
 - **S4-A4:** Expert는 granted Timeline view와 capabilities만 사용하고 DB, credential,
   raw source에 접근하지 않는다. structured insight/proposal만 Manager에게 반환하며
-  Calendar 변경은 반드시 S3 Review/Policy/Validation/Executor를 재사용한다.
+  Calendar 변경은 반드시 S3 Review/Policy/Validation/Executor를 재사용한다. Expert가
+  해석한 범위가 기존 evidence coverage를 벗어나면 connector를 다시 읽으며, unavailable
+  또는 partial 결과를 빈 일정으로 취급하지 않는다.
 - **S4-A5:** 모든 model/tool/Expert call은 cancellation, deadline, iteration/token/cost,
   output과 반복-call stall budget을 지킨다. 실패 격리, trace/replay, stale context,
   prompt-injection fixture와 실제 모델 대화 세트를 통과한다. 실제 개인 대화는

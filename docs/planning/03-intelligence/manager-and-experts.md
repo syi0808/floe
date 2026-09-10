@@ -91,11 +91,13 @@ Playbook으로 분리한다. 예를 들어 focus-time 탐색은 선택 가능한
 Rust Tool이 담당한다. Declarative fixture는 LLM 없이 같은 capability/output contract를
 검증할 수 있다.
 
-다일 조회에는 host가 해당 날짜들을 포함하는 bounded Calendar View를 먼저 발급해야
-한다. Expert의 반복 호출 자체가 grant를 넓히거나 새로운 Calendar source를 읽을 수는
-없다. Calendar turn transport와 Core View는 호출자가 선택한 최대 31일의 연속 범위를
-전달할 수 있다. Day Canvas는 아직 하루를 기본 범위로 사용하므로 자연어 요청의 범위
-해석과 필요한 source refresh는 별도 connector increment에서 연결한다.
+Calendar source grant는 선택된 source와 정책 경계를 허가하며 대화 전체의 날짜 범위를
+미리 고정하지 않는다. Expert는 현재 assignment에 필요한 범위를 해석해 range-aware
+Observe capability를 호출하고, host는 각 호출의 범위·freshness·item/byte/time budget을
+검증한다. 새 요청이 기존 근거의 검증된 coverage를 벗어나면 connector를 다시 읽어야
+한다. 대화가 표시된 Day Canvas의 선택 날짜는 evidence 범위를 대신하지 않는다. 자세한
+ownership과 migration은
+[ADR 0023](../../decisions/0023-page-independent-assistant-conversation.md)을 따른다.
 
 Expert는 독립적인 사용자-facing personality, 무제한 recursive agent 또는 Calendar
 writer가 아니다. Model placement, data class, consent, deadline과 token/cost budget은
