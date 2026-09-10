@@ -83,6 +83,7 @@ async function refresh() {
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
   renderProvider();
   element('github-state').textContent = state.connectors?.github?.configured ? 'Configured · selected repository read only' : 'Not configured';
+  element('slack-state').textContent = state.connectors?.slack?.configured ? 'Configured · selected conversation read only' : 'Not configured';
   element('home-state').textContent = state.connectors?.home_assistant?.configured ? 'Configured · selected state entities read only' : 'Not configured';
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
@@ -154,7 +155,7 @@ async function gmail(operation) {
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
 element('gmail-sync').onclick = () => action(element('gmail-sync'), async () => { await gmail('sync'); await gmail('status'); });
-for (const form of [element('github-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
+for (const form of [element('github-form'), element('slack-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
 element('github-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
     const form = event.target;
@@ -170,6 +171,13 @@ element('home-form').addEventListener('submit', (event) => {
     form.elements.token.value = ''; editing = false; await refresh(); notice('Home Assistant source configuration saved.');
   });
 });
+element('slack-form').addEventListener('submit', (event) => {
+  event.preventDefault(); action(event.submitter, async () => {
+    const form = event.target;
+    await api('connector/slack', {enabled: true, channel: form.elements.channel.value.trim(), thread: form.elements.thread.value.trim(), token: form.elements.token.value});
+    form.elements.token.value = ''; editing = false; await refresh(); notice('Slack source configuration saved.');
+  });
+});
 element('github-disconnect').onclick = () => action(element('github-disconnect'), async () => {
   if (!confirm('Disconnect GitHub and delete its stored token?')) return;
   await api('connector/github', {enabled: false, owner: '', repository: '', token: ''}); editing = false; await refresh(); notice('GitHub source disconnected.');
@@ -177,6 +185,10 @@ element('github-disconnect').onclick = () => action(element('github-disconnect')
 element('home-disconnect').onclick = () => action(element('home-disconnect'), async () => {
   if (!confirm('Disconnect Home Assistant and delete its stored token?')) return;
   await api('connector/home-assistant', {enabled: false, base_url: '', entities: [], token: ''}); editing = false; await refresh(); notice('Home Assistant source disconnected.');
+});
+element('slack-disconnect').onclick = () => action(element('slack-disconnect'), async () => {
+  if (!confirm('Disconnect Slack and delete its stored token?')) return;
+  await api('connector/slack', {enabled: false, channel: '', thread: '', token: ''}); editing = false; await refresh(); notice('Slack source disconnected.');
 });
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;

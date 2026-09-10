@@ -43,6 +43,13 @@
 - GitHub and Home Assistant services publish typed revoked, rate-limited, partial-fetch and
   unavailable connection failures. A fresh prior View remains visible only as degraded and only
   until its declared expiry; provider failure no longer drops the whole connection inventory.
+- Added a server-native Slack adapter for one explicitly selected channel or thread. It performs a
+  single GET-only history/replies read, exports bounded message text as Work Context communication
+  evidence, hashes channel/message identity, and excludes files, reactions, profiles and provider
+  IDs. Invalid auth, missing scope and rate limits become typed connector failures.
+- Slack configuration and tokens use the same private console/Keychain lifecycle. GitHub and Slack
+  Work Context Views merge behind one provider-neutral Agent route with deterministic aggregate
+  handles, duplicate rejection and partial-provider tolerance.
 
 ## Automated evidence
 
@@ -54,6 +61,8 @@ go -C server test -race ./internal/connectors/homeassistant
 go -C server vet ./internal/connectors/homeassistant
 go -C server test -race ./internal/console
 go -C server vet ./internal/console
+go -C server test -race ./internal/connectors/slack
+go -C server vet ./internal/connectors/slack
 cargo test -p floe-agent --test connected_context
 cargo test -p floe-ffi
 cargo test --workspace
@@ -67,5 +76,5 @@ delegations fetch fresh Views and return source-linked typed A2A artifacts.
 ## Remaining gate
 
 No live provider evidence was used. The Agent path is stateless rather than a durable registry
-assignment. No Slack/Teams, file, travel or delivery adapter produces these Views yet. Cross-source
+assignment. No Teams, file, travel or delivery adapter produces these Views yet. Cross-source
 scenarios and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.

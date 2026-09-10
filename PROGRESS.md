@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Slack work communication adapter — 2026-09-11
+
+- Added a server-native GET-only Slack adapter for one selected channel or thread. Bounded message
+  text becomes provider-neutral Work Context communication evidence while channel/message IDs,
+  files, reactions and profiles stay outside the View.
+- Added Keychain-backed console setup, typed failure snapshots and Go→Rust conformance fixtures.
+  GitHub and Slack Views merge behind the same Agent route with duplicate rejection and partial
+  source tolerance.
+- Focused Go race tests/vet and Rust contract tests pass. A file adapter and live Slack/GitHub
+  evidence remain, so S5.5-C4/E7 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 managed Work and Life connector startup — 2026-09-11
 
 - Added loopback-console configuration for one selected GitHub repository and a bounded Home

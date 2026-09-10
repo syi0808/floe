@@ -1,0 +1,13 @@
+{
+  "descriptor": {
+    "schema_version": 1,
+    "id": "slack.conversations",
+    "version": "1.0.0",
+    "provider": "slack",
+    "execution": {"kind": "server"},
+    "capabilities": [{"schema_version":1,"id":"work.communication.read","version":"1.0.0","authority":"observe","required_scopes":["slack.selected_conversation.read"],"output_view_id":"work.context"}],
+    "views": [{"schema_version":1,"id":"work.context","version":"1.0.0","data_class":"personal","retention":"short_lived_cache","freshness_ttl_ms":300000,"max_items":50,"max_bytes":65536,"provenance_required":true}]
+  },
+  "connection": {"schema_version":1,"connector_id":"slack.conversations","state":"ready","granted_scopes":["slack.selected_conversation.read"],"observed_at_unix_ms":1789128000000,"last_success_at_unix_ms":1789128000000},
+  "views": [{"schema_version":1,"view_id":"work.context","source_handle":"slack:5470d05f837d0d69a83e9779354f6c9b4e7028666acdd6d10945a877f9665448","observed_at_unix_ms":1789128000000,"expires_at_unix_ms":1789128300000,"item_count":1,"byte_count":700,"provenance_count":1}]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "view_id": "work.context",
+  "source_handle": "slack:5470d05f837d0d69a83e9779354f6c9b4e7028666acdd6d10945a877f9665448",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "scope_handle": "channel:9ba9f4bbb8c3eed0f47cff21ea5e620328c46755aa17c21c254637bb0abe0664",
+  "items": [
+    {
+      "evidence_handle": "slack:21fc18e84be769d754c1a442bbb7a28d114af0125ec8feb7a1c0e2c291081bf7",
+      "kind": "communication",
+      "title": "Release review",
+      "excerpt": "Release review\nAttach the validation evidence.",
+      "status": "message",
+      "observed_at_unix_ms": 1789127940123
+    }
+  ]
+}

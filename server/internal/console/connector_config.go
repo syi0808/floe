@@ -8,10 +8,12 @@ import (
 
 	githubconnector "floe/server/internal/connectors/github"
 	homeconnector "floe/server/internal/connectors/homeassistant"
+	slackconnector "floe/server/internal/connectors/slack"
 )
 
 const (
 	githubTokenKey = "FLOE_CONNECTOR_GITHUB_TOKEN"
+	slackTokenKey  = "FLOE_CONNECTOR_SLACK_TOKEN"
 	homeTokenKey   = "FLOE_CONNECTOR_HOME_ASSISTANT_TOKEN"
 )
 
@@ -37,6 +39,17 @@ func (console *Console) rebuildConnectorRuntimes() error {
 			return err
 		}
 		service, err := githubconnector.NewService(client, configured.Owner, configured.Repository)
+		if err != nil {
+			return err
+		}
+		console.work = append(console.work, service)
+	}
+	if configured := console.state.Connectors.Slack; configured != nil {
+		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: slackTokenKey})
+		if err != nil {
+			return err
+		}
+		service, err := slackconnector.NewService(client, configured.Channel, configured.Thread)
 		if err != nil {
 			return err
 		}
@@ -120,6 +133,36 @@ func (console *Console) updateHomeAssistantConnector(writer http.ResponseWriter,
 	console.saveConnectorState(writer, next, homeTokenKey, input.Token)
 }
 
+func (console *Console) updateSlackConnector(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Enabled bool   `json:"enabled"`
+		Channel string `json:"channel"`
+		Thread  string `json:"thread"`
+		Token   string `json:"token"`
+	}
+	if !decode(writer, request, &input) || invalidConnectorToken(input.Token) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if !input.Enabled {
+		next.Connectors.Slack = nil
+		console.saveConnectorState(writer, next, slackTokenKey, "")
+		return
+	}
+	client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: slackTokenKey})
+	if err != nil {
+		failure(writer, 400, "validation")
+		return
+	}
+	if _, err = slackconnector.NewService(client, input.Channel, input.Thread); err != nil || input.Token == "" && console.state.Connectors.Slack == nil {
+		failure(writer, 400, "validation")
+		return
+	}
+	next.Connectors.Slack = &slackConnectorConfig{Channel: input.Channel, Thread: input.Thread}
+	console.saveConnectorState(writer, next, slackTokenKey, input.Token)
+}
+
 func invalidConnectorToken(token string) bool {
 	return token != "" && len(token) < 8 || len(token) > 4096 || strings.ContainsAny(token, "\r\n\x00")
 }
@@ -157,5 +200,5 @@ func (console *Console) saveConnectorState(writer http.ResponseWriter, next disk
 }
 
 func connectorTokenUnused(state diskState, tokenKey string) bool {
-	return tokenKey == githubTokenKey && state.Connectors.GitHub == nil || tokenKey == homeTokenKey && state.Connectors.HomeAssistant == nil
+	return tokenKey == githubTokenKey && state.Connectors.GitHub == nil || tokenKey == slackTokenKey && state.Connectors.Slack == nil || tokenKey == homeTokenKey && state.Connectors.HomeAssistant == nil
 }

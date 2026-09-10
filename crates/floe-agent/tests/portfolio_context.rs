@@ -108,3 +108,14 @@ fn home_assistant_logistics_view_crosses_the_go_rust_contract() {
     assert_eq!(view.items[0].kind, LogisticsItemKind::HomeState);
     assert_eq!(view.items[0].summary, "Front door temperature");
 }
+
+#[test]
+fn slack_work_view_crosses_the_go_rust_contract() {
+    let view: WorkContextView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/slack/testdata/work_context.json"
+    ))
+    .unwrap();
+    validate_work_context_view(&view, 1_789_128_000_000).unwrap();
+    assert_eq!(view.items[0].kind, WorkItemKind::Communication);
+    assert_eq!(view.items[0].title, "Release review");
+}

@@ -479,6 +479,26 @@ func TestGitHubConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
 	}
 }
 
+func TestSlackConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
+	fixture := setup(test)
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/slack", map[string]any{
+		"enabled": true, "channel": "C12345678", "thread": "1789127940.123456", "token": "private-slack-token",
+	}, ""))
+	if len(fixture.console.work) != 1 || fixture.vault.values[slackTokenKey] != "private-slack-token" {
+		test.Fatal("Slack connector was not installed")
+	}
+	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
+	if strings.Contains(string(state), "private-slack-token") {
+		test.Fatal("Slack token entered server state")
+	}
+	response := fixture.call(http.MethodPost, "/manage/api/connector/slack", map[string]any{
+		"enabled": true, "channel": "*", "thread": "", "token": "replacement-token",
+	}, "")
+	if response.Code != http.StatusBadRequest || fixture.vault.values[slackTokenKey] != "private-slack-token" {
+		test.Fatal("invalid Slack scope changed credential")
+	}
+}
+
 func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	fixture := setup(test)
 	var calls atomic.Int32

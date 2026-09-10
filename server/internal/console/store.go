@@ -28,12 +28,18 @@ type diskState struct {
 
 type connectorConfigState struct {
 	GitHub        *githubConnectorConfig        `json:"github,omitempty"`
+	Slack         *slackConnectorConfig         `json:"slack,omitempty"`
 	HomeAssistant *homeAssistantConnectorConfig `json:"home_assistant,omitempty"`
 }
 
 type githubConnectorConfig struct {
 	Owner      string `json:"owner"`
 	Repository string `json:"repository"`
+}
+
+type slackConnectorConfig struct {
+	Channel string `json:"channel"`
+	Thread  string `json:"thread,omitempty"`
 }
 
 type homeAssistantConnectorConfig struct {
@@ -144,6 +150,10 @@ func cloneState(state diskState) diskState {
 		configured := *state.Connectors.HomeAssistant
 		configured.Entities = append([]string(nil), configured.Entities...)
 		copy.Connectors.HomeAssistant = &configured
+	}
+	if state.Connectors.Slack != nil {
+		configured := *state.Connectors.Slack
+		copy.Connectors.Slack = &configured
 	}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value

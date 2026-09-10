@@ -544,6 +544,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateHomeAssistantConnector(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/connector/slack" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateSlackConnector(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.Method != "POST" {
@@ -655,6 +661,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 	}
 	connectors := map[string]any{
 		"github":         map[string]any{"configured": state.Connectors.GitHub != nil},
+		"slack":          map[string]any{"configured": state.Connectors.Slack != nil},
 		"home_assistant": map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
 	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
