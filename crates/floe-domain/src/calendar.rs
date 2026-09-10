@@ -9,6 +9,9 @@ use crate::{Event, EventSchedule};
 pub enum CalendarProvider {
     Fixture,
     EventKit,
+    Google,
+    Microsoft,
+    Android,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

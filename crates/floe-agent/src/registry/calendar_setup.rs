@@ -431,6 +431,9 @@ fn setup_packages(provider: CalendarProvider) -> [AgentPackage; 2] {
     let (source, data_class) = match provider {
         CalendarProvider::Fixture => ("fixture", DataClass::Synthetic),
         CalendarProvider::EventKit => ("eventkit", DataClass::Personal),
+        CalendarProvider::Google => ("google", DataClass::Personal),
+        CalendarProvider::Microsoft => ("microsoft", DataClass::Personal),
+        CalendarProvider::Android => ("android", DataClass::Personal),
     };
     let tool = PackageRef {
         kind: PackageKind::Tool,

@@ -155,3 +155,52 @@ fn nonconforming_and_duplicate_physical_views_are_not_promoted() {
         ["b-duplicate-mail", "health"]
     );
 }
+
+#[test]
+fn calendar_parity_routes_share_one_logical_source_without_prompt_selection() {
+    let mut google = snapshot(
+        "calendar.google",
+        "google_calendar",
+        ConnectionState::Ready,
+        NOW - 500,
+        "calendar.timeline:google",
+    );
+    let mut microsoft = snapshot(
+        "calendar.microsoft",
+        "microsoft_calendar",
+        ConnectionState::Ready,
+        NOW - 500,
+        "calendar.timeline:microsoft",
+    );
+    for candidate in [&mut google, &mut microsoft] {
+        candidate.descriptor.capabilities[0].id = "calendar.events.read".into();
+        candidate.descriptor.capabilities[0].required_scopes = vec!["calendar.events.read".into()];
+        candidate.descriptor.capabilities[0].output_view_id = Some("calendar.timeline".into());
+        candidate.descriptor.views[0].id = "calendar.timeline".into();
+        candidate.connection.granted_scopes = vec!["calendar.events.read".into()];
+        candidate.views[0].view_id = "calendar.timeline".into();
+    }
+    let routes = [
+        LogicalViewRoute {
+            logical_source_id: "personal-calendar".into(),
+            connector_id: "calendar.google".into(),
+            view_id: "calendar.timeline".into(),
+        },
+        LogicalViewRoute {
+            logical_source_id: "personal-calendar".into(),
+            connector_id: "calendar.microsoft".into(),
+            view_id: "calendar.timeline".into(),
+        },
+    ];
+
+    let result = route_logical_views(
+        &routes,
+        &[microsoft, google],
+        &["google_calendar".into(), "microsoft_calendar".into()],
+        NOW,
+    );
+
+    assert_eq!(result.selected.len(), 1);
+    assert_eq!(result.selected[0].connector_id, "calendar.google");
+    assert_eq!(result.deduplicated_candidates, 1);
+}

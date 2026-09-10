@@ -62,7 +62,11 @@ impl AgentSessionScope {
                 ..
             } => crate::DataClass::Synthetic,
             Self::Calendar {
-                provider: floe_domain::CalendarProvider::EventKit,
+                provider:
+                    floe_domain::CalendarProvider::EventKit
+                    | floe_domain::CalendarProvider::Google
+                    | floe_domain::CalendarProvider::Microsoft
+                    | floe_domain::CalendarProvider::Android,
                 ..
             } => crate::DataClass::Personal,
         }

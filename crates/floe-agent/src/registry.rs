@@ -196,7 +196,10 @@ impl CalendarViewBinding {
     pub fn data_class(&self) -> DataClass {
         match self.provider {
             floe_domain::CalendarProvider::Fixture => DataClass::Synthetic,
-            floe_domain::CalendarProvider::EventKit => DataClass::Personal,
+            floe_domain::CalendarProvider::EventKit
+            | floe_domain::CalendarProvider::Google
+            | floe_domain::CalendarProvider::Microsoft
+            | floe_domain::CalendarProvider::Android => DataClass::Personal,
         }
     }
 

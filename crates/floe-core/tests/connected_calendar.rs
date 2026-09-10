@@ -113,6 +113,68 @@ async fn durable_calendar_projects_a_conforming_provider_neutral_snapshot() {
 }
 
 #[tokio::test]
+async fn parity_calendar_providers_project_the_same_conforming_contract() {
+    for (provider, connector, provider_name) in [
+        (
+            CalendarProvider::Google,
+            "calendar.google",
+            "google_calendar",
+        ),
+        (
+            CalendarProvider::Microsoft,
+            "calendar.microsoft",
+            "microsoft_calendar",
+        ),
+        (
+            CalendarProvider::Android,
+            "calendar.android",
+            "android_calendar",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let core = FloeCore::open(directory.path().join("parity-calendar.db"))
+            .await
+            .unwrap();
+        let person_id = PersonId::new();
+        core.select_calendars(
+            person_id,
+            provider,
+            vec![CalendarSelection {
+                calendar_id: "selected".into(),
+                calendar_name: "Selected".into(),
+            }],
+        )
+        .await
+        .unwrap();
+        core.import_calendar_sources(
+            person_id,
+            1,
+            range(),
+            vec![batch("selected", "Review")],
+            now(),
+        )
+        .await
+        .unwrap();
+        let snapshot = core
+            .calendar_connector_snapshot(person_id, "parity-device", now() + Duration::minutes(1))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(snapshot.descriptor.id, connector);
+        assert_eq!(snapshot.descriptor.provider, provider_name);
+        assert_eq!(snapshot.connection.connector_id, connector);
+        assert!(
+            validate_connector_snapshot(
+                &snapshot,
+                u64::try_from((now() + Duration::minutes(1)).timestamp_millis()).unwrap(),
+            )
+            .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
 async fn partial_source_failure_keeps_the_healthy_calendar_situation_runnable() {
     let (_directory, core, person_id) = setup().await;
     let failure_at = now() + Duration::minutes(1);

@@ -19,6 +19,9 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
     for (provider, data_class) in [
         (CalendarProvider::Fixture, DataClass::Synthetic),
         (CalendarProvider::EventKit, DataClass::Personal),
+        (CalendarProvider::Google, DataClass::Personal),
+        (CalendarProvider::Microsoft, DataClass::Personal),
+        (CalendarProvider::Android, DataClass::Personal),
     ] {
         let request = request(&registry, provider);
         let setup = registry.install_calendar_expert(person, &request).unwrap();
@@ -68,11 +71,11 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
                 .ends_with(".schedule")
         );
     }
-    assert_eq!(registry.snapshot().packages.len(), 4);
+    assert_eq!(registry.snapshot().packages.len(), 10);
     let next = request(&registry, CalendarProvider::EventKit);
     registry.install_calendar_expert(person, &next).unwrap();
-    assert_eq!(registry.snapshot().packages.len(), 4);
-    assert_eq!(registry.snapshot().installations.len(), 6);
+    assert_eq!(registry.snapshot().packages.len(), 10);
+    assert_eq!(registry.snapshot().installations.len(), 12);
 }
 
 #[test]

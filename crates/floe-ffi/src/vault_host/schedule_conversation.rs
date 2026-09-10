@@ -170,6 +170,7 @@ fn range_bounds(
 enum Access {
     Fixture(FixtureAccess),
     Native(NativeCalendar),
+    Unsupported,
 }
 
 impl Access {
@@ -177,6 +178,9 @@ impl Access {
         match provider {
             CalendarProvider::Fixture => Self::Fixture(FixtureAccess { calendar_ids }),
             CalendarProvider::EventKit => Self::Native(NativeCalendar::new(calendar_ids)),
+            CalendarProvider::Google | CalendarProvider::Microsoft | CalendarProvider::Android => {
+                Self::Unsupported
+            }
         }
     }
 }
@@ -189,6 +193,7 @@ impl CalendarReadAccess for Access {
         match self {
             Self::Fixture(access) => access.check(request).await,
             Self::Native(access) => access.check(request).await,
+            Self::Unsupported => Err(AgentFailure::CapabilityUnavailable),
         }
     }
 
@@ -199,6 +204,7 @@ impl CalendarReadAccess for Access {
         match self {
             Self::Fixture(_) => Ok(None),
             Self::Native(access) => access.observe(request).await,
+            Self::Unsupported => Err(AgentFailure::CapabilityUnavailable),
         }
     }
 }

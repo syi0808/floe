@@ -1,7 +1,7 @@
 # S5.5 Provider-neutral Context Routing Foundation
 
-> Date: 2026-09-10  
-> Acceptance status: route arbitration contract only; provider adapters pending
+> Date: 2026-09-11
+> Acceptance status: route arbitration and calendar provider contracts; source adapters pending
 
 ## Delivered boundary
 
@@ -13,17 +13,31 @@
   logical routes, and unavailable logical sources remain explicit instead of becoming empty data.
 - Fixtures cover Google/Microsoft mail arbitration and Android/Health Connect-shaped candidates,
   including degraded fallback, invalid bounds and duplicate-source suppression.
+- The durable calendar provider enum, registry binding and Schedule Expert setup now represent
+  Google Calendar, Microsoft Calendar and Android Calendar explicitly. Every provider gets a
+  distinct provider-pinned package identifier and personal-data classification.
+- Durable mirror projection emits the same `calendar.timeline` capability/View descriptor for the
+  three parity providers while preserving distinct connector/provider IDs and opaque source handles.
+  Unsupported FFI access returns `CapabilityUnavailable` until its real adapter is installed rather
+  than accidentally invoking EventKit or fixture data.
+- Google and Microsoft calendar snapshots share one logical route in a focused arbitration test.
+  Equal-health/equal-freshness candidates follow configured provider priority without model input,
+  and the losing physical candidate is counted as deduplicated.
 
 ## Automated evidence
 
 ```sh
 cargo test -p floe-agent --test context_routing
+cargo test -p floe-agent --test calendar_setup
+cargo test -p floe-core --test connected_calendar
+cargo test -p floe-ffi --lib vault_host::tests::calendar_experts
 ```
 
 The focused routing tests pass 2/2.
 
 ## Remaining gate
 
-This is deterministic route/dedup infrastructure, not provider parity. Google Calendar,
-Microsoft Calendar/Mail, Android Calendar/Contacts and Health Connect adapters still need to emit
-live conforming snapshots and use the route table. S5.5-C3 remains pending.
+This is deterministic route/dedup and calendar contract infrastructure, not complete provider
+parity. Microsoft Mail has a product adapter path, but Google Calendar, Microsoft Calendar, Android
+Calendar/Contacts and Health Connect still need real source adapters and live conforming snapshots.
+S5.5-C3 remains pending.

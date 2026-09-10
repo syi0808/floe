@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 calendar parity contract path — 2026-09-11
+
+- Extended the durable calendar domain and Schedule Expert setup contract with explicit Google,
+  Microsoft and Android providers. Each provider receives an isolated provider-pinned package and
+  personal-data binding; unsupported runtime access fails typed instead of falling through.
+- All three providers now project the same conforming `calendar.timeline` connector snapshot with
+  stable provider IDs, and Google/Microsoft candidates exercise deterministic logical-source routing.
+- Focused Agent/Core/FFI tests pass. The remote and Android source adapters themselves remain, so
+  S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-context-routing.md).
+
 ### S5.5 Microsoft Mail OAuth and product route — 2026-09-11
 
 - Added a dedicated Microsoft PKCE OAuth runtime with exact `Mail.Read` and `offline_access`

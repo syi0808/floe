@@ -32,7 +32,10 @@ impl CalendarTimelineGrant {
     pub fn data_class(&self) -> DataClass {
         match self.provider {
             CalendarProvider::Fixture => DataClass::Synthetic,
-            CalendarProvider::EventKit => DataClass::Personal,
+            CalendarProvider::EventKit
+            | CalendarProvider::Google
+            | CalendarProvider::Microsoft
+            | CalendarProvider::Android => DataClass::Personal,
         }
     }
 

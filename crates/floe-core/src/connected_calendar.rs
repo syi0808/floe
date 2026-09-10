@@ -208,7 +208,10 @@ fn project_calendar_connector(
                 version: "1.0.0".into(),
                 data_class: match connection.provider {
                     CalendarProvider::Fixture => DataClass::Synthetic,
-                    CalendarProvider::EventKit => DataClass::Personal,
+                    CalendarProvider::EventKit
+                    | CalendarProvider::Google
+                    | CalendarProvider::Microsoft
+                    | CalendarProvider::Android => DataClass::Personal,
                 },
                 retention: RetentionClass::Mirror,
                 freshness_ttl_ms: CALENDAR_FRESHNESS_MS,
@@ -234,6 +237,9 @@ fn connector_id(provider: CalendarProvider) -> &'static str {
     match provider {
         CalendarProvider::Fixture => "calendar.fixture",
         CalendarProvider::EventKit => "calendar.event_kit",
+        CalendarProvider::Google => "calendar.google",
+        CalendarProvider::Microsoft => "calendar.microsoft",
+        CalendarProvider::Android => "calendar.android",
     }
 }
 
@@ -241,6 +247,9 @@ fn provider_name(provider: CalendarProvider) -> &'static str {
     match provider {
         CalendarProvider::Fixture => "fixture",
         CalendarProvider::EventKit => "apple_event_kit",
+        CalendarProvider::Google => "google_calendar",
+        CalendarProvider::Microsoft => "microsoft_calendar",
+        CalendarProvider::Android => "android_calendar",
     }
 }
 
