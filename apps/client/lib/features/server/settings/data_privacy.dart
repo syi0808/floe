@@ -5,6 +5,7 @@ class _DataPrivacy extends StatefulWidget {
     required this.controller,
     required this.serverClient,
     required this.onManageMemory,
+    this.androidContext,
     this.calendarSources,
     this.calendarSourceChanges,
   });
@@ -12,6 +13,7 @@ class _DataPrivacy extends StatefulWidget {
   final AgentController controller;
   final LocalServerClient? serverClient;
   final VoidCallback onManageMemory;
+  final AndroidContextApi? androidContext;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
 
@@ -27,8 +29,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool savedMemoryRequested = false;
   bool connectionsRequested = false;
   bool serverConnectionsRequested = false;
+  bool androidConnectionsRequested = false;
+  bool androidHealthBusy = false;
   List<AgentConnection>? serverConnections;
+  List<AgentConnection>? androidConnections;
   Object? serverConnectionFailure;
+  Object? androidConnectionFailure;
 
   AgentController get controller => widget.controller;
 
@@ -56,6 +62,11 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       serverConnections = null;
       serverConnectionFailure = null;
     }
+    if (oldWidget.androidContext != widget.androidContext) {
+      androidConnectionsRequested = false;
+      androidConnections = null;
+      androidConnectionFailure = null;
+    }
     _load();
   }
 
@@ -69,7 +80,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             !controller.canReviewMemory &&
             !controller.canReadMemory &&
             !controller.canReadConnections &&
-            widget.serverClient == null) {
+            widget.serverClient == null &&
+            widget.androidContext == null) {
       return;
     }
     loading = true;
@@ -118,6 +130,20 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       }
       if (mounted) setState(() {});
     }
+    if (!androidConnectionsRequested && widget.androidContext != null) {
+      androidConnectionsRequested = true;
+      try {
+        final values = await widget.androidContext!.connections();
+        androidConnections = List.unmodifiable(
+          values.map(AgentConnection.fromJson),
+        );
+        androidConnectionFailure = null;
+      } on Object catch (error) {
+        androidConnections = const [];
+        androidConnectionFailure = error;
+      }
+      if (mounted) setState(() {});
+    }
     loading = false;
   }
 
@@ -125,8 +151,40 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     connectionsRequested = false;
     serverConnectionsRequested = false;
     serverConnectionFailure = null;
+    androidConnectionsRequested = false;
+    androidConnectionFailure = null;
     if (widget.serverClient != null) serverConnections = null;
+    if (widget.androidContext != null) androidConnections = null;
     await _load();
+  }
+
+  Future<void> _refreshAndroidWellbeing(AgentConnection connection) async {
+    final gateway = widget.androidContext;
+    if (gateway == null || androidHealthBusy) return;
+    setState(() {
+      androidHealthBusy = true;
+      androidConnectionFailure = null;
+    });
+    try {
+      if (connection.state == AgentConnectionState.revoked) {
+        final granted = await gateway.requestPermission(
+          AndroidContextSource.health,
+        );
+        if (!granted) {
+          throw StateError('Health Connect access was not granted.');
+        }
+      }
+      await gateway.readWellbeing();
+    } on Object catch (error) {
+      androidConnectionFailure = error;
+    } finally {
+      androidConnectionsRequested = false;
+      try {
+        await _load();
+      } finally {
+        if (mounted) setState(() => androidHealthBusy = false);
+      }
+    }
   }
 
   @override
@@ -145,10 +203,25 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       final remoteConnections = widget.serverClient == null
           ? const <AgentConnection>[]
           : serverConnections;
-      final connections = [...?localConnections, ...?remoteConnections];
+      final deviceConnections = widget.androidContext == null
+          ? const <AgentConnection>[]
+          : androidConnections;
+      final connections = [
+        ...?localConnections,
+        ...?deviceConnections,
+        ...?remoteConnections,
+      ];
       final connectionLoading =
           controller.hasConnections && localConnections == null ||
+          widget.androidContext != null && deviceConnections == null ||
           widget.serverClient != null && remoteConnections == null;
+      AgentConnection? healthConnection;
+      for (final connection in connections) {
+        if (connection.descriptor.provider == 'health_connect') {
+          healthConnection = connection;
+          break;
+        }
+      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -167,21 +240,52 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (controller.hasConnections || widget.serverClient != null)
+                if (controller.hasConnections ||
+                    widget.serverClient != null ||
+                    widget.androidContext != null)
                   AgentConnectionSettings(
                     connections: connections,
                     loading: connectionLoading,
                     failed:
                         controller.connectionFailure != null ||
-                        serverConnectionFailure != null,
+                        serverConnectionFailure != null ||
+                        androidConnectionFailure != null,
                     onRefresh: _refreshConnections,
                   ),
+                if (healthConnection != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Health records stay on this device. Floe receives only a short-lived capacity and recovery summary.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FloeButton.outlined(
+                      key: const ValueKey('android-health-refresh'),
+                      onPressed:
+                          healthConnection.state ==
+                              AgentConnectionState.unsupported
+                          ? null
+                          : () => _refreshAndroidWellbeing(healthConnection!),
+                      loading: androidHealthBusy,
+                      child: Text(
+                        healthConnection.state == AgentConnectionState.revoked
+                            ? 'Allow Health Connect'
+                            : 'Refresh wellbeing',
+                      ),
+                    ),
+                  ),
+                ],
                 if ((controller.hasConnections ||
-                        widget.serverClient != null) &&
+                        widget.serverClient != null ||
+                        widget.androidContext != null) &&
                     controller.hasCalendarExpertManagement)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
-                    child: Divider(height: 1),
+                    child: FloeDivider(height: 1),
                   ),
                 if (controller.hasCalendarExpertManagement)
                   AgentCalendarSettings(
@@ -191,6 +295,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                   ),
                 if (!controller.hasConnections &&
                     widget.serverClient == null &&
+                    widget.androidContext == null &&
                     !controller.hasCalendarExpertManagement)
                   const Text('No connected data sources are available yet.'),
               ],

@@ -137,13 +137,24 @@ final class _ConnectionCard extends StatelessWidget {
 
   String _provider(String provider) => switch (provider) {
     'apple_event_kit' => 'Apple Calendar',
+    'android_calendar' => 'Android Calendar',
+    'android_contacts' => 'Android Contacts',
+    'health_connect' => 'Health Connect',
+    'google_calendar' => 'Google Calendar',
+    'microsoft_calendar' => 'Microsoft Calendar',
+    'microsoft' => 'Microsoft',
+    'slack' => 'Slack',
+    'google_drive' => 'Google Drive',
+    'github' => 'GitHub',
+    'home_assistant' => 'Home Assistant',
     'gmail' => 'Gmail',
     'fixture' => 'Demo Calendar',
     _ => 'Connected source',
   };
 
   String _failure(String failure) => switch (failure) {
-    'permission_denied' => 'Calendar permission is no longer available.',
+    'permission_denied' => 'Source permission is no longer available.',
+    'unsupported_entitlement' => 'This source is not supported on this device.',
     'stale' => 'The last observation is stale. Refresh the source.',
     'partial_fetch' => 'Some source data could not be refreshed.',
     'rate_limited' => 'The provider temporarily limited refreshes.',

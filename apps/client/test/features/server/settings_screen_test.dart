@@ -8,6 +8,7 @@ import 'package:floe_client/features/day_canvas/application/calendar_action_cont
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/features/server/settings_screen.dart';
+import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,53 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Schedule planning'), findsNothing);
+  });
+
+  testWidgets('Android Health consent and derived refresh live in settings', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    final androidContext = _AndroidContext();
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(
+              client: null,
+              agentController: controller,
+              androidContext: androidContext,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Health Connect'), findsOneWidget);
+    expect(find.text('Allow Health Connect'), findsOneWidget);
+    expect(
+      find.textContaining('Health records stay on this device'),
+      findsOneWidget,
+    );
+
+    final refresh = find.byKey(const ValueKey('android-health-refresh'));
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+
+    expect(androidContext.permissionRequests, 1);
+    expect(androidContext.wellbeingReads, 1);
+    expect(find.text('Ready'), findsOneWidget);
+    expect(find.text('Refresh wellbeing'), findsOneWidget);
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -345,6 +393,103 @@ void main() {
     expect(controller.authority.calendarCreate, ActionAuthorityMode.deny);
   });
 }
+
+final class _AndroidContext implements AndroidContextApi {
+  bool ready = false;
+  int permissionRequests = 0;
+  int wellbeingReads = 0;
+
+  @override
+  Future<List<Map<String, dynamic>>> connections() async => [
+    _healthConnection(ready: ready),
+  ];
+
+  @override
+  Future<bool> requestPermission(AndroidContextSource source) async {
+    expect(source, AndroidContextSource.health);
+    permissionRequests += 1;
+    return true;
+  }
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async {
+    wellbeingReads += 1;
+    ready = true;
+    return {
+      'schema_version': 1,
+      'view_id': 'wellbeing.derived',
+      'source_handle': 'wellbeing:test',
+      'observed_at_unix_ms': 1000,
+      'expires_at_unix_ms': 301000,
+      'capacity': 'typical',
+      'recovery': 'recovered',
+      'confidence_millis': 700,
+      'evidence_handles': <String>['health.sleep.window:test'],
+    };
+  }
+}
+
+Map<String, dynamic> _healthConnection({required bool ready}) => {
+  'descriptor': {
+    'schema_version': 1,
+    'id': 'health.android',
+    'version': '1.0.0',
+    'provider': 'health_connect',
+    'execution': {'kind': 'device', 'device_id': 'android-test'},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': 'health.derived.read',
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': ['android.permission.health.READ_SLEEP'],
+        'output_view_id': 'wellbeing.derived',
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': 'wellbeing.derived',
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'derived_only',
+        'freshness_ttl_ms': 300000,
+        'max_items': 1,
+        'max_bytes': 32768,
+        'provenance_required': true,
+      },
+    ],
+  },
+  'connection': {
+    'schema_version': 1,
+    'connector_id': 'health.android',
+    'state': ready ? 'ready' : 'revoked',
+    'granted_scopes': ready
+        ? ['android.permission.health.READ_SLEEP']
+        : <String>[],
+    'observed_at_unix_ms': 2000,
+    if (ready) 'last_success_at_unix_ms': 2000,
+    if (!ready)
+      'last_failure': {
+        'kind': 'permission_denied',
+        'observed_at_unix_ms': 2000,
+      },
+  },
+  'views': ready
+      ? [
+          {
+            'schema_version': 1,
+            'view_id': 'wellbeing.derived',
+            'source_handle': 'wellbeing:test',
+            'observed_at_unix_ms': 1000,
+            'expires_at_unix_ms': 301000,
+            'item_count': 1,
+            'byte_count': 256,
+            'provenance_count': 1,
+          },
+        ]
+      : <Object?>[],
+};
 
 final class _SettingsServerClient extends LocalServerClient {
   _SettingsServerClient(

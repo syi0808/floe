@@ -32,6 +32,10 @@
 - Added a Dart gateway that binds calendar selection at adapter construction and strictly validates
   native View keys, versions, freshness, ranges, counts, duplicates and evidence handles before
   returning context to Flutter callers.
+- The production Android entrypoint now injects the native gateway into Data & privacy. Android
+  Calendar, Contacts and Health Connect lifecycle snapshots join the shared local/server connection
+  inventory. Health consent and the first derived Wellbeing read happen only from an explicit
+  settings button, after which the UI reloads the native lifecycle state.
 - Android fixtures cross the shared Rust Calendar, People and connected-context validators. The
   Health fixture additionally crosses the shared Wellbeing validator. The Android debug APK
   compiles with the native provider code and permission declarations included. Health Connect
@@ -43,13 +47,15 @@
 flutter analyze lib/infrastructure/native/android_context_gateway.dart \
   test/infrastructure/native/android_context_gateway_test.dart
 flutter test test/infrastructure/native/android_context_gateway_test.dart
+flutter test test/features/server/settings_screen_test.dart \
+  test/features/agent/agent_connections_test.dart
 flutter build apk --debug
 cargo test -p floe-agent --test calendar_context --test personal_context --test connected_context
 ```
 
 ## Remaining gate
 
-No physical Android device permission/read evidence was captured, and no Android settings surface
-currently persists selected calendar IDs or initiates the Health Connect consent/read flow. Store
-permission declarations and the in-app permission rationale still require release configuration.
-Therefore S5.5-C3 remains pending and the slice stays **0/14**.
+No physical Android device permission/read evidence was captured, and the Android settings surface
+does not yet list or persist selected calendar IDs. Health permission declarations and the in-app
+permission-rationale destination still require release/store configuration and physical-device
+validation. Therefore S5.5-C3 remains pending and the slice stays **0/14**.

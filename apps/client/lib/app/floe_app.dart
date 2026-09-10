@@ -9,6 +9,7 @@ import '../features/day_canvas/domain/day_models.dart';
 import '../features/day_canvas/presentation/personal_day_screen.dart';
 import '../features/agent/agent_fixture_gateway.dart';
 import '../features/server/local_server_client.dart';
+import '../infrastructure/native/android_context_gateway.dart';
 import 'floe_theme.dart';
 import 'floe_toast.dart';
 import 'local_identity.dart';
@@ -20,6 +21,7 @@ class FloeApp extends StatefulWidget {
     this.query,
     this.agentGateway,
     this.serverClient,
+    this.androidContext,
     this.onDisposeGateway,
     this.locale = const Locale('en'),
     this.builder,
@@ -29,6 +31,7 @@ class FloeApp extends StatefulWidget {
   final DayQuery? query;
   final AgentFixtureStreamingGateway? agentGateway;
   final LocalServerClient? serverClient;
+  final AndroidContextApi? androidContext;
   final Future<void> Function()? onDisposeGateway;
   final TransitionBuilder? builder;
 
@@ -60,6 +63,7 @@ class _FloeAppState extends State<FloeApp> {
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
         serverClient: widget.serverClient,
+        androidContext: widget.androidContext,
       ),
     );
     return MaterialApp(

@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Android Health Connect settings route — 2026-09-11
+
+- Wired Android connector snapshots into the shared Data & privacy connection inventory alongside
+  local-core and server sources, with explicit Android provider names and lifecycle messages.
+- Added a Health Connect control that requests read consent only after a user action, runs the
+  locally derived Wellbeing refresh and then reloads the typed connection state. The settings copy
+  states that raw health records stay on-device.
+- Focused Flutter analyzer and widget/gateway tests pass. Physical-device consent/read evidence,
+  persisted Android Calendar selection and release permission-rationale/store setup remain, so
+  S5.5-C3 stays pending and the slice remains **0/14**.
+
 ### S5.5 Android Health Connect adapter path — 2026-09-11
 
 - Added a Health Connect 1.1 adapter with explicit Sleep, Steps and Exercise read consent, bounded

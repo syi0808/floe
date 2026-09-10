@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +9,7 @@ import 'app/design_tokens.dart';
 import 'app/floe_primitives.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
+import 'infrastructure/native/android_context_gateway.dart';
 import 'preview/design_feedback_overlay.dart';
 
 Future<void> main() async {
@@ -18,6 +21,9 @@ Future<void> main() async {
         gateway: gateway,
         agentGateway: gateway.secureAgent,
         serverClient: gateway.serverClient,
+        androidContext: Platform.isAndroid
+            ? AndroidContextGateway(calendarIds: const [])
+            : null,
         onDisposeGateway: gateway.close,
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)

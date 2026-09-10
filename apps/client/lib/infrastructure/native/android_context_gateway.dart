@@ -5,12 +5,19 @@ import 'package:flutter/foundation.dart';
 
 const _channel = MethodChannel('floe/android_context');
 
-final class AndroidContextGateway {
+abstract interface class AndroidContextApi {
+  Future<List<Map<String, dynamic>>> connections();
+  Future<bool> requestPermission(AndroidContextSource source);
+  Future<Map<String, dynamic>> readWellbeing();
+}
+
+final class AndroidContextGateway implements AndroidContextApi {
   AndroidContextGateway({required List<String> calendarIds})
     : _calendarIds = List.unmodifiable(calendarIds);
 
   final List<String> _calendarIds;
 
+  @override
   Future<List<Map<String, dynamic>>> connections() async {
     _requireAndroid();
     final values = await _channel.invokeListMethod<Object?>('connections');
@@ -19,6 +26,7 @@ final class AndroidContextGateway {
         .toList(growable: false);
   }
 
+  @override
   Future<bool> requestPermission(AndroidContextSource source) async {
     _requireAndroid();
     final value = _strictMap(
@@ -64,6 +72,7 @@ final class AndroidContextGateway {
     return view;
   }
 
+  @override
   Future<Map<String, dynamic>> readWellbeing() async {
     _requireAndroid();
     final view = _strictMap(

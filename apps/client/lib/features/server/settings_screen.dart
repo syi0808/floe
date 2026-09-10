@@ -20,6 +20,7 @@ import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
+import '../../infrastructure/native/android_context_gateway.dart';
 
 part 'settings/data_privacy.dart';
 part 'settings/ai_processing.dart';
@@ -36,6 +37,7 @@ class SettingsScreen extends StatefulWidget {
     this.agentController,
     this.calendarSources,
     this.calendarSourceChanges,
+    this.androidContext,
   });
 
   final LocalServerClient? client;
@@ -43,6 +45,7 @@ class SettingsScreen extends StatefulWidget {
   final AgentController? agentController;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+  final AndroidContextApi? androidContext;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -83,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _SettingsPage.dataPrivacy => _DataPrivacy(
       controller: widget.agentController!,
       serverClient: widget.client,
+      androidContext: widget.androidContext,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
