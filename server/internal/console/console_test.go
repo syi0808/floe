@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -388,6 +389,61 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
 	if len(connections) != 2 {
 		test.Fatalf("connections: %#v", connections)
+	}
+}
+
+func TestConnectorConfigurationKeepsTokensInVaultAndRestoresRuntime(test *testing.T) {
+	now := time.Now().UTC()
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/states/sensor.temperature" || request.Header.Get("Authorization") != "Bearer private-home-token" {
+			test.Fatalf("unsafe connector request: %s", request.URL.Path)
+		}
+		_, _ = writer.Write([]byte(fmt.Sprintf(`{"entity_id":"sensor.temperature","state":"22","last_updated":%q,"attributes":{"friendly_name":"Temperature"}}`, now.Format(time.RFC3339Nano))))
+	}))
+	defer upstream.Close()
+	fixture := setup(test)
+
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/home-assistant", map[string]any{
+		"enabled": true, "base_url": upstream.URL, "entities": []string{"sensor.temperature"}, "token": "private-home-token",
+	}, ""))
+	if fixture.vault.values[homeTokenKey] != "private-home-token" || fixture.console.logistics == nil {
+		test.Fatal("connector credential or runtime missing")
+	}
+	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
+	if strings.Contains(string(state), "private-home-token") || !strings.Contains(string(state), "sensor.temperature") {
+		test.Fatal("connector state crossed credential boundary")
+	}
+	_, token := fixture.pair()
+	view := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
+	if view["view"].(map[string]any)["view_id"] != "life.logistics" {
+		test.Fatalf("view: %#v", view)
+	}
+
+	restarted, err := New(fixture.console.directory, "127.0.0.1:8431", fixture.vault, nil)
+	if err != nil || restarted.logistics == nil {
+		test.Fatalf("restart: %v", err)
+	}
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/home-assistant", map[string]any{
+		"enabled": false, "base_url": "", "entities": []string{}, "token": "",
+	}, ""))
+	if _, exists := fixture.vault.values[homeTokenKey]; exists || fixture.console.logistics != nil {
+		test.Fatal("connector credential or runtime survived disconnect")
+	}
+}
+
+func TestGitHubConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
+	fixture := setup(test)
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/github", map[string]any{
+		"enabled": true, "owner": "acme", "repository": "floe", "token": "private-github-token",
+	}, ""))
+	if fixture.console.work == nil || fixture.vault.values[githubTokenKey] != "private-github-token" {
+		test.Fatal("GitHub connector was not installed")
+	}
+	response := fixture.call(http.MethodPost, "/manage/api/connector/github", map[string]any{
+		"enabled": true, "owner": "../all", "repository": "floe", "token": "replacement-token",
+	}, "")
+	if response.Code != http.StatusBadRequest || fixture.vault.values[githubTokenKey] != "private-github-token" {
+		test.Fatal("invalid scope changed credential")
 	}
 }
 

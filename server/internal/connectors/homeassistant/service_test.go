@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"floe/server/internal/connectors/common"
 )
 
 func TestServiceKeepsEntityAllowlistOutsideViewRequests(test *testing.T) {
@@ -26,5 +28,19 @@ func TestServiceKeepsEntityAllowlistOutsideViewRequests(test *testing.T) {
 	}
 	if _, err := service.ConnectionSnapshot(context.Background()); err != nil {
 		test.Fatal(err)
+	}
+}
+
+func TestServicePublishesTypedCredentialFailure(test *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, _ := New(tokenSource{token: "private-token"}, server.URL, "home-1")
+	service, _ := NewService(client, []string{"sensor.temperature"})
+	snapshot, err := service.ConnectionSnapshot(context.Background())
+	value := snapshot.(common.Snapshot)
+	if err != nil || value.Connection.State != "revoked" || value.Connection.LastFailure.Kind != "credential_expired" || len(value.Views) != 0 {
+		test.Fatalf("snapshot: %#v %v", value, err)
 	}
 }

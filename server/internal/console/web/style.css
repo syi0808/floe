@@ -49,6 +49,8 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px 
 .footnote { text-align: center; font-size: 12px; margin-top: 32px; }
 .client { display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--border); padding: 16px 0; }
 .client span { overflow-wrap: anywhere; flex: 1; font-family: monospace; font-size: 12px; }
+.source { border-top: 1px solid var(--border); margin-top: 28px; padding-top: 24px; }
+.source-grid { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 12px; }
 #notice:empty { display: none; }
 #notice { border-radius: var(--sq-md); padding: 16px; background: var(--primary-subtle); color: var(--secondary); }
 a { color: var(--primary); font-size: 14px; }
@@ -80,4 +82,5 @@ legend { font-size: 16px; font-weight: 650; padding: 0; margin-bottom: 8px; }
   .provider-nav { display: grid; grid-template-columns: 1fr; }
   .provider-detail { border-left: 0; border-top: 1px solid var(--border); padding: 24px 0 0; }
   .class-grid { grid-template-columns: 1fr; align-items: stretch; }
+  .source-grid { grid-template-columns: 1fr; }
 }

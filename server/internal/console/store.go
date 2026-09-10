@@ -19,10 +19,26 @@ type Vault interface {
 }
 
 type diskState struct {
-	Targets   map[string]inference.Target `json:"targets"`
-	Routes    map[string]inference.Route  `json:"routes"`
-	Providers map[string]providerProfile  `json:"providers,omitempty"`
-	Clients   map[string]string           `json:"clients"`
+	Targets    map[string]inference.Target `json:"targets"`
+	Routes     map[string]inference.Route  `json:"routes"`
+	Providers  map[string]providerProfile  `json:"providers,omitempty"`
+	Connectors connectorConfigState        `json:"connectors,omitempty"`
+	Clients    map[string]string           `json:"clients"`
+}
+
+type connectorConfigState struct {
+	GitHub        *githubConnectorConfig        `json:"github,omitempty"`
+	HomeAssistant *homeAssistantConnectorConfig `json:"home_assistant,omitempty"`
+}
+
+type githubConnectorConfig struct {
+	Owner      string `json:"owner"`
+	Repository string `json:"repository"`
+}
+
+type homeAssistantConnectorConfig struct {
+	BaseURL  string   `json:"base_url"`
+	Entities []string `json:"entities"`
 }
 
 type providerProfile struct {
@@ -119,7 +135,16 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}, Connectors: state.Connectors}
+	if state.Connectors.GitHub != nil {
+		configured := *state.Connectors.GitHub
+		copy.Connectors.GitHub = &configured
+	}
+	if state.Connectors.HomeAssistant != nil {
+		configured := *state.Connectors.HomeAssistant
+		configured.Entities = append([]string(nil), configured.Entities...)
+		copy.Connectors.HomeAssistant = &configured
+	}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}

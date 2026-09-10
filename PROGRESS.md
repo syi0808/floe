@@ -1,8 +1,20 @@
 # Floe Progress
 
-> Last updated: 2026-09-10
+> Last updated: 2026-09-11
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
+
+### S5.5 managed Work and Life connector startup — 2026-09-11
+
+- Added loopback-console configuration for one selected GitHub repository and a bounded Home
+  Assistant entity allowlist. Tokens remain in macOS Keychain, private state contains configuration
+  only, restart restores runtimes and disconnect removes the credential.
+- Added dashboard setup controls and typed connector failure snapshots. A provider failure leaves a
+  recent prior View visible as degraded only until expiry instead of failing the whole connection
+  inventory.
+- Full Go race tests/vet and dashboard JavaScript syntax validation pass. Live provider evidence,
+  work communication/file adapters and travel/delivery coverage remain, so S5.5-C4/C5/E7/E8 and
+  the slice stay **0/14**. [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
 
 ### S5.5 Work and Life Logistics conversation delegation — 2026-09-10
 

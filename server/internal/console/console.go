@@ -101,6 +101,9 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	}
 	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}}
 	console.rebuild()
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		return nil, errors.New("invalid connector configuration")
+	}
 	return console, nil
 }
 
@@ -488,6 +491,18 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.writeState(writer, current)
 		return
 	}
+	if request.URL.Path == "/manage/api/connector/github" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateGitHubConnector(writer, request)
+		return
+	}
+	if request.URL.Path == "/manage/api/connector/home-assistant" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateHomeAssistantConnector(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.Method != "POST" {
@@ -597,7 +612,11 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		}
 		providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
 	}
-	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
+	connectors := map[string]any{
+		"github":         map[string]any{"configured": state.Connectors.GitHub != nil},
+		"home_assistant": map[string]any{"configured": state.Connectors.HomeAssistant != nil},
+	}
+	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }
 
 func (console *Console) updateRoute(writer http.ResponseWriter, request *http.Request) {

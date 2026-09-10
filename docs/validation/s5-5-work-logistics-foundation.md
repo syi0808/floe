@@ -1,8 +1,8 @@
 # S5.5 Work and Life Logistics Foundation
 
-> Date: 2026-09-10  
-> Acceptance status: bounded Views, isolated Expert contracts and two read-only adapter foundations;
-> product transport and live evidence pending
+> Date: 2026-09-11
+> Acceptance status: managed read-only adapter and Agent paths; live evidence and cohort breadth
+> pending
 
 ## Delivered boundary
 
@@ -36,6 +36,13 @@
 - Paired general conversations now advertise read-only Work Context and Life Logistics capabilities
   and stateless A2A Expert cards. Delegation fetches and strictly validates a fresh bounded View,
   then runs the matching isolated Expert without granting it provider actions.
+- The loopback management console now configures one selected GitHub repository and one bounded
+  Home Assistant entity allowlist. Tokens live only in macOS Keychain, connector selection persists
+  without credentials in private server state, startup restores runtimes, and disconnect deletes
+  the credential. The dashboard exposes these setup and disconnect controls.
+- GitHub and Home Assistant services publish typed revoked, rate-limited, partial-fetch and
+  unavailable connection failures. A fresh prior View remains visible only as degraded and only
+  until its declared expiry; provider failure no longer drops the whole connection inventory.
 
 ## Automated evidence
 
@@ -49,6 +56,7 @@ go -C server test -race ./internal/console
 go -C server vet ./internal/console
 cargo test -p floe-agent --test connected_context
 cargo test -p floe-ffi
+node --check server/internal/console/web/app.js
 ```
 
 The focused View/privacy and Expert contract tests pass, including both cross-language adapter
@@ -56,7 +64,6 @@ fixtures.
 
 ## Remaining gate
 
-GitHub and Home Assistant are not yet credential-managed or installed by server startup, and no live
-provider evidence was used. The Agent path is stateless rather than a durable registry assignment.
-No Slack/Teams, file, travel or delivery adapter produces these Views yet. Cross-source scenarios and
-live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+No live provider evidence was used. The Agent path is stateless rather than a durable registry
+assignment. No Slack/Teams, file, travel or delivery adapter produces these Views yet. Cross-source
+scenarios and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
