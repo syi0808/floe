@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "view_id": "calendar.timeline",
+  "source_handle": "calendar.timeline:7ab58d6965dfbb479f48f460eb52034a",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "range_start_unix_ms": 1789041600000,
+  "range_end_unix_ms": 1789214400000,
+  "coverage_complete": true,
+  "items": [{"evidence_handle": "calendar.event:2fdc587aff76417d5bf6c16cc67a8725", "untrusted_title": "Android planning review", "starts_at_unix_ms": 1789131600000, "ends_at_unix_ms": 1789135200000, "all_day": false}]
+}

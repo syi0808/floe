@@ -309,3 +309,41 @@ fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
             .all(|capability| capability.authority == CapabilityAuthority::Observe)
     );
 }
+
+#[test]
+fn android_calendar_and_contacts_descriptors_conform_to_the_shared_contract() {
+    for (source, connector, provider) in [
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../apps/client/android/fixtures/calendar_snapshot.json"
+            )),
+            "calendar.android",
+            "android_calendar",
+        ),
+        (
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../apps/client/android/fixtures/contacts_snapshot.json"
+            )),
+            "contacts.android",
+            "android_contacts",
+        ),
+    ] {
+        let snapshot: ConnectorSnapshot = serde_json::from_str(source).unwrap();
+        assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
+        assert_eq!(snapshot.descriptor.id, connector);
+        assert_eq!(snapshot.descriptor.provider, provider);
+        assert!(matches!(
+            snapshot.descriptor.execution,
+            ExecutionLocation::Device { .. }
+        ));
+        assert!(
+            snapshot
+                .descriptor
+                .capabilities
+                .iter()
+                .all(|capability| capability.authority == CapabilityAuthority::Observe)
+        );
+    }
+}

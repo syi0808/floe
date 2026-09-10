@@ -26,6 +26,18 @@ fn people() -> PeopleView {
 }
 
 #[test]
+fn android_people_fixture_crosses_the_shared_identity_boundary() {
+    let view: PeopleView = serde_json::from_str(include_str!(
+        "../../../apps/client/android/fixtures/people_view.json"
+    ))
+    .unwrap();
+    validate_people_view(&view, 1_789_128_000_000).unwrap();
+    let evidence = personal_context_evidence(&view).unwrap();
+    assert!(evidence.untrusted_text.contains("Alex"));
+    assert!(!evidence.untrusted_text.contains("content://"));
+}
+
+#[test]
 fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
     let people = people();
     validate_people_view(&people, NOW).unwrap();

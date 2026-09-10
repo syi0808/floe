@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Android Calendar and Contacts adapter path — 2026-09-11
+
+- Added an Android MethodChannel adapter over public CalendarContract Instances and ContactsContract
+  providers with runtime permission handling, API-gated bounded queries and a single worker.
+- Android Calendar emits the shared strict `calendar.timeline` View from an adapter-owned selected
+  calendar list. Contacts emits `people.identity` using display names and opaque handles only; notes,
+  provider IDs, event details and all write authority remain excluded.
+- The debug APK builds, focused Flutter validation tests and Rust cross-language conformance tests
+  pass. Physical-device evidence and Health Connect remain, so S5.5-C3 stays pending and the slice
+  remains **0/14**. [Evidence and limits](docs/validation/s5-5-android-context-foundation.md).
+
 ### S5.5 Microsoft Calendar product route — 2026-09-11
 
 - Wired the dedicated Calendar OAuth runtime into startup, private selected-calendar persistence,

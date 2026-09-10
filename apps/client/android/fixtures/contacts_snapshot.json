@@ -1,0 +1,5 @@
+{
+  "descriptor": {"schema_version": 1, "id": "contacts.android", "version": "1.0.0", "provider": "android_contacts", "execution": {"kind": "device", "device_id": "android-fixture-device"}, "capabilities": [{"schema_version": 1, "id": "contacts.identity.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["android.permission.READ_CONTACTS"], "output_view_id": "people.identity"}], "views": [{"schema_version": 1, "id": "people.identity", "version": "1.0.0", "data_class": "personal", "retention": "ephemeral", "freshness_ttl_ms": 300000, "max_items": 64, "max_bytes": 32768, "provenance_required": true}]},
+  "connection": {"schema_version": 1, "connector_id": "contacts.android", "state": "ready", "granted_scopes": ["android.permission.READ_CONTACTS"], "observed_at_unix_ms": 1789128000000, "last_success_at_unix_ms": 1789128000000},
+  "views": [{"schema_version": 1, "view_id": "people.identity", "source_handle": "people:92ed93c73dd2ff5e197ab61914378fa3", "observed_at_unix_ms": 1789128000000, "expires_at_unix_ms": 1789128300000, "item_count": 1, "byte_count": 520, "provenance_count": 1}]
+}

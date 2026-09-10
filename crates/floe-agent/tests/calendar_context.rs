@@ -19,6 +19,13 @@ fn microsoft_fixture() -> CalendarContextView {
     .unwrap()
 }
 
+fn android_fixture() -> CalendarContextView {
+    serde_json::from_str(include_str!(
+        "../../../apps/client/android/fixtures/calendar_view.json"
+    ))
+    .unwrap()
+}
+
 #[test]
 fn google_calendar_view_crosses_the_strict_context_boundary() {
     let view = fixture();
@@ -41,6 +48,15 @@ fn microsoft_calendar_view_crosses_the_same_strict_context_boundary() {
             .contains("Microsoft planning review")
     );
     assert!(!evidence.untrusted_text.contains("provider-event-id"));
+}
+
+#[test]
+fn android_calendar_view_crosses_the_same_strict_context_boundary() {
+    let view = android_fixture();
+    validate_calendar_context_view(&view, NOW).unwrap();
+    let evidence = calendar_context_evidence(&view).unwrap();
+    assert!(evidence.untrusted_text.contains("Android planning review"));
+    assert!(!evidence.untrusted_text.contains("content://"));
 }
 
 #[test]

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "view_id": "people.identity",
+  "source_handle": "people:92ed93c73dd2ff5e197ab61914378fa3",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "identities": [{"identity_handle": "person.identity:5eccc8791974a7e44cb0c13b95415940", "display_name": "Alex", "aliases": [], "confidence_millis": 1000, "evidence_handles": ["contact.evidence:e42a4b62e34ed60c46be985b77c316a4"]}]
+}
