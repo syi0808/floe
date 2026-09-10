@@ -42,6 +42,12 @@
 - Google Calendar OAuth uses a dedicated Keychain credential and the exact Calendar read-only scope,
   separate from Gmail and Drive credentials. Typed credential, permission, rate-limit and partial
   failures retain a prior View only while fresh.
+- Startup creates the Calendar OAuth runtime alongside the other isolated Google profiles. The
+  dashboard owns OAuth login and one selected-calendar configuration; only that selection persists
+  in private server state and credentials remain in Keychain.
+- Paired clients can request the selected source through `calendar.timeline` with bounded Unix-time
+  range, cursor and item limit. Unknown fields and invalid ranges fail closed, source selection is
+  never accepted from the request, and the connector snapshot joins the common inventory.
 
 ## Automated evidence
 
@@ -51,7 +57,8 @@ go -C server vet ./internal/connectors/microsoftmail
 go -C server test -race ./internal/microsoftauth ./internal/console ./cmd/floe-server
 go -C server vet ./internal/microsoftauth ./internal/console ./cmd/floe-server
 go -C server test -race ./internal/connectors/googlecalendar ./internal/googleauth
-go -C server vet ./internal/connectors/googlecalendar ./internal/googleauth
+go -C server test -race ./internal/console ./cmd/floe-server
+go -C server vet ./internal/connectors/googlecalendar ./internal/googleauth ./internal/console ./cmd/floe-server
 cargo test -p floe-agent --test communication_context --test connected_context
 cargo test -p floe-agent --test calendar_context
 node --check server/internal/console/web/app.js
@@ -59,7 +66,6 @@ node --check server/internal/console/web/app.js
 
 ## Remaining gate
 
-No live Microsoft Graph evidence was used. Google Calendar, Microsoft Calendar, Android
-startup/product routing and live evidence remain; Microsoft Calendar, Android Calendar/Contacts and
-Health Connect adapters are also absent. The provider-neutral route table still needs the complete
-parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.
+No live Microsoft Graph or Google Calendar evidence was used. Microsoft Calendar, Android
+Calendar/Contacts and Health Connect adapters are absent, and the provider-neutral route table still
+needs the complete parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.

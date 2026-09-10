@@ -27,6 +27,13 @@ type fakeAuthRuntime struct{ ready bool }
 
 type fakeDriveAuth struct{ token string }
 
+type fakeCalendarAuth struct{ token string }
+
+func (runtime *fakeCalendarAuth) Token(context.Context) (string, error) { return runtime.token, nil }
+func (*fakeCalendarAuth) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/calendar.readonly"}, nil
+}
+
 type fakeMicrosoftAuth struct{}
 
 func (*fakeMicrosoftAuth) Action(context.Context, string) (any, error) {
@@ -38,6 +45,20 @@ type fakeCommunicationRuntime struct {
 	view     any
 	err      error
 	reads    atomic.Int32
+}
+
+type fakeCalendarRuntime struct {
+	snapshot any
+	view     any
+	err      error
+}
+
+func (runtime *fakeCalendarRuntime) ConnectionSnapshot(context.Context) (any, error) {
+	return runtime.snapshot, runtime.err
+}
+
+func (runtime *fakeCalendarRuntime) ReadCalendarView(context.Context, time.Time, time.Time, string, int) (any, error) {
+	return runtime.view, runtime.err
 }
 
 func (runtime *fakeCommunicationRuntime) ConnectionSnapshot(context.Context) (any, error) {
@@ -434,6 +455,20 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 	}
 }
 
+func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	fixture.console.calendars = []CalendarRuntime{&fakeCalendarRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "google_calendar"}}, view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
+	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
+	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
+		test.Fatalf("view: %#v", value)
+	}
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
+		test.Fatalf("invalid range accepted: %d", response.Code)
+	}
+}
+
 func TestCommunicationRouteFallsBackToMicrosoftMail(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
@@ -611,6 +646,29 @@ func TestGoogleDriveSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
 	}
 	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/drive/status", map[string]any{}, ""))
 	if status["scope"] != "https://www.googleapis.com/auth/drive.readonly" {
+		test.Fatalf("status: %#v", status)
+	}
+}
+
+func TestGoogleCalendarSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
+	fixture := setup(test)
+	input := map[string]any{"enabled": true, "calendar_id": "team/selected"}
+	if response := fixture.call(http.MethodPost, "/manage/api/connector/google-calendar", input, ""); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("missing Calendar auth accepted: %d", response.Code)
+	}
+	if err := fixture.console.SetCalendarAuth(&fakeCalendarAuth{token: "private-calendar-token"}); err != nil {
+		test.Fatal(err)
+	}
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/google-calendar", input, ""))
+	if len(fixture.console.calendars) != 1 || fixture.console.state.Connectors.GoogleCalendar.CalendarID != "team/selected" {
+		test.Fatal("Calendar selection was not installed")
+	}
+	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
+	if strings.Contains(string(state), "private-calendar-token") {
+		test.Fatal("Calendar credential entered server state")
+	}
+	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/calendar/status", map[string]any{}, ""))
+	if status["scope"] != "https://www.googleapis.com/auth/calendar.readonly" {
 		test.Fatalf("status: %#v", status)
 	}
 }

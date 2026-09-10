@@ -4,6 +4,16 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Google Calendar product route — 2026-09-11
+
+- Wired the isolated Calendar OAuth runtime into startup, private selected-calendar persistence,
+  dashboard login/configuration and common connection inventory.
+- Added an authenticated paired `calendar.timeline` route with strict range, cursor, item and schema
+  validation. Calendar selection remains server-owned and is never accepted from an Agent request.
+- Focused Go race tests/vet and dashboard JavaScript validation pass. Live Google Calendar evidence
+  and the remaining Microsoft/Android/Health Connect adapters keep S5.5-C3 and the slice at **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 bounded Google Calendar adapter foundation — 2026-09-11
 
 - Added a selected-calendar, GET-only Google Calendar adapter with a strict `calendar.timeline`

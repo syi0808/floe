@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	githubconnector "floe/server/internal/connectors/github"
+	calendarconnector "floe/server/internal/connectors/googlecalendar"
 	driveconnector "floe/server/internal/connectors/googledrive"
 	homeconnector "floe/server/internal/connectors/homeassistant"
 	slackconnector "floe/server/internal/connectors/slack"
@@ -34,6 +35,7 @@ func (source vaultTokenSource) Token(context.Context) (string, error) {
 func (console *Console) rebuildConnectorRuntimes() error {
 	console.work = nil
 	console.logistics = nil
+	console.calendars = nil
 	if configured := console.state.Connectors.GitHub; configured != nil {
 		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: githubTokenKey})
 		if err != nil {
@@ -66,6 +68,17 @@ func (console *Console) rebuildConnectorRuntimes() error {
 			return err
 		}
 		console.work = append(console.work, service)
+	}
+	if configured := console.state.Connectors.GoogleCalendar; configured != nil && console.calendarAuth != nil {
+		client, err := calendarconnector.New(console.calendarAuth, configured.CalendarID, "primary")
+		if err != nil {
+			return err
+		}
+		service, err := calendarconnector.NewService(client)
+		if err != nil {
+			return err
+		}
+		console.calendars = append(console.calendars, service)
 	}
 	if configured := console.state.Connectors.HomeAssistant; configured != nil {
 		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: homeTokenKey}, configured.BaseURL, "primary")
@@ -202,6 +215,46 @@ func (console *Console) updateGoogleDriveConnector(writer http.ResponseWriter, r
 			return
 		}
 		next.Connectors.GoogleDrive = &googleDriveConnectorConfig{FolderID: input.FolderID}
+	}
+	if console.save(next) != nil {
+		failure(writer, 500, "save_failed")
+		return
+	}
+	console.state = next
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		failure(writer, 500, "invalid_connector_configuration")
+		return
+	}
+	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+func (console *Console) updateGoogleCalendarConnector(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Enabled    bool   `json:"enabled"`
+		CalendarID string `json:"calendar_id"`
+	}
+	if !decode(writer, request, &input) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if !input.Enabled {
+		next.Connectors.GoogleCalendar = nil
+	} else {
+		if console.calendarAuth == nil {
+			failure(writer, 503, "calendar_unavailable")
+			return
+		}
+		client, err := calendarconnector.New(console.calendarAuth, input.CalendarID, "primary")
+		if err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		if _, err := calendarconnector.NewService(client); err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		next.Connectors.GoogleCalendar = &googleCalendarConnectorConfig{CalendarID: input.CalendarID}
 	}
 	if console.save(next) != nil {
 		failure(writer, 500, "save_failed")

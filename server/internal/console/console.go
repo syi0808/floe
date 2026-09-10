@@ -42,6 +42,11 @@ type CommunicationRuntime interface {
 	ReadCommunicationView(context.Context, string, int, int) (any, error)
 }
 
+type CalendarRuntime interface {
+	ConnectionSnapshot(context.Context) (any, error)
+	ReadCalendarView(context.Context, time.Time, time.Time, string, int) (any, error)
+}
+
 type WorkContextRuntime interface {
 	ConnectionSnapshot(context.Context) (any, error)
 	ReadWorkContextView(context.Context) (common.WorkContextView, error)
@@ -84,6 +89,8 @@ type Console struct {
 	work                                         []WorkContextRuntime
 	logistics                                    []LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
+	calendarAuth                                 DriveAuthRuntime
+	calendars                                    []CalendarRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
 	unavailable                                  map[string]bool
@@ -119,6 +126,13 @@ func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	console.driveAuth = runtime
+	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.calendarAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -339,6 +353,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	microsoftMail := console.microsoftMail
 	work := append([]WorkContextRuntime(nil), console.work...)
 	logistics := append([]LogisticsRuntime(nil), console.logistics...)
+	calendars := append([]CalendarRuntime(nil), console.calendars...)
 	console.mu.Unlock()
 	if !allowed {
 		failure(writer, 401, "unauthorized")
@@ -368,11 +383,14 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		}
 		runtimes := make([]interface {
 			ConnectionSnapshot(context.Context) (any, error)
-		}, 0, len(work)+len(logistics))
+		}, 0, len(work)+len(logistics)+len(calendars))
 		for _, runtime := range work {
 			runtimes = append(runtimes, runtime)
 		}
 		for _, runtime := range logistics {
+			runtimes = append(runtimes, runtime)
+		}
+		for _, runtime := range calendars {
 			runtimes = append(runtimes, runtime)
 		}
 		for _, runtime := range runtimes {
@@ -412,6 +430,30 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		if (gmail == nil || err != nil) && microsoftMail != nil {
 			view, err = microsoftMail.ReadCommunicationView(request.Context(), input.Query, input.Cursor, input.Limit)
 		}
+		if err != nil {
+			failure(writer, 503, "view_unavailable")
+			return
+		}
+		reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
+		return
+	}
+	if request.URL.Path == "/v1/views/calendar.timeline" {
+		if request.Method != http.MethodPost || len(calendars) == 0 {
+			failure(writer, 404, "not_found")
+			return
+		}
+		var input struct {
+			SchemaVersion    int    `json:"schema_version"`
+			RangeStartUnixMS int64  `json:"range_start_unix_ms"`
+			RangeEndUnixMS   int64  `json:"range_end_unix_ms"`
+			Cursor           string `json:"cursor"`
+			Limit            int    `json:"limit"`
+		}
+		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
+			failure(writer, 400, "validation")
+			return
+		}
+		view, err := calendars[0].ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
 		if err != nil {
 			failure(writer, 503, "view_unavailable")
 			return
@@ -551,6 +593,24 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/calendar/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.calendarAuth
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "calendar_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/calendar/"))
+		if err != nil {
+			failure(writer, 502, "calendar_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-mail/") && request.Method == "POST" {
 		console.mu.Lock()
 		runtime := console.microsoftAuth
@@ -664,6 +724,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateGoogleDriveConnector(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/connector/google-calendar" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateGoogleCalendarConnector(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.Method != "POST" {
@@ -774,10 +840,11 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
 	}
 	connectors := map[string]any{
-		"github":         map[string]any{"configured": state.Connectors.GitHub != nil},
-		"slack":          map[string]any{"configured": state.Connectors.Slack != nil},
-		"google_drive":   map[string]any{"configured": state.Connectors.GoogleDrive != nil},
-		"home_assistant": map[string]any{"configured": state.Connectors.HomeAssistant != nil},
+		"github":          map[string]any{"configured": state.Connectors.GitHub != nil},
+		"slack":           map[string]any{"configured": state.Connectors.Slack != nil},
+		"google_drive":    map[string]any{"configured": state.Connectors.GoogleDrive != nil},
+		"google_calendar": map[string]any{"configured": state.Connectors.GoogleCalendar != nil},
+		"home_assistant":  map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
 	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }

@@ -58,6 +58,11 @@ func main() {
 				log.Fatal("Cannot configure Google Drive OAuth")
 			}
 			defer driveAuth.Close()
+			calendarAuth, calendarAuthError := googleauth.NewCalendar(vault, googleConfig)
+			if calendarAuthError != nil || management.SetCalendarAuth(calendarAuth) != nil {
+				log.Fatal("Cannot configure Google Calendar OAuth")
+			}
+			defer calendarAuth.Close()
 			query := os.Getenv("FLOE_GMAIL_QUERY")
 			if query == "" {
 				query = "newer_than:30d -in:spam -in:trash"

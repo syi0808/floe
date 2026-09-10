@@ -91,6 +91,12 @@ connected; **Sync now** runs the same checkpointed path. `FLOE_GMAIL_QUERY` can 
 `newer_than:30d -in:spam -in:trash` query. OAuth setup and a live mailbox run are still required
 before Gmail evidence is available to Floe clients.
 
+The same Google client registration also enables a separate **Google Calendar** dashboard login.
+That flow stores `FLOE_GOOGLE_CALENDAR_OAUTH` independently and requests only
+`calendar.readonly`. Select one calendar ID in the dashboard; paired clients may then request a
+bounded `calendar.timeline` range of up to 32 days. Floe exports title and timing only—calendar IDs,
+provider event IDs, descriptions, locations and attendees are excluded from Agent context.
+
 ### Microsoft Mail read-only OAuth
 
 Register a Microsoft identity-platform application that allows public-client loopback redirects,

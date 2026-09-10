@@ -8,6 +8,7 @@ let codexPending = false;
 let gmailPending = false;
 let drivePending = false;
 let microsoftMailPending = false;
+let calendarPending = false;
 let editing = false;
 let state = {providers: {}, connectors: {}, clients: []};
 let selectedProvider = 'openai_compatible';
@@ -27,11 +28,12 @@ async function api(path, body) {
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false; microsoftMailPending = false;
+  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false; microsoftMailPending = false; calendarPending = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
   element('gmail-link').removeAttribute('href'); element('gmail-link').hidden = true;
   element('drive-link').removeAttribute('href'); element('drive-link').hidden = true;
   element('microsoft-mail-link').removeAttribute('href'); element('microsoft-mail-link').hidden = true;
+  element('calendar-link').removeAttribute('href'); element('calendar-link').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
 }
 async function action(button, operation) {
@@ -89,6 +91,7 @@ async function refresh() {
   element('github-state').textContent = state.connectors?.github?.configured ? 'Configured · selected repository read only' : 'Not configured';
   element('slack-state').textContent = state.connectors?.slack?.configured ? 'Configured · selected conversation read only' : 'Not configured';
   element('drive-state').textContent = state.connectors?.google_drive?.configured ? 'Configured · selected folder ephemeral read' : 'Not configured';
+  element('calendar-state').textContent = state.connectors?.google_calendar?.configured ? 'Configured · selected calendar ephemeral read' : 'Not configured';
   element('home-state').textContent = state.connectors?.home_assistant?.configured ? 'Configured · selected state entities read only' : 'Not configured';
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
@@ -167,7 +170,7 @@ async function microsoftMail(operation) {
   if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`microsoft-mail-${operation}`).onclick = () => action(element(`microsoft-mail-${operation}`), () => microsoftMail(operation));
-for (const form of [element('github-form'), element('slack-form'), element('drive-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
+for (const form of [element('github-form'), element('slack-form'), element('drive-form'), element('calendar-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
 element('github-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
     const form = event.target;
@@ -197,6 +200,13 @@ element('drive-form').addEventListener('submit', (event) => {
     editing = false; await refresh(); notice('Google Drive folder selection saved.');
   });
 });
+element('calendar-form').addEventListener('submit', (event) => {
+  event.preventDefault(); action(event.submitter, async () => {
+    const form = event.target;
+    await api('connector/google-calendar', {enabled: true, calendar_id: form.elements.calendar_id.value.trim()});
+    editing = false; await refresh(); notice('Google Calendar selection saved.');
+  });
+});
 element('github-disconnect').onclick = () => action(element('github-disconnect'), async () => {
   if (!confirm('Disconnect GitHub and delete its stored token?')) return;
   await api('connector/github', {enabled: false, owner: '', repository: '', token: ''}); editing = false; await refresh(); notice('GitHub source disconnected.');
@@ -213,6 +223,10 @@ element('drive-disconnect').onclick = () => action(element('drive-disconnect'), 
   if (!confirm('Remove the selected Drive folder from Floe?')) return;
   await api('connector/google-drive', {enabled: false, folder_id: ''}); editing = false; await refresh(); notice('Google Drive folder removed.');
 });
+element('calendar-disconnect').onclick = () => action(element('calendar-disconnect'), async () => {
+  if (!confirm('Remove the selected Google Calendar from Floe?')) return;
+  await api('connector/google-calendar', {enabled: false, calendar_id: ''}); editing = false; await refresh(); notice('Google Calendar selection removed.');
+});
 async function drive(operation) {
   const value = await api(`drive/${operation}`, {}); drivePending = value.status === 'pending';
   element('drive-auth-state').textContent = `Authentication: ${value.status} · Scope: Drive read-only`;
@@ -220,10 +234,17 @@ async function drive(operation) {
   if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`drive-${operation}`).onclick = () => action(element(`drive-${operation}`), () => drive(operation));
+async function calendar(operation) {
+  const value = await api(`calendar/${operation}`, {}); calendarPending = value.status === 'pending';
+  element('calendar-auth-state').textContent = `Authentication: ${value.status} · Scope: Calendar read-only`;
+  const link = element('calendar-link'); link.hidden = !value.auth_url;
+  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
+}
+for (const operation of ['login', 'status', 'cancel', 'logout']) element(`calendar-${operation}`).onclick = () => action(element(`calendar-${operation}`), () => calendar(operation));
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
-  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); if (microsoftMailPending) await microsoftMail('status'); }
+  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); if (microsoftMailPending) await microsoftMail('status'); if (calendarPending) await calendar('status'); }
   catch (error) { notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);
