@@ -3,7 +3,7 @@ use floe_agent::{
     CapabilityDescriptor, CapabilityHost, CapabilityInvocation, DataClass, InferencePolicyDecision,
     ModelPlacement, ModelRequest, ModelResponse, ModelRunner, SessionStore, TransferConsent,
 };
-use floe_core::{EncryptedAgentVault, VaultKeyProvider};
+use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
 use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
@@ -12,11 +12,12 @@ use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner}
 use super::session_uuid;
 
 pub(super) async fn run<Keys: VaultKeyProvider>(
+    core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
     person_id: PersonId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
-    emit: impl FnMut(AgentEvent) + Send,
+    mut emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let text = request.text.trim();
     if text.is_empty() || text.len() > 8_192 {
@@ -30,6 +31,25 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     {
         return Err(AgentFailure::Conflict);
     }
+    let context = AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vault.personal_memory_context(chrono::Utc::now()).await?,
+        evidence: vec![],
+    };
+    if let Some(session) = super::calendar_turn::run_conversation(
+        core,
+        vault,
+        person_id,
+        request,
+        context.clone(),
+        cancellation.clone(),
+        &mut emit,
+    )
+    .await?
+    {
+        return Ok(session);
+    }
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
     let runtime = AgentRuntime {
@@ -38,12 +58,6 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         capabilities: &NoCapabilities,
         policy: &policy,
         budget: AgentBudget::default(),
-    };
-    let context = AgentContext {
-        projection_version: 1,
-        persona: None,
-        memories: vault.personal_memory_context(chrono::Utc::now()).await?,
-        evidence: vec![],
     };
     if request.continuation {
         runtime

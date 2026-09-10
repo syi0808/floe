@@ -678,6 +678,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let session = conversation_turn::run(
+                core,
                 vault,
                 job.person,
                 request,
