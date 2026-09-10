@@ -467,6 +467,7 @@ impl ModelRequest {
             },
             contextual_data: ContextualData {
                 projection_version: self.context.projection_version,
+                memories: self.context.memories.clone(),
                 evidence: self.context.evidence.clone(),
             },
             conversation: ConversationContext {
@@ -495,6 +496,16 @@ impl ModelRequest {
                         source_handle: evidence.source_handle.clone(),
                         data_class: evidence.data_class,
                         expires_at_unix_ms: evidence.expires_at_unix_ms,
+                    })
+                    .collect(),
+                memories: self
+                    .context
+                    .memories
+                    .iter()
+                    .map(|memory| MemoryManifestEntry {
+                        target_id: memory.target_id,
+                        revision: memory.revision,
+                        source_refs: memory.source_refs.clone(),
                     })
                     .collect(),
                 agent_cards: self
@@ -526,6 +537,7 @@ pub struct ContextEnvelope {
 #[serde(deny_unknown_fields)]
 pub struct ContextualData {
     pub projection_version: u32,
+    pub memories: Vec<crate::ContextMemory>,
     pub evidence: Vec<crate::ContextEvidence>,
 }
 
@@ -555,7 +567,16 @@ pub struct RuntimeContext {
 pub struct ContextManifest {
     pub prompt_components: Vec<PromptManifestEntry>,
     pub evidence: Vec<EvidenceManifestEntry>,
+    pub memories: Vec<MemoryManifestEntry>,
     pub agent_cards: Vec<AgentCardManifestEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryManifestEntry {
+    pub target_id: Uuid,
+    pub revision: u64,
+    pub source_refs: Vec<crate::LearningEvidenceRef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

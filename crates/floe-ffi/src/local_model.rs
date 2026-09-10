@@ -438,6 +438,7 @@ mod tests {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                memories: vec![],
                 evidence: vec![ContextEvidence {
                     source_handle: "fixture".into(),
                     data_class: DataClass::Synthetic,

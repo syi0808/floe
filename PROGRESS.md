@@ -4,6 +4,20 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 confirmed Memory context retrieval — 2026-09-10
+
+- General encrypted Personal conversations now load active confirmed Memory into a
+  typed `ContextMemory` section and record target revision plus source turn references
+  in `ContextManifest`. Memory stays contextual data and never enters instructions.
+- Temporal filtering and policy revalidation reject future, expired, source-free,
+  duplicate, non-Personal and over-budget projections. Synthetic sessions and Calendar
+  Experts receive no ambient Personal Memory.
+- Focused Agent policy/runtime tests pass 44/44 and encrypted-vault tests pass 19/19;
+  full Rust workspace tests/check and formatting pass.
+- Relevance ranking, durable per-attempt manifests, conversation extraction, Review
+  FFI/UI and background Learner remain. S5-A1–A6 stay pending.
+  [Evidence and limits](docs/validation/s5-memory-context-retrieval.md).
+
 ### S5 governed Memory persistence foundation — 2026-09-10
 
 - Accepted ADR 0019 after reviewing Hermes Agent's background review, staged-write,

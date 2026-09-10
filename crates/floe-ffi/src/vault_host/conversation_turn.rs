@@ -42,6 +42,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let context = AgentContext {
         projection_version: 1,
         persona: None,
+        memories: vault.personal_memory_context(chrono::Utc::now()).await?,
         evidence: vec![],
     };
     if request.continuation {

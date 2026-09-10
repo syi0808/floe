@@ -58,6 +58,7 @@ async fn main() -> std::process::ExitCode {
         context: AgentContext {
             projection_version: 1,
             persona: None,
+            memories: vec![],
             evidence: vec![],
         },
         messages: vec![AgentMessage::User {

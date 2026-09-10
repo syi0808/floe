@@ -16,11 +16,30 @@ fn context(class: DataClass) -> AgentContext {
     AgentContext {
         projection_version: 1,
         persona: None,
+        memories: vec![],
         evidence: vec![ContextEvidence {
             source_handle: "synthetic:coarse-state".into(),
             data_class: class,
             untrusted_text: "Synthetic coarse state".into(),
             expires_at_unix_ms: 100,
+        }],
+    }
+}
+
+fn memory() -> ContextMemory {
+    ContextMemory {
+        target_id: uuid::Uuid::new_v4(),
+        revision: 2,
+        kind: PersonalMemoryKind::Preference,
+        statement: "The user prefers afternoon meetings.".into(),
+        epistemic_status: EpistemicStatus::Fact,
+        confidence_millis: 1000,
+        observed_at_unix_ms: 10,
+        valid_from_unix_ms: None,
+        valid_until_unix_ms: Some(200),
+        source_refs: vec![LearningEvidenceRef {
+            session_id: uuid::Uuid::new_v4(),
+            turn_id: uuid::Uuid::new_v4(),
         }],
     }
 }
@@ -125,6 +144,52 @@ fn expired_and_empty_projection_metadata_fail_closed() {
             SessionProtection::Encrypted,
             &context,
             1
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+}
+
+#[test]
+fn confirmed_memory_requires_personal_scope_and_current_bounded_metadata() {
+    let mut personal = context(DataClass::Personal);
+    personal.evidence.clear();
+    personal.memories.push(memory());
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &personal,
+            100,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        policy(DataClass::Synthetic).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::SyntheticOnly,
+            &personal,
+            100,
+        ),
+        Err(AgentFailure::PolicyDenied)
+    );
+    personal.memories[0].valid_until_unix_ms = Some(100);
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &personal,
+            100,
+        ),
+        Err(AgentFailure::StaleContext)
+    );
+    personal.memories[0].valid_until_unix_ms = None;
+    personal.memories[0].source_refs.clear();
+    assert_eq!(
+        policy(DataClass::Personal).authorize(
+            ModelPlacement::DeviceLocal,
+            SessionProtection::Encrypted,
+            &personal,
+            100,
         ),
         Err(AgentFailure::PolicyDenied)
     );

@@ -2,11 +2,12 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
-    AgentFailure, AgentOutcome, DataClass, EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor,
-    KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind,
-    KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation, KnowledgeOperation,
-    KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceRef,
-    LearningObservation, PersonalMemoryKind, StageMemoryCandidate,
+    AgentFailure, AgentOutcome, ContextMemory, DataClass, EpistemicStatus, KNOWLEDGE_VERSION,
+    KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision,
+    KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
+    KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+    LearningEvidenceRef, LearningObservation, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
+    PersonalMemoryKind, StageMemoryCandidate,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -395,6 +396,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         Ok(revisions)
+    }
+
+    pub async fn personal_memory_context(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<ContextMemory>, AgentFailure> {
+        let mut context = Vec::new();
+        let mut total_bytes = 0usize;
+        for revision in self.active_personal_memories().await? {
+            let KnowledgePayload::Memory { value } = revision.payload else {
+                return Err(AgentFailure::VaultUnavailable);
+            };
+            if value.valid_from.is_some_and(|valid_from| valid_from > now)
+                || value
+                    .valid_until
+                    .is_some_and(|valid_until| valid_until <= now)
+            {
+                continue;
+            }
+            total_bytes = total_bytes
+                .checked_add(value.statement.len())
+                .ok_or(AgentFailure::BudgetExceeded)?;
+            if context.len() >= MAX_CONTEXT_MEMORIES || total_bytes > MAX_CONTEXT_MEMORY_BYTES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            context.push(ContextMemory {
+                target_id: revision.target_id,
+                revision: revision.revision,
+                kind: value.kind,
+                statement: value.statement,
+                epistemic_status: value.epistemic_status,
+                confidence_millis: value.confidence_millis,
+                observed_at_unix_ms: value.observed_at.timestamp_millis(),
+                valid_from_unix_ms: value.valid_from.map(|time| time.timestamp_millis()),
+                valid_until_unix_ms: value.valid_until.map(|time| time.timestamp_millis()),
+                source_refs: revision.source_refs,
+            });
+        }
+        self.check_access()?;
+        Ok(context)
     }
 
     pub async fn knowledge_mutations(

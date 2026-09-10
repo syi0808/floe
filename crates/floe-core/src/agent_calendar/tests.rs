@@ -439,6 +439,7 @@ impl Fixture {
             context: AgentContext {
                 projection_version: 1,
                 persona: None,
+                memories: vec![],
                 evidence: vec![],
             },
             policy: InferencePolicyDecision {

@@ -237,6 +237,18 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         vault.active_personal_memories().await.unwrap().as_slice(),
         std::slice::from_ref(&active_revision)
     );
+    let context = vault
+        .personal_memory_context(Utc.with_ymd_and_hms(2026, 9, 10, 12, 9, 0).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(context.len(), 1);
+    assert_eq!(context[0].target_id, active_revision.target_id);
+    assert_eq!(context[0].revision, 2);
+    assert_eq!(context[0].source_refs[0].turn_id, correction_turn_id);
+    assert_eq!(
+        context[0].statement,
+        "사용자는 회의를 14시 이후에 선호한다."
+    );
 
     drop(vault);
     let vault = EncryptedAgentVault::open(root.path(), person, keys)
@@ -951,6 +963,7 @@ async fn runtime_fails_closed_on_key_loss_and_recovers_without_model_replay() {
     let context = AgentContext {
         projection_version: 1,
         persona: None,
+        memories: vec![],
         evidence: vec![],
     };
     let mut events = vec![];

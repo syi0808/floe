@@ -937,6 +937,7 @@ async fn generate_schedule_step<Model: ModelRunner + Sync>(
             context: AgentContext {
                 projection_version: policy.projection_version,
                 persona: None,
+                memories: vec![],
                 evidence: vec![],
             },
             messages: messages.to_vec(),

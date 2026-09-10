@@ -1064,6 +1064,7 @@ fn context() -> AgentContext {
     AgentContext {
         projection_version: 1,
         persona: None,
+        memories: vec![],
         evidence: vec![],
     }
 }
@@ -1491,6 +1492,50 @@ async fn manager_uses_the_validated_persona_without_exposing_it_as_evidence() {
     assert_eq!(persona.content, "Respond calmly and directly.");
     let envelope = requests[0].context_envelope().unwrap();
     assert!(envelope.contextual_data.evidence.is_empty());
+}
+
+#[tokio::test]
+async fn manager_receives_confirmed_memory_as_manifested_data_not_instructions() {
+    let store = Store::new();
+    let model = Model::new(vec![answer()]);
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let target_id = Uuid::new_v4();
+    let source = LearningEvidenceRef {
+        session_id: store.session.lock().unwrap().id,
+        turn_id: Uuid::new_v4(),
+    };
+    let mut context = context();
+    context.memories.push(ContextMemory {
+        target_id,
+        revision: 3,
+        kind: PersonalMemoryKind::Preference,
+        statement: "The user prefers afternoon meetings.".into(),
+        epistemic_status: EpistemicStatus::Fact,
+        confidence_millis: 1000,
+        observed_at_unix_ms: 1,
+        valid_from_unix_ms: None,
+        valid_until_unix_ms: None,
+        source_refs: vec![source.clone()],
+    });
+    runtime
+        .run_turn(store.command(), context, Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+
+    let requests = model.requests.lock().unwrap();
+    assert!(!requests[0].prompt.render().contains("afternoon meetings"));
+    let envelope = requests[0].context_envelope().unwrap();
+    assert_eq!(envelope.contextual_data.memories[0].target_id, target_id);
+    assert_eq!(envelope.contextual_data.memories[0].revision, 3);
+    assert_eq!(envelope.manifest.memories[0].source_refs, [source]);
 }
 
 #[tokio::test]
