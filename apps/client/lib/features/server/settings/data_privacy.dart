@@ -25,6 +25,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool calendarRequested = false;
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
+  bool connectionsRequested = false;
 
   AgentController get controller => widget.controller;
 
@@ -45,6 +46,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       calendarRequested = false;
       memoryRequested = false;
       savedMemoryRequested = false;
+      connectionsRequested = false;
       _load();
     }
   }
@@ -57,7 +59,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     if (loading ||
         !controller.canManageRegistry &&
             !controller.canReviewMemory &&
-            !controller.canReadMemory) {
+            !controller.canReadMemory &&
+            !controller.canReadConnections) {
       return;
     }
     loading = true;
@@ -82,6 +85,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         controller.canReadMemory) {
       savedMemoryRequested = true;
       await controller.loadMemory();
+    }
+    if (controller.hasConnections &&
+        !connectionsRequested &&
+        controller.canReadConnections) {
+      connectionsRequested = true;
+      await controller.loadConnections();
     }
     loading = false;
   }
@@ -110,13 +119,28 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         const SizedBox(height: FloeSpace.lg),
         FloeSquircle(
           padding: const EdgeInsets.all(FloeSpace.lg),
-          child: controller.hasCalendarExpertManagement
-              ? AgentCalendarSettings(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (controller.hasConnections)
+                AgentConnectionSettings(controller: controller),
+              if (controller.hasConnections &&
+                  controller.hasCalendarExpertManagement)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
+                  child: Divider(height: 1),
+                ),
+              if (controller.hasCalendarExpertManagement)
+                AgentCalendarSettings(
                   controller: controller,
                   sources: widget.calendarSources,
                   sourceChanges: widget.calendarSourceChanges,
-                )
-              : const Text('No connected data sources are available yet.'),
+                ),
+              if (!controller.hasConnections &&
+                  !controller.hasCalendarExpertManagement)
+                const Text('No connected data sources are available yet.'),
+            ],
+          ),
         ),
         if (controller.hasMemory) ...[
           const SizedBox(height: FloeSpace.lg),

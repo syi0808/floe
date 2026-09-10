@@ -4,6 +4,21 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 shared Calendar connection inspection — 2026-09-10
+
+- Added a read-only `connections` protocol/FFI operation over the common connector snapshot.
+  It works without creating or unlocking the Agent vault and rejects attempted mutation or
+  credential fields.
+- Added strict Dart projections for descriptors, capabilities, lifecycle, freshness, bounds
+  and provenance. Data & privacy now shows a shared Connections section with provider,
+  execution location, available Views, last success, degraded reason and granted read scope.
+- The presentation explicitly keeps source read access separate from action approval and does
+  not expose provider-native identifiers. Focused protocol and FFI tests pass; Flutter gateway,
+  malformed escalation and settings tests pass 3/3, with analyzer clean.
+- Only Calendar uses the production snapshot and signed live EventKit evidence was not rerun,
+  so S5.5 remains **0/14**.
+  [Evidence and limits](docs/validation/s5-5-calendar-connector-snapshot.md).
+
 ### S5.5 durable Calendar connector snapshot — 2026-09-10
 
 - Projected the existing durable Calendar mirror into the common versioned connector

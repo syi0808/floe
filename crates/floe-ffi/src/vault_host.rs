@@ -98,6 +98,7 @@ struct Progress {
     proposal: Option<AgentProposalInspectionDto>,
     memory_review: Option<AgentMemoryReviewOverviewDto>,
     memory: Option<AgentMemoryOverviewDto>,
+    connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     failure: Option<AgentFailure>,
 }
 
@@ -303,6 +304,7 @@ impl Worker {
             proposal: progress.proposal.clone(),
             memory_review: progress.memory_review.clone(),
             memory: progress.memory.clone(),
+            connections: progress.connections.clone(),
             failure: progress.failure,
         };
         drop(progress);
@@ -373,13 +375,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                     None,
                 ));
             }
-            let state = match fs::symlink_metadata(root.join(job.person.to_string())) {
-                Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    AgentVaultStateDto::Missing
-                }
-                _ => AgentVaultStateDto::Unavailable,
-            };
+            let state = stored_vault_state(root, job.person);
             Ok((state, None, None, None, None, None, None))
         }
         AgentVaultActionDto::Create {} => {
@@ -764,6 +760,45 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 }),
             ))
         }
+        AgentVaultActionDto::Connections {} => {
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            let device_id = format!("local-{}", std::env::consts::OS);
+            let connections = core
+                .calendar_connector_snapshot(job.person, &device_id, chrono::Utc::now())
+                .await
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .into_iter()
+                .collect();
+            if job.cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            job.progress
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?
+                .connections = Some(connections);
+            Ok((
+                current.as_ref().map_or_else(
+                    || stored_vault_state(root, job.person),
+                    |_| AgentVaultStateDto::Ready,
+                ),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ))
+        }
+    }
+}
+
+fn stored_vault_state(root: &std::path::Path, person: PersonId) -> AgentVaultStateDto {
+    match fs::symlink_metadata(root.join(person.to_string())) {
+        Ok(metadata) if metadata.is_dir() => AgentVaultStateDto::Locked,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => AgentVaultStateDto::Missing,
+        _ => AgentVaultStateDto::Unavailable,
     }
 }
 
@@ -897,6 +932,19 @@ mod tests {
             .request(person, id, AgentVaultOperationDto::Release {})
             .unwrap();
         result
+    }
+
+    #[test]
+    fn connections_are_inspectable_without_initializing_a_vault() {
+        let directory = tempfile::tempdir().unwrap();
+        let person = PersonId::new();
+        let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+
+        let result = perform(&worker, person, AgentVaultActionDto::Connections {});
+
+        assert!(result.failure.is_none());
+        assert_eq!(result.connections, Some(vec![]));
+        assert!(!directory.path().join("vaults").exists());
     }
 
     #[test]

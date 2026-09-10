@@ -576,3 +576,17 @@ fn all_command_variants_round_trip_through_json() {
         );
     }
 }
+#[test]
+fn connections_transport_is_read_only() {
+    let action = json!({"kind": "connections"});
+    assert_eq!(
+        serde_json::from_value::<AgentVaultActionDto>(action).unwrap(),
+        AgentVaultActionDto::Connections {}
+    );
+    for forged in [
+        json!({"kind": "connections", "disconnect": true}),
+        json!({"kind": "connections", "credential": "secret"}),
+    ] {
+        assert!(serde_json::from_value::<AgentVaultActionDto>(forged).is_err());
+    }
+}

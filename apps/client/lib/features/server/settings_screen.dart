@@ -10,6 +10,7 @@ import '../../app/floe_loading.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
+import '../agent/agent_connection_settings.dart';
 import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_memory_settings.dart';

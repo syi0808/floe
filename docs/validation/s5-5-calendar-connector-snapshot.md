@@ -19,6 +19,12 @@
   IDs and calendar names do not enter the common snapshot.
 - Calendar failure observation time is now persisted with aggregate and per-source state,
   cleared by a successful import and preserved across reopen.
+- Added a read-only `connections` protocol/FFI operation that can inspect connector health
+  without creating or unlocking the Agent vault. Unknown mutation or credential fields are
+  rejected by the strict action contract.
+- Added strict Dart projections and a shared Connections section in Data & privacy. It shows
+  provider, execution location, available View count, last success, typed degraded reason and
+  granted read scopes while explicitly separating action approval.
 
 ## Automated evidence
 
@@ -27,8 +33,13 @@ Run from the repository root:
 ```sh
 cargo test -p floe-core --test connected_calendar
 cargo test -p floe-agent --test connected_context
+cargo test -p floe-protocol --test protocol
+cargo test -p floe-ffi --lib vault_host::tests::connections_are_inspectable_without_initializing_a_vault
 cargo check --workspace
 cargo test --workspace
+cd apps/client
+flutter test test/features/agent/agent_connections_test.dart test/features/server/settings_screen_test.dart
+flutter analyze
 ```
 
 The Calendar integration suite covers four cases:
@@ -41,9 +52,12 @@ The Calendar integration suite covers four cases:
 4. A projection at the five-minute freshness boundary becomes typed stale/unavailable
    evidence and cannot satisfy a required Situation View.
 
+The protocol/FFI boundary covers read-only inspection without vault initialization. Three
+focused Flutter tests cover strict parsing, escalation rejection and the degraded-source UI.
+
 ## Remaining gate
 
-The snapshot is a Core API and has not yet been exposed through the shared Connections UI
-or consumed as the discovery source for every adapter. Only Calendar implements this
-production projection, and no signed live EventKit lifecycle was rerun for this checkpoint.
-Therefore S5.5-C1 and all other S5.5 criteria remain pending.
+Only Calendar implements this production projection, and the snapshot is not yet consumed as
+the discovery source for every adapter. Disconnect/reconnect controls still use the existing
+Calendar path, and no signed live EventKit lifecycle was rerun for this checkpoint. Therefore
+S5.5-C1 and all other S5.5 criteria remain pending.

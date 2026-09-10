@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'agent_calendar_experts.dart';
+import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
@@ -14,6 +15,7 @@ import 'agent_vault_gateway.dart';
 import 'application/agent_registry_controller.dart';
 import 'application/agent_memory_controller.dart';
 import 'application/agent_calendar_expert_controller.dart';
+import 'application/agent_connection_controller.dart';
 
 enum AgentProgress {
   idle,
@@ -76,6 +78,21 @@ final class AgentController extends ChangeNotifier {
           vaultState == AgentVaultState.ready,
       onFatalFailure: _fail,
     )..addListener(_notify);
+    connectionController = AgentConnectionController(
+      gateway: gateway is AgentConnectionsGateway
+          ? gateway as AgentConnectionsGateway
+          : null,
+      personId: personId,
+      canOperate: () =>
+          !_busy &&
+          !registryController.busy &&
+          !memoryController.busy &&
+          !calendarExpertController.busy &&
+          !_sealed &&
+          !_disposed &&
+          _locking == null,
+      onFatalFailure: _fail,
+    )..addListener(_notify);
   }
 
   final AgentFixtureStreamingGateway gateway;
@@ -104,6 +121,13 @@ final class AgentController extends ChangeNotifier {
   AgentCalendarExperts? get calendarExperts => calendarExpertController.experts;
   String? get calendarExpertFailure => calendarExpertController.failure;
   late final AgentMemoryController memoryController;
+  late final AgentConnectionController connectionController;
+  List<AgentConnection>? get connections => connectionController.connections;
+  String? get connectionFailure => connectionController.failure;
+  bool get hasConnections => connectionController.available;
+  bool get canReadConnections => connectionController.canRead;
+
+  Future<void> loadConnections() => connectionController.load();
   List<AgentMemoryCandidate>? get memoryCandidates =>
       memoryController.candidates;
   String? get memoryReviewFailure => memoryController.reviewFailure;
@@ -287,7 +311,8 @@ final class AgentController extends ChangeNotifier {
       _busy ||
       registryController.busy ||
       memoryController.busy ||
-      calendarExpertController.busy;
+      calendarExpertController.busy ||
+      connectionController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
   bool get canSend =>
@@ -673,6 +698,7 @@ final class AgentController extends ChangeNotifier {
     registryController.clear();
     calendarExpertController.clear();
     memoryController.clear();
+    connectionController.clear();
     session = null;
     messages = [];
     _lastPrompt = null;
@@ -719,6 +745,7 @@ final class AgentController extends ChangeNotifier {
       registryController.clear();
       calendarExpertController.clear();
       memoryController.clear();
+      connectionController.clear();
       session = null;
       messages = [];
       vaultState = AgentVaultState.unavailable;
@@ -731,6 +758,7 @@ final class AgentController extends ChangeNotifier {
     registryController.removeListener(_notify);
     memoryController.removeListener(_notify);
     calendarExpertController.removeListener(_notify);
+    connectionController.removeListener(_notify);
     unawaited(stop());
     super.dispose();
   }

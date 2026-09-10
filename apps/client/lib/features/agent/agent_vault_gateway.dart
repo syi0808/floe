@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'agent_calendar_experts.dart';
+import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
@@ -31,6 +32,7 @@ final class NativeAgentVaultGateway
         AgentProposalGateway,
         AgentConversationGateway,
         AgentCalendarExpertGateway,
+        AgentConnectionsGateway,
         AgentMemoryGateway,
         AgentMemoryReviewGateway {
   NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
@@ -40,6 +42,21 @@ final class NativeAgentVaultGateway
   _VaultJob? _pending;
   AgentSession? _run;
   AgentConversationTurnRequest? _conversationRun;
+
+  @override
+  Future<List<AgentConnection>> readConnections(String personId) async {
+    final result = await _perform(personId, {'kind': 'connections'});
+    final raw = result['connections'];
+    if (raw is! List || raw.length > 64) {
+      throw const FormatException('Invalid connection overview');
+    }
+    return List.unmodifiable(
+      raw.map(
+        (entry) =>
+            AgentConnection.fromJson(Map<String, dynamic>.from(entry as Map)),
+      ),
+    );
+  }
 
   @override
   Future<AgentMemoryOverview> readMemory(String personId) async {

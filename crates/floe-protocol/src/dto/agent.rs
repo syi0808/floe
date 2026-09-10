@@ -52,6 +52,7 @@ pub enum AgentVaultActionDto {
         decision: Option<AgentMemoryReviewDecisionDto>,
     },
     Memory {},
+    Connections {},
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -221,6 +222,8 @@ pub struct AgentVaultResultDto {
     pub memory_review: Option<AgentMemoryReviewOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<AgentMemoryOverviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     pub failure: Option<floe_agent::AgentFailure>,
 }
 
