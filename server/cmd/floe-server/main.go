@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"floe/server/internal/codexauth"
+	"floe/server/internal/connectors/gmail"
 	"floe/server/internal/console"
 	"floe/server/internal/credentials"
 	"floe/server/internal/googleauth"
@@ -49,7 +50,18 @@ func main() {
 				log.Fatal("Cannot configure Google OAuth")
 			}
 			defer gmailAuth.Close()
-			management.SetGmailAuth(gmailAuth)
+			query := os.Getenv("FLOE_GMAIL_QUERY")
+			if query == "" {
+				query = "newer_than:30d -in:spam -in:trash"
+			}
+			gmailService, serviceError := gmail.NewService(filepath.Join(directory, "connectors", "gmail"), "primary", query, gmailAuth)
+			if serviceError != nil {
+				log.Fatal("Cannot initialize Gmail connector")
+			}
+			management.SetGmailAuth(gmailService)
+			syncContext, stopSync := context.WithCancel(context.Background())
+			defer stopSync()
+			go func() { _ = gmailService.Run(syncContext, 5*time.Minute) }()
 		}
 		handler = management
 		log.Printf("Local dashboard: http://%s/manage/", address)

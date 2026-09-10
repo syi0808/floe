@@ -29,6 +29,9 @@
   loopback callback, PKCE S256, five-minute state, offline access and only `gmail.readonly`.
   Tokens stay in macOS Keychain, refresh is serialized, invalid grants are cleared, changed OAuth
   client IDs cannot inherit tokens, and disconnect revokes upstream before local deletion.
+- The local server now composes OAuth, sync and index as one Gmail service. It exposes authenticated
+  status/manual-sync controls, refreshes every five minutes while connected, persists ready/degraded
+  lifecycle evidence and removes indexed metadata after a successful revoke/disconnect.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -56,7 +59,7 @@ cover bootstrap catch-up, label changes, deletions, atomic checkpoints and `404`
 
 ## Remaining gate
 
-The authenticated console can manage OAuth, but it does not yet register a Gmail connection or
-start scheduled synchronization, and no live mailbox run has been recorded. The Rust Agent runtime
-does not yet consume its Communication View. S5.5-C1,
+The authenticated console owns one local Gmail connection and scheduled synchronization, but no
+live mailbox run has been recorded. Its snapshot is not yet transported to the client Connections
+UI, and the Rust Agent runtime does not yet consume its Communication View. S5.5-C1,
 S5.5-C2 and implementation-order items 2–3 remain pending.

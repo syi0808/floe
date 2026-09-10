@@ -145,11 +145,13 @@ async function codex(operation) {
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`codex-${operation}`).onclick = () => action(element(`codex-${operation}`), () => codex(operation));
 async function gmail(operation) {
   const value = await api(`gmail/${operation}`, {}); gmailPending = value.status === 'pending';
-  element('gmail-state').textContent = `Authentication: ${value.status} · Scope: Gmail read-only`;
+  const connection = value.connection?.connection?.state;
+  element('gmail-state').textContent = `Authentication: ${value.status || 'connected'} · Context: ${connection || (operation === 'sync' ? 'synced' : 'not inspected')} · Scope: Gmail read-only`;
   const link = element('gmail-link'); link.hidden = !value.auth_url;
   if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
+element('gmail-sync').onclick = () => action(element('gmail-sync'), async () => { await gmail('sync'); await gmail('status'); });
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;

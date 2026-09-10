@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Gmail service lifecycle — 2026-09-10
+
+- Composed Google OAuth, checkpointed sync and the private metadata index into one server-owned
+  Gmail service. The authenticated console now offers inspect, manual sync and revoke controls;
+  connected metadata refreshes every five minutes with a bounded purpose query.
+- Ready/degraded/revoked lifecycle and sync failures persist across restart. Successful disconnect
+  revokes the upstream grant and clears indexed metadata; cached Views are never published while
+  disconnected or revoked.
+- Full Go race tests and vet pass. Live Google credentials, client snapshot transport and
+  Commitments/Communication Expert consumption remain, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 Gmail desktop OAuth boundary — 2026-09-10
 
 - Added Google Desktop OAuth with random loopback callback, PKCE S256, five-minute state,

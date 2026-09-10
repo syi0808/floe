@@ -25,10 +25,12 @@ type Index struct {
 }
 
 type indexState struct {
-	SchemaVersion int                 `json:"schema_version"`
-	ConnectionID  string              `json:"connection_id"`
-	HistoryID     string              `json:"history_id,omitempty"`
-	Messages      map[string]Metadata `json:"messages"`
+	SchemaVersion       int                 `json:"schema_version"`
+	ConnectionID        string              `json:"connection_id"`
+	HistoryID           string              `json:"history_id,omitempty"`
+	Messages            map[string]Metadata `json:"messages"`
+	LastSuccessAtUnixMS *int64              `json:"last_success_at_unix_ms,omitempty"`
+	LastFailure         *Failure            `json:"last_failure,omitempty"`
 }
 
 type CommunicationItem struct {
@@ -82,7 +84,7 @@ func (index *Index) ApplyFull(messages []Metadata, historyID string) error {
 	if !validID(historyID) || len(messages) > maxIndexItems {
 		return ErrInvalidInput
 	}
-	next := indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, HistoryID: historyID, Messages: map[string]Metadata{}}
+	next := indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, HistoryID: historyID, Messages: map[string]Metadata{}, LastSuccessAtUnixMS: index.state.LastSuccessAtUnixMS, LastFailure: cloneFailure(index.state.LastFailure)}
 	for _, message := range messages {
 		if validateMetadata(message) != nil || next.Messages[message.ID].ID != "" {
 			return ErrInvalidInput
@@ -124,6 +126,44 @@ func (index *Index) HistoryID() string {
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	return index.state.HistoryID
+}
+
+func (index *Index) RecordSync(now time.Time, failureKind string) error {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	next := cloneIndexState(index.state)
+	observed := now.UnixMilli()
+	if failureKind == "" {
+		next.LastSuccessAtUnixMS = &observed
+		next.LastFailure = nil
+	} else {
+		if !validFailure(failureKind) {
+			return ErrInvalidInput
+		}
+		next.LastFailure = &Failure{Kind: failureKind, ObservedAtUnixMS: observed}
+	}
+	return index.commit(next)
+}
+
+func (index *Index) SyncStatus() (*int64, *Failure, int) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	var success *int64
+	if index.state.LastSuccessAtUnixMS != nil {
+		value := *index.state.LastSuccessAtUnixMS
+		success = &value
+	}
+	return success, cloneFailure(index.state.LastFailure), len(index.state.Messages)
+}
+
+func (index *Index) Reset() error {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if err := os.Remove(index.path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	index.state = indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, Messages: map[string]Metadata{}}
+	return nil
 }
 
 func (index *Index) Communication(query string, cursor, limit int, now time.Time) (CommunicationView, error) {
@@ -181,7 +221,7 @@ func (index *Index) commit(next indexState) error {
 }
 
 func (index *Index) validateState() error {
-	if index.state.SchemaVersion != indexVersion || index.state.ConnectionID != index.connectionID || index.state.Messages == nil || len(index.state.Messages) > maxIndexItems || (index.state.HistoryID != "" && !validID(index.state.HistoryID)) {
+	if index.state.SchemaVersion != indexVersion || index.state.ConnectionID != index.connectionID || index.state.Messages == nil || len(index.state.Messages) > maxIndexItems || (index.state.HistoryID != "" && !validID(index.state.HistoryID)) || (index.state.LastSuccessAtUnixMS != nil && *index.state.LastSuccessAtUnixMS < 0) || (index.state.LastFailure != nil && (!validFailure(index.state.LastFailure.Kind) || index.state.LastFailure.ObservedAtUnixMS < 0)) {
 		return ErrInvalidInput
 	}
 	for id, message := range index.state.Messages {
@@ -204,11 +244,19 @@ func cloneMetadata(message Metadata) Metadata {
 	return message
 }
 func cloneIndexState(state indexState) indexState {
-	next := indexState{SchemaVersion: state.SchemaVersion, ConnectionID: state.ConnectionID, HistoryID: state.HistoryID, Messages: map[string]Metadata{}}
+	next := indexState{SchemaVersion: state.SchemaVersion, ConnectionID: state.ConnectionID, HistoryID: state.HistoryID, Messages: map[string]Metadata{}, LastSuccessAtUnixMS: state.LastSuccessAtUnixMS, LastFailure: cloneFailure(state.LastFailure)}
 	for id, message := range state.Messages {
 		next.Messages[id] = cloneMetadata(message)
 	}
 	return next
+}
+
+func cloneFailure(failure *Failure) *Failure {
+	if failure == nil {
+		return nil
+	}
+	copy := *failure
+	return &copy
 }
 
 func ensurePrivateDirectory(directory string) error {

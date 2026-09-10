@@ -86,8 +86,10 @@ random loopback callback port, PKCE S256, five-minute state, offline access and 
 returned by the management API. Disconnect first revokes the Google grant and then deletes the
 local credential. Changing the configured client ID never inherits an older client's tokens.
 
-OAuth setup and a live mailbox run are still required before the Gmail connector is usable. The
-current dashboard connection does not yet start scheduled synchronization.
+The connector performs a bounded purpose-filtered metadata refresh every five minutes while
+connected; **Sync now** runs the same checkpointed path. `FLOE_GMAIL_QUERY` can replace the default
+`newer_than:30d -in:spam -in:trash` query. OAuth setup and a live mailbox run are still required
+before Gmail evidence is available to Floe clients.
 
 ## Legacy headless mode
 
