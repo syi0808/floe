@@ -266,6 +266,8 @@ nested Playbook progressive disclosure는
 activation, rollback, Curator와 삭제 lifecycle은 Hermes Agent 구현을 참고해 Floe의
 typed encrypted vault 경계로 조정한
 [ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md)를 따른다.
+일반 사용자가 Memory를 확인·교정·삭제하는 설정 경험은
+[User-facing Memory settings](../03-intelligence/memory-settings-experience.md)를 따른다.
 
 ### Acceptance criteria
 
