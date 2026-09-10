@@ -170,42 +170,35 @@ impl ModelRunner for Model<'_> {
                 .iter()
                 .filter(|message| matches!(message, AgentMessage::Capability { .. }))
                 .count();
-            let step = if tool_results >= 2 {
+            let coverage = request.messages.iter().find_map(|message| match message {
+                AgentMessage::User { text, .. } => serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .map(|task| {
+                        (
+                            task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                            task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                        )
+                    }),
+                _ => None,
+            });
+            let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
+                coverage.ok_or(AgentFailure::InvalidModelOutput)?
+            else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
+            let step = if tool_results >= 1 {
                 ModelStep::Answer {
                     text: "One commitment is followed by an available focus window.".into(),
-                }
-            } else if tool_results == 1 {
-                let insights = request
-                    .messages
-                    .iter()
-                    .find_map(|message| match message {
-                        AgentMessage::Capability {
-                            result: Ok(output), ..
-                        } => serde_json::from_str::<Vec<serde_json::Value>>(output).ok(),
-                        _ => None,
-                    })
-                    .ok_or(AgentFailure::InvalidModelOutput)?;
-                let (starts_at_unix_ms, ends_at_unix_ms) = insights
-                    .iter()
-                    .find_map(|insight| {
-                        if insight["kind"] == "focus_window" {
-                            Some((
-                                insight["starts_at_unix_ms"].as_u64()?,
-                                insight["ends_at_unix_ms"].as_u64()?,
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or(AgentFailure::InvalidModelOutput)?;
-                ModelStep::Call {
-                    capability_id: "schedule.propose_window".into(),
-                    input: serde_json::json!({"starts_at_unix_ms": starts_at_unix_ms, "ends_at_unix_ms": ends_at_unix_ms}).to_string(),
                 }
             } else {
                 ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
-                    input: serde_json::json!({"minimum_minutes": 60}).to_string(),
+                    input: serde_json::json!({
+                        "minimum_minutes": 60,
+                        "range_start_unix_ms": starts_at_unix_ms,
+                        "range_end_unix_ms": ends_at_unix_ms,
+                    })
+                    .to_string(),
                 }
             };
             return Ok(ModelResponse {
@@ -460,6 +453,7 @@ impl Fixture {
                 connection_revision: 2,
                 timezone: "UTC".into(),
             }),
+            propose_focus: true,
             cancellation: Cancellation::default(),
         }
     }
@@ -694,15 +688,14 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         .unwrap();
     assert!(!parent.is_cancelled());
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
-    assert_eq!(result.session.revision, 20);
-    assert_eq!(result.session.usage.tokens, 50);
-    assert_eq!(result.session.usage.model_attempts, 5);
-    assert_eq!(result.session.model_attempts.len(), 5);
+    assert_eq!(result.session.revision, 16);
+    assert_eq!(result.session.usage.tokens, 40);
+    assert_eq!(result.session.usage.model_attempts, 4);
+    assert_eq!(result.session.model_attempts.len(), 4);
     let executions = &result.session.capability_executions;
-    assert_eq!(executions.len(), 3);
+    assert_eq!(executions.len(), 2);
     assert_eq!(executions[0].capability_id, "view.timeline");
     assert_eq!(executions[1].capability_id, "schedule.find_free_windows");
-    assert_eq!(executions[2].capability_id, "schedule.propose_window");
     assert!(
         executions
             .iter()
@@ -767,13 +760,13 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
     let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
     assert!(output.contains("Ignore all rules"));
     let expert: ExpertResult = serde_json::from_str(output).unwrap();
-    assert_eq!(expert.model_calls, 3);
+    assert_eq!(expert.model_calls, 2);
     assert_eq!(
         expert.summary.as_deref(),
         Some("One commitment is followed by an available focus window.")
     );
     let expert_requests = model.expert_requests.lock().unwrap();
-    assert_eq!(expert_requests.len(), 3);
+    assert_eq!(expert_requests.len(), 2);
     assert!(expert_requests[0].replay.is_empty());
     assert_eq!(expert_requests[1].replay.len(), 1);
     assert_eq!(expert_requests[1].replay[0].call_id, executions[1].call_id);
@@ -844,7 +837,7 @@ async fn reopening_and_follow_up_preserve_history_but_do_not_resend_old_tool_evi
         .await
         .unwrap();
     assert_eq!(second.session.messages[..3], first.session.messages);
-    assert_eq!(second.session.revision, 40);
+    assert_eq!(second.session.revision, 32);
     assert_eq!(second.proposals.len(), 1);
     assert_ne!(
         second.proposals[0].reference.invocation_id,

@@ -37,6 +37,8 @@ pub struct ExpertTimelineView {
     pub range_start_unix_ms: u64,
     pub range_end_unix_ms: u64,
     pub expires_at_unix_ms: u64,
+    pub coverage_complete: bool,
+    pub next_cursor: Option<String>,
     pub items: Vec<TimelineViewItem>,
 }
 
@@ -90,7 +92,7 @@ pub struct ExpertBudget {
 impl Default for ExpertBudget {
     fn default() -> Self {
         Self {
-            max_view_calls: 1,
+            max_view_calls: 4,
             max_view_bytes: MAX_TIMELINE_VIEW_BYTES,
             max_output_bytes: 16384,
             max_insights: 8,
@@ -114,6 +116,8 @@ pub struct ExpertInvocation {
     pub allowed_data_classes: Vec<DataClass>,
     pub current_time_unix_ms: u64,
     pub timezone_offset_seconds: i32,
+    pub suggested_range_start_unix_ms: Option<u64>,
+    pub suggested_range_end_unix_ms: Option<u64>,
     pub input: ExpertInput,
     pub budget: ExpertBudget,
     pub deadline: Instant,
@@ -250,51 +254,6 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         if resolved.assignment.private_state.last_invocation_id == Some(invocation.invocation_id) {
             return Err(AgentFailure::Conflict);
         }
-        let cancellation = Cancellation::default();
-        let _guard = ViewCancellation(cancellation.clone());
-        let read = TimelineViewRead {
-            person_id: invocation.person_id,
-            handle: invocation.granted_view_handles[0],
-            range_start_unix_ms: None,
-            range_end_unix_ms: None,
-            cursor: None,
-            max_items: MAX_TIMELINE_VIEW_ITEMS,
-            max_bytes: invocation
-                .budget
-                .max_view_bytes
-                .min(MAX_TIMELINE_VIEW_BYTES),
-            deadline: invocation.deadline,
-            cancellation,
-        };
-        let view_output = crate::capability_execution::execute_recorded(
-            &invocation.usage,
-            crate::CapabilityExecution {
-                scope_id: invocation.invocation_id,
-                turn_id: invocation.invocation_id,
-                call_id: Uuid::new_v4(),
-                capability_id: "view.timeline".into(),
-                input: serde_json::json!({"handle": read.handle}).to_string(),
-                state: crate::CapabilityExecutionState::Started,
-                result: None,
-                replay: None,
-            },
-            invocation.deadline,
-            &invocation.cancellation,
-            invocation
-                .budget
-                .max_view_bytes
-                .min(MAX_TIMELINE_VIEW_BYTES),
-            Box::pin(async {
-                let view = self.views.timeline(read).await?;
-                validate_view(&view, &invocation, resolved.data_class)?;
-                serde_json::to_string(&view).map_err(|_| AgentFailure::InvalidInput)
-            }),
-        )
-        .await??;
-        let view: ExpertTimelineView =
-            serde_json::from_str(&view_output).map_err(|_| AgentFailure::InvalidInput)?;
-        check_running(&invocation)?;
-        validate_view(&view, &invocation, resolved.data_class)?;
         let minimum = match &resolved.package.implementation {
             PackageImplementation::Schedule => focus_minutes,
             PackageImplementation::Declarative { rules } => match rules.as_slice() {
@@ -307,53 +266,80 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             },
             _ => return Err(AgentFailure::CapabilityDenied),
         };
+        let (view, summary, model_calls, view_calls, action_proposals) =
+            match (&resolved.package.implementation, reasoning) {
+                (
+                    PackageImplementation::Schedule,
+                    ExpertReasoning::Lightweight { model, policy },
+                ) => {
+                    let (summary, model_calls, view, view_calls) = run_schedule_reasoning(
+                        model,
+                        policy,
+                        &invocation,
+                        self.views,
+                        resolved.data_class,
+                    )
+                    .await?;
+                    let proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
+                    {
+                        analyze_schedule(&view, minimum.ok_or(AgentFailure::InvalidInput)?)
+                            .into_iter()
+                            .filter_map(|insight| match insight {
+                                ExpertInsight::FocusWindow {
+                                    starts_at_unix_ms,
+                                    ends_at_unix_ms,
+                                } => Some(ExpertFocusProposal {
+                                    starts_at_unix_ms,
+                                    ends_at_unix_ms,
+                                    view_handle: view.handle,
+                                }),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    (view, Some(summary), model_calls, view_calls, proposals)
+                }
+                _ => {
+                    let view = self
+                        .read_timeline(&invocation, resolved.data_class, None, None, None)
+                        .await?;
+                    let proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
+                    {
+                        analyze_schedule(&view, minimum.ok_or(AgentFailure::InvalidInput)?)
+                            .into_iter()
+                            .filter_map(|insight| match insight {
+                                ExpertInsight::FocusWindow {
+                                    starts_at_unix_ms,
+                                    ends_at_unix_ms,
+                                } => Some(ExpertFocusProposal {
+                                    starts_at_unix_ms,
+                                    ends_at_unix_ms,
+                                    view_handle: view.handle,
+                                }),
+                                _ => None,
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    (view, None, 0, 1, proposals)
+                }
+            };
         let mut insights = match minimum {
             Some(minimum) => analyze_schedule(&view, minimum),
             None => commitment_insights(&view, invocation.budget.max_insights.min(8)),
         };
-        if insights.len() > invocation.budget.max_insights.min(8) {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let mut action_proposals = if matches!(&invocation.input, ExpertInput::ProposeFocus { .. })
-        {
-            insights
-                .iter()
-                .filter_map(|insight| match insight {
-                    ExpertInsight::FocusWindow {
-                        starts_at_unix_ms,
-                        ends_at_unix_ms,
-                    } => Some(ExpertFocusProposal {
-                        starts_at_unix_ms: *starts_at_unix_ms,
-                        ends_at_unix_ms: *ends_at_unix_ms,
-                        view_handle: view.handle,
-                    }),
-                    _ => None,
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-        let (summary, model_calls) = match (&resolved.package.implementation, reasoning) {
-            (PackageImplementation::Schedule, ExpertReasoning::Lightweight { model, policy }) => {
-                let (summary, model_calls, model_proposals) =
-                    run_schedule_reasoning(model, policy, &invocation, &view, view.data_class)
-                        .await?;
-                if !model_proposals.is_empty() {
-                    action_proposals = model_proposals;
-                    for proposal in &action_proposals {
-                        let insight = ExpertInsight::FocusWindow {
-                            starts_at_unix_ms: proposal.starts_at_unix_ms,
-                            ends_at_unix_ms: proposal.ends_at_unix_ms,
-                        };
-                        if !insights.contains(&insight) {
-                            insights.push(insight);
-                        }
-                    }
-                }
-                (Some(summary), model_calls)
+        for proposal in &action_proposals {
+            let insight = ExpertInsight::FocusWindow {
+                starts_at_unix_ms: proposal.starts_at_unix_ms,
+                ends_at_unix_ms: proposal.ends_at_unix_ms,
+            };
+            if !insights.contains(&insight) {
+                insights.push(insight);
             }
-            _ => (None, 0),
-        };
+        }
         if insights.len() > invocation.budget.max_insights.min(8) {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -378,7 +364,7 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
                 .revision
                 .checked_add(1)
                 .ok_or(AgentFailure::BudgetExceeded)?,
-            view_calls: 1,
+            view_calls,
         };
         if serde_json::to_vec(&result)
             .map_err(|_| AgentFailure::InvalidModelOutput)?
@@ -405,6 +391,68 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         result.state_revision = registry.complete(&resolved, invocation.invocation_id)?;
         Ok(result)
     }
+
+    async fn read_timeline(
+        &self,
+        invocation: &ExpertInvocation,
+        data_class: DataClass,
+        range_start_unix_ms: Option<u64>,
+        range_end_unix_ms: Option<u64>,
+        cursor: Option<String>,
+    ) -> Result<ExpertTimelineView, AgentFailure> {
+        let cancellation = Cancellation::default();
+        let _guard = ViewCancellation(cancellation.clone());
+        let read = TimelineViewRead {
+            person_id: invocation.person_id,
+            handle: invocation.granted_view_handles[0],
+            range_start_unix_ms,
+            range_end_unix_ms,
+            cursor,
+            max_items: MAX_TIMELINE_VIEW_ITEMS,
+            max_bytes: invocation
+                .budget
+                .max_view_bytes
+                .min(MAX_TIMELINE_VIEW_BYTES),
+            deadline: invocation.deadline,
+            cancellation,
+        };
+        let input = serde_json::json!({
+            "handle": read.handle,
+            "range_start_unix_ms": read.range_start_unix_ms,
+            "range_end_unix_ms": read.range_end_unix_ms,
+            "cursor": read.cursor,
+        })
+        .to_string();
+        let view_output = crate::capability_execution::execute_recorded(
+            &invocation.usage,
+            crate::CapabilityExecution {
+                scope_id: invocation.invocation_id,
+                turn_id: invocation.invocation_id,
+                call_id: Uuid::new_v4(),
+                capability_id: "view.timeline".into(),
+                input,
+                state: crate::CapabilityExecutionState::Started,
+                result: None,
+                replay: None,
+            },
+            invocation.deadline,
+            &invocation.cancellation,
+            invocation
+                .budget
+                .max_view_bytes
+                .min(MAX_TIMELINE_VIEW_BYTES),
+            Box::pin(async {
+                let view = self.views.timeline(read).await?;
+                validate_view(&view, invocation, data_class)?;
+                serde_json::to_string(&view).map_err(|_| AgentFailure::InvalidInput)
+            }),
+        )
+        .await??;
+        let view = serde_json::from_str(&view_output).map_err(|_| AgentFailure::InvalidInput)?;
+        check_running(invocation)?;
+        validate_view(&view, invocation, data_class)?;
+        Ok(view)
+    }
 }
 
 enum ExpertReasoning<'model, Model> {
@@ -427,13 +475,13 @@ impl ModelRunner for NoExpertModel {
     }
 }
 
-async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
+async fn run_schedule_reasoning<Model: ModelRunner + Sync, Views: ExpertViews>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &ExpertInvocation,
-    view: &ExpertTimelineView,
+    views: &Views,
     data_class: DataClass,
-) -> Result<(String, u32, Vec<ExpertFocusProposal>), AgentFailure> {
+) -> Result<(String, u32, ExpertTimelineView, u32), AgentFailure> {
     if invocation.budget.max_model_calls == 0
         || invocation.budget.max_model_calls > 10
         || invocation.budget.max_model_tokens == 0
@@ -454,9 +502,9 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
             )?,
             "timezone_offset_seconds": invocation.timezone_offset_seconds,
         },
-        "authorized_range": {
-            "starts_at_unix_ms": view.range_start_unix_ms,
-            "ends_at_unix_ms": view.range_end_unix_ms
+        "suggested_query_range": {
+            "starts_at_unix_ms": invocation.suggested_range_start_unix_ms,
+            "ends_at_unix_ms": invocation.suggested_range_end_unix_ms
         }
     })
     .to_string();
@@ -471,7 +519,8 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
     expert_policy.purpose = "schedule-summary".into();
     expert_policy.performance_class = "fast".into();
     let mut tool_calls = 0;
-    let mut action_proposals = vec![];
+    let mut view_calls = 0;
+    let mut active_view: Option<ExpertTimelineView> = None;
     for model_call in 1..=invocation.budget.max_model_calls {
         let available_capabilities = if tool_calls < invocation.budget.max_tool_calls {
             capabilities.clone()
@@ -511,7 +560,11 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                     if summary.is_empty() || summary.len() > 2048 {
                         return Err(AgentFailure::InvalidModelOutput);
                     }
-                    return Ok((summary.into(), model_call, action_proposals));
+                    let view = active_view.ok_or(AgentFailure::InvalidModelOutput)?;
+                    if !view.coverage_complete {
+                        return Err(AgentFailure::CapabilityUnavailable);
+                    }
+                    return Ok((summary.into(), model_call, view, view_calls));
                 }
                 ModelStep::Call {
                     capability_id,
@@ -525,18 +578,64 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         return Err(AgentFailure::InvalidModelOutput);
                     }
                     tool_calls += 1;
-                    if capability_id == "schedule.propose_window" {
-                        if !action_proposals.is_empty() {
-                            return Err(AgentFailure::InvalidModelOutput);
+                    let requested_range = schedule_read_range(&capability_id, &input)?;
+                    if let Some((range_start_unix_ms, range_end_unix_ms)) = requested_range {
+                        if view_calls >= invocation.budget.max_view_calls {
+                            return Err(AgentFailure::BudgetExceeded);
                         }
-                        let proposal: ScheduleProposalInput = serde_json::from_str(&input)
-                            .map_err(|_| AgentFailure::InvalidModelOutput)?;
-                        validate_schedule_proposal(view, &proposal)?;
-                        action_proposals.push(ExpertFocusProposal {
-                            starts_at_unix_ms: proposal.starts_at_unix_ms,
-                            ends_at_unix_ms: proposal.ends_at_unix_ms,
-                            view_handle: view.handle,
-                        });
+                        let cancellation = Cancellation::default();
+                        let _guard = ViewCancellation(cancellation.clone());
+                        let read = TimelineViewRead {
+                            person_id: invocation.person_id,
+                            handle: invocation.granted_view_handles[0],
+                            range_start_unix_ms: Some(range_start_unix_ms),
+                            range_end_unix_ms: Some(range_end_unix_ms),
+                            cursor: None,
+                            max_items: MAX_TIMELINE_VIEW_ITEMS,
+                            max_bytes: invocation
+                                .budget
+                                .max_view_bytes
+                                .min(MAX_TIMELINE_VIEW_BYTES),
+                            deadline: invocation.deadline,
+                            cancellation,
+                        };
+                        let view_input = serde_json::json!({
+                            "handle": read.handle,
+                            "range_start_unix_ms": range_start_unix_ms,
+                            "range_end_unix_ms": range_end_unix_ms,
+                        })
+                        .to_string();
+                        let encoded = crate::capability_execution::execute_recorded(
+                            &invocation.usage,
+                            crate::CapabilityExecution {
+                                scope_id: invocation.invocation_id,
+                                turn_id,
+                                call_id: Uuid::new_v4(),
+                                capability_id: "view.timeline".into(),
+                                input: view_input,
+                                state: crate::CapabilityExecutionState::Started,
+                                result: None,
+                                replay: None,
+                            },
+                            invocation.deadline,
+                            &invocation.cancellation,
+                            invocation
+                                .budget
+                                .max_view_bytes
+                                .min(MAX_TIMELINE_VIEW_BYTES),
+                            Box::pin(async {
+                                let observed = views.timeline(read).await?;
+                                validate_view(&observed, invocation, data_class)?;
+                                serde_json::to_string(&observed)
+                                    .map_err(|_| AgentFailure::InvalidInput)
+                            }),
+                        )
+                        .await??;
+                        let observed: ExpertTimelineView = serde_json::from_str(&encoded)
+                            .map_err(|_| AgentFailure::InvalidInput)?;
+                        validate_view(&observed, invocation, data_class)?;
+                        active_view = Some(observed);
+                        view_calls += 1;
                     }
                     let call_id = Uuid::new_v4();
                     let output = crate::capability_execution::execute_recorded(
@@ -556,6 +655,9 @@ async fn run_schedule_reasoning<Model: ModelRunner + Sync>(
                         invocation.budget.max_output_bytes,
                         Box::pin(async {
                             check_running(invocation)?;
+                            let view = active_view
+                                .as_ref()
+                                .ok_or(AgentFailure::InvalidModelOutput)?;
                             validate_view(view, invocation, data_class)?;
                             schedule_capability_result(
                                 &capability_id,
@@ -612,11 +714,34 @@ struct FreeWindowInput {
     range_end_unix_ms: Option<u64>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScheduleProposalInput {
-    starts_at_unix_ms: u64,
-    ends_at_unix_ms: u64,
+fn schedule_read_range(
+    capability_id: &str,
+    input: &str,
+) -> Result<Option<(u64, u64)>, AgentFailure> {
+    let range = match capability_id {
+        "calendar.read" => {
+            let input: CalendarRangeInput =
+                serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            (input.range_start_unix_ms, input.range_end_unix_ms)
+        }
+        "calendar.search" => {
+            let input: CalendarSearchInput =
+                serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            (input.range_start_unix_ms, input.range_end_unix_ms)
+        }
+        "schedule.find_free_windows" => {
+            let input: FreeWindowInput =
+                serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            (input.range_start_unix_ms, input.range_end_unix_ms)
+        }
+        _ => return Err(AgentFailure::CapabilityDenied),
+    };
+    match range {
+        (Some(start), Some(end)) if start < end && end - start <= MAX_TIMELINE_VIEW_DURATION_MS => {
+            Ok(Some((start, end)))
+        }
+        _ => Err(AgentFailure::InvalidModelOutput),
+    }
 }
 
 fn schedule_capabilities(data_class: DataClass) -> Vec<CapabilityDescriptor> {
@@ -626,6 +751,7 @@ fn schedule_capabilities(data_class: DataClass) -> Vec<CapabilityDescriptor> {
             "range_start_unix_ms": {"type": "integer", "minimum": 0},
             "range_end_unix_ms": {"type": "integer", "minimum": 1}
         },
+        "required": ["range_start_unix_ms", "range_end_unix_ms"],
         "additionalProperties": false
     });
     let mut capabilities = vec![
@@ -650,7 +776,7 @@ fn schedule_capabilities(data_class: DataClass) -> Vec<CapabilityDescriptor> {
                     "range_start_unix_ms": {"type": "integer", "minimum": 0},
                     "range_end_unix_ms": {"type": "integer", "minimum": 1}
                 },
-                "required": ["query"],
+                "required": ["query", "range_start_unix_ms", "range_end_unix_ms"],
                 "additionalProperties": false
             })),
         },
@@ -668,23 +794,7 @@ fn schedule_capabilities(data_class: DataClass) -> Vec<CapabilityDescriptor> {
                 "range_start_unix_ms": {"type": "integer", "minimum": 0},
                 "range_end_unix_ms": {"type": "integer", "minimum": 1}
             },
-            "required": ["minimum_minutes"],
-            "additionalProperties": false
-        })),
-    });
-    capabilities.push(CapabilityDescriptor {
-        schema_version: AGENT_VERSION,
-        id: "schedule.propose_window".into(),
-        version: "1.0.0".into(),
-        read_only: true,
-        output_data_class: data_class,
-        input_schema: Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "starts_at_unix_ms": {"type": "integer", "minimum": 0},
-                "ends_at_unix_ms": {"type": "integer", "minimum": 1}
-            },
-            "required": ["starts_at_unix_ms", "ends_at_unix_ms"],
+            "required": ["minimum_minutes", "range_start_unix_ms", "range_end_unix_ms"],
             "additionalProperties": false
         })),
     });
@@ -741,12 +851,6 @@ fn schedule_capability_result(
                 current_time_unix_ms,
                 timezone_offset_seconds,
             )
-        }
-        "schedule.propose_window" => {
-            let proposal: ScheduleProposalInput =
-                serde_json::from_str(input).map_err(|_| AgentFailure::InvalidModelOutput)?;
-            validate_schedule_proposal(view, &proposal)?;
-            Ok(serde_json::json!({"accepted": true}).to_string())
         }
         _ => Err(AgentFailure::CapabilityDenied),
     }
@@ -863,23 +967,6 @@ fn local_datetime(
     DateTime::<Utc>::from_timestamp_millis(unix_ms)
         .map(|time| time.with_timezone(&offset))
         .ok_or(AgentFailure::InvalidInput)
-}
-
-fn validate_schedule_proposal(
-    view: &ExpertTimelineView,
-    proposal: &ScheduleProposalInput,
-) -> Result<(), AgentFailure> {
-    if proposal.starts_at_unix_ms < view.range_start_unix_ms
-        || proposal.ends_at_unix_ms > view.range_end_unix_ms
-        || proposal.starts_at_unix_ms >= proposal.ends_at_unix_ms
-        || view.items.iter().any(|item| {
-            proposal.starts_at_unix_ms < item.ends_at_unix_ms
-                && proposal.ends_at_unix_ms > item.starts_at_unix_ms
-        })
-    {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    Ok(())
 }
 
 fn bounded_calendar_view(
@@ -1009,6 +1096,11 @@ fn validate_view(
         || view.source_handle.len() > 128
         || view.range_start_unix_ms >= view.range_end_unix_ms
         || view.range_end_unix_ms - view.range_start_unix_ms > MAX_TIMELINE_VIEW_DURATION_MS
+        || view.coverage_complete == view.next_cursor.is_some()
+        || view
+            .next_cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 256)
         || view.items.iter().enumerate().any(|(index, item)| {
             item.untrusted_title.len() > 256
                 || item.starts_at_unix_ms < view.range_start_unix_ms

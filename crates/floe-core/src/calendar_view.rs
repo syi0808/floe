@@ -70,6 +70,22 @@ pub struct CalendarReadAccessRequest {
     pub cancellation: Cancellation,
 }
 
+pub struct CalendarObserveRequest {
+    pub person_id: PersonId,
+    pub provider: CalendarProvider,
+    pub calendar_ids: Vec<String>,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub deadline: Instant,
+    pub cancellation: Cancellation,
+}
+
+pub struct CalendarObservation {
+    pub stamp: CalendarReadAccessStamp,
+    pub observed_at: DateTime<Utc>,
+    pub batches: Vec<floe_domain::CalendarBatch>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CalendarReadAccessStamp {
@@ -85,6 +101,13 @@ pub trait CalendarReadAccess: Sync {
         &self,
         request: CalendarReadAccessRequest,
     ) -> impl Future<Output = Result<CalendarReadAccessStamp, AgentFailure>> + Send;
+
+    fn observe(
+        &self,
+        _: CalendarObserveRequest,
+    ) -> impl Future<Output = Result<Option<CalendarObservation>, AgentFailure>> + Send {
+        async { Ok(None) }
+    }
 }
 
 pub struct CalendarTimelineViews<'host, Access, Clock> {
@@ -93,6 +116,7 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     clock: Clock,
     grant: CalendarTimelineGrant,
     stamp: Mutex<Option<CalendarReadAccessStamp>>,
+    live_observation_expires_at: Mutex<Option<DateTime<Utc>>>,
 }
 
 impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
@@ -111,6 +135,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             clock,
             grant,
             stamp: Mutex::new(None),
+            live_observation_expires_at: Mutex::new(None),
         })
     }
 
@@ -186,6 +211,19 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
             result = async {
                 self.authorized(deadline, child.clone()).await?;
+                let live_observation_expires_at = {
+                    *self
+                        .live_observation_expires_at
+                        .lock()
+                        .map_err(|_| AgentFailure::CapabilityUnavailable)?
+                };
+                if let Some(expires_at) = live_observation_expires_at {
+                    if expires_at <= (self.clock)() {
+                        return Err(AgentFailure::StaleContext);
+                    }
+                    self.authorized(deadline, child.clone()).await?;
+                    return Ok(());
+                }
                 let mirror = self.core.store.bounded_calendar_mirror(self.grant.person_id).await?;
                 self.validate_mirror(&mirror, (self.clock)())?;
                 self.authorized(deadline, child.clone()).await?;
@@ -277,6 +315,30 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         let before = self
             .authorized(deadline, request.cancellation.clone())
             .await?;
+        if let Some(observation) = self
+            .access
+            .observe(CalendarObserveRequest {
+                person_id: self.grant.person_id,
+                provider: self.grant.provider,
+                calendar_ids: self.grant.calendar_ids.clone(),
+                starts_at: range_start,
+                ends_at: range_end,
+                deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?
+        {
+            return self
+                .project_observation(
+                    request,
+                    range_start,
+                    range_end,
+                    before,
+                    observation,
+                    deadline,
+                )
+                .await;
+        }
         let mirror = self
             .core
             .store
@@ -366,6 +428,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             range_start_unix_ms: milliseconds(range_start)?,
             range_end_unix_ms: milliseconds(range_end)?,
             expires_at_unix_ms: milliseconds(expires)?,
+            coverage_complete: true,
+            next_cursor: None,
             items,
         };
         if serde_json::to_vec(&view)
@@ -401,6 +465,155 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         *saved = Some(before);
         Ok(view)
     }
+
+    async fn project_observation(
+        &self,
+        request: &TimelineViewRead,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+        before: CalendarReadAccessStamp,
+        mut observation: CalendarObservation,
+        deadline: Instant,
+    ) -> Result<ExpertTimelineView, AgentFailure> {
+        observation.stamp.calendar_ids.sort();
+        if observation.stamp != before
+            || observation.observed_at > (self.clock)()
+            || (self.clock)() - observation.observed_at > chrono::Duration::minutes(5)
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let expected: HashSet<_> = self.grant.calendar_ids.iter().map(String::as_str).collect();
+        let received: HashSet<_> = observation
+            .batches
+            .iter()
+            .map(|batch| batch.calendar_id.as_str())
+            .collect();
+        if expected != received || observation.batches.len() != expected.len() {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        let mut items = vec![];
+        let mut evidence = HashSet::new();
+        for batch in observation.batches {
+            if let Some(failure) = batch.failure {
+                return Err(match failure {
+                    floe_domain::CalendarFailure::PermissionDenied => {
+                        AgentFailure::CapabilityDenied
+                    }
+                    _ => AgentFailure::CapabilityUnavailable,
+                });
+            }
+            for record in batch.records {
+                if record.calendar_id.as_deref() != Some(batch.calendar_id.as_str())
+                    || record.external_id.trim().is_empty()
+                    || record.external_revision.trim().is_empty()
+                {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                }
+                let (start, end) = observation_schedule_bounds(
+                    &record.schedule,
+                    range_start,
+                    range_end,
+                    self.grant.day.timezone_offset_seconds,
+                    self.grant.day.end_timezone_offset_seconds,
+                )?;
+                if start >= end {
+                    continue;
+                }
+                let evidence_handle = Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!(
+                        "floe:calendar:{:?}:{}:{}",
+                        self.grant.provider, batch.calendar_id, record.external_id
+                    )
+                    .as_bytes(),
+                );
+                if !evidence.insert(evidence_handle) {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                }
+                if items.len() >= request.max_items.min(MAX_TIMELINE_VIEW_ITEMS) {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                items.push(TimelineViewItem {
+                    evidence_handle,
+                    untrusted_title: bounded_title(&record.title),
+                    starts_at_unix_ms: milliseconds(start)?,
+                    ends_at_unix_ms: milliseconds(end)?,
+                });
+            }
+        }
+        items.sort_by_key(|item| {
+            (
+                item.starts_at_unix_ms,
+                item.ends_at_unix_ms,
+                item.evidence_handle,
+            )
+        });
+        let expires = self
+            .grant
+            .expires_at
+            .min(observation.observed_at + chrono::Duration::minutes(5));
+        let view = ExpertTimelineView {
+            schema_version: 1,
+            handle: self.grant.handle,
+            person_id: self.grant.person_id,
+            data_class: self.grant.data_class(),
+            source_handle: format!(
+                "calendar.observe:{}:{}",
+                self.grant.handle, observation.stamp.generation
+            ),
+            range_start_unix_ms: milliseconds(range_start)?,
+            range_end_unix_ms: milliseconds(range_end)?,
+            expires_at_unix_ms: milliseconds(expires)?,
+            coverage_complete: true,
+            next_cursor: None,
+            items,
+        };
+        if serde_json::to_vec(&view)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
+            > request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES)
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let after = self
+            .authorized(deadline, request.cancellation.clone())
+            .await?;
+        if before != after {
+            return Err(AgentFailure::StaleContext);
+        }
+        *self
+            .stamp
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(before);
+        *self
+            .live_observation_expires_at
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(expires);
+        Ok(view)
+    }
+}
+
+fn observation_schedule_bounds(
+    schedule: &EventSchedule,
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+    start_offset: i32,
+    end_offset: Option<i32>,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), AgentFailure> {
+    let (start, end) = match schedule {
+        EventSchedule::Timed(schedule) => (schedule.starts_at, schedule.ends_at),
+        EventSchedule::AllDay(schedule) => {
+            let end_offset = end_offset.unwrap_or(start_offset);
+            (
+                date_boundary(schedule.start_date, start_offset.max(end_offset))?,
+                date_boundary(schedule.end_date_exclusive, start_offset.min(end_offset))?,
+            )
+        }
+    };
+    if start >= end {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    Ok((start.max(range_start), end.min(range_end)))
 }
 
 impl<Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync> ExpertViews
@@ -455,8 +668,8 @@ fn requested_range(
         ),
         _ => return Err(AgentFailure::InvalidInput),
     };
-    if start < grant.starts_at || end > grant.ends_at || start >= end {
-        return Err(AgentFailure::CapabilityDenied);
+    if start >= end || end - start > chrono::Duration::days(MAX_TIMELINE_VIEW_DAYS + 1) {
+        return Err(AgentFailure::InvalidInput);
     }
     Ok((start, end))
 }

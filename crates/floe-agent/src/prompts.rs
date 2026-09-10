@@ -12,7 +12,7 @@ const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 const BEHAVIOR_KERNEL_REVISION: u64 = 2;
 const CAPABILITY_PROTOCOL_REVISION: u64 = 2;
 const MANAGER_ROLE_REVISION: u64 = 2;
-const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 2;
+const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

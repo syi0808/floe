@@ -22,6 +22,7 @@ pub struct CalendarAgentTurnRequest {
     pub grant: CalendarTimelineGrant,
     pub assignment_id: Uuid,
     pub destination: Option<ExpertCalendarDestination>,
+    pub propose_focus: bool,
     pub cancellation: Cancellation,
     pub continuation: bool,
 }
@@ -126,6 +127,7 @@ impl FloeCore {
                 registry: Mutex::new(registry),
                 revision: AtomicU64::new(revision),
                 assignment_id: request.assignment_id,
+                propose_focus: request.propose_focus,
                 card,
                 deadline,
                 cancellation: request.cancellation,
@@ -253,6 +255,7 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     registry: Mutex<AgentRegistry>,
     revision: AtomicU64,
     assignment_id: Uuid,
+    propose_focus: bool,
     card: AgentCard,
     deadline: Instant,
     cancellation: Cancellation,
@@ -449,9 +452,21 @@ impl<
                 current_time_unix_ms: u64::try_from(self.views.current_time().timestamp_millis())
                     .map_err(|_| AgentFailure::InvalidInput)?,
                 timezone_offset_seconds: self.views.grant().day.timezone_offset_seconds,
-                input: ExpertInput::Analyze {
-                    request: assignment,
-                    focus_minutes: None,
+                suggested_range_start_unix_ms: Some(
+                    u64::try_from(self.views.grant().starts_at.timestamp_millis())
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                ),
+                suggested_range_end_unix_ms: Some(
+                    u64::try_from(self.views.grant().ends_at.timestamp_millis())
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                ),
+                input: if self.propose_focus {
+                    ExpertInput::ProposeFocus { focus_minutes: 60 }
+                } else {
+                    ExpertInput::Analyze {
+                        request: assignment,
+                        focus_minutes: None,
+                    }
                 },
                 budget: ExpertBudget {
                     max_output_bytes: request.max_output_bytes,

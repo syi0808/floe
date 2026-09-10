@@ -174,6 +174,90 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
           "calendar_ids": identifiers.sorted(), "generation": before]
 }
 
+private func observationRecord(_ event: EKEvent, calendarID: String) -> [String: Any] {
+  let timestamp = ISO8601DateFormatter()
+  timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  let identifier = event.calendarItemIdentifier
+  let occurrence = (event.hasRecurrenceRules || event.isDetached)
+    ? event.occurrenceDate.map { timestamp.string(from: $0) } ?? "" : ""
+  let date = DateFormatter()
+  date.calendar = Calendar(identifier: .gregorian)
+  date.locale = Locale(identifier: "en_US_POSIX")
+  date.timeZone = event.timeZone ?? TimeZone.current
+  date.dateFormat = "yyyy-MM-dd"
+  let schedule: [String: Any] = event.isAllDay ? ["AllDay": [
+    "start_date": date.string(from: event.startDate),
+    "end_date_exclusive": date.string(from: event.endDate)
+  ]] : ["Timed": [
+    "starts_at": timestamp.string(from: event.startDate),
+    "ends_at": timestamp.string(from: event.endDate),
+    "timezone": (event.timeZone ?? TimeZone.current).identifier
+  ]]
+  let title = event.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+  let normalizedTitle = title?.isEmpty == false ? title! : "(Untitled)"
+  let revisionData = try! JSONSerialization.data(withJSONObject: [
+    "title": normalizedTitle, "schedule": schedule,
+    "modified": event.lastModifiedDate.map { timestamp.string(from: $0) } ?? ""
+  ], options: [.sortedKeys])
+  let revision = SHA256.hash(data: revisionData).map { String(format: "%02x", $0) }.joined()
+  return [
+    "can_modify": event.calendar.allowsContentModifications && !event.calendar.isSubscribed &&
+      !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees &&
+      event.endDate > event.startDate && event.endDate.timeIntervalSince(event.startDate) <= 86400,
+    "calendar_id": calendarID,
+    "external_id": "\(identifier)|\(occurrence)",
+    "external_revision": revision,
+    "title": normalizedTitle,
+    "schedule": schedule
+  ]
+}
+
+private func calendarObservation(_ request: [String: Any]) throws -> [String: Any] {
+  guard request["schema_version"] as? Int == 1,
+        request["person_id"] as? String == localPerson,
+        request["provider"] as? String == "event_kit",
+        let identifiers = request["calendar_ids"] as? [String],
+        !identifiers.isEmpty, identifiers.count <= 4,
+        Set(identifiers).count == identifiers.count,
+        let startText = request["starts_at"] as? String,
+        let endText = request["ends_at"] as? String else {
+    throw NativeFailure("permission_denied")
+  }
+  let start = try timestamp(startText)
+  let end = try timestamp(endText)
+  let deadline = try timestamp(request["deadline"])
+  guard start < end, end.timeIntervalSince(start) <= 32 * 86400,
+        Date() < deadline, deadline.timeIntervalSinceNow <= 30 else {
+    throw NativeFailure("timeout")
+  }
+  try requirePermission()
+  let before = calendarViewGeneration.value()
+  let store = EKEventStore()
+  let calendars = identifiers.compactMap { store.calendar(withIdentifier: $0) }
+  guard calendars.count == identifiers.count else { throw NativeFailure("provider_unavailable") }
+  let batches = calendars.map { calendar -> [String: Any] in
+    let predicate = store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
+    return [
+      "calendar_id": calendar.calendarIdentifier,
+      "records": store.events(matching: predicate).map {
+        observationRecord($0, calendarID: calendar.calendarIdentifier)
+      }
+    ]
+  }
+  try requirePermission()
+  guard before == calendarViewGeneration.value(), Date() < deadline else {
+    throw NativeFailure("timeout")
+  }
+  let formatter = ISO8601DateFormatter()
+  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  return [
+    "stamp": ["schema_version": 1, "person_id": localPerson, "provider": "event_kit",
+      "calendar_ids": identifiers.sorted(), "generation": before],
+    "observed_at": formatter.string(from: Date()),
+    "batches": batches
+  ]
+}
+
 private func runAction(_ request: [String: Any]) throws -> Any {
   guard let operation = request["operation"] as? String else { throw NativeFailure("uncertain_result") }
   if operation == "capabilities" { return ["writes_enabled": true] }
@@ -182,6 +266,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
     return try calendarViewAccess(request, permission: requirePermission,
       contains: { store.calendar(withIdentifier: $0) != nil }, generation: calendarViewGeneration.value)
   }
+  if operation == "observe" { return try calendarObservation(request) }
   guard let raw = request["action"] as? [String: Any] else { throw NativeFailure("uncertain_result") }
   let proposal = try Proposal(raw)
   let deadline = try timestamp(request["deadline"])

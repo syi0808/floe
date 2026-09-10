@@ -121,7 +121,7 @@ pub struct CalendarSyncStatus {
     pub error: Option<CalendarFailure>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CalendarBatch {
     pub calendar_id: String,
     pub records: Vec<CalendarRecord>,
@@ -147,7 +147,7 @@ pub struct CalendarMirror {
     pub events: Vec<Event>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CalendarRecord {
     pub can_modify: bool,
     pub calendar_id: Option<String>,

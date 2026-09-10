@@ -1,6 +1,7 @@
 use floe_agent::AgentFailure;
 use floe_core::{
-    ActionFailure, CalendarAction, CalendarActionProvider, CalendarCreateReceipt, CalendarPreflight,
+    ActionFailure, CalendarAction, CalendarActionProvider, CalendarCreateReceipt,
+    CalendarObservation, CalendarObserveRequest, CalendarPreflight,
 };
 use floe_domain::Event;
 use serde::de::DeserializeOwned;
@@ -84,6 +85,91 @@ impl floe_core::CalendarReadAccess for NativeCalendar {
         )
         .await
     }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        observe_calendar(
+            request,
+            &self.calendar_ids,
+            call::<NativeCalendarObservation>,
+        )
+        .await
+        .map(|observation| {
+            Some(CalendarObservation {
+                stamp: observation.stamp,
+                observed_at: observation.observed_at,
+                batches: observation.batches,
+            })
+        })
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCalendarObservation {
+    stamp: floe_core::CalendarReadAccessStamp,
+    observed_at: chrono::DateTime<chrono::Utc>,
+    batches: Vec<floe_domain::CalendarBatch>,
+}
+
+async fn observe_calendar(
+    request: CalendarObserveRequest,
+    included: &[String],
+    invoke: impl FnOnce(Value) -> Result<NativeCalendarObservation, ActionFailure> + Send + 'static,
+) -> Result<NativeCalendarObservation, AgentFailure> {
+    if request.person_id.to_string() != LOCAL_PERSON
+        || request.provider != floe_domain::CalendarProvider::EventKit
+        || request.calendar_ids.is_empty()
+        || request.calendar_ids.len() > 4
+        || request.calendar_ids.iter().any(|identifier| {
+            identifier.trim().is_empty() || identifier.len() > 512 || !included.contains(identifier)
+        })
+        || request.starts_at >= request.ends_at
+        || request.ends_at - request.starts_at > chrono::Duration::days(32)
+    {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    if request.cancellation.is_cancelled() {
+        return Err(AgentFailure::Cancelled);
+    }
+    let remaining = request
+        .deadline
+        .saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    let deadline = chrono::Utc::now()
+        + chrono::Duration::from_std(remaining.min(std::time::Duration::from_secs(12)))
+            .map_err(|_| AgentFailure::InvalidInput)?;
+    let input = json!({
+        "operation": "observe",
+        "schema_version": 1,
+        "person_id": request.person_id,
+        "provider": request.provider,
+        "calendar_ids": request.calendar_ids,
+        "starts_at": request.starts_at,
+        "ends_at": request.ends_at,
+        "deadline": deadline,
+    });
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("floe-calendar-observe".into())
+        .spawn(move || {
+            let _ = sender.send(invoke(input));
+        })
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    let result = tokio::select! {
+        biased;
+        _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+        _ = tokio::time::sleep_until(request.deadline) => return Err(AgentFailure::DeadlineExceeded),
+        result = receiver => result.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+    };
+    result.map_err(|error| match error {
+        ActionFailure::PermissionDenied => AgentFailure::CapabilityDenied,
+        ActionFailure::Timeout => AgentFailure::DeadlineExceeded,
+        _ => AgentFailure::CapabilityUnavailable,
+    })
 }
 
 async fn check_calendar_read(

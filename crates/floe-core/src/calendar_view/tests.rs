@@ -150,6 +150,47 @@ impl CalendarReadAccess for Access {
     }
 }
 
+struct ObservationAccess {
+    calendar_id: String,
+    record: CalendarRecord,
+}
+
+impl CalendarReadAccess for ObservationAccess {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        Ok(CalendarReadAccessStamp {
+            schema_version: 1,
+            person_id: request.person_id,
+            provider: request.provider,
+            calendar_ids: request.calendar_ids,
+            generation: "live-observation".into(),
+        })
+    }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        Ok(Some(CalendarObservation {
+            stamp: CalendarReadAccessStamp {
+                schema_version: 1,
+                person_id: request.person_id,
+                provider: request.provider,
+                calendar_ids: request.calendar_ids,
+                generation: "live-observation".into(),
+            },
+            observed_at: now(),
+            batches: vec![CalendarBatch {
+                calendar_id: self.calendar_id.clone(),
+                records: vec![self.record.clone()],
+                failure: None,
+            }],
+        }))
+    }
+}
+
 fn request(grant: &CalendarTimelineGrant) -> TimelineViewRead {
     TimelineViewRead {
         person_id: grant.person_id,
@@ -201,7 +242,7 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
 }
 
 #[tokio::test]
-async fn read_range_is_request_scoped_within_the_authorized_view() {
+async fn read_range_is_request_scoped_within_the_authorized_source() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
     let access = Access::default();
@@ -232,7 +273,7 @@ async fn read_range_is_request_scoped_within_the_authorized_view() {
         milliseconds(range_start).unwrap()
     );
 
-    let outside = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
+    let expanded = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
         .unwrap()
         .timeline(TimelineViewRead {
             range_start_unix_ms: Some(
@@ -241,8 +282,47 @@ async fn read_range_is_request_scoped_within_the_authorized_view() {
             range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
             ..request(&grant)
         })
-        .await;
-    assert_eq!(outside.unwrap_err(), AgentFailure::CapabilityDenied);
+        .await
+        .unwrap();
+    assert_eq!(
+        expanded.range_start_unix_ms,
+        milliseconds(grant.starts_at - TimeDelta::minutes(1)).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn request_scoped_observation_does_not_depend_on_page_mirror_coverage() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let requested_start = now() + TimeDelta::days(7);
+    let requested_end = requested_start + TimeDelta::days(7);
+    let access = ObservationAccess {
+        calendar_id: "home-secret-id".into(),
+        record: record(
+            "home-secret-id",
+            "next-week-event",
+            "Next week review",
+            8 * 24 * 60,
+            8 * 24 * 60 + 60,
+        ),
+    };
+    let view = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
+        .unwrap()
+        .timeline(TimelineViewRead {
+            range_start_unix_ms: Some(milliseconds(requested_start).unwrap()),
+            range_end_unix_ms: Some(milliseconds(requested_end).unwrap()),
+            ..request(&grant)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        view.range_start_unix_ms,
+        milliseconds(requested_start).unwrap()
+    );
+    assert_eq!(view.range_end_unix_ms, milliseconds(requested_end).unwrap());
+    assert!(view.coverage_complete);
+    assert_eq!(view.items[0].untrusted_title, "Next week review");
 }
 
 #[tokio::test]
@@ -853,6 +933,8 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         allowed_data_classes: vec![DataClass::Synthetic],
         current_time_unix_ms: milliseconds(now()).unwrap(),
         timezone_offset_seconds: grant.day.timezone_offset_seconds,
+        suggested_range_start_unix_ms: Some(milliseconds(grant.starts_at).unwrap()),
+        suggested_range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
         input: ExpertInput::ProposeFocus { focus_minutes: 60 },
         budget: ExpertBudget::default(),
         deadline: Instant::now() + Duration::from_secs(5),

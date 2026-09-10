@@ -26,10 +26,11 @@ Date: 2026-09-09. Implementation and automated evidence only; S4 remains **0/14*
   Tool capability.
 - Generalized `ExpertInput` with `analyze`. Free-text Calendar turns no longer become
   an implicit 60-minute focus request.
-- Schedule Expert can choose `calendar.read`, `calendar.search`,
-  `schedule.find_free_windows` and `schedule.propose_window` according to the task.
-  No common prompt forces a focus-time workflow; host budgets, schemas and proposal
-  validation remain authoritative.
+- Schedule Expert can choose `calendar.read`, `calendar.search` and
+  `schedule.find_free_windows` according to the task. Focus-time proposals are typed
+  host output derived from grounded availability rather than an empty model-facing
+  tool call. No common prompt forces a focus-time workflow; host budgets, schemas
+  and proposal validation remain authoritative.
 - Schedule Expert tasks now append invocation-time clock and local-offset context
   outside the stable Role prompt. Calendar Tool results retain authoritative epoch
   values while adding local display values whose precision expands from `HH:mm` to

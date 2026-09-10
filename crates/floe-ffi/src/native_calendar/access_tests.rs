@@ -11,6 +11,48 @@ fn request() -> CalendarReadAccessRequest {
     }
 }
 
+#[tokio::test]
+async fn native_observation_forwards_the_requested_range_and_typed_coverage() {
+    let starts_at = chrono::Utc::now() + chrono::Duration::days(5);
+    let ends_at = starts_at + chrono::Duration::days(7);
+    let observation = observe_calendar(
+        CalendarObserveRequest {
+            person_id: floe_domain::PersonId(uuid::Uuid::parse_str(LOCAL_PERSON).unwrap()),
+            provider: floe_domain::CalendarProvider::EventKit,
+            calendar_ids: vec!["allowed".into()],
+            starts_at,
+            ends_at,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+            cancellation: floe_agent::Cancellation::default(),
+        },
+        &["allowed".into()],
+        move |input| {
+            assert_eq!(input["operation"], "observe");
+            assert_eq!(input["starts_at"], serde_json::json!(starts_at));
+            assert_eq!(input["ends_at"], serde_json::json!(ends_at));
+            serde_json::from_value(serde_json::json!({
+                "stamp": {
+                    "schema_version": 1,
+                    "person_id": LOCAL_PERSON,
+                    "provider": "event_kit",
+                    "calendar_ids": ["allowed"],
+                    "generation": "live"
+                },
+                "observed_at": chrono::Utc::now(),
+                "batches": [{
+                    "calendar_id": "allowed",
+                    "records": []
+                }]
+            }))
+            .map_err(|_| ActionFailure::UncertainResult)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(observation.stamp.generation, "live");
+    assert!(observation.batches[0].records.is_empty());
+}
+
 fn response(input: Value) -> Result<floe_core::CalendarReadAccessStamp, ActionFailure> {
     assert_eq!(input["operation"], "view_access");
     serde_json::from_value(json!({"schema_version": 1, "person_id": input["person_id"],

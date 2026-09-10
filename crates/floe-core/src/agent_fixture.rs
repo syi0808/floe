@@ -621,6 +621,8 @@ impl FixtureCapabilities {
                 range_start_unix_ms: 36_000_000,
                 range_end_unix_ms: 43_200_000,
                 expires_at_unix_ms: u64::MAX,
+                coverage_complete: true,
+                next_cursor: None,
                 items: vec![TimelineViewItem {
                     evidence_handle: Uuid::from_u128(handle.as_u128() ^ 1),
                     untrusted_title: "Design review".into(),
@@ -722,6 +724,8 @@ impl InProcessAgent for FixtureCapabilities {
             allowed_data_classes: vec![DataClass::Synthetic],
             current_time_unix_ms: self.view.range_start_unix_ms,
             timezone_offset_seconds: 0,
+            suggested_range_start_unix_ms: Some(self.view.range_start_unix_ms),
+            suggested_range_end_unix_ms: Some(self.view.range_end_unix_ms),
             input: ExpertInput::Analyze {
                 request: assignment,
                 focus_minutes: Some(60),

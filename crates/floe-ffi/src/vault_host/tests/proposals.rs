@@ -40,6 +40,22 @@ impl ModelRunner for Model {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         let schedule_expert = request.prompt.role == PromptRole::ScheduleExpert;
         let step = if schedule_expert {
+            let coverage = request.messages.iter().find_map(|message| match message {
+                AgentMessage::User { text, .. } => serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .map(|task| {
+                        (
+                            task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                            task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                        )
+                    }),
+                _ => None,
+            });
+            let (Some(starts_at_unix_ms), Some(ends_at_unix_ms)) =
+                coverage.ok_or(AgentFailure::InvalidModelOutput)?
+            else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
             let latest = request
                 .messages
                 .iter()
@@ -53,36 +69,17 @@ impl ModelRunner for Model {
                     _ => None,
                 });
             match latest {
-                Some(("schedule.propose_window", _)) => ModelStep::Answer {
+                Some(("schedule.find_free_windows", _)) => ModelStep::Answer {
                     text: "Synthetic proposal recorded.".into(),
                 },
-                Some(("schedule.find_free_windows", output)) => {
-                    let insights: Vec<serde_json::Value> = serde_json::from_str(output).unwrap();
-                    let (starts_at_unix_ms, ends_at_unix_ms) = insights
-                        .into_iter()
-                        .find_map(|insight| {
-                            if insight["kind"] == "focus_window" {
-                                Some((
-                                    insight["starts_at_unix_ms"].as_u64()?,
-                                    insight["ends_at_unix_ms"].as_u64()?,
-                                ))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap();
-                    ModelStep::Call {
-                        capability_id: "schedule.propose_window".into(),
-                        input: serde_json::json!({
-                            "starts_at_unix_ms": starts_at_unix_ms,
-                            "ends_at_unix_ms": ends_at_unix_ms,
-                        })
-                        .to_string(),
-                    }
-                }
                 _ => ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
-                    input: r#"{"minimum_minutes":60}"#.into(),
+                    input: serde_json::json!({
+                        "minimum_minutes": 60,
+                        "range_start_unix_ms": starts_at_unix_ms,
+                        "range_end_unix_ms": ends_at_unix_ms,
+                    })
+                    .to_string(),
                 },
             }
         } else if request
@@ -244,6 +241,7 @@ async fn seed(
                 },
                 assignment_id: setup.expert_assignment_id,
                 destination: None,
+                propose_focus: true,
                 cancellation: Cancellation::default(),
             },
             || now,

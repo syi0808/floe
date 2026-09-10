@@ -75,17 +75,14 @@ pub(super) async fn run_conversation<Keys: VaultKeyProvider, Emit: FnMut(AgentEv
     if connection.disconnected || connection.provider != binding.provider {
         return Err(AgentFailure::StaleContext);
     }
-    let mut ranges = binding.calendar_ids.iter().map(|calendar_id| {
-        connection
-            .source_statuses
-            .get(calendar_id)
-            .and_then(|status| (status.error.is_none()).then_some(status.last_range.as_ref()?))
-            .ok_or(AgentFailure::StaleContext)
-    });
-    let range = ranges.next().ok_or(AgentFailure::StaleContext)??.clone();
-    if ranges.any(|candidate| candidate.is_err() || candidate.is_ok_and(|value| value != &range)) {
-        return Err(AgentFailure::StaleContext);
-    }
+    let local = chrono::Local::now();
+    let offset = local.offset().local_minus_utc();
+    let range = floe_domain::CalendarRange {
+        start_date: local.date_naive(),
+        end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
+        timezone_offset_seconds: offset,
+        end_timezone_offset_seconds: None,
+    };
     let (starts_at, ends_at) = range_bounds(&range)?;
     let now = chrono::Utc::now();
     let model = Model::conversation(request.remote_route.clone())?;
@@ -136,6 +133,7 @@ pub(super) async fn run_conversation<Keys: VaultKeyProvider, Emit: FnMut(AgentEv
                 },
                 assignment_id: setup.expert_assignment_id,
                 destination: None,
+                propose_focus: false,
                 cancellation,
                 continuation: request.continuation,
             },
@@ -302,6 +300,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
                 connection_revision: destination.connection_revision,
                 timezone: destination.timezone.clone(),
             }),
+        propose_focus: matches!(request.prompt, AgentCalendarPromptDto::ProposeFocus { .. }),
         cancellation,
         continuation: request.continuation,
     };
@@ -375,6 +374,16 @@ impl CalendarReadAccess for Access {
         match self {
             Self::Fixture(access) => access.check(request).await,
             Self::Native(access) => access.check(request).await,
+        }
+    }
+
+    async fn observe(
+        &self,
+        request: floe_core::CalendarObserveRequest,
+    ) -> Result<Option<floe_core::CalendarObservation>, AgentFailure> {
+        match self {
+            Self::Fixture(_) => Ok(None),
+            Self::Native(access) => access.observe(request).await,
         }
     }
 }
@@ -495,6 +504,17 @@ impl ModelRunner for DeterministicModel {
                 _ => None,
             })
             .collect();
+        let coverage = request.messages.iter().find_map(|message| match message {
+            AgentMessage::User { text, .. } => serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .map(|task| {
+                    (
+                        task["suggested_query_range"]["starts_at_unix_ms"].as_u64(),
+                        task["suggested_query_range"]["ends_at_unix_ms"].as_u64(),
+                    )
+                }),
+            _ => None,
+        });
         let step = if !schedule_expert {
             if request
                 .messages
@@ -524,43 +544,29 @@ impl ModelRunner for DeterministicModel {
                 ModelStep::Delegate { agent_id, message }
             }
         } else if capability_results.is_empty() {
+            let (Some(range_start_unix_ms), Some(range_end_unix_ms)) =
+                coverage.ok_or(AgentFailure::InvalidModelOutput)?
+            else {
+                return Err(AgentFailure::InvalidModelOutput);
+            };
             match self.prompt {
                 AgentCalendarPromptDto::ProposeFocus { focus_minutes }
                 | AgentCalendarPromptDto::Briefing { focus_minutes } => ModelStep::Call {
                     capability_id: "schedule.find_free_windows".into(),
-                    input: serde_json::json!({"minimum_minutes": focus_minutes}).to_string(),
-                },
-                AgentCalendarPromptDto::FreeText { .. } => ModelStep::Call {
-                    capability_id: "calendar.read".into(),
-                    input: "{}".into(),
-                },
-            }
-        } else if matches!(self.prompt, AgentCalendarPromptDto::ProposeFocus { .. })
-            && capability_results.len() == 1
-        {
-            let insights: Vec<serde_json::Value> = serde_json::from_str(capability_results[0].1)
-                .map_err(|_| AgentFailure::InvalidModelOutput)?;
-            let window = insights.iter().find_map(|insight| {
-                if insight["kind"] == "focus_window" {
-                    Some((
-                        insight["starts_at_unix_ms"].as_u64()?,
-                        insight["ends_at_unix_ms"].as_u64()?,
-                    ))
-                } else {
-                    None
-                }
-            });
-            match window {
-                Some((starts_at_unix_ms, ends_at_unix_ms)) => ModelStep::Call {
-                    capability_id: "schedule.propose_window".into(),
                     input: serde_json::json!({
-                        "starts_at_unix_ms": starts_at_unix_ms,
-                        "ends_at_unix_ms": ends_at_unix_ms
+                        "minimum_minutes": focus_minutes,
+                        "range_start_unix_ms": range_start_unix_ms,
+                        "range_end_unix_ms": range_end_unix_ms,
                     })
                     .to_string(),
                 },
-                None => ModelStep::Answer {
-                    text: "No suitable Calendar window was found.".into(),
+                AgentCalendarPromptDto::FreeText { .. } => ModelStep::Call {
+                    capability_id: "calendar.read".into(),
+                    input: serde_json::json!({
+                        "range_start_unix_ms": range_start_unix_ms,
+                        "range_end_unix_ms": range_end_unix_ms,
+                    })
+                    .to_string(),
                 },
             }
         } else {
