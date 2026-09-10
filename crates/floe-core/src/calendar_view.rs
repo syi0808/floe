@@ -269,10 +269,11 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         if request.person_id != self.grant.person_id || request.handle != self.grant.handle {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if request.max_items == 0 || request.max_bytes == 0 {
+        if request.max_items == 0 || request.max_bytes == 0 || request.cursor.is_some() {
             return Err(AgentFailure::BudgetExceeded);
         }
         self.grant.validate((self.clock)())?;
+        let (range_start, range_end) = requested_range(request, &self.grant)?;
         let before = self
             .authorized(deadline, request.cancellation.clone())
             .await?;
@@ -303,8 +304,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                         return Err(AgentFailure::CapabilityUnavailable);
                     }
                     (
-                        schedule.starts_at.max(self.grant.starts_at),
-                        schedule.ends_at.min(self.grant.ends_at),
+                        schedule.starts_at.max(range_start),
+                        schedule.ends_at.min(range_end),
                     )
                 }
                 EventSchedule::AllDay(schedule) => {
@@ -324,12 +325,12 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                         .unwrap_or(initial_offset);
                     (
                         date_boundary(schedule.start_date, initial_offset.max(final_offset))?
-                            .max(self.grant.starts_at),
+                            .max(range_start),
                         date_boundary(
                             schedule.end_date_exclusive,
                             initial_offset.min(final_offset),
                         )?
-                        .min(self.grant.ends_at),
+                        .min(range_end),
                     )
                 }
             };
@@ -362,8 +363,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                 "calendar.timeline:{}:{}",
                 self.grant.handle, self.grant.connection_revision
             ),
-            range_start_unix_ms: milliseconds(self.grant.starts_at)?,
-            range_end_unix_ms: milliseconds(self.grant.ends_at)?,
+            range_start_unix_ms: milliseconds(range_start)?,
+            range_end_unix_ms: milliseconds(range_end)?,
             expires_at_unix_ms: milliseconds(expires)?,
             items,
         };
@@ -417,6 +418,9 @@ impl<Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync> ExpertView
         let bounded = TimelineViewRead {
             person_id: request.person_id,
             handle: request.handle,
+            range_start_unix_ms: request.range_start_unix_ms,
+            range_end_unix_ms: request.range_end_unix_ms,
+            cursor: request.cursor,
             max_items: request.max_items,
             max_bytes: request.max_bytes,
             deadline,
@@ -431,6 +435,30 @@ impl<Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync> ExpertView
         check_running(deadline, &request.cancellation)?;
         result
     }
+}
+
+fn requested_range(
+    request: &TimelineViewRead,
+    grant: &CalendarTimelineGrant,
+) -> Result<(DateTime<Utc>, DateTime<Utc>), AgentFailure> {
+    let (start, end) = match (request.range_start_unix_ms, request.range_end_unix_ms) {
+        (None, None) => (grant.starts_at, grant.ends_at),
+        (Some(start), Some(end)) => (
+            DateTime::from_timestamp_millis(
+                i64::try_from(start).map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .ok_or(AgentFailure::InvalidInput)?,
+            DateTime::from_timestamp_millis(
+                i64::try_from(end).map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .ok_or(AgentFailure::InvalidInput)?,
+        ),
+        _ => return Err(AgentFailure::InvalidInput),
+    };
+    if start < grant.starts_at || end > grant.ends_at || start >= end {
+        return Err(AgentFailure::CapabilityDenied);
+    }
+    Ok((start, end))
 }
 
 struct CancelAccess(Cancellation);

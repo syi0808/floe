@@ -43,6 +43,9 @@ pub struct ExpertTimelineView {
 pub struct TimelineViewRead {
     pub person_id: PersonId,
     pub handle: Uuid,
+    pub range_start_unix_ms: Option<u64>,
+    pub range_end_unix_ms: Option<u64>,
+    pub cursor: Option<String>,
     pub max_items: usize,
     pub max_bytes: usize,
     pub deadline: Instant,
@@ -252,6 +255,9 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         let read = TimelineViewRead {
             person_id: invocation.person_id,
             handle: invocation.granted_view_handles[0],
+            range_start_unix_ms: None,
+            range_end_unix_ms: None,
+            cursor: None,
             max_items: MAX_TIMELINE_VIEW_ITEMS,
             max_bytes: invocation
                 .budget

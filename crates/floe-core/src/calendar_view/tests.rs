@@ -154,6 +154,9 @@ fn request(grant: &CalendarTimelineGrant) -> TimelineViewRead {
     TimelineViewRead {
         person_id: grant.person_id,
         handle: grant.handle,
+        range_start_unix_ms: None,
+        range_end_unix_ms: None,
+        cursor: None,
         max_items: 32,
         max_bytes: 16_384,
         deadline: Instant::now() + Duration::from_secs(5),
@@ -195,6 +198,51 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
     let again = views.timeline(request(&grant)).await.unwrap();
     assert_eq!(again, projected);
     assert!(fixture.root.path().join("view.db").exists());
+}
+
+#[tokio::test]
+async fn read_range_is_request_scoped_within_the_authorized_view() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let access = Access::default();
+    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let range_start = now() + TimeDelta::minutes(75);
+    let range_end = now() + TimeDelta::minutes(105);
+    let projected = views
+        .timeline(TimelineViewRead {
+            range_start_unix_ms: Some(milliseconds(range_start).unwrap()),
+            range_end_unix_ms: Some(milliseconds(range_end).unwrap()),
+            ..request(&grant)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        projected.range_start_unix_ms,
+        milliseconds(range_start).unwrap()
+    );
+    assert_eq!(
+        projected.range_end_unix_ms,
+        milliseconds(range_end).unwrap()
+    );
+    assert_eq!(projected.items.len(), 1);
+    assert_eq!(projected.items[0].untrusted_title, "Home appointment");
+    assert_eq!(
+        projected.items[0].starts_at_unix_ms,
+        milliseconds(range_start).unwrap()
+    );
+
+    let outside = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
+        .unwrap()
+        .timeline(TimelineViewRead {
+            range_start_unix_ms: Some(
+                milliseconds(grant.starts_at - TimeDelta::minutes(1)).unwrap(),
+            ),
+            range_end_unix_ms: Some(milliseconds(grant.ends_at).unwrap()),
+            ..request(&grant)
+        })
+        .await;
+    assert_eq!(outside.unwrap_err(), AgentFailure::CapabilityDenied);
 }
 
 #[tokio::test]
