@@ -71,9 +71,14 @@ type Metadata struct {
 
 type ChangePage struct {
 	Added      []MessageRef `json:"added"`
+	Changed    []MessageRef `json:"changed"`
 	Deleted    []MessageRef `json:"deleted"`
 	HistoryID  string       `json:"history_id"`
 	NextCursor string       `json:"next_cursor,omitempty"`
+}
+
+type Profile struct {
+	HistoryID string `json:"historyId"`
 }
 
 func New(tokens TokenSource) (*Client, error) {
@@ -144,6 +149,17 @@ func (client *Client) ReadMetadata(ctx context.Context, messageID string) (Metad
 	return response.metadata()
 }
 
+func (client *Client) Profile(ctx context.Context) (Profile, error) {
+	var profile Profile
+	if err := client.get(ctx, "/users/me/profile", &profile); err != nil {
+		return Profile{}, err
+	}
+	if !validID(profile.HistoryID) {
+		return Profile{}, ErrInvalidResponse
+	}
+	return profile, nil
+}
+
 func (client *Client) ReadBody(ctx context.Context, messageID string, authority BodyReadAuthority) (string, error) {
 	if !validID(messageID) {
 		return "", ErrInvalidInput
@@ -169,6 +185,8 @@ func (client *Client) Changes(ctx context.Context, startHistoryID, cursor string
 	parameters := url.Values{"startHistoryId": {startHistoryID}, "maxResults": {strconv.Itoa(limit)}}
 	parameters.Add("historyTypes", "messageAdded")
 	parameters.Add("historyTypes", "messageDeleted")
+	parameters.Add("historyTypes", "labelAdded")
+	parameters.Add("historyTypes", "labelRemoved")
 	if cursor != "" {
 		parameters.Set("pageToken", cursor)
 	}
@@ -180,7 +198,7 @@ func (client *Client) Changes(ctx context.Context, startHistoryID, cursor string
 	if !validID(page.HistoryID) || !validCursor(page.NextCursor) {
 		return ChangePage{}, ErrInvalidResponse
 	}
-	seenAdded, seenDeleted := map[string]bool{}, map[string]bool{}
+	seenAdded, seenChanged, seenDeleted := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, history := range response.History {
 		for _, added := range history.MessagesAdded {
 			if err := appendRef(&page.Added, added.Message, seenAdded); err != nil {
@@ -192,8 +210,13 @@ func (client *Client) Changes(ctx context.Context, startHistoryID, cursor string
 				return ChangePage{}, err
 			}
 		}
+		for _, changed := range append(history.LabelsAdded, history.LabelsRemoved...) {
+			if err := appendRef(&page.Changed, changed.Message, seenChanged); err != nil {
+				return ChangePage{}, err
+			}
+		}
 	}
-	if len(page.Added)+len(page.Deleted) > limit*2 {
+	if len(page.Added)+len(page.Changed)+len(page.Deleted) > limit*3 {
 		return ChangePage{}, ErrInvalidResponse
 	}
 	return page, nil
@@ -274,6 +297,8 @@ type historyMessage struct {
 type historyEntry struct {
 	MessagesAdded   []historyMessage `json:"messagesAdded"`
 	MessagesDeleted []historyMessage `json:"messagesDeleted"`
+	LabelsAdded     []historyMessage `json:"labelsAdded"`
+	LabelsRemoved   []historyMessage `json:"labelsRemoved"`
 }
 type historyResponse struct {
 	History       []historyEntry `json:"history"`

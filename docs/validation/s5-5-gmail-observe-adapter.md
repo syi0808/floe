@@ -22,6 +22,9 @@
 - The index stores headers, labels and snippets but has no body field. It projects a bounded,
   paginated Communication View with hashed message/thread evidence handles and five-minute expiry.
   Public directories/files, symlinks, corrupt state and cross-connection state fail closed.
+- Added bounded full/incremental sync orchestration. Bootstrap captures a mailbox checkpoint before
+  its purpose-scoped search and then catches up from that checkpoint; incremental runs merge added,
+  label-changed and deleted messages atomically. An expired checkpoint triggers a bounded full sync.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -43,11 +46,12 @@ The fixture server verifies exact GET-only paths, Bearer placement, metadata/bod
 body authority checks, pagination, history additions/deletions, typed HTTP failures, endpoint
 allowlisting and descriptor redaction. A shared JSON fixture also crosses the Go/Rust boundary and
 passes the Rust connector conformance validator. Index tests cover reopen, stale checkpoint
-rejection, update/delete merge, paging, hashed provenance and private-file enforcement.
+rejection, update/delete merge, paging, hashed provenance and private-file enforcement. Sync tests
+cover bootstrap catch-up, label changes, deletions, atomic checkpoints and `404` full-sync recovery.
 
 ## Remaining gate
 
-The adapter is not registered in the local console, has no Google OAuth flow or sync worker and has
-not run against a real mailbox. The Rust Agent runtime does not yet consume its Communication View,
-and full-sync recovery after an expired history checkpoint is not implemented. S5.5-C1,
+The adapter is not registered in the local console, has no Google OAuth flow or scheduled trigger
+and has not run against a real mailbox. The Rust Agent runtime does not yet consume its
+Communication View. S5.5-C1,
 S5.5-C2 and implementation-order items 2–3 remain pending.

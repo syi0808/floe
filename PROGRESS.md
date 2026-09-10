@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Gmail checkpointed sync — 2026-09-10
+
+- Added bounded Gmail bootstrap and incremental synchronization over the private metadata index.
+  Bootstrap records a profile checkpoint before purpose-scoped search and catches up afterward;
+  incremental runs atomically merge added, label-changed and permanently deleted messages.
+- Expired history checkpoints now trigger bounded full-sync recovery. Provider or metadata failure
+  leaves the previous durable checkpoint intact, so retries cannot publish partial state.
+- Race-enabled sync tests pass for catch-up, changes, deletion and `404` recovery. OAuth, console
+  registration, scheduled triggering, live mailbox evidence and Agent consumption remain, so
+  S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 durable Gmail metadata index — 2026-09-10
 
 - Added a private, connection-scoped Gmail metadata index with atomic full replacement and
