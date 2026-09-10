@@ -33,6 +33,9 @@
   and Life Logistics. Requests contain only the schema version: repository and entity selections
   remain server-owned, unknown fields fail closed, and both snapshots join the common connection
   inventory when their runtimes are installed.
+- Paired general conversations now advertise read-only Work Context and Life Logistics capabilities
+  and stateless A2A Expert cards. Delegation fetches and strictly validates a fresh bounded View,
+  then runs the matching isolated Expert without granting it provider actions.
 
 ## Automated evidence
 
@@ -45,6 +48,7 @@ go -C server vet ./internal/connectors/homeassistant
 go -C server test -race ./internal/console
 go -C server vet ./internal/console
 cargo test -p floe-agent --test connected_context
+cargo test -p floe-ffi
 ```
 
 The focused View/privacy and Expert contract tests pass, including both cross-language adapter
@@ -52,7 +56,7 @@ fixtures.
 
 ## Remaining gate
 
-GitHub and Home Assistant are not yet credential-managed, installed by server startup or consumed by
-the client Agent, and no live provider evidence was used. No Slack/Teams, file, travel or delivery
-adapter produces these Views yet. Cross-source scenarios and live evidence remain required. S5.5-C4/C5
-and S5.5-E7/E8 remain pending.
+GitHub and Home Assistant are not yet credential-managed or installed by server startup, and no live
+provider evidence was used. The Agent path is stateless rather than a durable registry assignment.
+No Slack/Teams, file, travel or delivery adapter produces these Views yet. Cross-source scenarios and
+live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.

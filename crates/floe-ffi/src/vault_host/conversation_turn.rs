@@ -3,9 +3,11 @@ use floe_agent::{
     A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
     AgentFailure, AgentRuntime, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
     CommitmentsExpertResult, CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE,
-    InProcessA2ATransport, InProcessAgent, InferencePolicyDecision, MailExpertInvocation,
-    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, SessionStore, TransferConsent,
-    run_commitments_expert, run_communication_expert,
+    InProcessA2ATransport, InProcessAgent, InferencePolicyDecision, LifeLogisticsExpertResult,
+    MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
+    PortfolioExpertInvocation, SessionStore, TransferConsent, WorkContextExpertResult,
+    run_commitments_expert, run_communication_expert, run_life_logistics_expert,
+    run_work_context_expert,
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -57,12 +59,12 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
     let capabilities = ConversationCapabilities { model: &model };
-    let mail_experts = ConversationMailExperts {
+    let experts = ConversationExperts {
         model: &model,
         policy: &policy,
         context: &context,
     };
-    let agents = InProcessA2ATransport::new(&mail_experts);
+    let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
         store: vault,
         model: &model,
@@ -194,28 +196,29 @@ impl CapabilityHost for ConversationCapabilities<'_> {
         if !matches!(self.model, Model::Server(_)) {
             return vec![];
         }
-        vec![CapabilityDescriptor {
-            schema_version: AGENT_VERSION,
-            id: "mail.communication.read".into(),
-            version: "1.0.0".into(),
-            read_only: true,
-            output_data_class: DataClass::Personal,
-            input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "maxLength": 512},
-                    "cursor": {"type": "integer", "minimum": 0, "maximum": 10000},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
-                },
-                "additionalProperties": false
-            })),
-        }]
+        vec![
+            CapabilityDescriptor {
+                schema_version: AGENT_VERSION,
+                id: "mail.communication.read".into(),
+                version: "1.0.0".into(),
+                read_only: true,
+                output_data_class: DataClass::Personal,
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "maxLength": 512},
+                        "cursor": {"type": "integer", "minimum": 0, "maximum": 10000},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                    },
+                    "additionalProperties": false
+                })),
+            },
+            read_capability("work.context.read"),
+            read_capability("life.logistics.read"),
+        ]
     }
 
     async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
-        if invocation.capability_id != "mail.communication.read" {
-            return Err(AgentFailure::CapabilityDenied);
-        }
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Input {
@@ -226,21 +229,64 @@ impl CapabilityHost for ConversationCapabilities<'_> {
             #[serde(default = "default_communication_limit")]
             limit: usize,
         }
-        let input: Input =
-            serde_json::from_str(&invocation.input).map_err(|_| AgentFailure::InvalidInput)?;
         let Model::Server(model) = self.model else {
             return Err(AgentFailure::CapabilityUnavailable);
         };
-        let view = model
-            .read_communication_view(
-                &input.query,
-                input.cursor,
-                input.limit,
-                invocation.deadline,
-                &invocation.cancellation,
-            )
-            .await?;
-        serde_json::to_string(&view).map_err(|_| AgentFailure::InvalidInput)
+        let output = match invocation.capability_id.as_str() {
+            "mail.communication.read" => {
+                let input: Input = serde_json::from_str(&invocation.input)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                serde_json::to_value(
+                    model
+                        .read_communication_view(
+                            &input.query,
+                            input.cursor,
+                            input.limit,
+                            invocation.deadline,
+                            &invocation.cancellation,
+                        )
+                        .await?,
+                )
+            }
+            "work.context.read" | "life.logistics.read" => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Empty {}
+                serde_json::from_str::<Empty>(&invocation.input)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                if invocation.capability_id == "work.context.read" {
+                    serde_json::to_value(
+                        model
+                            .read_work_context_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    )
+                } else {
+                    serde_json::to_value(
+                        model
+                            .read_logistics_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    )
+                }
+            }
+            _ => return Err(AgentFailure::CapabilityDenied),
+        }
+        .map_err(|_| AgentFailure::InvalidInput)?;
+        serde_json::to_string(&output).map_err(|_| AgentFailure::InvalidInput)
+    }
+}
+
+fn read_capability(id: &str) -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        schema_version: AGENT_VERSION,
+        id: id.into(),
+        version: "1.0.0".into(),
+        read_only: true,
+        output_data_class: DataClass::Personal,
+        input_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })),
     }
 }
 
@@ -250,14 +296,16 @@ fn default_communication_limit() -> usize {
 
 const COMMITMENTS_AGENT_ID: &str = "floe.commitments";
 const COMMUNICATION_AGENT_ID: &str = "floe.communication";
+const WORK_CONTEXT_AGENT_ID: &str = "floe.work-context";
+const LIFE_LOGISTICS_AGENT_ID: &str = "floe.life-logistics";
 
-struct ConversationMailExperts<'model> {
+struct ConversationExperts<'model> {
     model: &'model Model,
     policy: &'model InferencePolicyDecision,
     context: &'model AgentContext,
 }
 
-impl InProcessAgent for ConversationMailExperts<'_> {
+impl InProcessAgent for ConversationExperts<'_> {
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
         if !matches!(self.model, Model::Server(_)) {
             return vec![];
@@ -283,6 +331,26 @@ impl InProcessAgent for ConversationMailExperts<'_> {
                 domain_tags: vec!["communication".into()],
                 skills: vec!["Prepare evidence-linked reply guidance without sending messages.".into()],
             },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: WORK_CONTEXT_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Work Context Expert".into(),
+                description: "Finds blockers and next actions from a bounded selected workspace.".into(),
+                domain_tags: vec!["work-context".into()],
+                skills: vec!["Prepare evidence-linked work guidance without changing project state.".into()],
+            },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: LIFE_LOGISTICS_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Life Logistics Expert".into(),
+                description: "Finds preparations from bounded home and logistics state.".into(),
+                domain_tags: vec!["life-logistics".into()],
+                skills: vec!["Prepare evidence-linked logistics guidance without taking actions.".into()],
+            },
         ]
     }
 
@@ -295,7 +363,10 @@ impl InProcessAgent for ConversationMailExperts<'_> {
             || request.message.task_id.is_none()
             || !matches!(
                 request.agent_id.as_str(),
-                COMMITMENTS_AGENT_ID | COMMUNICATION_AGENT_ID
+                COMMITMENTS_AGENT_ID
+                    | COMMUNICATION_AGENT_ID
+                    | WORK_CONTEXT_AGENT_ID
+                    | LIFE_LOGISTICS_AGENT_ID
             )
         {
             return Err(AgentFailure::CapabilityDenied);
@@ -304,25 +375,18 @@ impl InProcessAgent for ConversationMailExperts<'_> {
             return Err(AgentFailure::CapabilityUnavailable);
         };
         let assignment = request.message.text()?.to_owned();
-        let view = model
-            .read_communication_view(
-                "",
-                0,
-                default_communication_limit(),
-                request.deadline,
-                &request.cancellation,
-            )
-            .await?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
-        let invocation = MailExpertInvocation {
+        let current_time_unix_ms =
+            i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
+        let invocation_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
+        let mail_invocation = |view| MailExpertInvocation {
             usage: request.usage.clone(),
             person_id: request.person_id,
-            invocation_id: request.message.task_id.ok_or(AgentFailure::InvalidInput)?,
-            assignment,
-            current_time_unix_ms: i64::try_from(now.as_millis())
-                .map_err(|_| AgentFailure::StaleContext)?,
+            invocation_id,
+            assignment: assignment.clone(),
+            current_time_unix_ms,
             context: self.context.clone(),
             view,
             max_output_bytes: request.max_output_bytes,
@@ -331,10 +395,32 @@ impl InProcessAgent for ConversationMailExperts<'_> {
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
+        let portfolio_invocation = || PortfolioExpertInvocation {
+            usage: request.usage.clone(),
+            person_id: request.person_id,
+            invocation_id,
+            assignment: assignment.clone(),
+            current_time_unix_ms,
+            context: self.context.clone(),
+            max_output_bytes: request.max_output_bytes,
+            max_model_tokens: 40_960,
+            max_model_cost_micros: 50_000,
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
         let (summary, data, name) = match request.agent_id.as_str() {
             COMMITMENTS_AGENT_ID => {
+                let view = model
+                    .read_communication_view(
+                        "",
+                        0,
+                        default_communication_limit(),
+                        request.deadline,
+                        &request.cancellation,
+                    )
+                    .await?;
                 let result: CommitmentsExpertResult =
-                    run_commitments_expert(model, self.policy, invocation).await?;
+                    run_commitments_expert(model, self.policy, mail_invocation(view)).await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -342,12 +428,47 @@ impl InProcessAgent for ConversationMailExperts<'_> {
                 )
             }
             COMMUNICATION_AGENT_ID => {
+                let view = model
+                    .read_communication_view(
+                        "",
+                        0,
+                        default_communication_limit(),
+                        request.deadline,
+                        &request.cancellation,
+                    )
+                    .await?;
                 let result: CommunicationExpertResult =
-                    run_communication_expert(model, self.policy, invocation).await?;
+                    run_communication_expert(model, self.policy, mail_invocation(view)).await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
                     "Communication expert result",
+                )
+            }
+            WORK_CONTEXT_AGENT_ID => {
+                let view = model
+                    .read_work_context_view(request.deadline, &request.cancellation)
+                    .await?;
+                let result: WorkContextExpertResult =
+                    run_work_context_expert(model, self.policy, portfolio_invocation(), view)
+                        .await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Work Context expert result",
+                )
+            }
+            LIFE_LOGISTICS_AGENT_ID => {
+                let view = model
+                    .read_logistics_view(request.deadline, &request.cancellation)
+                    .await?;
+                let result: LifeLogisticsExpertResult =
+                    run_life_logistics_expert(model, self.policy, portfolio_invocation(), view)
+                        .await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Life Logistics expert result",
                 )
             }
             _ => return Err(AgentFailure::CapabilityDenied),
@@ -436,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn server_route_exposes_only_bounded_mail_observe_capability() {
+    fn server_route_exposes_only_bounded_context_observe_capabilities() {
         let model = Model::new(Some(AgentRemoteRouteDto {
             base_url: "http://127.0.0.1:8431".into(),
             bearer_token: "daily_route_token_that_is_long_enough".into(),
@@ -447,13 +568,25 @@ mod tests {
         .unwrap();
         let capabilities = ConversationCapabilities { model: &model };
         let descriptors = capabilities.descriptors(PersonId::new());
-        assert_eq!(descriptors.len(), 1);
-        assert_eq!(descriptors[0].id, "mail.communication.read");
-        assert!(descriptors[0].read_only);
-        assert_eq!(descriptors[0].output_data_class, DataClass::Personal);
-        let schema = descriptors[0].input_schema.as_ref().unwrap();
-        assert_eq!(schema["additionalProperties"], false);
-        assert!(schema.to_string().len() < 1024);
+        assert_eq!(descriptors.len(), 3);
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "mail.communication.read",
+                "work.context.read",
+                "life.logistics.read"
+            ]
+        );
+        for descriptor in &descriptors {
+            assert!(descriptor.read_only);
+            assert_eq!(descriptor.output_data_class, DataClass::Personal);
+            let schema = descriptor.input_schema.as_ref().unwrap();
+            assert_eq!(schema["additionalProperties"], false);
+            assert!(schema.to_string().len() < 1024);
+        }
         let policy = policy(&model, None);
         let context = AgentContext {
             projection_version: 1,
@@ -461,15 +594,17 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let experts = ConversationMailExperts {
+        let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
         };
         let cards = experts.agent_cards(PersonId::new());
-        assert_eq!(cards.len(), 2);
+        assert_eq!(cards.len(), 4);
         assert_eq!(cards[0].id, COMMITMENTS_AGENT_ID);
         assert_eq!(cards[1].id, COMMUNICATION_AGENT_ID);
+        assert_eq!(cards[2].id, WORK_CONTEXT_AGENT_ID);
+        assert_eq!(cards[3].id, LIFE_LOGISTICS_AGENT_ID);
         assert!(cards.iter().all(|card| card.validate().is_ok()));
     }
 
@@ -595,7 +730,7 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
-        let experts = ConversationMailExperts {
+        let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,

@@ -1,13 +1,14 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, CommunicationView, MAX_COMMUNICATION_BYTES,
-    MAX_COMMUNICATION_ITEMS, ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep,
-    SessionProtection, validate_communication_view,
+    AGENT_VERSION, AgentFailure, CommunicationView, LogisticsView, MAX_COMMUNICATION_BYTES,
+    MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, ModelPlacement, ModelRequest, ModelResponse,
+    ModelRunner, ModelStep, SessionProtection, WorkContextView, validate_communication_view,
+    validate_logistics_view, validate_work_context_view,
 };
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
 
 pub struct ServerModelRunner {
@@ -53,6 +54,63 @@ impl ServerModelRunner {
         if query.len() > 512 || cursor > 10_000 || !(1..=MAX_COMMUNICATION_ITEMS).contains(&limit) {
             return Err(AgentFailure::InvalidInput);
         }
+        self.read_view(
+            "/v1/views/mail.communication",
+            json!({
+                "schema_version": AGENT_VERSION,
+                "query": query,
+                "cursor": cursor,
+                "limit": limit,
+            }),
+            MAX_COMMUNICATION_BYTES,
+            deadline,
+            cancellation,
+            |view, now| validate_communication_view(view, now, limit, MAX_COMMUNICATION_BYTES),
+        )
+        .await
+    }
+
+    pub async fn read_work_context_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<WorkContextView, AgentFailure> {
+        self.read_view(
+            "/v1/views/work.context",
+            json!({"schema_version": AGENT_VERSION}),
+            MAX_PORTFOLIO_VIEW_BYTES,
+            deadline,
+            cancellation,
+            validate_work_context_view,
+        )
+        .await
+    }
+
+    pub async fn read_logistics_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<LogisticsView, AgentFailure> {
+        self.read_view(
+            "/v1/views/life.logistics",
+            json!({"schema_version": AGENT_VERSION}),
+            MAX_PORTFOLIO_VIEW_BYTES,
+            deadline,
+            cancellation,
+            validate_logistics_view,
+        )
+        .await
+    }
+
+    async fn read_view<View: DeserializeOwned>(
+        &self,
+        path: &str,
+        input: serde_json::Value,
+        max_bytes: usize,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+        validate: impl FnOnce(&View, i64) -> Result<(), AgentFailure>,
+    ) -> Result<View, AgentFailure> {
         if cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
         }
@@ -68,16 +126,11 @@ impl ServerModelRunner {
             .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let send = client
             .post(format!(
-                "{}/v1/views/mail.communication",
+                "{}{path}",
                 self.route.base_url.trim_end_matches('/')
             ))
             .bearer_auth(&self.route.bearer_token)
-            .json(&json!({
-                "schema_version": AGENT_VERSION,
-                "query": query,
-                "cursor": cursor,
-                "limit": limit,
-            }))
+            .json(&input)
             .send();
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
@@ -94,16 +147,16 @@ impl ServerModelRunner {
             .bytes()
             .await
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if bytes.len() > MAX_COMMUNICATION_BYTES + 4096 {
+        if bytes.len() > max_bytes + 4096 {
             return Err(AgentFailure::BudgetExceeded);
         }
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Response {
+        struct Response<View> {
             schema_version: u32,
-            view: CommunicationView,
+            view: View,
         }
-        let response: Response =
+        let response: Response<View> =
             serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)?;
         if response.schema_version != AGENT_VERSION {
             return Err(AgentFailure::UnsupportedVersion);
@@ -111,11 +164,9 @@ impl ServerModelRunner {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
-        validate_communication_view(
+        validate(
             &response.view,
             i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
-            limit,
-            MAX_COMMUNICATION_BYTES,
         )?;
         Ok(response.view)
     }
@@ -724,6 +775,85 @@ mod tests {
             .unwrap();
         assert_eq!(view.items[0].subject, "Reply needed");
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn portfolio_view_reads_use_fixed_routes_and_strict_validation() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (path, view) in [
+            (
+                "/v1/views/work.context",
+                json!({
+                    "schema_version": 1,
+                    "view_id": "work.context",
+                    "source_handle": "work:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "scope_handle": "workspace:fixture",
+                    "items": []
+                }),
+            ),
+            (
+                "/v1/views/life.logistics",
+                json!({
+                    "schema_version": 1,
+                    "view_id": "life.logistics",
+                    "source_handle": "logistics:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "items": []
+                }),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let expected_path = path.to_owned();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let read = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+                assert!(request.contains(r#"{"schema_version":1}"#));
+                let body = json!({"schema_version": 1, "view": view}).to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(), body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let mut route = route();
+            route.base_url = format!("http://{address}");
+            let model = ServerModelRunner::new(route).unwrap();
+            if path.ends_with("work.context") {
+                model
+                    .read_work_context_view(
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                        &floe_agent::Cancellation::default(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                model
+                    .read_logistics_view(
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                        &floe_agent::Cancellation::default(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            server.await.unwrap();
+        }
     }
 
     #[test]

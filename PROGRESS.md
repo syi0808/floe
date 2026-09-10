@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Work and Life Logistics conversation delegation — 2026-09-10
+
+- Paired general conversations now advertise strict read-only Work Context and Life Logistics
+  capabilities plus stateless Work Context and Life Logistics A2A Expert cards.
+- Each delegation reads a fresh bounded server View, validates it in Rust and runs the isolated
+  Expert without provider actions. Fixed-route authentication, payload rejection and the full
+  `floe-ffi` suite pass.
+- Durable registry assignment, startup connector configuration, cross-source scenarios and live
+  provider evidence remain, so S5.5-C4/C5/E7/E8 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 work/logistics paired View transport — 2026-09-10
 
 - Added configured-scope GitHub and Home Assistant service boundaries plus authenticated paired
