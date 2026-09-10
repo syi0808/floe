@@ -1,0 +1,19 @@
+{
+  "descriptor": {
+    "schema_version": 1,
+    "id": "microsoft.mail",
+    "version": "1.0.0",
+    "provider": "microsoft",
+    "execution": {"kind": "server"},
+    "capabilities": [
+      {"schema_version": 1, "id": "mail.communication.read", "version": "1.0.0", "authority": "observe", "required_scopes": ["Mail.Read"], "output_view_id": "mail.communication"}
+    ],
+    "views": [
+      {"schema_version": 1, "id": "mail.communication", "version": "1.0.0", "data_class": "personal", "retention": "ephemeral", "freshness_ttl_ms": 300000, "max_items": 100, "max_bytes": 65536, "provenance_required": true}
+    ]
+  },
+  "connection": {"schema_version": 1, "connector_id": "microsoft.mail", "state": "ready", "granted_scopes": ["Mail.Read"], "observed_at_unix_ms": 1789128000000, "last_success_at_unix_ms": 1789128000000},
+  "views": [
+    {"schema_version": 1, "view_id": "mail.communication", "source_handle": "mail:9754857f47e08b2a08e8ce1fe56e232a", "observed_at_unix_ms": 1789128000000, "expires_at_unix_ms": 1789128300000, "item_count": 1, "byte_count": 620, "provenance_count": 1}
+  ]
+}

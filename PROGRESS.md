@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Microsoft Mail adapter foundation — 2026-09-11
+
+- Added a Microsoft Graph Mail adapter that reads only bounded inbox metadata through `Mail.Read`.
+  It hashes message/conversation IDs, omits provider URLs and headers, and emits the existing strict
+  provider-neutral Communication View with no action authority.
+- Added typed credential, permission, rate-limit and partial-fetch snapshots with fresh-cache
+  degradation, plus Go→Rust View and connector conformance fixtures.
+- Focused Go race tests/vet and Rust contract tests pass. Microsoft OAuth/product routing, Microsoft
+  Calendar, Google Calendar, Android Calendar/Contacts, Health Connect and live parity evidence
+  remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 mail and home Life Logistics composition — 2026-09-11
 
 - Gmail metadata now emits bounded reservation/travel/delivery/errand candidates only for explicit

@@ -12,6 +12,13 @@ fn fixture() -> CommunicationView {
     .unwrap()
 }
 
+fn microsoft_fixture() -> CommunicationView {
+    serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/microsoftmail/testdata/communication_view.json"
+    ))
+    .unwrap()
+}
+
 #[test]
 fn server_communication_view_crosses_the_common_context_boundary() {
     let view = fixture();
@@ -22,6 +29,23 @@ fn server_communication_view_crosses_the_common_context_boundary() {
     assert_eq!(evidence.data_class, DataClass::Personal);
     assert!(evidence.untrusted_text.contains("Please confirm"));
     assert!(!evidence.untrusted_text.contains("access_token"));
+}
+
+#[test]
+fn microsoft_communication_view_crosses_the_common_context_boundary() {
+    let view = microsoft_fixture();
+    validate_communication_view(
+        &view,
+        1_789_128_000_000,
+        MAX_COMMUNICATION_ITEMS,
+        MAX_COMMUNICATION_BYTES,
+    )
+    .unwrap();
+    let evidence = communication_context_evidence(&view).unwrap();
+    assert_eq!(evidence.source_handle, view.source_handle);
+    assert_eq!(evidence.data_class, DataClass::Personal);
+    assert!(evidence.untrusted_text.contains("Please confirm"));
+    assert!(!evidence.untrusted_text.contains("message_123"));
 }
 
 #[test]

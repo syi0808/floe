@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "view_id": "mail.communication",
+  "source_handle": "mail:9754857f47e08b2a08e8ce1fe56e232a",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "items": [
+    {
+      "evidence_handle": "mail:bfb5aba17599d1720fd48a706143c860",
+      "thread_handle": "mail:b80d71f7f2e63f70b4d943e8f41109ad",
+      "received_unix_ms": 1789127940000,
+      "from": "alex@example.com",
+      "to": "person@example.com",
+      "subject": "Confirm review",
+      "snippet": "Please confirm by Friday.",
+      "labels": ["Focused"]
+    }
+  ]
+}
