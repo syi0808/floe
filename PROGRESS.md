@@ -13,7 +13,11 @@
   tone and optional email draft while granting no send/archive capability. Malformed, duplicate,
   oversized and authority-blurring results fail closed.
 - A deterministic positive/negative mail corpus passes 3/3 and the Rust workspace passes. Product
-  registry assignment/delegation, cross-source evaluation and live mailbox quality remain, so
+  conversations with a paired server now advertise both stateless Experts through the existing
+  in-process A2A boundary; the Manager chooses whether to delegate and each delegation reads a fresh
+  bounded View before isolated reasoning.
+- Durable registry assignment, combined Calendar/mail routing, cross-source evaluation and live
+  mailbox quality remain, so
   S5.5-E2/E3 and the slice remain **0/14**.
   [Evidence and limits](docs/validation/s5-5-mail-experts.md).
 

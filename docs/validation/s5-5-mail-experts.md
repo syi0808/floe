@@ -20,6 +20,10 @@
 - Added a deterministic two-scenario corpus covering an explicit deadline/reply request and an
   informational newsletter. It verifies both positive and negative judgments, evidence binding,
   role isolation and zero advertised capabilities inside either Expert.
+- General conversations backed by a paired server now advertise the two Expert cards through the
+  existing in-process A2A transport. The Manager selects delegation; each task obtains a fresh
+  bounded Communication View, runs the matching isolated prompt and returns summary plus typed data
+  artifact. Device-only conversations do not advertise mail Experts.
 
 ## Automated evidence
 
@@ -33,7 +37,8 @@ claim model quality or live Gmail acceptance.
 
 ## Remaining gate
 
-The Expert runners are not yet installed, assigned or delegated through the product registry.
-Commitments still needs Calendar/Task/confirmed Memory cross-source evaluation, and Communication
-needs People/relationship context plus explicit draft review. No live mailbox evidence was used.
-S5.5-E2 and S5.5-E3 remain pending.
+The built-in stateless runners are not yet installed or assigned through the durable product
+registry, and the existing Calendar-scoped conversation path still takes precedence when configured.
+Commitments needs Calendar/Task/confirmed Memory cross-source evaluation, and Communication needs
+People/relationship context plus explicit draft review. No live mailbox evidence was used. S5.5-E2
+and S5.5-E3 remain pending.

@@ -1,7 +1,11 @@
 use floe_agent::{
-    AGENT_VERSION, AgentBudget, AgentCommand, AgentContext, AgentEvent, AgentFailure, AgentRuntime,
-    CapabilityDescriptor, CapabilityHost, CapabilityInvocation, DataClass, InferencePolicyDecision,
+    A2A_PROTOCOL_VERSION, A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
+    A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
+    AgentFailure, AgentRuntime, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
+    CommitmentsExpertResult, CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE,
+    InProcessA2ATransport, InProcessAgent, InferencePolicyDecision, MailExpertInvocation,
     ModelPlacement, ModelRequest, ModelResponse, ModelRunner, SessionStore, TransferConsent,
+    run_commitments_expert, run_communication_expert,
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -53,6 +57,12 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
     let capabilities = ConversationCapabilities { model: &model };
+    let mail_experts = ConversationMailExperts {
+        model: &model,
+        policy: &policy,
+        context: &context,
+    };
+    let agents = InProcessA2ATransport::new(&mail_experts);
     let runtime = AgentRuntime {
         store: vault,
         model: &model,
@@ -62,18 +72,19 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     };
     if request.continuation {
         runtime
-            .continue_turn(
+            .continue_turn_with_agents(
                 person_id,
                 session_id,
                 request.expected_revision,
-                context,
+                context.clone(),
+                &agents,
                 cancellation,
                 emit,
             )
             .await
     } else {
         runtime
-            .run_turn(
+            .run_turn_with_agents(
                 AgentCommand {
                     schema_version: AGENT_VERSION,
                     person_id,
@@ -81,7 +92,8 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
                     expected_revision: request.expected_revision,
                     text: text.into(),
                 },
-                context,
+                context.clone(),
+                &agents,
                 cancellation,
                 emit,
             )
@@ -236,6 +248,132 @@ fn default_communication_limit() -> usize {
     25
 }
 
+const COMMITMENTS_AGENT_ID: &str = "floe.commitments";
+const COMMUNICATION_AGENT_ID: &str = "floe.communication";
+
+struct ConversationMailExperts<'model> {
+    model: &'model Model,
+    policy: &'model InferencePolicyDecision,
+    context: &'model AgentContext,
+}
+
+impl InProcessAgent for ConversationMailExperts<'_> {
+    fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
+        if !matches!(self.model, Model::Server(_)) {
+            return vec![];
+        }
+        vec![
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: COMMITMENTS_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Commitments Expert".into(),
+                description: "Finds obligations, deadlines, expected replies and follow-up gaps from bounded evidence.".into(),
+                domain_tags: vec!["commitments".into()],
+                skills: vec!["Distinguish explicit commitments from inferred follow-up candidates.".into()],
+            },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: COMMUNICATION_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Communication Expert".into(),
+                description: "Judges reply need, summary, tone and optional email drafts from bounded evidence.".into(),
+                domain_tags: vec!["communication".into()],
+                skills: vec!["Prepare evidence-linked reply guidance without sending messages.".into()],
+            },
+        ]
+    }
+
+    async fn handle_message(
+        &self,
+        request: A2ASendMessageRequest,
+    ) -> Result<A2ATask, AgentFailure> {
+        if request.schema_version != AGENT_VERSION
+            || request.message.role != A2AMessageRole::User
+            || request.message.task_id.is_none()
+            || !matches!(
+                request.agent_id.as_str(),
+                COMMITMENTS_AGENT_ID | COMMUNICATION_AGENT_ID
+            )
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let Model::Server(model) = self.model else {
+            return Err(AgentFailure::CapabilityUnavailable);
+        };
+        let assignment = request.message.text()?.to_owned();
+        let view = model
+            .read_communication_view(
+                "",
+                0,
+                default_communication_limit(),
+                request.deadline,
+                &request.cancellation,
+            )
+            .await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_err(|_| AgentFailure::StaleContext)?;
+        let invocation = MailExpertInvocation {
+            usage: request.usage.clone(),
+            person_id: request.person_id,
+            invocation_id: request.message.task_id.ok_or(AgentFailure::InvalidInput)?,
+            assignment,
+            current_time_unix_ms: i64::try_from(now.as_millis())
+                .map_err(|_| AgentFailure::StaleContext)?,
+            context: self.context.clone(),
+            view,
+            max_output_bytes: request.max_output_bytes,
+            max_model_tokens: 40_960,
+            max_model_cost_micros: 50_000,
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
+        let (summary, data, name) = match request.agent_id.as_str() {
+            COMMITMENTS_AGENT_ID => {
+                let result: CommitmentsExpertResult =
+                    run_commitments_expert(model, self.policy, invocation).await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Commitments expert result",
+                )
+            }
+            COMMUNICATION_AGENT_ID => {
+                let result: CommunicationExpertResult =
+                    run_communication_expert(model, self.policy, invocation).await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Communication expert result",
+                )
+            }
+            _ => return Err(AgentFailure::CapabilityDenied),
+        };
+        Ok(A2ATask {
+            id: request.message.task_id.ok_or(AgentFailure::InvalidInput)?,
+            context_id: request.message.context_id,
+            agent_id: request.agent_id,
+            state: A2ATaskState::Completed,
+            history: vec![request.message],
+            artifacts: vec![A2AArtifact {
+                artifact_id: uuid::Uuid::new_v4(),
+                name: name.into(),
+                parts: vec![
+                    A2APart::Text { text: summary },
+                    A2APart::Data {
+                        media_type: EXPERT_RESULT_MEDIA_TYPE.into(),
+                        data,
+                    },
+                ],
+            }],
+            failure: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +415,23 @@ mod tests {
         let schema = descriptors[0].input_schema.as_ref().unwrap();
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema.to_string().len() < 1024);
+        let policy = policy(&model, None);
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let experts = ConversationMailExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+        };
+        let cards = experts.agent_cards(PersonId::new());
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].id, COMMITMENTS_AGENT_ID);
+        assert_eq!(cards[1].id, COMMUNICATION_AGENT_ID);
+        assert!(cards.iter().all(|card| card.validate().is_ok()));
     }
 
     #[tokio::test]
