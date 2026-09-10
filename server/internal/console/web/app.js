@@ -5,6 +5,7 @@ let pairing = null;
 let unlocked = false;
 let polling = false;
 let codexPending = false;
+let gmailPending = false;
 let editing = false;
 let state = {providers: {}, clients: []};
 let selectedProvider = 'openai_compatible';
@@ -24,8 +25,9 @@ async function api(path, body) {
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false;
+  unlocked = false; csrf = ''; codexPending = false; gmailPending = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
+  element('gmail-link').removeAttribute('href'); element('gmail-link').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
 }
 async function action(button, operation) {
@@ -141,10 +143,17 @@ async function codex(operation) {
   if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`codex-${operation}`).onclick = () => action(element(`codex-${operation}`), () => codex(operation));
+async function gmail(operation) {
+  const value = await api(`gmail/${operation}`, {}); gmailPending = value.status === 'pending';
+  element('gmail-state').textContent = `Authentication: ${value.status} · Scope: Gmail read-only`;
+  const link = element('gmail-link'); link.hidden = !value.auth_url;
+  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
+}
+for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
-  try { await refresh(); if (codexPending) await codex('status'); }
+  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); }
   catch (error) { notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);

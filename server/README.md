@@ -67,6 +67,28 @@ stores the rotated result in Keychain. This integration follows the Codex CLI OA
 wire contract directly rather than launching `codex app-server`; upstream protocol,
 model availability and subscription limits can change and require live retesting.
 
+### Gmail read-only OAuth
+
+Create a Google **Desktop app** OAuth client in a project with the Gmail API enabled, then start
+the local node with its client ID. The client secret is optional for installed-app clients and,
+when supplied, must come from the process environment rather than repository configuration.
+
+```sh
+export FLOE_GOOGLE_OAUTH_CLIENT_ID='your-desktop-client-id'
+export FLOE_GOOGLE_OAUTH_CLIENT_SECRET='optional-client-secret'
+go run ./cmd/floe-server
+```
+
+In the dashboard, use **Context sources → Gmail → Start browser login**. Floe opens no embedded
+webview: the returned authorization URL must be opened in the system browser. The flow uses a
+random loopback callback port, PKCE S256, five-minute state, offline access and only
+`gmail.readonly`. Access and refresh tokens are stored together in macOS Keychain and are never
+returned by the management API. Disconnect first revokes the Google grant and then deletes the
+local credential. Changing the configured client ID never inherits an older client's tokens.
+
+OAuth setup and a live mailbox run are still required before the Gmail connector is usable. The
+current dashboard connection does not yet start scheduled synchronization.
+
 ## Legacy headless mode
 
 The environment-configured mode below remains for existing development fixtures.

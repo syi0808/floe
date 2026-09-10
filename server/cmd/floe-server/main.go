@@ -17,6 +17,7 @@ import (
 	"floe/server/internal/codexauth"
 	"floe/server/internal/console"
 	"floe/server/internal/credentials"
+	"floe/server/internal/googleauth"
 	"floe/server/internal/inference"
 )
 
@@ -41,6 +42,14 @@ func main() {
 		management, err := console.New(directory, address, vault, runtime)
 		if err != nil {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
+		}
+		if clientID := os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_ID"); clientID != "" {
+			gmailAuth, authError := googleauth.New(vault, googleauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")})
+			if authError != nil {
+				log.Fatal("Cannot configure Google OAuth")
+			}
+			defer gmailAuth.Close()
+			management.SetGmailAuth(gmailAuth)
 		}
 		handler = management
 		log.Printf("Local dashboard: http://%s/manage/", address)

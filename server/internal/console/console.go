@@ -25,6 +25,10 @@ type AuthRuntime interface {
 	inference.CodexClient
 }
 
+type ConnectorAuthRuntime interface {
+	Action(context.Context, string) (any, error)
+}
+
 type session struct {
 	csrf    string
 	expires time.Time
@@ -42,6 +46,7 @@ type Console struct {
 	directory, address, adminHash, internalToken string
 	vault                                        Vault
 	runtime                                      AuthRuntime
+	gmail                                        ConnectorAuthRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
 	unavailable                                  map[string]bool
@@ -51,6 +56,12 @@ type Console struct {
 	loginWindow                                  time.Time
 	lastPair                                     time.Time
 	testActive                                   bool
+}
+
+func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.gmail = runtime
 }
 
 func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console, error) {
@@ -310,6 +321,24 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/gmail/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.gmail
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "gmail_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/gmail/"))
+		if err != nil {
+			failure(writer, 502, "gmail_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") && request.Method == "POST" {
 		if console.runtime == nil {
 			failure(writer, 503, "codex_unavailable")

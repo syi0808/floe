@@ -25,6 +25,10 @@
 - Added bounded full/incremental sync orchestration. Bootstrap captures a mailbox checkpoint before
   its purpose-scoped search and then catches up from that checkpoint; incremental runs merge added,
   label-changed and deleted messages atomically. An expired checkpoint triggers a bounded full sync.
+- Added a desktop Google OAuth runtime and authenticated local-console controls. It uses a random
+  loopback callback, PKCE S256, five-minute state, offline access and only `gmail.readonly`.
+  Tokens stay in macOS Keychain, refresh is serialized, invalid grants are cleared, changed OAuth
+  client IDs cannot inherit tokens, and disconnect revokes upstream before local deletion.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -38,6 +42,7 @@ contracts.
 cd server
 go test -race ./internal/connectors/gmail
 go vet ./internal/connectors/gmail
+go test -race ./internal/googleauth ./internal/console
 cd ..
 cargo test -p floe-agent --test connected_context
 ```
@@ -51,7 +56,7 @@ cover bootstrap catch-up, label changes, deletions, atomic checkpoints and `404`
 
 ## Remaining gate
 
-The adapter is not registered in the local console, has no Google OAuth flow or scheduled trigger
-and has not run against a real mailbox. The Rust Agent runtime does not yet consume its
-Communication View. S5.5-C1,
+The authenticated console can manage OAuth, but it does not yet register a Gmail connection or
+start scheduled synchronization, and no live mailbox run has been recorded. The Rust Agent runtime
+does not yet consume its Communication View. S5.5-C1,
 S5.5-C2 and implementation-order items 2–3 remain pending.

@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Gmail desktop OAuth boundary — 2026-09-10
+
+- Added Google Desktop OAuth with random loopback callback, PKCE S256, five-minute state,
+  offline access and the sole `gmail.readonly` scope. Access/refresh tokens remain in macOS
+  Keychain and serialized refresh clears rejected grants without exposing provider responses.
+- Added authenticated local-console connect/status/cancel/revoke controls. Changed client IDs do
+  not inherit old credentials; disconnect revokes Google before deleting local tokens.
+- Race-enabled OAuth and console tests pass. A Google project/client, scheduled connector
+  registration, live mailbox evidence and Agent consumption remain, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 Gmail checkpointed sync — 2026-09-10
 
 - Added bounded Gmail bootstrap and incremental synchronization over the private metadata index.

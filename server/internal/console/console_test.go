@@ -239,6 +239,27 @@ func TestManagementAndInferenceAuthAreSeparate(test *testing.T) {
 	}
 }
 
+func TestGmailOAuthActionsRequireManagementSessionAndConfiguredRuntime(test *testing.T) {
+	fixture := setup(test)
+	if response := fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("unconfigured status: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.SetGmailAuth(&fakeAuthRuntime{ready: true})
+	value := fixture.value(fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""))
+	if value["status"] != "connected" {
+		test.Fatalf("status: %#v", value)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8431/manage/api/gmail/logout", strings.NewReader(`{}`))
+	request.Host = "127.0.0.1:8431"
+	request.Header.Set("Origin", "http://127.0.0.1:8431")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	fixture.console.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		test.Fatalf("unauthorized action: %d", response.Code)
+	}
+}
+
 func TestTargetCredentialsConsentAndSyntheticTest(test *testing.T) {
 	fixture := setup(test)
 	var calls atomic.Int32
