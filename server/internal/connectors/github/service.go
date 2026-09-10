@@ -25,7 +25,7 @@ func NewService(client *Client, owner, repository string) (*Service, error) {
 	return &Service{client: client, owner: owner, repository: repository, clock: time.Now}, nil
 }
 
-func (service *Service) ReadWorkContextView(ctx context.Context) (any, error) {
+func (service *Service) ReadWorkContextView(ctx context.Context) (common.WorkContextView, error) {
 	service.operation.Lock()
 	defer service.operation.Unlock()
 	view, err := service.client.WorkContext(ctx, service.owner, service.repository, service.clock())

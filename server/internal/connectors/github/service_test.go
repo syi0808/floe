@@ -23,7 +23,7 @@ func TestServiceKeepsRepositorySelectionOutsideViewRequests(test *testing.T) {
 	}
 	service.clock = func() time.Time { return time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC) }
 	view, err := service.ReadWorkContextView(context.Background())
-	if err != nil || view.(WorkContextView).Items[0].Title != "Selected work" {
+	if err != nil || view.Items[0].Title != "Selected work" {
 		test.Fatalf("view: %#v %v", view, err)
 	}
 	snapshot, err := service.ConnectionSnapshot(context.Background())

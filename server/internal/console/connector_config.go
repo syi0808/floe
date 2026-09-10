@@ -40,7 +40,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		if err != nil {
 			return err
 		}
-		console.work = service
+		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.HomeAssistant; configured != nil {
 		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: homeTokenKey}, configured.BaseURL, "primary")

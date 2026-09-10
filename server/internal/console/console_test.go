@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"floe/server/internal/connectors/common"
 )
 
 type memoryVault struct {
@@ -51,8 +53,14 @@ func (runtime *fakeContextRuntime) ConnectionSnapshot(context.Context) (any, err
 	return runtime.snapshot, runtime.err
 }
 
-func (runtime *fakeContextRuntime) ReadWorkContextView(context.Context) (any, error) {
-	return runtime.view, runtime.err
+func (runtime *fakeContextRuntime) ReadWorkContextView(context.Context) (common.WorkContextView, error) {
+	if runtime.err != nil {
+		return common.WorkContextView{}, runtime.err
+	}
+	encoded, _ := json.Marshal(runtime.view)
+	var view common.WorkContextView
+	_ = json.Unmarshal(encoded, &view)
+	return view, nil
 }
 
 func (runtime *fakeContextRuntime) ReadLogisticsView(context.Context) (any, error) {
@@ -371,7 +379,8 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "github"}}, view: map[string]any{"view_id": "work.context"}})
+	now := time.Now().UnixMilli()
+	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "github"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "home_assistant"}}, view: map[string]any{"view_id": "life.logistics"}})
 
 	for path, viewID := range map[string]string{
@@ -389,6 +398,29 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
 	if len(connections) != 2 {
 		test.Fatalf("connections: %#v", connections)
+	}
+}
+
+func TestWorkContextRouteMergesHealthyProvidersAndToleratesOneFailure(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	now := time.Now().UnixMilli()
+	view := func(source, scope, evidence string) map[string]any {
+		return map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": source, "scope_handle": scope, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": "communication", "title": "Selected work", "observed_at_unix_ms": now - 2}}}
+	}
+	fixture.console.work = []WorkContextRuntime{
+		&fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
+		&fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
+	}
+	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
+	merged := response["view"].(map[string]any)
+	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "work:") {
+		test.Fatalf("merged view: %#v", merged)
+	}
+	fixture.console.work[0] = &fakeContextRuntime{err: errors.New("private provider failure")}
+	response = fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
+	if len(response["view"].(map[string]any)["items"].([]any)) != 1 || strings.Contains(fmt.Sprint(response), "private provider failure") {
+		test.Fatalf("partial view: %#v", response)
 	}
 }
 
