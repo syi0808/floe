@@ -5,16 +5,23 @@ import '../../app/floe_badge.dart';
 import '../../app/floe_button.dart';
 import '../../app/floe_squircle.dart';
 import 'agent_connections.dart';
-import 'agent_controller.dart';
 
 final class AgentConnectionSettings extends StatelessWidget {
-  const AgentConnectionSettings({super.key, required this.controller});
+  const AgentConnectionSettings({
+    super.key,
+    required this.connections,
+    required this.loading,
+    required this.failed,
+    required this.onRefresh,
+  });
 
-  final AgentController controller;
+  final List<AgentConnection> connections;
+  final bool loading;
+  final bool failed;
+  final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    final connections = controller.connections;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -23,9 +30,7 @@ final class AgentConnectionSettings extends StatelessWidget {
             const Expanded(child: Text('Connections', style: FloeType.title)),
             FloeButton.text(
               key: const ValueKey('connections-refresh'),
-              onPressed: controller.canReadConnections
-                  ? controller.loadConnections
-                  : null,
+              onPressed: loading ? null : onRefresh,
               child: const Text('Refresh'),
             ),
           ],
@@ -36,11 +41,13 @@ final class AgentConnectionSettings extends StatelessWidget {
           style: FloeType.body.copyWith(color: FloePalette.neutral600),
         ),
         const SizedBox(height: FloeSpace.base),
-        if (controller.connectionFailure != null)
-          const Text('Connection status is temporarily unavailable.')
-        else if (connections == null)
+        if (failed) ...[
+          const Text('Some connection status is temporarily unavailable.'),
+          if (connections.isNotEmpty) const SizedBox(height: FloeSpace.sm),
+        ],
+        if (loading && connections.isEmpty)
           const Text('Loading connection status…')
-        else if (connections.isEmpty)
+        else if (connections.isEmpty && !failed)
           const Text('No connected sources are available yet.')
         else
           for (final connection in connections)
@@ -130,6 +137,7 @@ final class _ConnectionCard extends StatelessWidget {
 
   String _provider(String provider) => switch (provider) {
     'apple_event_kit' => 'Apple Calendar',
+    'gmail' => 'Gmail',
     'fixture' => 'Demo Calendar',
     _ => 'Connected source',
   };
@@ -139,6 +147,7 @@ final class _ConnectionCard extends StatelessWidget {
     'stale' => 'The last observation is stale. Refresh the source.',
     'partial_fetch' => 'Some source data could not be refreshed.',
     'rate_limited' => 'The provider temporarily limited refreshes.',
+    'credential_expired' => 'Provider access expired. Reconnect the source.',
     _ => 'The source could not provide current data.',
   };
 

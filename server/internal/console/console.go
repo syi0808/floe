@@ -27,6 +27,7 @@ type AuthRuntime interface {
 
 type ConnectorAuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	ConnectionSnapshot() (any, error)
 }
 
 type session struct {
@@ -261,9 +262,27 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		}
 	}
 	gateway := console.gateway
+	gmail := console.gmail
 	console.mu.Unlock()
 	if !allowed {
 		failure(writer, 401, "unauthorized")
+		return
+	}
+	if request.URL.Path == "/v1/connections" {
+		if request.Method != http.MethodGet {
+			failure(writer, 404, "not_found")
+			return
+		}
+		connections := []any{}
+		if gmail != nil {
+			snapshot, err := gmail.ConnectionSnapshot()
+			if err != nil {
+				failure(writer, 503, "connections_unavailable")
+				return
+			}
+			connections = append(connections, snapshot)
+		}
+		reply(writer, 200, map[string]any{"schema_version": 1, "connections": connections})
 		return
 	}
 	forward := request.Clone(request.Context())

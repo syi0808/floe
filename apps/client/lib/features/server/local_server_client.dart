@@ -271,6 +271,30 @@ class LocalServerClient {
     }
   }
 
+  Future<List<Map<String, dynamic>>> connections(
+    ServerConnection connection,
+  ) async {
+    final response = await request(
+      connection.address,
+      '/v1/connections',
+      token: connection.token,
+    );
+    if (response['schema_version'] != 1 ||
+        response['connections'] is! List ||
+        (response['connections'] as List).length > 64) {
+      throw const ServerConnectionException('invalid_response');
+    }
+    try {
+      return List.unmodifiable(
+        (response['connections'] as List).map(
+          (value) => Map<String, dynamic>.from(value as Map),
+        ),
+      );
+    } on Object {
+      throw const ServerConnectionException('invalid_response');
+    }
+  }
+
   Future<List<InferenceAuditRecord>> privacyActivity(
     ServerConnection connection,
   ) async {

@@ -32,6 +32,12 @@
 - The local server now composes OAuth, sync and index as one Gmail service. It exposes authenticated
   status/manual-sync controls, refreshes every five minutes while connected, persists ready/degraded
   lifecycle evidence and removes indexed metadata after a successful revoke/disconnect.
+- Added a paired-client, read-only `GET /v1/connections` route. It publishes the same common Gmail
+  snapshot without credentials or provider-native identifiers, does not accept browser origins or
+  management authentication and redacts internal snapshot failures.
+- The Flutter client validates a bounded v1 connection envelope and then applies the existing strict
+  common snapshot parser. Data & privacy merges server Gmail and device Calendar status, preserves
+  healthy cards when only one execution location fails and refreshes both sources together.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -48,6 +54,11 @@ go vet ./internal/connectors/gmail
 go test -race ./internal/googleauth ./internal/console
 cd ..
 cargo test -p floe-agent --test connected_context
+cd apps/client
+flutter test test/features/server/local_server_http_test.dart \
+  test/features/server/settings_screen_test.dart \
+  test/features/agent/agent_connections_test.dart
+flutter analyze
 ```
 
 The fixture server verifies exact GET-only paths, Bearer placement, metadata/body separation,
@@ -59,7 +70,8 @@ cover bootstrap catch-up, label changes, deletions, atomic checkpoints and `404`
 
 ## Remaining gate
 
-The authenticated console owns one local Gmail connection and scheduled synchronization, but no
-live mailbox run has been recorded. Its snapshot is not yet transported to the client Connections
-UI, and the Rust Agent runtime does not yet consume its Communication View. S5.5-C1,
-S5.5-C2 and implementation-order items 2–3 remain pending.
+The authenticated console owns one local Gmail connection, scheduled synchronization and shared
+connection-health presentation, but no live mailbox run has been recorded. The paired route carries
+only connection metadata; it intentionally does not expose Communication View items. The Rust Agent
+runtime does not yet consume that View. S5.5-C1, S5.5-C2 and implementation-order items 2–3 remain
+pending.

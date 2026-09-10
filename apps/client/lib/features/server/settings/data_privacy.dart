@@ -26,6 +26,9 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
   bool connectionsRequested = false;
+  bool serverConnectionsRequested = false;
+  List<AgentConnection>? serverConnections;
+  Object? serverConnectionFailure;
 
   AgentController get controller => widget.controller;
 
@@ -47,8 +50,13 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       memoryRequested = false;
       savedMemoryRequested = false;
       connectionsRequested = false;
-      _load();
     }
+    if (oldWidget.serverClient != widget.serverClient) {
+      serverConnectionsRequested = false;
+      serverConnections = null;
+      serverConnectionFailure = null;
+    }
+    _load();
   }
 
   void _controllerChanged() {
@@ -60,7 +68,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         !controller.canManageRegistry &&
             !controller.canReviewMemory &&
             !controller.canReadMemory &&
-            !controller.canReadConnections) {
+            !controller.canReadConnections &&
+            widget.serverClient == null) {
       return;
     }
     loading = true;
@@ -92,7 +101,32 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       connectionsRequested = true;
       await controller.loadConnections();
     }
+    if (!serverConnectionsRequested && widget.serverClient != null) {
+      serverConnectionsRequested = true;
+      try {
+        final connection = await widget.serverClient!.connection();
+        final values = connection == null
+            ? const <Map<String, dynamic>>[]
+            : await widget.serverClient!.connections(connection);
+        serverConnections = List.unmodifiable(
+          values.map(AgentConnection.fromJson),
+        );
+        serverConnectionFailure = null;
+      } on Object catch (error) {
+        serverConnections = const [];
+        serverConnectionFailure = error;
+      }
+      if (mounted) setState(() {});
+    }
     loading = false;
+  }
+
+  Future<void> _refreshConnections() async {
+    connectionsRequested = false;
+    serverConnectionsRequested = false;
+    serverConnectionFailure = null;
+    if (widget.serverClient != null) serverConnections = null;
+    await _load();
   }
 
   @override
@@ -104,64 +138,85 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
-    builder: (context, _) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Data & privacy',
-          style: FloeType.headlineLarge.copyWith(fontSize: 22),
-        ),
-        const SizedBox(height: FloeSpace.sm),
-        Text(
-          'Control what Floe may use and where assisted processing may happen.',
-          style: FloeType.body.copyWith(color: FloePalette.neutral600),
-        ),
-        const SizedBox(height: FloeSpace.lg),
-        FloeSquircle(
-          padding: const EdgeInsets.all(FloeSpace.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (controller.hasConnections)
-                AgentConnectionSettings(controller: controller),
-              if (controller.hasConnections &&
-                  controller.hasCalendarExpertManagement)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
-                  child: Divider(height: 1),
-                ),
-              if (controller.hasCalendarExpertManagement)
-                AgentCalendarSettings(
-                  controller: controller,
-                  sources: widget.calendarSources,
-                  sourceChanges: widget.calendarSourceChanges,
-                ),
-              if (!controller.hasConnections &&
-                  !controller.hasCalendarExpertManagement)
-                const Text('No connected data sources are available yet.'),
-            ],
+    builder: (context, _) {
+      final localConnections = controller.hasConnections
+          ? controller.connections
+          : const <AgentConnection>[];
+      final remoteConnections = widget.serverClient == null
+          ? const <AgentConnection>[]
+          : serverConnections;
+      final connections = [...?localConnections, ...?remoteConnections];
+      final connectionLoading =
+          controller.hasConnections && localConnections == null ||
+          widget.serverClient != null && remoteConnections == null;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Data & privacy',
+            style: FloeType.headlineLarge.copyWith(fontSize: 22),
           ),
-        ),
-        if (controller.hasMemory) ...[
-          const SizedBox(height: FloeSpace.lg),
-          AgentMemorySettingsCard(
-            controller: controller,
-            onManage: widget.onManageMemory,
-          ),
-        ],
-        const SizedBox(height: FloeSpace.lg),
-        _AiProcessing(client: widget.serverClient),
-        if (controller.vaultState != AgentVaultState.ready) ...[
           const SizedBox(height: FloeSpace.sm),
           Text(
-            'Data access will appear when your private data is unlocked.',
-            style: FloeType.body.copyWith(
-              color: FloePalette.neutral600,
-              height: 1.4,
+            'Control what Floe may use and where assisted processing may happen.',
+            style: FloeType.body.copyWith(color: FloePalette.neutral600),
+          ),
+          const SizedBox(height: FloeSpace.lg),
+          FloeSquircle(
+            padding: const EdgeInsets.all(FloeSpace.lg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (controller.hasConnections || widget.serverClient != null)
+                  AgentConnectionSettings(
+                    connections: connections,
+                    loading: connectionLoading,
+                    failed:
+                        controller.connectionFailure != null ||
+                        serverConnectionFailure != null,
+                    onRefresh: _refreshConnections,
+                  ),
+                if ((controller.hasConnections ||
+                        widget.serverClient != null) &&
+                    controller.hasCalendarExpertManagement)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
+                    child: Divider(height: 1),
+                  ),
+                if (controller.hasCalendarExpertManagement)
+                  AgentCalendarSettings(
+                    controller: controller,
+                    sources: widget.calendarSources,
+                    sourceChanges: widget.calendarSourceChanges,
+                  ),
+                if (!controller.hasConnections &&
+                    widget.serverClient == null &&
+                    !controller.hasCalendarExpertManagement)
+                  const Text('No connected data sources are available yet.'),
+              ],
             ),
           ),
+          if (controller.hasMemory) ...[
+            const SizedBox(height: FloeSpace.lg),
+            AgentMemorySettingsCard(
+              controller: controller,
+              onManage: widget.onManageMemory,
+            ),
+          ],
+          const SizedBox(height: FloeSpace.lg),
+          _AiProcessing(client: widget.serverClient),
+          if (controller.vaultState != AgentVaultState.ready) ...[
+            const SizedBox(height: FloeSpace.sm),
+            Text(
+              'Data access will appear when your private data is unlocked.',
+              style: FloeType.body.copyWith(
+                color: FloePalette.neutral600,
+                height: 1.4,
+              ),
+            ),
+          ],
         ],
-      ],
-    ),
+      );
+    },
   );
 }

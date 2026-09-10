@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 shared Gmail connection inspection — 2026-09-10
+
+- Added paired-client `GET /v1/connections` transport for server-owned connector snapshots.
+  Authentication remains separate from management sessions; the route is read-only, rejects
+  browser origins and redacts connector failures.
+- The native client validates the bounded v1 envelope, applies the existing strict common
+  connection parser and merges server Gmail health with device Calendar health in one Connections
+  section. Partial failure leaves healthy sources visible and refreshes both execution locations.
+- Focused Go and Flutter tests plus Flutter analyzer pass. Live Google credentials and
+  Commitments/Communication Expert consumption remain, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 Gmail service lifecycle — 2026-09-10
 
 - Composed Google OAuth, checkpointed sync and the private metadata index into one server-owned

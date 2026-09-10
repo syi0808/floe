@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
@@ -198,6 +201,53 @@ void main() {
     expect(find.text('Needs consent'), findsNothing);
   });
 
+  testWidgets('server Gmail health joins shared Connections settings', (
+    tester,
+  ) async {
+    final store = MemoryServerCredentials();
+    final snapshot = Map<String, dynamic>.from(
+      jsonDecode(
+        File(
+          '../../server/internal/connectors/gmail/testdata/ready_snapshot.json',
+        ).readAsStringSync(),
+      ) as Map,
+    );
+    final client = _SettingsServerClient(
+      store,
+      connectionSnapshots: [snapshot],
+    );
+    await client.save(
+      ServerConnection(
+        address: 'http://127.0.0.1:8431',
+        token: 'a' * 52,
+        clientId: 'paired-client',
+      ),
+    );
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        home: Scaffold(
+          body: SettingsScreen(client: client, agentController: controller),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Gmail'), findsOneWidget);
+    expect(find.text('Ready'), findsOneWidget);
+    expect(find.textContaining('Runs on server'), findsOneWidget);
+    expect(
+      find.textContaining('Actions require separate approval.'),
+      findsOneWidget,
+    );
+  });
+
   for (final width in [390.0, 1200.0]) {
     testWidgets('remote server lives under Settings at $width', (tester) async {
       await tester.binding.setSurfaceSize(Size(width, 900));
@@ -297,7 +347,17 @@ void main() {
 }
 
 final class _SettingsServerClient extends LocalServerClient {
-  _SettingsServerClient(ServerCredentialStore store) : super(store: store);
+  _SettingsServerClient(
+    ServerCredentialStore store, {
+    this.connectionSnapshots = const [],
+  }) : super(store: store);
+
+  final List<Map<String, dynamic>> connectionSnapshots;
+
+  @override
+  Future<List<Map<String, dynamic>>> connections(
+    ServerConnection connection,
+  ) async => connectionSnapshots;
 
   @override
   Future<Map<InferencePurpose, InferencePurposeAvailability>> purposes(

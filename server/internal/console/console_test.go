@@ -22,6 +22,19 @@ type memoryVault struct {
 
 type fakeAuthRuntime struct{ ready bool }
 
+type fakeConnectorRuntime struct {
+	snapshot any
+	err      error
+}
+
+func (*fakeConnectorRuntime) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected"}, nil
+}
+
+func (runtime *fakeConnectorRuntime) ConnectionSnapshot() (any, error) {
+	return runtime.snapshot, runtime.err
+}
+
 type blockingAuthRuntime struct {
 	started chan struct{}
 	release chan struct{}
@@ -244,7 +257,7 @@ func TestGmailOAuthActionsRequireManagementSessionAndConfiguredRuntime(test *tes
 	if response := fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""); response.Code != http.StatusServiceUnavailable {
 		test.Fatalf("unconfigured status: %d %s", response.Code, response.Body.String())
 	}
-	fixture.console.SetGmailAuth(&fakeAuthRuntime{ready: true})
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{})
 	value := fixture.value(fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""))
 	if value["status"] != "connected" {
 		test.Fatalf("status: %#v", value)
@@ -257,6 +270,42 @@ func TestGmailOAuthActionsRequireManagementSessionAndConfiguredRuntime(test *tes
 	fixture.console.ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		test.Fatalf("unauthorized action: %d", response.Code)
+	}
+}
+
+func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	snapshot := map[string]any{
+		"descriptor": map[string]any{"id": "gmail.fixture", "provider": "gmail"},
+		"connection": map[string]any{"state": "ready"},
+		"views":      []any{},
+	}
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{snapshot: snapshot})
+
+	value := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))
+	if value["schema_version"] != float64(1) {
+		test.Fatalf("schema: %#v", value)
+	}
+	connections := value["connections"].([]any)
+	if len(connections) != 1 || connections[0].(map[string]any)["descriptor"].(map[string]any)["provider"] != "gmail" {
+		test.Fatalf("connections: %#v", connections)
+	}
+	if response := fixture.call(http.MethodPost, "/v1/connections", map[string]any{}, token); response.Code != http.StatusNotFound {
+		test.Fatalf("write endpoint accepted: %d", response.Code)
+	}
+	if response := fixture.call(http.MethodGet, "/v1/connections", nil, ""); response.Code != http.StatusUnauthorized {
+		test.Fatalf("unpaired read accepted: %d", response.Code)
+	}
+}
+
+func TestConnectorSnapshotFailureIsRedacted(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("private connector failure")})
+	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private connector failure") {
+		test.Fatalf("unsafe failure: %d %s", response.Code, response.Body.String())
 	}
 }
 

@@ -159,6 +159,10 @@ func (service *Service) Snapshot() (Snapshot, error) {
 	return snapshot, nil
 }
 
+func (service *Service) ConnectionSnapshot() (any, error) {
+	return service.Snapshot()
+}
+
 func failureFor(err error) string {
 	switch {
 	case errors.Is(err, ErrCredentialExpired):

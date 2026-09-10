@@ -1,12 +1,9 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_connection_settings.dart';
 import 'package:floe_client/features/agent/agent_connections.dart';
-import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import '../../support/agent_vault_gateway.dart';
 
 void main() {
   test(
@@ -88,19 +85,21 @@ void main() {
   testWidgets(
     'settings explains degraded source without implying action access',
     (tester) async {
-      final controller = AgentController(
-        gateway: TestVaultGateway(personId: 'person-1'),
-        personId: 'person-1',
-      );
-      addTearDown(controller.dispose);
-      controller.connectionController.connections = [
+      final connections = [
         AgentConnection.fromJson(Map<String, dynamic>.from(_connection)),
       ];
 
       await tester.pumpWidget(
         MaterialApp(
           theme: FloeTheme.light,
-          home: Scaffold(body: AgentConnectionSettings(controller: controller)),
+          home: Scaffold(
+            body: AgentConnectionSettings(
+              connections: connections,
+              loading: false,
+              failed: false,
+              onRefresh: () async {},
+            ),
+          ),
         ),
       );
 
