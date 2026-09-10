@@ -1,7 +1,8 @@
 # S5.5 Work and Life Logistics Foundation
 
 > Date: 2026-09-10  
-> Acceptance status: bounded Views and isolated Expert contracts; live adapters pending
+> Acceptance status: bounded Views, isolated Expert contracts and two read-only adapter foundations;
+> product transport and live evidence pending
 
 ## Delivered boundary
 
@@ -22,6 +23,12 @@
   Only bounded title/body excerpt/status/blocker metadata enters Work Context.
 - The GitHub connector publishes a common server execution descriptor with one Observe capability
   and no Act authority. Static View and snapshot fixtures cross the Go/Rust strict validators.
+- Added a server-native, read-only Home Assistant adapter for an explicit allowlist of at most 16
+  sensor, binary-sensor, climate, light or switch entities. It rejects security-control domains,
+  redirects, non-TLS remote endpoints, endpoint subpaths and duplicate entities. Only friendly name,
+  state and opaque evidence handles enter Life Logistics; native entity IDs and attributes do not.
+- The Home Assistant connector publishes one Observe capability and no Act authority. Static Life
+  Logistics and snapshot fixtures cross the same Go/Rust strict validators.
 
 ## Automated evidence
 
@@ -29,14 +36,17 @@
 cargo test -p floe-agent --test portfolio_context --test portfolio_experts
 go -C server test -race ./internal/connectors/github
 go -C server vet ./internal/connectors/github
+go -C server test -race ./internal/connectors/homeassistant
+go -C server vet ./internal/connectors/homeassistant
 cargo test -p floe-agent --test connected_context
 ```
 
-The focused View/privacy and Expert contract tests pass 4/4.
+The focused View/privacy and Expert contract tests pass, including both cross-language adapter
+fixtures.
 
 ## Remaining gate
 
-GitHub is not yet credential-managed, scheduled or exposed to a product conversation, and no live
-repository evidence was used. No Slack/Teams, file, travel, delivery or Home Assistant adapter
-produces these Views yet. Cross-source scenarios and live evidence remain required. S5.5-C4/C5 and
-S5.5-E7/E8 remain pending.
+GitHub and Home Assistant are not yet credential-managed, scheduled or exposed to a product
+conversation, and no live provider evidence was used. No Slack/Teams, file, travel or delivery
+adapter produces these Views yet. Cross-source scenarios and live evidence remain required.
+S5.5-C4/C5 and S5.5-E7/E8 remain pending.

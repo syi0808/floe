@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "view_id": "life.logistics",
+  "source_handle": "home:5276f9955e12626ab183f67baef3e4705d8454051696eb332ccb40379c6be4a1",
+  "observed_at_unix_ms": 1789012800000,
+  "expires_at_unix_ms": 1789013100000,
+  "coverage_complete": true,
+  "items": [
+    {
+      "evidence_handle": "home:9879177ff2f01a59c057d2b88eb232baf9b58be91f43e2fdef0fd1fec04447f3",
+      "kind": "home_state",
+      "summary": "Front door temperature",
+      "status": "22.5",
+      "needs_attention": false
+    }
+  ]
+}

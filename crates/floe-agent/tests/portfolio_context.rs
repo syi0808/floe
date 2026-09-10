@@ -97,3 +97,14 @@ fn github_work_view_crosses_the_go_rust_contract() {
     assert_eq!(view.items[0].kind, WorkItemKind::Project);
     assert_eq!(view.items[0].title, "Release readiness");
 }
+
+#[test]
+fn home_assistant_logistics_view_crosses_the_go_rust_contract() {
+    let view: LogisticsView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/homeassistant/testdata/logistics_view.json"
+    ))
+    .unwrap();
+    validate_logistics_view(&view, 1_789_012_800_000).unwrap();
+    assert_eq!(view.items[0].kind, LogisticsItemKind::HomeState);
+    assert_eq!(view.items[0].summary, "Front door temperature");
+}

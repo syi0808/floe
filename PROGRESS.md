@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Home Assistant logistics adapter — 2026-09-10
+
+- Added a server-native GET-only Home Assistant adapter for up to 16 explicitly selected benign
+  state entities. It rejects security-control domains, redirects and unsafe endpoints and exports
+  only bounded provider-neutral state summaries with opaque provenance.
+- The connector emits a common server descriptor with one Observe capability and no Act authority.
+  Go adapter tests and Go→Rust Life Logistics/connector conformance fixtures pass.
+- Credential lifecycle, scheduling, client/Agent transport, live Home Assistant evidence and
+  travel/delivery adapters remain, so S5.5-C5/E8 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 bounded GitHub work adapter — 2026-09-10
 
 - Added a server-native GET-only GitHub Issues adapter for one selected repository. Direct TLS
