@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 durable Gmail metadata index — 2026-09-10
+
+- Added a private, connection-scoped Gmail metadata index with atomic full replacement and
+  checkpoint-CAS delta commits. It persists headers, labels, snippets and provenance identifiers,
+  but has no field for message bodies or credentials.
+- Added bounded Communication View projection with hashed message/thread handles, deterministic
+  newest-first paging and five-minute freshness. Public/symlinked storage, corrupt state,
+  cross-connection files, stale checkpoints and oversized indexes fail closed.
+- Race-enabled reopen/update/delete/privacy tests pass. OAuth, sync orchestration, console wiring,
+  live mailbox evidence and Expert consumption remain, so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-gmail-observe-adapter.md).
+
 ### S5.5 Gmail Observe adapter foundation — 2026-09-10
 
 - Added a server-native Gmail REST adapter for bounded search, metadata, separately authorized

@@ -17,6 +17,11 @@
   `mail.communication` and ephemeral `mail.body` Views. It grants no draft/send/archive authority.
 - Connection snapshots contain lifecycle, scope and typed failure metadata only. Source handles
   hash account/resource identifiers instead of projecting provider-native identifiers.
+- Added a private durable metadata index scoped by a hashed connection filename. Full replacement
+  and checkpoint-CAS deltas are atomic; stale checkpoints cannot overwrite newer state.
+- The index stores headers, labels and snippets but has no body field. It projects a bounded,
+  paginated Communication View with hashed message/thread evidence handles and five-minute expiry.
+  Public directories/files, symlinks, corrupt state and cross-connection state fail closed.
 
 The request shapes follow Google's current
 [messages.list](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list),
@@ -37,11 +42,12 @@ cargo test -p floe-agent --test connected_context
 The fixture server verifies exact GET-only paths, Bearer placement, metadata/body separation,
 body authority checks, pagination, history additions/deletions, typed HTTP failures, endpoint
 allowlisting and descriptor redaction. A shared JSON fixture also crosses the Go/Rust boundary and
-passes the Rust connector conformance validator.
+passes the Rust connector conformance validator. Index tests cover reopen, stale checkpoint
+rejection, update/delete merge, paging, hashed provenance and private-file enforcement.
 
 ## Remaining gate
 
-The adapter is not registered in the local console, has no Google OAuth flow or durable index and
-has not run against a real mailbox. The Rust Agent runtime does not yet consume its Communication
-View, and full-sync recovery after an expired history checkpoint is not implemented. S5.5-C1,
+The adapter is not registered in the local console, has no Google OAuth flow or sync worker and has
+not run against a real mailbox. The Rust Agent runtime does not yet consume its Communication View,
+and full-sync recovery after an expired history checkpoint is not implemented. S5.5-C1,
 S5.5-C2 and implementation-order items 2–3 remain pending.
