@@ -1,24 +1,15 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
-import 'dart:isolate';
-
-import 'package:ffi/ffi.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/day_models.dart';
 import '../domain/calendar_action.dart';
-import '../infrastructure/floe_native_bindings.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
 import 'calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/agent_vault_gateway.dart';
+import '../../../infrastructure/native/native_transport.dart';
 
-const _protocolVersion = 1;
 const localPersonId = '00000000-0000-4000-8000-000000000001';
 
 final class FfiDayGatewayException implements Exception {
@@ -39,25 +30,16 @@ final class FfiDayGateway
         CalendarDirectActionGateway,
         AgentFixtureStreamingGateway {
   FfiDayGateway._(
-    this._isolate,
-    this._commands,
+    this._transport,
     this._clock,
     this._calendarAdapter,
     this.serverClient,
-  ) {
-    _finalizer.attach(this, _commands, detach: this);
-  }
-
-  static final Finalizer<SendPort> _finalizer = Finalizer(
-    (commands) => commands.send(const {'operation': 'close'}),
   );
 
-  final Isolate _isolate;
-  final SendPort _commands;
+  final NativeTransport _transport;
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
   final LocalServerClient serverClient;
-  bool _closed = false;
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
     resolveRemoteRoute: _remoteRoute,
@@ -96,14 +78,14 @@ final class FfiDayGateway
   }
 
   static Future<FfiDayGateway> openDefault() async {
-    final supportDirectory = await getApplicationSupportDirectory();
-    final databaseDirectory = Directory(
-      '${supportDirectory.path}/people/$localPersonId',
+    final transport = await _openTransport(
+      NativeTransport.openDefault(personId: localPersonId),
     );
-    await databaseDirectory.create(recursive: true);
-    return open(
-      libraryPath: resolveLibraryPath(),
-      databasePath: '${databaseDirectory.path}/floe.db',
+    return FfiDayGateway._(
+      transport,
+      DateTime.now,
+      const EventKitCalendarAdapter(),
+      LocalServerClient.shared,
     );
   }
 
@@ -114,35 +96,30 @@ final class FfiDayGateway
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
     LocalServerClient? serverClient,
   }) async {
-    final ready = ReceivePort();
-    final isolate = await Isolate.spawn(_ffiWorkerMain, {
-      'ready': ready.sendPort,
-      'library_path': libraryPath,
-      'database_path': databasePath,
-    });
-    final result = _asMap(await ready.first);
-    ready.close();
-    if (result['status'] != 'ok') {
-      isolate.kill(priority: Isolate.immediate);
-      throw _exceptionFromEnvelope(_asMap(result['error']));
-    }
+    final transport = await _openTransport(
+      NativeTransport.open(
+        libraryPath: libraryPath,
+        databasePath: databasePath,
+      ),
+    );
     return FfiDayGateway._(
-      isolate,
-      result['commands']! as SendPort,
+      transport,
       clock ?? DateTime.now,
       calendarAdapter,
       serverClient ?? LocalServerClient.shared,
     );
   }
 
-  static String resolveLibraryPath() {
-    final override = Platform.environment['FLOE_CORE_LIBRARY_PATH'];
-    if (override != null && override.isNotEmpty) return override;
-    if (!Platform.isMacOS) {
-      throw UnsupportedError('FfiDayGateway currently supports macOS only.');
+  static String resolveLibraryPath() => NativeTransport.resolveLibraryPath();
+
+  static Future<NativeTransport> _openTransport(
+    Future<NativeTransport> pending,
+  ) async {
+    try {
+      return await pending;
+    } on NativeTransportException catch (error) {
+      throw FfiDayGatewayException(error.code, error.message);
     }
-    final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
   }
 
   @override
@@ -290,7 +267,7 @@ final class FfiDayGateway
     Map<String, dynamic> operation,
   ) async {
     final data = await _request('calendar_actions', {
-      'schema_version': _protocolVersion,
+      'schema_version': nativeProtocolVersion,
       'person_id': personId,
       'operation': operation,
     });
@@ -302,7 +279,7 @@ final class FfiDayGateway
   @override
   Future<bool> calendarWritesEnabled(String personId) async {
     final data = await _request('calendar_actions', {
-      'schema_version': _protocolVersion,
+      'schema_version': nativeProtocolVersion,
       'person_id': personId,
       'operation': {'kind': 'capabilities'},
     });
@@ -312,7 +289,7 @@ final class FfiDayGateway
   @override
   Future<ActionAuthority> loadActionAuthority(String personId) async {
     final data = await _request('calendar_actions', {
-      'schema_version': _protocolVersion,
+      'schema_version': nativeProtocolVersion,
       'person_id': personId,
       'operation': {'kind': 'get_authority'},
     });
@@ -325,7 +302,7 @@ final class FfiDayGateway
     ActionAuthorityMode mode,
   ) async {
     final data = await _request('calendar_actions', {
-      'schema_version': _protocolVersion,
+      'schema_version': nativeProtocolVersion,
       'person_id': personId,
       'operation': {'kind': 'set_authority', 'calendar_create': mode.name},
     });
@@ -421,16 +398,7 @@ final class FfiDayGateway
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
-  Future<void> close() async {
-    if (_closed) return;
-    _closed = true;
-    _finalizer.detach(this);
-    final reply = ReceivePort();
-    _commands.send({'operation': 'close', 'reply': reply.sendPort});
-    await reply.first;
-    reply.close();
-    _isolate.kill(priority: Isolate.immediate);
-  }
+  Future<void> close() => _transport.close();
 
   @override
   Future<List<CalendarChoice>> calendars() => _calendarAdapter.calendars();
@@ -582,26 +550,15 @@ final class FfiDayGateway
     String operation,
     Map<String, dynamic> request,
   ) async {
-    if (_closed) throw StateError('FfiDayGateway is already closed.');
-    final reply = ReceivePort();
-    _commands.send({
-      'operation': operation,
-      'request': jsonEncode(request),
-      'reply': reply.sendPort,
-    });
-    final result = _asMap(await reply.first);
-    reply.close();
-    if (result['status'] != 'ok') {
-      throw FfiDayGatewayException(
-        'ffi',
-        result['message']?.toString() ?? 'The Rust core request failed.',
-      );
+    try {
+      return await _transport.request(operation, request);
+    } on NativeTransportException catch (error) {
+      throw FfiDayGatewayException(error.code, error.message);
     }
-    return _unwrapEnvelope(result['response']! as String);
   }
 
   Map<String, dynamic> _loadRequest(DayQuery query) => {
-    'schema_version': _protocolVersion,
+    'schema_version': nativeProtocolVersion,
     'person_id': query.personId,
     'day': _day(query),
   };
@@ -610,7 +567,7 @@ final class FfiDayGateway
     DayQuery query,
     Map<String, dynamic> command,
   ) => {
-    'schema_version': _protocolVersion,
+    'schema_version': nativeProtocolVersion,
     'person_id': query.personId,
     'day': _day(query),
     'command': command,
@@ -655,31 +612,6 @@ Map<String, dynamic> _classification(ClassificationDraft value) =>
       NoteDraft(:final content) => {'kind': 'note', 'content': content},
     };
 
-Map<String, dynamic> _unwrapEnvelope(String source) {
-  final envelope = _asMap(jsonDecode(source));
-  if (envelope['schema_version'] != _protocolVersion) {
-    throw const FfiDayGatewayException(
-      'unsupported_version',
-      'Unsupported Rust protocol version.',
-    );
-  }
-  if (envelope['status'] == 'error') {
-    throw _exceptionFromEnvelope(envelope);
-  }
-  if (envelope['status'] != 'ok') {
-    throw const FormatException('Unknown Rust response status.');
-  }
-  return _asMap(envelope['data']);
-}
-
-FfiDayGatewayException _exceptionFromEnvelope(Map<String, dynamic> envelope) {
-  final error = envelope['error'] is Map ? _asMap(envelope['error']) : envelope;
-  return FfiDayGatewayException(
-    error['code']?.toString() ?? 'internal',
-    error['message']?.toString() ?? 'Could not open Rust core.',
-  );
-}
-
 CaptureReceipt _decodeCapture(Map<String, dynamic> json) => CaptureReceipt(
   id: json['id']! as String,
   originalInput: json['original_input']! as String,
@@ -688,7 +620,7 @@ CaptureReceipt _decodeCapture(Map<String, dynamic> json) => CaptureReceipt(
 );
 
 DaySnapshot _decodeSnapshot(Map<String, dynamic> json) {
-  if (json['schema_version'] != _protocolVersion) {
+  if (json['schema_version'] != nativeProtocolVersion) {
     throw const FfiDayGatewayException(
       'unsupported_version',
       'Unsupported DaySnapshot version.',
@@ -825,76 +757,4 @@ String _timezone(Duration offset) {
   final hours = (minutes ~/ 60).toString().padLeft(2, '0');
   final remainder = (minutes % 60).toString().padLeft(2, '0');
   return 'UTC$sign$hours:$remainder';
-}
-
-Future<void> _ffiWorkerMain(Map<String, Object?> configuration) async {
-  final ready = configuration['ready']! as SendPort;
-  FloeNativeBindings? bindings;
-  Pointer<Void> handle = nullptr;
-  try {
-    bindings = FloeNativeBindings(configuration['library_path']! as String);
-    if (bindings.protocolVersion() != _protocolVersion) {
-      throw StateError('Rust protocol version does not match Flutter.');
-    }
-    final path = (configuration['database_path']! as String).toNativeUtf8();
-    final error = calloc<Pointer<Utf8>>();
-    try {
-      handle = bindings.open(path, error);
-      if (handle == nullptr) {
-        final pointer = error.value;
-        final source = pointer == nullptr ? null : pointer.toDartString();
-        if (pointer != nullptr) bindings.freeString(pointer);
-        throw source == null
-            ? StateError('Could not open Rust core.')
-            : _exceptionFromEnvelope(_asMap(jsonDecode(source)));
-      }
-    } finally {
-      calloc.free(error);
-      calloc.free(path);
-    }
-  } on Object catch (error) {
-    ready.send({
-      'status': 'error',
-      'error': {'code': 'ffi_open', 'message': error.toString()},
-    });
-    return;
-  }
-
-  final commands = ReceivePort();
-  ready.send({'status': 'ok', 'commands': commands.sendPort});
-  await for (final raw in commands) {
-    final message = _asMap(raw);
-    final operation = message['operation'];
-    if (operation == 'close') {
-      bindings.freeCore(handle);
-      (message['reply'] as SendPort?)?.send(true);
-      commands.close();
-      return;
-    }
-    final reply = message['reply']! as SendPort;
-    try {
-      final input = (message['request']! as String).toNativeUtf8();
-      Pointer<Utf8> output = nullptr;
-      try {
-        output = switch (operation) {
-          'load_day' => bindings.loadDay(handle, input),
-          'execute' => bindings.execute(handle, input),
-          'calendar_actions' => bindings.calendarActions(handle, input),
-          'agent_fixture' => bindings.agentFixture(handle, input),
-          'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
-          'agent_vault' => bindings.agentVault(handle, input),
-          _ => throw StateError('Unknown core operation: $operation'),
-        };
-        if (output == nullptr) {
-          throw StateError('Rust core returned an empty response.');
-        }
-        reply.send({'status': 'ok', 'response': output.toDartString()});
-      } finally {
-        if (output != nullptr) bindings.freeString(output);
-        calloc.free(input);
-      }
-    } on Object catch (error) {
-      reply.send({'status': 'error', 'message': error.toString()});
-    }
-  }
 }
