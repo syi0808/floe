@@ -29,6 +29,7 @@ type diskState struct {
 type connectorConfigState struct {
 	GitHub        *githubConnectorConfig        `json:"github,omitempty"`
 	Slack         *slackConnectorConfig         `json:"slack,omitempty"`
+	GoogleDrive   *googleDriveConnectorConfig   `json:"google_drive,omitempty"`
 	HomeAssistant *homeAssistantConnectorConfig `json:"home_assistant,omitempty"`
 }
 
@@ -40,6 +41,10 @@ type githubConnectorConfig struct {
 type slackConnectorConfig struct {
 	Channel string `json:"channel"`
 	Thread  string `json:"thread,omitempty"`
+}
+
+type googleDriveConnectorConfig struct {
+	FolderID string `json:"folder_id"`
 }
 
 type homeAssistantConnectorConfig struct {
@@ -154,6 +159,10 @@ func cloneState(state diskState) diskState {
 	if state.Connectors.Slack != nil {
 		configured := *state.Connectors.Slack
 		copy.Connectors.Slack = &configured
+	}
+	if state.Connectors.GoogleDrive != nil {
+		configured := *state.Connectors.GoogleDrive
+		copy.Connectors.GoogleDrive = &configured
 	}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value

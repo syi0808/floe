@@ -25,6 +25,13 @@ type memoryVault struct {
 
 type fakeAuthRuntime struct{ ready bool }
 
+type fakeDriveAuth struct{ token string }
+
+func (runtime *fakeDriveAuth) Token(context.Context) (string, error) { return runtime.token, nil }
+func (*fakeDriveAuth) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/drive.readonly"}, nil
+}
+
 type fakeConnectorRuntime struct {
 	snapshot any
 	view     any
@@ -496,6 +503,29 @@ func TestSlackConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
 	}, "")
 	if response.Code != http.StatusBadRequest || fixture.vault.values[slackTokenKey] != "private-slack-token" {
 		test.Fatal("invalid Slack scope changed credential")
+	}
+}
+
+func TestGoogleDriveSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
+	fixture := setup(test)
+	input := map[string]any{"enabled": true, "folder_id": "folder12345"}
+	if response := fixture.call(http.MethodPost, "/manage/api/connector/google-drive", input, ""); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("missing Drive auth accepted: %d", response.Code)
+	}
+	if err := fixture.console.SetDriveAuth(&fakeDriveAuth{token: "private-drive-token"}); err != nil {
+		test.Fatal(err)
+	}
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/google-drive", input, ""))
+	if len(fixture.console.work) != 1 || fixture.console.state.Connectors.GoogleDrive.FolderID != "folder12345" {
+		test.Fatal("Drive selection was not installed")
+	}
+	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
+	if strings.Contains(string(state), "private-drive-token") {
+		test.Fatal("Drive credential entered server state")
+	}
+	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/drive/status", map[string]any{}, ""))
+	if status["scope"] != "https://www.googleapis.com/auth/drive.readonly" {
+		test.Fatalf("status: %#v", status)
 	}
 }
 

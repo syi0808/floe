@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	githubconnector "floe/server/internal/connectors/github"
+	driveconnector "floe/server/internal/connectors/googledrive"
 	homeconnector "floe/server/internal/connectors/homeassistant"
 	slackconnector "floe/server/internal/connectors/slack"
 )
@@ -50,6 +51,17 @@ func (console *Console) rebuildConnectorRuntimes() error {
 			return err
 		}
 		service, err := slackconnector.NewService(client, configured.Channel, configured.Thread)
+		if err != nil {
+			return err
+		}
+		console.work = append(console.work, service)
+	}
+	if configured := console.state.Connectors.GoogleDrive; configured != nil && console.driveAuth != nil {
+		client, err := driveconnector.New(console.driveAuth)
+		if err != nil {
+			return err
+		}
+		service, err := driveconnector.NewService(client, configured.FolderID)
 		if err != nil {
 			return err
 		}
@@ -161,6 +173,46 @@ func (console *Console) updateSlackConnector(writer http.ResponseWriter, request
 	}
 	next.Connectors.Slack = &slackConnectorConfig{Channel: input.Channel, Thread: input.Thread}
 	console.saveConnectorState(writer, next, slackTokenKey, input.Token)
+}
+
+func (console *Console) updateGoogleDriveConnector(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Enabled  bool   `json:"enabled"`
+		FolderID string `json:"folder_id"`
+	}
+	if !decode(writer, request, &input) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if !input.Enabled {
+		next.Connectors.GoogleDrive = nil
+	} else {
+		if console.driveAuth == nil {
+			failure(writer, 503, "drive_unavailable")
+			return
+		}
+		client, err := driveconnector.New(console.driveAuth)
+		if err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		if _, err := driveconnector.NewService(client, input.FolderID); err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		next.Connectors.GoogleDrive = &googleDriveConnectorConfig{FolderID: input.FolderID}
+	}
+	if console.save(next) != nil {
+		failure(writer, 500, "save_failed")
+		return
+	}
+	console.state = next
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		failure(writer, 500, "invalid_connector_configuration")
+		return
+	}
+	reply(writer, 200, map[string]bool{"ok": true})
 }
 
 func invalidConnectorToken(token string) bool {

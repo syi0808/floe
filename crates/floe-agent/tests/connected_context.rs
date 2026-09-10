@@ -230,3 +230,15 @@ fn go_slack_descriptor_conforms_to_the_shared_rust_contract() {
     assert_eq!(snapshot.descriptor.provider, "slack");
     assert_eq!(snapshot.views[0].view_id, "work.context");
 }
+
+#[test]
+fn go_google_drive_descriptor_conforms_to_the_shared_rust_contract() {
+    let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../server/internal/connectors/googledrive/testdata/ready_snapshot.json"
+    )))
+    .unwrap();
+    assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
+    assert_eq!(snapshot.descriptor.provider, "google_drive");
+    assert_eq!(snapshot.views[0].view_id, "work.context");
+}

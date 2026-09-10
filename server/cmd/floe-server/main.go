@@ -45,11 +45,17 @@ func main() {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
 		}
 		if clientID := os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_ID"); clientID != "" {
-			gmailAuth, authError := googleauth.New(vault, googleauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")})
+			googleConfig := googleauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
+			gmailAuth, authError := googleauth.New(vault, googleConfig)
 			if authError != nil {
 				log.Fatal("Cannot configure Google OAuth")
 			}
 			defer gmailAuth.Close()
+			driveAuth, driveAuthError := googleauth.NewDrive(vault, googleConfig)
+			if driveAuthError != nil || management.SetDriveAuth(driveAuth) != nil {
+				log.Fatal("Cannot configure Google Drive OAuth")
+			}
+			defer driveAuth.Close()
 			query := os.Getenv("FLOE_GMAIL_QUERY")
 			if query == "" {
 				query = "newer_than:30d -in:spam -in:trash"

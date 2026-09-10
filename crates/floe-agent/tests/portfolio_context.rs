@@ -119,3 +119,14 @@ fn slack_work_view_crosses_the_go_rust_contract() {
     assert_eq!(view.items[0].kind, WorkItemKind::Communication);
     assert_eq!(view.items[0].title, "Release review");
 }
+
+#[test]
+fn google_drive_work_view_crosses_the_go_rust_contract() {
+    let view: WorkContextView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/googledrive/testdata/work_context.json"
+    ))
+    .unwrap();
+    validate_work_context_view(&view, 1_789_128_000_000).unwrap();
+    assert_eq!(view.items[0].kind, WorkItemKind::SelectedFile);
+    assert_eq!(view.items[0].title, "Launch notes");
+}

@@ -42,6 +42,11 @@ type LogisticsRuntime interface {
 	ReadLogisticsView(context.Context) (any, error)
 }
 
+type DriveAuthRuntime interface {
+	Action(context.Context, string) (any, error)
+	Token(context.Context) (string, error)
+}
+
 type session struct {
 	csrf    string
 	expires time.Time
@@ -62,6 +67,7 @@ type Console struct {
 	gmail                                        ConnectorAuthRuntime
 	work                                         []WorkContextRuntime
 	logistics                                    LogisticsRuntime
+	driveAuth                                    DriveAuthRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
 	unavailable                                  map[string]bool
@@ -87,6 +93,13 @@ func (console *Console) SetLogistics(runtime LogisticsRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	console.logistics = runtime
+}
+
+func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.driveAuth = runtime
+	return console.rebuildConnectorRuntimes()
 }
 
 func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
@@ -512,6 +525,24 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		reply(writer, 200, value)
 		return
 	}
+	if strings.HasPrefix(request.URL.Path, "/manage/api/drive/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.driveAuth
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "drive_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/drive/"))
+		if err != nil {
+			failure(writer, 502, "drive_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if request.URL.Path == "/manage/api/test" && request.Method == "POST" {
 		console.testTarget(writer, request)
 		return
@@ -548,6 +579,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.mu.Lock()
 		defer console.mu.Unlock()
 		console.updateSlackConnector(writer, request)
+		return
+	}
+	if request.URL.Path == "/manage/api/connector/google-drive" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateGoogleDriveConnector(writer, request)
 		return
 	}
 	console.mu.Lock()
@@ -662,6 +699,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 	connectors := map[string]any{
 		"github":         map[string]any{"configured": state.Connectors.GitHub != nil},
 		"slack":          map[string]any{"configured": state.Connectors.Slack != nil},
+		"google_drive":   map[string]any{"configured": state.Connectors.GoogleDrive != nil},
 		"home_assistant": map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
 	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})

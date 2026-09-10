@@ -1,0 +1,13 @@
+{
+  "descriptor": {
+    "schema_version": 1,
+    "id": "google_drive.files",
+    "version": "1.0.0",
+    "provider": "google_drive",
+    "execution": {"kind":"server"},
+    "capabilities": [{"schema_version":1,"id":"work.files.read","version":"1.0.0","authority":"observe","required_scopes":["https://www.googleapis.com/auth/drive.readonly"],"output_view_id":"work.context"}],
+    "views": [{"schema_version":1,"id":"work.context","version":"1.0.0","data_class":"personal","retention":"ephemeral","freshness_ttl_ms":300000,"max_items":8,"max_bytes":65536,"provenance_required":true}]
+  },
+  "connection": {"schema_version":1,"connector_id":"google_drive.files","state":"ready","granted_scopes":["https://www.googleapis.com/auth/drive.readonly"],"observed_at_unix_ms":1789128000000,"last_success_at_unix_ms":1789128000000},
+  "views": [{"schema_version":1,"view_id":"work.context","source_handle":"drive:bbd99195d687fe3e9d0912fd19ca6904f9c22949a70199e94228138ad530bc64","observed_at_unix_ms":1789128000000,"expires_at_unix_ms":1789128300000,"item_count":1,"byte_count":700,"provenance_count":1}]
+}

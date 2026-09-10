@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Google Drive file adapter — 2026-09-11
+
+- Added an ephemeral Google Drive adapter for one selected folder. It lists at most eight recent
+  entries, reads only supported text/Google Document content, and projects at most 2 KiB per file
+  without provider IDs, URLs, MIME details or binary content.
+- Added an isolated PKCE Drive OAuth credential with the exact read-only scope, separate from Gmail,
+  plus dashboard login/folder configuration and Go→Rust conformance fixtures. Drive, Slack and
+  GitHub now merge behind the same Work Context route.
+- Focused Go race tests/vet and Rust contract tests pass. Valid-host live evidence is still required,
+  so S5.5-C4/E7 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 bounded Slack work communication adapter — 2026-09-11
 
 - Added a server-native GET-only Slack adapter for one selected channel or thread. Bounded message

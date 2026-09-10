@@ -6,6 +6,7 @@ let unlocked = false;
 let polling = false;
 let codexPending = false;
 let gmailPending = false;
+let drivePending = false;
 let editing = false;
 let state = {providers: {}, connectors: {}, clients: []};
 let selectedProvider = 'openai_compatible';
@@ -25,9 +26,10 @@ async function api(path, body) {
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false; gmailPending = false;
+  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
   element('gmail-link').removeAttribute('href'); element('gmail-link').hidden = true;
+  element('drive-link').removeAttribute('href'); element('drive-link').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
 }
 async function action(button, operation) {
@@ -84,6 +86,7 @@ async function refresh() {
   renderProvider();
   element('github-state').textContent = state.connectors?.github?.configured ? 'Configured · selected repository read only' : 'Not configured';
   element('slack-state').textContent = state.connectors?.slack?.configured ? 'Configured · selected conversation read only' : 'Not configured';
+  element('drive-state').textContent = state.connectors?.google_drive?.configured ? 'Configured · selected folder ephemeral read' : 'Not configured';
   element('home-state').textContent = state.connectors?.home_assistant?.configured ? 'Configured · selected state entities read only' : 'Not configured';
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
@@ -155,7 +158,7 @@ async function gmail(operation) {
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
 element('gmail-sync').onclick = () => action(element('gmail-sync'), async () => { await gmail('sync'); await gmail('status'); });
-for (const form of [element('github-form'), element('slack-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
+for (const form of [element('github-form'), element('slack-form'), element('drive-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
 element('github-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
     const form = event.target;
@@ -178,6 +181,13 @@ element('slack-form').addEventListener('submit', (event) => {
     form.elements.token.value = ''; editing = false; await refresh(); notice('Slack source configuration saved.');
   });
 });
+element('drive-form').addEventListener('submit', (event) => {
+  event.preventDefault(); action(event.submitter, async () => {
+    const form = event.target;
+    await api('connector/google-drive', {enabled: true, folder_id: form.elements.folder_id.value.trim()});
+    editing = false; await refresh(); notice('Google Drive folder selection saved.');
+  });
+});
 element('github-disconnect').onclick = () => action(element('github-disconnect'), async () => {
   if (!confirm('Disconnect GitHub and delete its stored token?')) return;
   await api('connector/github', {enabled: false, owner: '', repository: '', token: ''}); editing = false; await refresh(); notice('GitHub source disconnected.');
@@ -190,10 +200,21 @@ element('slack-disconnect').onclick = () => action(element('slack-disconnect'), 
   if (!confirm('Disconnect Slack and delete its stored token?')) return;
   await api('connector/slack', {enabled: false, channel: '', thread: '', token: ''}); editing = false; await refresh(); notice('Slack source disconnected.');
 });
+element('drive-disconnect').onclick = () => action(element('drive-disconnect'), async () => {
+  if (!confirm('Remove the selected Drive folder from Floe?')) return;
+  await api('connector/google-drive', {enabled: false, folder_id: ''}); editing = false; await refresh(); notice('Google Drive folder removed.');
+});
+async function drive(operation) {
+  const value = await api(`drive/${operation}`, {}); drivePending = value.status === 'pending';
+  element('drive-auth-state').textContent = `Authentication: ${value.status} · Scope: Drive read-only`;
+  const link = element('drive-link'); link.hidden = !value.auth_url;
+  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
+}
+for (const operation of ['login', 'status', 'cancel', 'logout']) element(`drive-${operation}`).onclick = () => action(element(`drive-${operation}`), () => drive(operation));
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
-  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); }
+  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); }
   catch (error) { notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);

@@ -50,6 +50,13 @@
 - Slack configuration and tokens use the same private console/Keychain lifecycle. GitHub and Slack
   Work Context Views merge behind one provider-neutral Agent route with deterministic aggregate
   handles, duplicate rejection and partial-provider tolerance.
+- Added a Google Drive adapter for one explicitly selected folder. Each foreground read lists at
+  most eight recent entries and reads only supported text or Google Document content, capped at
+  16 KiB fetched and 2 KiB projected per file. Binary/unsupported types, file/folder IDs, MIME
+  details and provider URLs stay outside Work Context; content remains ephemeral.
+- Drive uses a separate PKCE OAuth credential and exact Drive read-only scope, isolated from the
+  Gmail OAuth bundle. The dashboard manages browser login and folder selection independently, and
+  Drive joins the same multi-provider Work Context route and typed failure lifecycle.
 
 ## Automated evidence
 
@@ -63,6 +70,8 @@ go -C server test -race ./internal/console
 go -C server vet ./internal/console
 go -C server test -race ./internal/connectors/slack
 go -C server vet ./internal/connectors/slack
+go -C server test -race ./internal/connectors/googledrive ./internal/googleauth
+go -C server vet ./internal/connectors/googledrive ./internal/googleauth
 cargo test -p floe-agent --test connected_context
 cargo test -p floe-ffi
 cargo test --workspace
@@ -76,5 +85,5 @@ delegations fetch fresh Views and return source-linked typed A2A artifacts.
 ## Remaining gate
 
 No live provider evidence was used. The Agent path is stateless rather than a durable registry
-assignment. No Teams, file, travel or delivery adapter produces these Views yet. Cross-source
-scenarios and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+assignment. No Teams, travel or delivery adapter produces these Views yet. Cross-source scenarios
+and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.

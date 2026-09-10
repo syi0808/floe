@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "view_id": "work.context",
+  "source_handle": "drive:bbd99195d687fe3e9d0912fd19ca6904f9c22949a70199e94228138ad530bc64",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "scope_handle": "folder:8c2e43f13574416403db4a242b23731f48a0100456895459a07bb781c85da245",
+  "items": [{
+    "evidence_handle": "drive:235144d80ea298bd3edc81f13ed34314d809d76b2d4fe44147d30e4b4fd47298",
+    "kind": "selected_file",
+    "title": "Launch notes",
+    "excerpt": "Release readiness\nAttach validation evidence.",
+    "status": "selected_file",
+    "observed_at_unix_ms": 1789127940000
+  }]
+}
