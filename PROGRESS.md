@@ -14,7 +14,7 @@
   inventory.
 - Added paired HTTP-to-Expert integration evidence for both Work Context and Life Logistics,
   including strict View parsing and evidence-linked typed A2A artifacts.
-- Full Go race tests/vet and dashboard JavaScript syntax validation pass. Live provider evidence,
+- Full Go race tests/vet, Rust workspace tests and dashboard JavaScript syntax validation pass. Live provider evidence,
   work communication/file adapters and travel/delivery coverage remain, so S5.5-C4/C5/E7/E8 and
   the slice stay **0/14**. [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
 

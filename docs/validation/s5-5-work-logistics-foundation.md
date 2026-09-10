@@ -56,6 +56,7 @@ go -C server test -race ./internal/console
 go -C server vet ./internal/console
 cargo test -p floe-agent --test connected_context
 cargo test -p floe-ffi
+cargo test --workspace
 node --check server/internal/console/web/app.js
 ```
 
