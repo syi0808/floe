@@ -4,6 +4,16 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Microsoft Mail OAuth and product route — 2026-09-11
+
+- Added a dedicated Microsoft PKCE OAuth runtime with exact `Mail.Read` and `offline_access`
+  consent, Keychain credential isolation, refresh rotation, client-ID binding and local disconnect.
+- Wired the Microsoft adapter into startup, connection inventory, dashboard lifecycle and the paired
+  Communication View route. Gmail remains first priority and Microsoft is the deterministic fallback.
+- Focused Go race tests/vet and dashboard JavaScript validation pass. Live Microsoft evidence and
+  Calendar/Android/Health Connect parity remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-provider-parity-foundation.md).
+
 ### S5.5 bounded Microsoft Mail adapter foundation — 2026-09-11
 
 - Added a Microsoft Graph Mail adapter that reads only bounded inbox metadata through `Mail.Read`.

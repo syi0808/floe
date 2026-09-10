@@ -1,8 +1,7 @@
 # S5.5 Provider Parity Foundation
 
 > Date: 2026-09-11
-> Acceptance status: Microsoft Mail adapter contract; production OAuth/routing and provider breadth
-> pending
+> Acceptance status: Microsoft Mail production path; live evidence and provider breadth pending
 
 ## Delivered boundary
 
@@ -22,18 +21,31 @@
   expiry.
 - Static Microsoft Mail View and snapshot fixtures pass both the Go adapter tests and shared Rust
   Communication View/connected-context validators.
+- Added a dedicated Microsoft OAuth 2.0 authorization-code runtime using a random loopback callback,
+  PKCE S256, five-minute state and the exact `Mail.Read` plus `offline_access` request. Access and
+  refresh tokens share one Microsoft-only Keychain credential bound to the configured client ID;
+  refresh rotation retains required scope and rejected refresh clears the unusable credential.
+- Startup installs the OAuth-backed Microsoft Mail service when its client ID is configured. The
+  management dashboard exposes login, status, cancellation and local disconnect without returning
+  credentials. Because Microsoft has no token-revocation endpoint in this flow, the dashboard
+  states that remote consent must be revoked from the Microsoft account.
+- Microsoft snapshots join the paired connection inventory. The paired Communication View route
+  prefers Gmail deterministically and falls back to Microsoft only when Gmail is absent or fails,
+  keeping provider selection outside model prompts and avoiding unnecessary mailbox fan-out.
 
 ## Automated evidence
 
 ```sh
 go -C server test -race ./internal/connectors/microsoftmail
 go -C server vet ./internal/connectors/microsoftmail
+go -C server test -race ./internal/microsoftauth ./internal/console ./cmd/floe-server
+go -C server vet ./internal/microsoftauth ./internal/console ./cmd/floe-server
 cargo test -p floe-agent --test communication_context --test connected_context
+node --check server/internal/console/web/app.js
 ```
 
 ## Remaining gate
 
-This is an adapter and conformance foundation, not a configured production connection. Microsoft
-PKCE OAuth, startup/console lifecycle, provider-neutral product routing and live Microsoft Graph
-evidence remain required. Google Calendar, Microsoft Calendar, Android Calendar/Contacts and Health
-Connect adapters are also absent. S5.5-C3 remains pending and the slice stays **0/14**.
+No live Microsoft Graph evidence was used. Google Calendar, Microsoft Calendar, Android
+Calendar/Contacts and Health Connect adapters are also absent, and the provider-neutral route table
+still needs the complete parity cohort. S5.5-C3 remains pending and the slice stays **0/14**.

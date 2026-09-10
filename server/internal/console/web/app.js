@@ -7,6 +7,7 @@ let polling = false;
 let codexPending = false;
 let gmailPending = false;
 let drivePending = false;
+let microsoftMailPending = false;
 let editing = false;
 let state = {providers: {}, connectors: {}, clients: []};
 let selectedProvider = 'openai_compatible';
@@ -26,10 +27,11 @@ async function api(path, body) {
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false;
+  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false; microsoftMailPending = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
   element('gmail-link').removeAttribute('href'); element('gmail-link').hidden = true;
   element('drive-link').removeAttribute('href'); element('drive-link').hidden = true;
+  element('microsoft-mail-link').removeAttribute('href'); element('microsoft-mail-link').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
 }
 async function action(button, operation) {
@@ -158,6 +160,13 @@ async function gmail(operation) {
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
 element('gmail-sync').onclick = () => action(element('gmail-sync'), async () => { await gmail('sync'); await gmail('status'); });
+async function microsoftMail(operation) {
+  const value = await api(`microsoft-mail/${operation}`, {}); microsoftMailPending = value.status === 'pending';
+  element('microsoft-mail-state').textContent = `Authentication: ${value.status} · Scope: Mail.Read`;
+  const link = element('microsoft-mail-link'); link.hidden = !value.auth_url;
+  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
+}
+for (const operation of ['login', 'status', 'cancel', 'logout']) element(`microsoft-mail-${operation}`).onclick = () => action(element(`microsoft-mail-${operation}`), () => microsoftMail(operation));
 for (const form of [element('github-form'), element('slack-form'), element('drive-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
 element('github-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
@@ -214,7 +223,7 @@ for (const operation of ['login', 'status', 'cancel', 'logout']) element(`drive-
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
-  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); }
+  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); if (microsoftMailPending) await microsoftMail('status'); }
   catch (error) { notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);

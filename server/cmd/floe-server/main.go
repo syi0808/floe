@@ -16,10 +16,12 @@ import (
 
 	"floe/server/internal/codexauth"
 	"floe/server/internal/connectors/gmail"
+	"floe/server/internal/connectors/microsoftmail"
 	"floe/server/internal/console"
 	"floe/server/internal/credentials"
 	"floe/server/internal/googleauth"
 	"floe/server/internal/inference"
+	"floe/server/internal/microsoftauth"
 )
 
 func main() {
@@ -68,6 +70,22 @@ func main() {
 			syncContext, stopSync := context.WithCancel(context.Background())
 			defer stopSync()
 			go func() { _ = gmailService.Run(syncContext, 5*time.Minute) }()
+		}
+		if clientID := os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_ID"); clientID != "" {
+			microsoftAuth, authError := microsoftauth.New(vault, microsoftauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")})
+			if authError != nil {
+				log.Fatal("Cannot configure Microsoft OAuth")
+			}
+			defer microsoftAuth.Close()
+			microsoftClient, clientError := microsoftmail.New(microsoftAuth, "primary")
+			if clientError != nil {
+				log.Fatal("Cannot initialize Microsoft Mail connector")
+			}
+			microsoftService, serviceError := microsoftmail.NewService(microsoftClient)
+			if serviceError != nil {
+				log.Fatal("Cannot initialize Microsoft Mail connector")
+			}
+			management.SetMicrosoftMail(microsoftAuth, microsoftService)
 		}
 		handler = management
 		log.Printf("Local dashboard: http://%s/manage/", address)

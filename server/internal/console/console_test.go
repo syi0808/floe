@@ -27,6 +27,28 @@ type fakeAuthRuntime struct{ ready bool }
 
 type fakeDriveAuth struct{ token string }
 
+type fakeMicrosoftAuth struct{}
+
+func (*fakeMicrosoftAuth) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected", "scope": "Mail.Read"}, nil
+}
+
+type fakeCommunicationRuntime struct {
+	snapshot any
+	view     any
+	err      error
+	reads    atomic.Int32
+}
+
+func (runtime *fakeCommunicationRuntime) ConnectionSnapshot(context.Context) (any, error) {
+	return runtime.snapshot, runtime.err
+}
+
+func (runtime *fakeCommunicationRuntime) ReadCommunicationView(context.Context, string, int, int) (any, error) {
+	runtime.reads.Add(1)
+	return runtime.view, runtime.err
+}
+
 func (runtime *fakeDriveAuth) Token(context.Context) (string, error) { return runtime.token, nil }
 func (*fakeDriveAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/drive.readonly"}, nil
@@ -329,6 +351,18 @@ func TestGmailOAuthActionsRequireManagementSessionAndConfiguredRuntime(test *tes
 	}
 }
 
+func TestMicrosoftMailOAuthActionsRequireConfiguredRuntime(test *testing.T) {
+	fixture := setup(test)
+	if response := fixture.call("POST", "/manage/api/microsoft-mail/status", map[string]any{}, ""); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("unconfigured status: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.SetMicrosoftMail(&fakeMicrosoftAuth{}, &fakeCommunicationRuntime{})
+	value := fixture.value(fixture.call("POST", "/manage/api/microsoft-mail/status", map[string]any{}, ""))
+	if value["status"] != "connected" || value["scope"] != "Mail.Read" {
+		test.Fatalf("status: %#v", value)
+	}
+}
+
 func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
@@ -397,6 +431,25 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 	}
 	if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25}, ""); response.Code != http.StatusUnauthorized {
 		test.Fatalf("unpaired view read accepted: %d", response.Code)
+	}
+}
+
+func TestCommunicationRouteFallsBackToMicrosoftMail(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	view := map[string]any{"schema_version": 1, "view_id": "mail.communication", "source_handle": "mail:microsoft", "items": []any{}}
+	microsoft := &fakeCommunicationRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "microsoft"}}, view: view}
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("gmail unavailable")})
+	fixture.console.SetMicrosoftMail(&fakeMicrosoftAuth{}, microsoft)
+
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "follow up", "cursor": 0, "limit": 25}, token))
+	if value["view"].(map[string]any)["source_handle"] != "mail:microsoft" || microsoft.reads.Load() != 1 {
+		test.Fatalf("view: %#v reads=%d", value, microsoft.reads.Load())
+	}
+	fixture.console.SetGmailAuth(nil)
+	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
+	if len(connections) != 1 || connections[0].(map[string]any)["descriptor"].(map[string]any)["provider"] != "microsoft" {
+		test.Fatalf("connections: %#v", connections)
 	}
 }
 

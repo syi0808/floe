@@ -91,6 +91,25 @@ connected; **Sync now** runs the same checkpointed path. `FLOE_GMAIL_QUERY` can 
 `newer_than:30d -in:spam -in:trash` query. OAuth setup and a live mailbox run are still required
 before Gmail evidence is available to Floe clients.
 
+### Microsoft Mail read-only OAuth
+
+Register a Microsoft identity-platform application that allows public-client loopback redirects,
+then configure the local node with its client ID. A client secret is optional and, when present,
+must stay in the process environment.
+
+```sh
+export FLOE_MICROSOFT_OAUTH_CLIENT_ID='your-application-client-id'
+export FLOE_MICROSOFT_OAUTH_CLIENT_SECRET='optional-client-secret'
+go run ./cmd/floe-server
+```
+
+Use **Context sources → Microsoft Mail → Start Microsoft login** in the dashboard. The PKCE flow
+requests only `Mail.Read` and `offline_access`, stores the resulting credential under a separate
+macOS Keychain name, and binds stored tokens to the configured client ID. The paired communication
+route uses Gmail first when both providers are configured and falls back to Microsoft on absence or
+failure. Dashboard disconnect deletes the local credential; revoke the application's consent in the
+Microsoft account when the remote grant must also be invalidated.
+
 ## Legacy headless mode
 
 The environment-configured mode below remains for existing development fixtures.

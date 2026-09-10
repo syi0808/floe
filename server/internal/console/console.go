@@ -33,6 +33,15 @@ type ConnectorAuthRuntime interface {
 	ReadLogisticsView(context.Context) (common.LogisticsView, error)
 }
 
+type ConnectorOAuthRuntime interface {
+	Action(context.Context, string) (any, error)
+}
+
+type CommunicationRuntime interface {
+	ConnectionSnapshot(context.Context) (any, error)
+	ReadCommunicationView(context.Context, string, int, int) (any, error)
+}
+
 type WorkContextRuntime interface {
 	ConnectionSnapshot(context.Context) (any, error)
 	ReadWorkContextView(context.Context) (common.WorkContextView, error)
@@ -70,6 +79,8 @@ type Console struct {
 	vault                                        Vault
 	runtime                                      AuthRuntime
 	gmail                                        ConnectorAuthRuntime
+	microsoftAuth                                ConnectorOAuthRuntime
+	microsoftMail                                CommunicationRuntime
 	work                                         []WorkContextRuntime
 	logistics                                    []LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
@@ -115,6 +126,13 @@ func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	console.gmail = runtime
+}
+
+func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.microsoftAuth = auth
+	console.microsoftMail = runtime
 }
 
 func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console, error) {
@@ -318,6 +336,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	}
 	gateway := console.gateway
 	gmail := console.gmail
+	microsoftMail := console.microsoftMail
 	work := append([]WorkContextRuntime(nil), console.work...)
 	logistics := append([]LogisticsRuntime(nil), console.logistics...)
 	console.mu.Unlock()
@@ -333,6 +352,14 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		connections := []any{}
 		if gmail != nil {
 			snapshot, err := gmail.ConnectionSnapshot()
+			if err != nil {
+				failure(writer, 503, "connections_unavailable")
+				return
+			}
+			connections = append(connections, snapshot)
+		}
+		if microsoftMail != nil {
+			snapshot, err := microsoftMail.ConnectionSnapshot(request.Context())
 			if err != nil {
 				failure(writer, 503, "connections_unavailable")
 				return
@@ -363,7 +390,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
-		if request.Method != http.MethodPost || gmail == nil {
+		if request.Method != http.MethodPost || gmail == nil && microsoftMail == nil {
 			failure(writer, 404, "not_found")
 			return
 		}
@@ -377,7 +404,14 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, 400, "validation")
 			return
 		}
-		view, err := gmail.ReadCommunicationView(input.Query, input.Cursor, input.Limit)
+		var view any
+		var err error
+		if gmail != nil {
+			view, err = gmail.ReadCommunicationView(input.Query, input.Cursor, input.Limit)
+		}
+		if (gmail == nil || err != nil) && microsoftMail != nil {
+			view, err = microsoftMail.ReadCommunicationView(request.Context(), input.Query, input.Cursor, input.Limit)
+		}
 		if err != nil {
 			failure(writer, 503, "view_unavailable")
 			return
@@ -517,6 +551,24 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-mail/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.microsoftAuth
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "microsoft_mail_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-mail/"))
+		if err != nil {
+			failure(writer, 502, "microsoft_mail_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/gmail/") && request.Method == "POST" {
 		console.mu.Lock()
 		runtime := console.gmail
