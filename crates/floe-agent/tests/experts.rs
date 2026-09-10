@@ -1072,7 +1072,12 @@ async fn built_in_schedule_selects_from_general_calendar_tools_in_an_isolated_mo
                 .any(|component| component.kind == PromptComponentKind::Persona)
         );
         assert!(!requests[0].prompt.render().contains("find_free_windows"));
-        assert!(requests[0].prompt.render().contains("normally HH:mm"));
+        assert!(
+            requests[0]
+                .prompt
+                .render()
+                .contains("Normally format event times as HH:mm")
+        );
         assert_eq!(requests[0].messages.len(), 1);
         let AgentMessage::User { text, .. } = &requests[0].messages[0] else {
             panic!("expected Schedule Expert task");

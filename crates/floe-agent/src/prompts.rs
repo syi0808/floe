@@ -9,6 +9,10 @@ const SCHEDULE_EXPERT_ROLE: &str = include_str!("../prompts/schedule_expert_role
 const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
+const BEHAVIOR_KERNEL_REVISION: u64 = 2;
+const CAPABILITY_PROTOCOL_REVISION: u64 = 2;
+const MANAGER_ROLE_REVISION: u64 = 2;
+const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,9 +134,15 @@ pub fn manager_prompt(persona: Option<&PersonaProfile>) -> Result<PromptAssembly
             product_component(
                 PromptComponentKind::BehaviorKernel,
                 "behavior-kernel",
+                BEHAVIOR_KERNEL_REVISION,
                 BEHAVIOR_KERNEL,
             ),
-            product_component(PromptComponentKind::Role, "manager-role", MANAGER_ROLE),
+            product_component(
+                PromptComponentKind::Role,
+                "manager-role",
+                MANAGER_ROLE_REVISION,
+                MANAGER_ROLE,
+            ),
             PromptComponent {
                 kind: PromptComponentKind::Persona,
                 source: persona.source,
@@ -142,6 +152,7 @@ pub fn manager_prompt(persona: Option<&PersonaProfile>) -> Result<PromptAssembly
             product_component(
                 PromptComponentKind::CapabilityProtocol,
                 "capability-protocol",
+                CAPABILITY_PROTOCOL_REVISION,
                 CAPABILITY_PROTOCOL,
             ),
         ],
@@ -158,16 +169,19 @@ pub fn schedule_expert_prompt() -> PromptAssembly {
             product_component(
                 PromptComponentKind::BehaviorKernel,
                 "behavior-kernel",
+                BEHAVIOR_KERNEL_REVISION,
                 BEHAVIOR_KERNEL,
             ),
             product_component(
                 PromptComponentKind::Role,
                 "schedule-expert-role",
+                SCHEDULE_EXPERT_ROLE_REVISION,
                 SCHEDULE_EXPERT_ROLE,
             ),
             product_component(
                 PromptComponentKind::CapabilityProtocol,
                 "capability-protocol",
+                CAPABILITY_PROTOCOL_REVISION,
                 CAPABILITY_PROTOCOL,
             ),
         ],
@@ -182,23 +196,30 @@ pub fn learner_prompt() -> PromptAssembly {
             product_component(
                 PromptComponentKind::BehaviorKernel,
                 "behavior-kernel",
+                BEHAVIOR_KERNEL_REVISION,
                 BEHAVIOR_KERNEL,
             ),
-            product_component(PromptComponentKind::Role, "learner-role", LEARNER_ROLE),
+            product_component(PromptComponentKind::Role, "learner-role", 1, LEARNER_ROLE),
             product_component(
                 PromptComponentKind::CapabilityProtocol,
                 "learner-protocol",
+                1,
                 LEARNER_PROTOCOL,
             ),
         ],
     }
 }
 
-fn product_component(kind: PromptComponentKind, source: &str, content: &str) -> PromptComponent {
+fn product_component(
+    kind: PromptComponentKind,
+    source: &str,
+    revision: u64,
+    content: &str,
+) -> PromptComponent {
     PromptComponent {
         kind,
         source: source.into(),
-        revision: 1,
+        revision,
         content: content.trim().into(),
     }
 }
@@ -277,12 +298,21 @@ mod tests {
             PromptComponentKind::BehaviorKernel
         );
         assert_eq!(manager.components[1].kind, PromptComponentKind::Role);
+        assert_eq!(manager.components[0].revision, BEHAVIOR_KERNEL_REVISION);
+        assert_eq!(manager.components[1].revision, MANAGER_ROLE_REVISION);
         assert_eq!(manager.components[2].kind, PromptComponentKind::Persona);
         assert_eq!(
             manager.components[3].kind,
             PromptComponentKind::CapabilityProtocol
         );
+        assert_eq!(manager.components[3].revision, CAPABILITY_PROTOCOL_REVISION);
         assert!(!manager.render().contains("focus window"));
+        assert!(manager.render().contains("subject, scope, and time"));
+        assert!(
+            manager
+                .render()
+                .contains("understanding, choices, or next action")
+        );
 
         let expert = schedule_expert_prompt();
         assert_eq!(expert.role, PromptRole::ScheduleExpert);
@@ -294,6 +324,10 @@ mod tests {
                 .any(|component| component.kind == PromptComponentKind::Persona)
         );
         assert!(!expert.render().contains("find_free_windows"));
+        assert_eq!(expert.components[0].revision, BEHAVIOR_KERNEL_REVISION);
+        assert_eq!(expert.components[1].revision, SCHEDULE_EXPERT_ROLE_REVISION);
+        assert!(expert.render().contains("Manager-ready summary"));
+        assert!(expert.render().contains("add no useful meaning"));
 
         let learner = learner_prompt();
         assert_eq!(learner.role, PromptRole::Learner);
