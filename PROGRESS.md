@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Relationships, Focus and Wellbeing contracts — 2026-09-10
+
+- Added isolated prompt roles and typed results for Relationships, Focus & Attention and Wellbeing.
+  Results are bound to existing identity/provenance handles and runtime-owned source/expiry metadata.
+- Relationship inference cannot invent identities; Focus has no raw app or notification authority;
+  Wellbeing consumes only derived capacity/recovery and rejects diagnostic fields. Actionable
+  judgments require evidence while no-conclusion requires none.
+- Focused deterministic tests pass 2/2. Product delegation, live source adapters and cross-source
+  Schedule/Memory evaluation remain, so S5.5-E4/E5/E6 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-personal-domain-experts.md).
+
 ### S5.5 bounded personal context Views — 2026-09-10
 
 - Added strict provider-neutral People identity, next-event Feasibility, coarse Attention and derived

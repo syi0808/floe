@@ -8,6 +8,9 @@ const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
 const SCHEDULE_EXPERT_ROLE: &str = include_str!("../prompts/schedule_expert_role.txt");
 const COMMITMENTS_EXPERT_ROLE: &str = include_str!("../prompts/commitments_expert_role.txt");
 const COMMUNICATION_EXPERT_ROLE: &str = include_str!("../prompts/communication_expert_role.txt");
+const RELATIONSHIPS_EXPERT_ROLE: &str = include_str!("../prompts/relationships_expert_role.txt");
+const FOCUS_EXPERT_ROLE: &str = include_str!("../prompts/focus_expert_role.txt");
+const WELLBEING_EXPERT_ROLE: &str = include_str!("../prompts/wellbeing_expert_role.txt");
 const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
@@ -25,6 +28,9 @@ pub enum PromptRole {
     ScheduleExpert,
     CommitmentsExpert,
     CommunicationExpert,
+    RelationshipsExpert,
+    FocusAttentionExpert,
+    WellbeingExpert,
     Learner,
 }
 
@@ -212,6 +218,33 @@ pub fn communication_expert_prompt() -> PromptAssembly {
     )
 }
 
+pub fn relationships_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::RelationshipsExpert,
+        "relationships-expert-role",
+        1,
+        RELATIONSHIPS_EXPERT_ROLE,
+    )
+}
+
+pub fn focus_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::FocusAttentionExpert,
+        "focus-expert-role",
+        1,
+        FOCUS_EXPERT_ROLE,
+    )
+}
+
+pub fn wellbeing_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::WellbeingExpert,
+        "wellbeing-expert-role",
+        1,
+        WELLBEING_EXPERT_ROLE,
+    )
+}
+
 fn expert_prompt(role: PromptRole, source: &str, revision: u64, content: &str) -> PromptAssembly {
     PromptAssembly {
         schema_version: AGENT_VERSION,
@@ -395,6 +428,16 @@ mod tests {
                 .render()
                 .contains("proposal, never permission")
         );
+
+        for prompt in [
+            relationships_expert_prompt(),
+            focus_expert_prompt(),
+            wellbeing_expert_prompt(),
+        ] {
+            assert_eq!(prompt.validate(), Ok(()));
+            assert_eq!(prompt.components.len(), 3);
+            assert!(prompt.render().contains("untrusted evidence"));
+        }
 
         let learner = learner_prompt();
         assert_eq!(learner.role, PromptRole::Learner);
