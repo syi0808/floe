@@ -164,6 +164,10 @@ fn calendar_turn_transport_requires_explicit_inference_route_and_destination() {
     });
     let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), action);
+    let mut multi_day = action.clone();
+    multi_day["request"]["day"]["end_date_exclusive"] = json!("2026-09-15");
+    multi_day["request"]["ends_at"] = json!("2026-09-14T15:00:00Z");
+    assert!(serde_json::from_value::<AgentVaultActionDto>(multi_day).is_ok());
     for field in [
         "person_id",
         "view_handle",

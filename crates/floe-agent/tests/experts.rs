@@ -412,8 +412,8 @@ struct Views {
 impl ExpertViews for Views {
     async fn timeline(&self, read: TimelineViewRead) -> Result<ExpertTimelineView, AgentFailure> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        assert_eq!(read.max_items, 32);
-        assert!(read.max_bytes <= 16384);
+        assert_eq!(read.max_items, MAX_TIMELINE_VIEW_ITEMS);
+        assert!(read.max_bytes <= MAX_TIMELINE_VIEW_BYTES);
         Ok(self.view.clone())
     }
 }
@@ -639,13 +639,13 @@ async fn stale_wrong_and_oversized_views_never_commit_expert_state() {
     raw.data_class = DataClass::Credential;
     invalid.push((raw, AgentFailure::CapabilityDenied));
     let mut many = fixture.view.clone();
-    many.items = vec![many.items[0].clone(); 33];
+    many.items = vec![many.items[0].clone(); MAX_TIMELINE_VIEW_ITEMS + 1];
     invalid.push((many, AgentFailure::BudgetExceeded));
     let mut beyond = fixture.view.clone();
     beyond.items[0].ends_at_unix_ms = 8_000_000;
     invalid.push((beyond, AgentFailure::InvalidInput));
     let mut too_wide = fixture.view.clone();
-    too_wide.range_end_unix_ms = too_wide.range_start_unix_ms + 15 * 86_400_000;
+    too_wide.range_end_unix_ms = too_wide.range_start_unix_ms + 33 * 86_400_000;
     invalid.push((too_wide, AgentFailure::InvalidInput));
     for (view, reason) in invalid {
         let views = Views {

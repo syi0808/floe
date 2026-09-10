@@ -211,10 +211,92 @@ fn calendar_turn_job_streams_and_waits_for_exactly_one_prepared_action() {
 }
 
 #[test]
+fn calendar_turn_accepts_a_fresh_bounded_multi_day_range() {
+    let mut fixture = fixture();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let start_date = fixture.request.day.start_date;
+    let range = CalendarRange {
+        start_date,
+        end_date_exclusive: start_date + chrono::Duration::days(7),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+    };
+    let connection = runtime
+        .block_on(fixture.core.calendar_connection(fixture.person))
+        .unwrap()
+        .unwrap();
+    runtime
+        .block_on(fixture.core.import_calendar_sources(
+            fixture.person,
+            connection.revision,
+            range.clone(),
+            vec![floe_domain::CalendarBatch {
+                calendar_id: "calendar-a".into(),
+                records: vec![floe_domain::CalendarRecord {
+                    can_modify: false,
+                    calendar_id: Some("calendar-a".into()),
+                    external_id: "weekly-event".into(),
+                    external_revision: "1".into(),
+                    title: "Weekly event".into(),
+                    schedule: floe_domain::EventSchedule::Timed(
+                        floe_domain::TimedSchedule::new(
+                            fixture.request.starts_at + chrono::Duration::days(3),
+                            fixture.request.starts_at
+                                + chrono::Duration::days(3)
+                                + chrono::Duration::hours(1),
+                            "UTC",
+                        )
+                        .unwrap(),
+                    ),
+                }],
+                failure: None,
+            }],
+            chrono::Utc::now(),
+        ))
+        .unwrap();
+    fixture.request.day = range;
+    fixture.request.starts_at = chrono::Utc
+        .with_ymd_and_hms(
+            start_date.year(),
+            start_date.month(),
+            start_date.day(),
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+    fixture.request.ends_at = fixture.request.starts_at + chrono::Duration::days(7);
+    fixture.request.prompt = AgentCalendarPromptDto::FreeText {
+        text: "Brief this week".into(),
+    };
+    fixture.request.destination = None;
+
+    let completed = perform(
+        &fixture.worker,
+        fixture.person,
+        AgentVaultActionDto::CalendarTurn {
+            request: fixture.request,
+        },
+    );
+
+    assert!(completed.done && completed.failure.is_none());
+    let session = completed.session.unwrap();
+    assert_eq!(
+        session.last_outcome,
+        Some(AgentOutcome::Completed),
+        "{session:#?}"
+    );
+}
+
+#[test]
 fn calendar_turn_rejects_invalid_bounds_destination_revision_and_disconnected_source() {
     let fixture = fixture();
     let mut invalid_day = fixture.request.clone();
-    invalid_day.day.end_date_exclusive = invalid_day.day.end_date_exclusive.succ_opt().unwrap();
+    invalid_day.day.end_date_exclusive =
+        invalid_day.day.start_date + chrono::Duration::days(floe_agent::MAX_TIMELINE_VIEW_DAYS + 1);
     assert_eq!(
         perform(
             &fixture.worker,

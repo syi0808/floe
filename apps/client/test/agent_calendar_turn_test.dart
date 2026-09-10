@@ -116,6 +116,36 @@ void main() {
     },
   );
 
+  test('Calendar turn can serialize a bounded multi-day query range', () {
+    final turn = turnRequest();
+    final ranged = AgentCalendarTurnRequest(
+      session: turn.session,
+      day: turn.day,
+      startsAt: turn.startsAt,
+      endsAt: turn.endsAt,
+      prompt: AgentCalendarPromptKind.freeText,
+      focusMinutes: 60,
+      text: 'Brief this week',
+      queryRange: AgentCalendarQueryRange(
+        startDate: DateTime.utc(2026, 9, 7),
+        endDateExclusive: DateTime.utc(2026, 9, 14),
+        timezoneOffsetSeconds: 32400,
+        endTimezoneOffsetSeconds: 32400,
+        startsAt: DateTime.utc(2026, 9, 6, 15),
+        endsAt: DateTime.utc(2026, 9, 13, 15),
+      ),
+    );
+
+    expect(ranged.toJson()['day'], {
+      'start_date': '2026-09-07',
+      'end_date_exclusive': '2026-09-14',
+      'timezone_offset_seconds': 32400,
+      'end_timezone_offset_seconds': 32400,
+    });
+    expect(ranged.toJson()['starts_at'], '2026-09-06T15:00:00.000Z');
+    expect(ranged.toJson()['ends_at'], '2026-09-13T15:00:00.000Z');
+  });
+
   test(
     'Calendar turn rejects changed retries and mismatched native results',
     () async {

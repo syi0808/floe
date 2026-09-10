@@ -198,6 +198,94 @@ async fn projection_is_scoped_clipped_bounded_and_contains_no_provider_native_me
 }
 
 #[tokio::test]
+async fn projection_reads_events_across_a_bounded_multi_day_range() {
+    let fixture = Fixture::new().await;
+    let range = CalendarRange {
+        start_date: now().date_naive(),
+        end_date_exclusive: (now() + TimeDelta::days(7)).date_naive(),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+    };
+    fixture
+        .core
+        .import_calendar(
+            fixture.person,
+            2,
+            range.clone(),
+            vec![
+                record("home-secret-id", "first-day", "First day", 60, 90),
+                record(
+                    "home-secret-id",
+                    "fifth-day",
+                    "Fifth day",
+                    4 * 24 * 60 + 60,
+                    4 * 24 * 60 + 90,
+                ),
+                CalendarRecord {
+                    can_modify: false,
+                    calendar_id: Some("home-secret-id".into()),
+                    external_id: "third-day-all-day".into(),
+                    external_revision: "1".into(),
+                    title: "Third day all day".into(),
+                    schedule: EventSchedule::AllDay(
+                        AllDaySchedule::new(
+                            now().date_naive() + TimeDelta::days(2),
+                            now().date_naive() + TimeDelta::days(3),
+                        )
+                        .unwrap(),
+                    ),
+                },
+            ],
+            now(),
+        )
+        .await
+        .unwrap();
+    let grant = CalendarTimelineGrant {
+        person_id: fixture.person,
+        handle: Uuid::new_v4(),
+        provider: CalendarProvider::Fixture,
+        calendar_ids: vec!["home-secret-id".into()],
+        connection_revision: 3,
+        day: range.clone(),
+        starts_at: range_bounds(&range).unwrap().0,
+        ends_at: range_bounds(&range).unwrap().1,
+        expires_at: now() + TimeDelta::minutes(2),
+    };
+    let access = Access::default();
+    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    let projected = views
+        .timeline(TimelineViewRead {
+            max_items: MAX_TIMELINE_VIEW_ITEMS,
+            max_bytes: MAX_TIMELINE_VIEW_BYTES,
+            ..request(&grant)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        projected
+            .items
+            .iter()
+            .map(|item| item.untrusted_title.as_str())
+            .collect::<Vec<_>>(),
+        ["First day", "Third day all day", "Fifth day"]
+    );
+    let all_day = &projected.items[1];
+    assert_eq!(
+        all_day.ends_at_unix_ms - all_day.starts_at_unix_ms,
+        86_400_000
+    );
+    assert_eq!(
+        projected.range_start_unix_ms,
+        milliseconds(range_bounds(&grant.day).unwrap().0).unwrap()
+    );
+    assert_eq!(
+        projected.range_end_unix_ms,
+        milliseconds(range_bounds(&grant.day).unwrap().1).unwrap()
+    );
+}
+
+#[tokio::test]
 async fn unknown_scope_identity_budgets_and_permission_are_denied_before_projection() {
     let fixture = Fixture::new().await;
     for mode in 0..7 {
@@ -419,7 +507,7 @@ async fn oversized_titles_are_unicode_safe_but_overfull_calendars_are_not_trunca
     let view = views.timeline(request(&grant)).await.unwrap();
     assert!(view.items[0].untrusted_title.len() <= 256);
     assert!(view.items[0].untrusted_title.ends_with('…'));
-    let records = (0..33)
+    let records = (0..=MAX_TIMELINE_VIEW_ITEMS)
         .map(|index| record("home-secret-id", &format!("busy-{index}"), "Busy", 60, 90))
         .collect();
     fixture
@@ -446,11 +534,30 @@ async fn input_window_honors_dst_day_bounds_without_assuming_twenty_four_hours()
         assert_eq!((end - start).num_hours(), hours);
         grant.starts_at = start;
         grant.ends_at = end;
-        assert_eq!(grant.validate(now()).is_ok(), hours <= 24);
+        grant.validate(now()).unwrap();
         grant.starts_at = start + TimeDelta::hours(8);
         grant.ends_at = start + TimeDelta::hours(16);
         grant.validate(now()).unwrap();
     }
+}
+
+#[tokio::test]
+async fn grants_accept_bounded_multi_day_and_historical_ranges() {
+    let fixture = Fixture::new().await;
+    let mut grant = fixture.grant();
+    grant.day.end_date_exclusive = grant.day.start_date + TimeDelta::days(7);
+    (grant.starts_at, grant.ends_at) = range_bounds(&grant.day).unwrap();
+    grant.validate(now()).unwrap();
+
+    grant.day.start_date -= TimeDelta::days(30);
+    grant.day.end_date_exclusive -= TimeDelta::days(30);
+    (grant.starts_at, grant.ends_at) = range_bounds(&grant.day).unwrap();
+    grant.validate(now()).unwrap();
+
+    grant.day.end_date_exclusive =
+        grant.day.start_date + TimeDelta::days(MAX_TIMELINE_VIEW_DAYS + 1);
+    grant.ends_at = grant.starts_at + TimeDelta::days(MAX_TIMELINE_VIEW_DAYS + 1);
+    assert_eq!(grant.validate(now()), Err(AgentFailure::InvalidInput));
 }
 
 #[tokio::test]

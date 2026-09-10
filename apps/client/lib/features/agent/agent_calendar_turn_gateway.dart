@@ -21,6 +21,53 @@ final class AgentCalendarConversationContext {
 
 enum AgentCalendarPromptKind { briefing, proposeFocus, freeText }
 
+final class AgentCalendarQueryRange {
+  AgentCalendarQueryRange({
+    required this.startDate,
+    required this.endDateExclusive,
+    required this.timezoneOffsetSeconds,
+    required this.startsAt,
+    required this.endsAt,
+    this.endTimezoneOffsetSeconds,
+  }) : assert(endDateExclusive.isAfter(startDate)),
+       assert(endsAt.isAfter(startsAt));
+
+  factory AgentCalendarQueryRange.day(
+    DayQuery day, {
+    DateTime? startsAt,
+    DateTime? endsAt,
+  }) => AgentCalendarQueryRange(
+    startDate: day.date,
+    endDateExclusive: DateTime.utc(
+      day.date.year,
+      day.date.month,
+      day.date.day + 1,
+    ),
+    timezoneOffsetSeconds: day.timezoneOffsetSeconds,
+    endTimezoneOffsetSeconds: day.endTimezoneOffsetSeconds,
+    startsAt: startsAt ?? day.startsAt,
+    endsAt: endsAt ?? day.endsAt,
+  );
+
+  final DateTime startDate;
+  final DateTime endDateExclusive;
+  final int timezoneOffsetSeconds;
+  final int? endTimezoneOffsetSeconds;
+  final DateTime startsAt;
+  final DateTime endsAt;
+
+  Map<String, Object?> toJson() => {
+    'day': {
+      'start_date': _date(startDate),
+      'end_date_exclusive': _date(endDateExclusive),
+      'timezone_offset_seconds': timezoneOffsetSeconds,
+      'end_timezone_offset_seconds': endTimezoneOffsetSeconds,
+    },
+    'starts_at': startsAt.toUtc().toIso8601String(),
+    'ends_at': endsAt.toUtc().toIso8601String(),
+  };
+}
+
 enum AgentCalendarInferenceRoute {
   deterministicFixture('deterministic_fixture'),
   deviceLocal('device_local'),
@@ -61,6 +108,7 @@ final class AgentCalendarTurnRequest {
     required this.focusMinutes,
     this.text,
     this.destination,
+    this.queryRange,
     this.continuation = false,
   }) : assert(
          prompt != AgentCalendarPromptKind.freeText ||
@@ -75,35 +123,32 @@ final class AgentCalendarTurnRequest {
   final int focusMinutes;
   final String? text;
   final AgentCalendarDestination? destination;
+  final AgentCalendarQueryRange? queryRange;
   final bool continuation;
 
-  Map<String, Object?> toJson() => {
-    'session_id': session.id,
-    'expected_revision': session.revision,
-    'prompt': {
-      'kind': switch (prompt) {
-        AgentCalendarPromptKind.briefing => 'briefing',
-        AgentCalendarPromptKind.proposeFocus => 'propose_focus',
-        AgentCalendarPromptKind.freeText => 'free_text',
+  Map<String, Object?> toJson() {
+    final range =
+        queryRange ??
+        AgentCalendarQueryRange.day(day, startsAt: startsAt, endsAt: endsAt);
+    return {
+      'session_id': session.id,
+      'expected_revision': session.revision,
+      'prompt': {
+        'kind': switch (prompt) {
+          AgentCalendarPromptKind.briefing => 'briefing',
+          AgentCalendarPromptKind.proposeFocus => 'propose_focus',
+          AgentCalendarPromptKind.freeText => 'free_text',
+        },
+        if (prompt == AgentCalendarPromptKind.freeText)
+          'text': text
+        else
+          'focus_minutes': focusMinutes,
       },
-      if (prompt == AgentCalendarPromptKind.freeText)
-        'text': text
-      else
-        'focus_minutes': focusMinutes,
-    },
-    'day': {
-      'start_date': _date(day.date),
-      'end_date_exclusive': _date(
-        DateTime.utc(day.date.year, day.date.month, day.date.day + 1),
-      ),
-      'timezone_offset_seconds': day.timezoneOffsetSeconds,
-      'end_timezone_offset_seconds': day.endTimezoneOffsetSeconds,
-    },
-    'starts_at': startsAt.toUtc().toIso8601String(),
-    'ends_at': endsAt.toUtc().toIso8601String(),
-    'destination': destination?.toJson(),
-    if (continuation) 'continuation': true,
-  };
+      ...range.toJson(),
+      'destination': destination?.toJson(),
+      if (continuation) 'continuation': true,
+    };
+  }
 }
 
 abstract interface class AgentCalendarTurnGateway {

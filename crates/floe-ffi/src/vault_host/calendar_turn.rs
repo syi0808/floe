@@ -70,9 +70,9 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     ) {
         return Err(AgentFailure::PolicyDenied);
     }
-    if (request.day.end_date_exclusive - request.day.start_date).num_days() != 1
+    let range_days = (request.day.end_date_exclusive - request.day.start_date).num_days();
+    if !(1..=floe_agent::MAX_TIMELINE_VIEW_DAYS).contains(&range_days)
         || request.starts_at >= request.ends_at
-        || request.ends_at - request.starts_at > chrono::Duration::hours(24)
     {
         return Err(AgentFailure::InvalidInput);
     }

@@ -12,6 +12,11 @@ use crate::{
     ModelRunner, ModelStep, PackageImplementation, PackageRef, schedule_expert_prompt,
 };
 
+pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
+pub const MAX_TIMELINE_VIEW_ITEMS: usize = 128;
+pub const MAX_TIMELINE_VIEW_BYTES: usize = 65_536;
+const MAX_TIMELINE_VIEW_DURATION_MS: u64 = (MAX_TIMELINE_VIEW_DAYS as u64 + 1) * 86_400_000;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineViewItem {
@@ -83,7 +88,7 @@ impl Default for ExpertBudget {
     fn default() -> Self {
         Self {
             max_view_calls: 1,
-            max_view_bytes: 16384,
+            max_view_bytes: MAX_TIMELINE_VIEW_BYTES,
             max_output_bytes: 16384,
             max_insights: 8,
             max_model_calls: 10,
@@ -247,8 +252,11 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         let read = TimelineViewRead {
             person_id: invocation.person_id,
             handle: invocation.granted_view_handles[0],
-            max_items: 32,
-            max_bytes: invocation.budget.max_view_bytes.min(16384),
+            max_items: MAX_TIMELINE_VIEW_ITEMS,
+            max_bytes: invocation
+                .budget
+                .max_view_bytes
+                .min(MAX_TIMELINE_VIEW_BYTES),
             deadline: invocation.deadline,
             cancellation,
         };
@@ -266,7 +274,10 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             },
             invocation.deadline,
             &invocation.cancellation,
-            invocation.budget.max_view_bytes.min(16384),
+            invocation
+                .budget
+                .max_view_bytes
+                .min(MAX_TIMELINE_VIEW_BYTES),
             Box::pin(async {
                 let view = self.views.timeline(read).await?;
                 validate_view(&view, &invocation, resolved.data_class)?;
@@ -876,7 +887,7 @@ fn bounded_calendar_view(
             if starts_at >= view.range_start_unix_ms
                 && ends_at <= view.range_end_unix_ms
                 && starts_at < ends_at
-                && ends_at - starts_at <= 86_400_000 =>
+                && ends_at - starts_at <= MAX_TIMELINE_VIEW_DURATION_MS =>
         {
             (starts_at, ends_at)
         }
@@ -977,18 +988,21 @@ fn validate_view(
     if view.expires_at_unix_ms <= now_unix_ms()? {
         return Err(AgentFailure::StaleContext);
     }
-    if view.items.len() > 32
+    if view.items.len() > MAX_TIMELINE_VIEW_ITEMS
         || serde_json::to_vec(view)
             .map_err(|_| AgentFailure::InvalidInput)?
             .len()
-            > invocation.budget.max_view_bytes.min(16384)
+            > invocation
+                .budget
+                .max_view_bytes
+                .min(MAX_TIMELINE_VIEW_BYTES)
     {
         return Err(AgentFailure::BudgetExceeded);
     }
     if view.source_handle.trim().is_empty()
         || view.source_handle.len() > 128
         || view.range_start_unix_ms >= view.range_end_unix_ms
-        || view.range_end_unix_ms - view.range_start_unix_ms > 14 * 86_400_000
+        || view.range_end_unix_ms - view.range_start_unix_ms > MAX_TIMELINE_VIEW_DURATION_MS
         || view.items.iter().enumerate().any(|(index, item)| {
             item.untrusted_title.len() > 256
                 || item.starts_at_unix_ms < view.range_start_unix_ms

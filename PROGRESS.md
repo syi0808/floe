@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S4 bounded multi-day Calendar query foundation — 2026-09-10
+
+- Generalized Calendar turn and Timeline View validation from a fixed 24-hour day to
+  a caller-selected continuous range of up to 31 civil days, including 23/25-hour DST
+  boundaries and historical ranges backed by a fresh source observation.
+- Raised the internal bounded View capacity to 128 events and 64 KiB while preserving
+  the separate model/tool output limits, exact Person/calendar grants, expiry and
+  fail-closed behavior for uncovered or overfull sources.
+- Added a typed Flutter `AgentCalendarQueryRange` transport override while retaining
+  the selected Day Canvas day as the current default. Rust coverage now exercises a
+  seven-day mirror projection and complete Calendar Manager/Expert turn; Flutter
+  coverage verifies multi-day wire serialization.
+- Natural-language range resolution and connector refresh are not connected yet, so
+  live free-text turns still default to the selected day. This increment removes the
+  fixed-day transport/Core blocker without claiming end-to-end weekly retrieval.
+  [Evidence and limits](docs/validation/s4-calendar-timeline.md).
+
 ### S5 user-facing saved Memory view — 2026-09-10
 
 - Added a read-only, Person-scoped Memory overview contract over active confirmed

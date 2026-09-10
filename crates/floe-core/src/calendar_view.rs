@@ -2,7 +2,8 @@ use std::{collections::HashSet, future::Future, sync::Mutex, time::Duration};
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
-    AgentFailure, Cancellation, DataClass, ExpertTimelineView, ExpertViews, TimelineViewItem,
+    AgentFailure, Cancellation, DataClass, ExpertTimelineView, ExpertViews,
+    MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS, MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem,
     TimelineViewRead,
 };
 use floe_domain::{
@@ -38,7 +39,8 @@ impl CalendarTimelineGrant {
     fn validate(&self, now: DateTime<Utc>) -> Result<(), AgentFailure> {
         let identifiers: HashSet<_> = self.calendar_ids.iter().collect();
         let (day_start, day_end) = range_bounds(&self.day)?;
-        if (self.day.end_date_exclusive - self.day.start_date).num_days() != 1
+        let range_days = (self.day.end_date_exclusive - self.day.start_date).num_days();
+        if !(1..=MAX_TIMELINE_VIEW_DAYS).contains(&range_days)
             || self.calendar_ids.is_empty()
             || self.calendar_ids.len() > 4
             || identifiers.len() != self.calendar_ids.len()
@@ -49,12 +51,11 @@ impl CalendarTimelineGrant {
             || self.starts_at < day_start
             || self.ends_at > day_end
             || self.starts_at >= self.ends_at
-            || self.ends_at - self.starts_at > chrono::Duration::hours(24)
             || self.expires_at - now > chrono::Duration::minutes(5)
         {
             return Err(AgentFailure::InvalidInput);
         }
-        if self.expires_at <= now || self.ends_at <= now {
+        if self.expires_at <= now {
             return Err(AgentFailure::StaleContext);
         }
         Ok(())
@@ -315,13 +316,27 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                     {
                         continue;
                     }
-                    (self.grant.starts_at, self.grant.ends_at)
+                    let initial_offset = self.grant.day.timezone_offset_seconds;
+                    let final_offset = self
+                        .grant
+                        .day
+                        .end_timezone_offset_seconds
+                        .unwrap_or(initial_offset);
+                    (
+                        date_boundary(schedule.start_date, initial_offset.max(final_offset))?
+                            .max(self.grant.starts_at),
+                        date_boundary(
+                            schedule.end_date_exclusive,
+                            initial_offset.min(final_offset),
+                        )?
+                        .min(self.grant.ends_at),
+                    )
                 }
             };
             if start >= end {
                 continue;
             }
-            if items.len() >= request.max_items.min(32) {
+            if items.len() >= request.max_items.min(MAX_TIMELINE_VIEW_ITEMS) {
                 return Err(AgentFailure::BudgetExceeded);
             }
             items.push(TimelineViewItem {
@@ -355,7 +370,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         if serde_json::to_vec(&view)
             .map_err(|_| AgentFailure::InvalidInput)?
             .len()
-            > request.max_bytes.min(16_384)
+            > request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES)
         {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -451,6 +466,19 @@ fn range_bounds(range: &CalendarRange) -> Result<(DateTime<Utc>, DateTime<Utc>),
         )))
         .ok_or(AgentFailure::InvalidInput)?;
     Ok((start, end))
+}
+
+fn date_boundary(
+    date: chrono::NaiveDate,
+    timezone_offset_seconds: i32,
+) -> Result<DateTime<Utc>, AgentFailure> {
+    date.and_hms_opt(0, 0, 0)
+        .ok_or(AgentFailure::InvalidInput)?
+        .and_utc()
+        .checked_sub_signed(chrono::Duration::seconds(i64::from(
+            timezone_offset_seconds,
+        )))
+        .ok_or(AgentFailure::InvalidInput)
 }
 
 fn milliseconds(time: DateTime<Utc>) -> Result<u64, AgentFailure> {

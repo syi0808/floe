@@ -8,10 +8,10 @@ Date: 2026-09-07. Connector/Expert preparation; S4 remains **0/14**.
 and declarative Experts. It projects the real Core Calendar mirror schema rather
 than embedding a second hard-coded sample schedule. The trusted host supplies an
 immutable per-lease grant: Person, opaque View handle, provider, exact Calendar IDs,
-connection revision, one local day, a UTC planning window and expiry.
+connection revision, a bounded local date range, a UTC planning window and expiry.
 
-The grant allows at most four selected calendars, a planning window of at most
-24 hours and an expiry no more than five minutes away. It is not an Agent-supplied
+The grant allows at most four selected calendars, a continuous range of at most
+31 civil days and an expiry no more than five minutes away. It is not an Agent-supplied
 request, durable installation record or new permission UI. Host orchestration must
 bind it to explicitly authorized Person/Expert assignments. The [Core turn host now
 checks a durable binding](s4-calendar-bindings.md); this View component alone does not
@@ -24,9 +24,10 @@ Before returning evidence, the adapter:
    `CalendarReadAccess` port. It never assumes a saved connection means current OS access.
 3. Reads the Person-bound mirror with a 4 MiB SQL payload guard before JSON decoding.
 4. Requires the expected connection revision, selected scope and per-source successful
-   import covering the requested day/window. Data older than five minutes, a future
+   import covering the requested range/window. Data older than five minutes, a future
    import clock, disconnected/failed/missing sources and uncovered ranges fail closed.
-5. Projects at most 32 events and 16 KiB of output. Overfull schedules fail rather
+5. Projects at most 128 events and 64 KiB of View data. Model-facing capability
+   results retain their separate output budget. Overfull schedules fail rather
    than truncating away busy intervals and fabricating a free slot.
 6. Rechecks native access generation, mirror identity/content/revision and expiry
    before returning the immutable View. A later `revalidate` checks the same lease
@@ -43,9 +44,10 @@ native objects and timezone metadata are not included. Titles are shortened at a
 UTF-8 boundary with an ellipsis; their contents never become instructions.
 
 All-day events conservatively block the requested window; crossing-midnight/long
-timed events are clipped, not discarded. The host's start/end day offsets preserve
-23/25-hour DST day bounds. A 25-hour whole-day request exceeds the existing Expert
-contract and is rejected, while a valid shorter planning window remains supported.
+timed events are clipped, not discarded. The host's independent start/end offsets
+preserve 23/25-hour DST day bounds without treating elapsed hours as the civil-range
+limit. Historical ranges are permitted when their source observation and lease are
+fresh.
 This Calendar-only View does not read local manual events, tasks or notes; S3 still
 checks local events and fresh provider conflicts before any eventual write.
 
@@ -78,10 +80,11 @@ leaving a cooperative provider worker running or cancelling its caller after suc
 
 ## Automated evidence
 
-- Thirteen new Core tests cover exact scopes/identity, metadata minimization, clipped
+- Core tests cover exact scopes/identity, metadata minimization, clipped
   intervals, healthy subsets, expired/missing coverage, source revisions/generations,
-  denial, Unicode/byte/item bounds, DST and all-day behavior, malformed foreign rows,
-  cancellation/deadline/drop cleanup and the bounded database read.
+  denial, Unicode/byte/item bounds, multi-day and historical ranges, DST and all-day
+  behavior, malformed foreign rows, cancellation/deadline/drop cleanup and the
+  bounded database read.
 - One of these runs the actual Schedule Expert over the Core-backed View, revalidates
   it, atomically commits its result/private state to the encrypted vault and passes
   its reference into the existing Manager-to-S3 bridge. The result is a pending
@@ -120,6 +123,10 @@ durable View binding, refresh/scope selection, model choice and native worker/UI
 dispatch before enabling connected personal chat.
 This checkpoint does not claim a live native access-stamp round trip or full C1/A4
 acceptance merely because the production adapter builds and injected checks pass.
+The Calendar turn wire now accepts a caller-provided bounded multi-day range, but the
+Day Canvas controller still supplies its selected day and its connector refreshes that
+day. Natural-language range resolution and source refresh must be connected before a
+live request such as "this week" can use the multi-day transport.
 
 The [production keyring gate](s4-keyring-live-smoke.md), [local model generation gate](s4-local-model.md),
 remote inference/authentication, other Connectors, trace/replay and S1/S3 live
