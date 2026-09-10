@@ -246,7 +246,10 @@ Floe의 inferred durable write는 기본적으로 공용 Review에 staging한다
 externalized knowledge 개선이며 model weights, identity, safety policy, permission을
 수정하지 않는다. 구체적인 ContextEnvelope, Persona/User Model 경계, retrieval manifest와
 nested Playbook progressive disclosure는
-[ADR 0017](../../decisions/0017-agent-context-assembly.md)을 따른다.
+[ADR 0017](../../decisions/0017-agent-context-assembly.md)을 따른다. Candidate, Review,
+activation, rollback, Curator와 삭제 lifecycle은 Hermes Agent 구현을 참고해 Floe의
+typed encrypted vault 경계로 조정한
+[ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md)를 따른다.
 
 ### Acceptance criteria
 

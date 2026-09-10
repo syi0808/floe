@@ -219,6 +219,10 @@ not learnable knowledge classes.
 Floe self-improvement means improving externalized Memory, retrieval and Playbooks;
 it does not mean autonomous model-weight or safety-policy modification.
 
+The concrete candidate schema, isolated Learner authority, Review/activation
+transaction, mutation ledger, Curator and deletion behavior are fixed by
+[ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md).
+
 ```text
 conversation + tool/Expert outcomes + user correction
 → immutable LearningObservation

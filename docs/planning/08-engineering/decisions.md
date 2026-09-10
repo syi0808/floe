@@ -432,3 +432,19 @@ run in one process initially through `InProcessA2ATransport`. Remote protocol bi
 may be added later without changing Manager semantics.
 
 See [ADR 0018](../../decisions/0018-manager-expert-a2a-delegation.md).
+
+---
+
+## D-042 — Learning proposes; Core governs knowledge changes
+
+**Status:** Proposed — 2026-09-10
+
+S5 uses Hermes Agent's isolated background review, staged write, origin tracking,
+pinning and recoverable Curator mechanisms as the primary implementation reference.
+Floe adapts them to typed Person-scoped encrypted records: a Learner can create only
+Memory or Playbook candidates, while Core alone can activate a reviewed revision in
+an atomic ledgered transaction. Inferred changes never mutate authoritative knowledge
+directly. Pinning blocks autonomous edits, hard delete and autonomous consolidation
+remain disabled, and user deletion propagates through provenance with tombstones.
+
+See [ADR 0019](../../decisions/0019-governed-memory-and-playbook-learning.md).
