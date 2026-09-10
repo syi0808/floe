@@ -6,6 +6,8 @@ const BEHAVIOR_KERNEL: &str = include_str!("../prompts/behavior_kernel.txt");
 const CAPABILITY_PROTOCOL: &str = include_str!("../prompts/capability_protocol.txt");
 const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
 const SCHEDULE_EXPERT_ROLE: &str = include_str!("../prompts/schedule_expert_role.txt");
+const COMMITMENTS_EXPERT_ROLE: &str = include_str!("../prompts/commitments_expert_role.txt");
+const COMMUNICATION_EXPERT_ROLE: &str = include_str!("../prompts/communication_expert_role.txt");
 const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
@@ -13,12 +15,16 @@ const BEHAVIOR_KERNEL_REVISION: u64 = 2;
 const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
 const MANAGER_ROLE_REVISION: u64 = 3;
 const SCHEDULE_EXPERT_ROLE_REVISION: u64 = 3;
+const COMMITMENTS_EXPERT_ROLE_REVISION: u64 = 1;
+const COMMUNICATION_EXPERT_ROLE_REVISION: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptRole {
     Manager,
     ScheduleExpert,
+    CommitmentsExpert,
+    CommunicationExpert,
     Learner,
 }
 
@@ -188,6 +194,46 @@ pub fn schedule_expert_prompt() -> PromptAssembly {
     }
 }
 
+pub fn commitments_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::CommitmentsExpert,
+        "commitments-expert-role",
+        COMMITMENTS_EXPERT_ROLE_REVISION,
+        COMMITMENTS_EXPERT_ROLE,
+    )
+}
+
+pub fn communication_expert_prompt() -> PromptAssembly {
+    expert_prompt(
+        PromptRole::CommunicationExpert,
+        "communication-expert-role",
+        COMMUNICATION_EXPERT_ROLE_REVISION,
+        COMMUNICATION_EXPERT_ROLE,
+    )
+}
+
+fn expert_prompt(role: PromptRole, source: &str, revision: u64, content: &str) -> PromptAssembly {
+    PromptAssembly {
+        schema_version: AGENT_VERSION,
+        role,
+        components: vec![
+            product_component(
+                PromptComponentKind::BehaviorKernel,
+                "behavior-kernel",
+                BEHAVIOR_KERNEL_REVISION,
+                BEHAVIOR_KERNEL,
+            ),
+            product_component(PromptComponentKind::Role, source, revision, content),
+            product_component(
+                PromptComponentKind::CapabilityProtocol,
+                "capability-protocol",
+                CAPABILITY_PROTOCOL_REVISION,
+                CAPABILITY_PROTOCOL,
+            ),
+        ],
+    }
+}
+
 pub fn learner_prompt() -> PromptAssembly {
     PromptAssembly {
         schema_version: AGENT_VERSION,
@@ -334,6 +380,21 @@ mod tests {
         assert_eq!(expert.components[1].revision, SCHEDULE_EXPERT_ROLE_REVISION);
         assert!(expert.render().contains("Manager-ready summary"));
         assert!(expert.render().contains("add no useful meaning"));
+
+        let commitments = commitments_expert_prompt();
+        assert_eq!(commitments.role, PromptRole::CommitmentsExpert);
+        assert_eq!(commitments.validate(), Ok(()));
+        assert!(commitments.render().contains("observed commitment"));
+        assert!(commitments.render().contains("Do not draft, send, archive"));
+
+        let communication = communication_expert_prompt();
+        assert_eq!(communication.role, PromptRole::CommunicationExpert);
+        assert_eq!(communication.validate(), Ok(()));
+        assert!(
+            communication
+                .render()
+                .contains("proposal, never permission")
+        );
 
         let learner = learner_prompt();
         assert_eq!(learner.role, PromptRole::Learner);

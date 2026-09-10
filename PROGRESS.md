@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Commitments and Communication contracts — 2026-09-10
+
+- Added separate Commitments and Communication prompt roles and typed result contracts over the
+  common bounded Communication View. Model text cannot invent evidence handles or control
+  runtime-owned source, expiry and invocation metadata.
+- Commitments preserves observed versus inferred status; Communication returns reply need, rationale,
+  tone and optional email draft while granting no send/archive capability. Malformed, duplicate,
+  oversized and authority-blurring results fail closed.
+- A deterministic positive/negative mail corpus passes 3/3 and the Rust workspace passes. Product
+  registry assignment/delegation, cross-source evaluation and live mailbox quality remain, so
+  S5.5-E2/E3 and the slice remain **0/14**.
+  [Evidence and limits](docs/validation/s5-5-mail-experts.md).
+
 ### S5.5 bounded Gmail context capability — 2026-09-10
 
 - Added a paired, read-only Communication View route over the private Gmail metadata index.
