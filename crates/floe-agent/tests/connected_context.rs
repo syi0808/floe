@@ -194,3 +194,15 @@ fn go_gmail_descriptor_conforms_to_the_shared_rust_contract() {
             .all(|capability| capability.authority == CapabilityAuthority::Observe)
     );
 }
+
+#[test]
+fn go_github_descriptor_conforms_to_the_shared_rust_contract() {
+    let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../server/internal/connectors/github/testdata/ready_snapshot.json"
+    )))
+    .unwrap();
+    assert!(validate_connector_snapshot(&snapshot, 1_789_012_800_000).is_empty());
+    assert_eq!(snapshot.descriptor.provider, "github");
+    assert_eq!(snapshot.views[0].view_id, "work.context");
+}

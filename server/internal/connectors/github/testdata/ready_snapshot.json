@@ -1,0 +1,52 @@
+{
+  "descriptor": {
+    "schema_version": 1,
+    "id": "github.issues",
+    "version": "1.0.0",
+    "provider": "github",
+    "execution": {"kind": "server"},
+    "capabilities": [
+      {
+        "schema_version": 1,
+        "id": "project.issues.read",
+        "version": "1.0.0",
+        "authority": "observe",
+        "required_scopes": ["github.issues.read"],
+        "output_view_id": "work.context"
+      }
+    ],
+    "views": [
+      {
+        "schema_version": 1,
+        "id": "work.context",
+        "version": "1.0.0",
+        "data_class": "personal",
+        "retention": "short_lived_cache",
+        "freshness_ttl_ms": 300000,
+        "max_items": 64,
+        "max_bytes": 65536,
+        "provenance_required": true
+      }
+    ]
+  },
+  "connection": {
+    "schema_version": 1,
+    "connector_id": "github.issues",
+    "state": "ready",
+    "granted_scopes": ["github.issues.read"],
+    "observed_at_unix_ms": 1789012800000,
+    "last_success_at_unix_ms": 1789012800000
+  },
+  "views": [
+    {
+      "schema_version": 1,
+      "view_id": "work.context",
+      "source_handle": "github:09dd53e4834132c62884e65dc1652a9130fab6ba2111cf6814900433acdcbbe6",
+      "observed_at_unix_ms": 1789012800000,
+      "expires_at_unix_ms": 1789013100000,
+      "item_count": 1,
+      "byte_count": 800,
+      "provenance_count": 1
+    }
+  ]
+}

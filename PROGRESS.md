@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded GitHub work adapter — 2026-09-10
+
+- Added a server-native GET-only GitHub Issues adapter for one selected repository. Direct TLS
+  networking, redirect denial, bounded response/count/text and hashed repository/issue handles keep
+  credentials, provider URLs and unrestricted organization search outside Work Context.
+- The connector emits a common server descriptor with one Observe capability and no Act authority.
+  Go adapter tests and Go→Rust Work View/connector conformance fixtures pass.
+- Credential lifecycle, scheduling, client/Agent transport, live GitHub evidence and additional
+  communication/file adapters remain, so S5.5-C4/E7 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 Work Context and Life Logistics contracts — 2026-09-10
 
 - Added bounded selected-scope Work Context and Life Logistics Views. Strict contracts exclude

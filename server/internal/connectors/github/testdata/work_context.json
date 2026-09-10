@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "view_id": "work.context",
+  "source_handle": "github:09dd53e4834132c62884e65dc1652a9130fab6ba2111cf6814900433acdcbbe6",
+  "observed_at_unix_ms": 1789012800000,
+  "expires_at_unix_ms": 1789013100000,
+  "coverage_complete": true,
+  "scope_handle": "workspace:326c4742b5a60afae0036d2644589b877b331be457ead396180aecbe64f95fa8",
+  "items": [
+    {
+      "evidence_handle": "github:33e264098cc42784eea0b1884e90c39275297b9f6f4a95f2461b12ac98720378",
+      "kind": "project",
+      "title": "Release readiness",
+      "excerpt": "Attach API evidence.",
+      "status": "open",
+      "blocker": "Issue is labeled blocked",
+      "observed_at_unix_ms": 1789012740000
+    }
+  ]
+}

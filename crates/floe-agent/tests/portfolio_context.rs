@@ -86,3 +86,14 @@ fn unrestricted_or_high_authority_payload_fields_fail_closed() {
         Err(AgentFailure::InvalidInput)
     );
 }
+
+#[test]
+fn github_work_view_crosses_the_go_rust_contract() {
+    let view: WorkContextView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/github/testdata/work_context.json"
+    ))
+    .unwrap();
+    validate_work_context_view(&view, 1_789_012_800_000).unwrap();
+    assert_eq!(view.items[0].kind, WorkItemKind::Project);
+    assert_eq!(view.items[0].title, "Release readiness");
+}
