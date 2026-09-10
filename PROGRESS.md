@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded personal context Views — 2026-09-10
+
+- Added strict provider-neutral People identity, next-event Feasibility, coarse Attention and derived
+  Wellbeing Views with five-minute freshness, byte/count bounds and opaque provenance handles.
+- The contracts exclude contact notes, precise coordinates/history, app/domain activity, raw health
+  samples and diagnosis. Unknown derived states require zero confidence; non-unknown states require
+  explicit evidence.
+- Focused contract/privacy tests pass 2/2. Live Apple adapters and Relationships/Focus/Wellbeing
+  Expert consumption remain, so S5.5-C2/E1/E4/E5/E6 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-personal-context-views.md).
+
 ### S5.5 Commitments and Communication contracts — 2026-09-10
 
 - Added separate Commitments and Communication prompt roles and typed result contracts over the
