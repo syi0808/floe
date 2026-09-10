@@ -7,8 +7,8 @@ use floe_agent::{
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
     KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
     LearnerJobSettlement, LearnerJobState, LearnerReviewInput, LearnerReviewJob,
-    LearningEvidenceRef, LearningObservation, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
-    PersonalMemoryKind, StageMemoryCandidate,
+    LearningEvidenceRef, LearningObservation, LearningObservationKind, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, PersonalMemoryKind, StageMemoryCandidate,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -23,6 +23,9 @@ const MAX_EVIDENCE_REFS: usize = 32;
 const MAX_VERSION_BYTES: usize = 128;
 const LEARNER_JOB_LEASE_SECONDS: i64 = 30;
 const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
+const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
+const MAX_LEARNER_DISCOVERY_SESSIONS: i64 = 64;
+const MAX_LEARNER_DIGEST_TEXT_BYTES: usize = 1536;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(super) async fn initialize_learning_store(&self) -> Result<(), AgentFailure> {
@@ -526,6 +529,82 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         finish_transaction(transaction, result).await
     }
 
+    pub async fn discover_explicit_learner_reviews(
+        &self,
+        now: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<LearnerReviewJob>, AgentFailure> {
+        if limit == 0 || limit > MAX_LEARNER_DISCOVERY_JOBS {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT payload FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
+                [MAX_LEARNER_DISCOVERY_SESSIONS],
+            )
+            .await
+            .map_err(storage)?;
+        let mut eligible = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let session: floe_agent::AgentSession =
+                decode(&row.get::<String>(0).map_err(storage)?)?;
+            if session.person_id != self.person_id {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            if session.scope.is_some()
+                || session.data_classes != [DataClass::Personal]
+                || session.active_turn.is_some()
+                || session.pending_output.is_some()
+                || session.last_outcome != Some(AgentOutcome::Completed)
+            {
+                continue;
+            }
+            let Some((turn_id, user_text, assistant_text, signal)) =
+                explicit_learning_turn(&session)
+            else {
+                continue;
+            };
+            eligible.push((session, turn_id, user_text, assistant_text, signal));
+            if eligible.len() == limit {
+                break;
+            }
+        }
+        drop(rows);
+        self.check_access()?;
+        if eligible.is_empty() {
+            return Ok(vec![]);
+        }
+        let memories = self.personal_memory_context(now).await?;
+        let mut jobs = Vec::with_capacity(eligible.len());
+        for (session, turn_id, user_text, assistant_text, signal) in eligible {
+            let digest = format!(
+                "signal: {}\nuser evidence:\n{}\nassistant outcome:\n{}",
+                learning_signal_name(signal),
+                bounded_digest_text(&user_text),
+                bounded_digest_text(&assistant_text),
+            );
+            let input = LearnerReviewInput {
+                schema_version: KNOWLEDGE_VERSION,
+                run_id: Uuid::nil(),
+                person_id: self.person_id,
+                session_id: session.id,
+                session_revision: session.revision,
+                turn_ids: vec![turn_id],
+                outcome: AgentOutcome::Completed,
+                digest,
+                current_memories: memories.clone(),
+                observed_at: now,
+            };
+            match self.enqueue_learner_review(input, now).await {
+                Ok(job) => jobs.push(job),
+                Err(AgentFailure::StaleContext | AgentFailure::Conflict) => {}
+                Err(failure) => return Err(failure),
+            }
+        }
+        Ok(jobs)
+    }
+
     pub async fn claim_learner_review(
         &self,
         now: DateTime<Utc>,
@@ -712,6 +791,63 @@ impl<Keys: VaultKeyProvider> floe_agent::MemoryCandidateSink for EncryptedAgentV
         request: StageMemoryCandidate,
     ) -> Result<KnowledgeCandidate, AgentFailure> {
         EncryptedAgentVault::stage_memory_candidate(self, request).await
+    }
+}
+
+fn explicit_learning_turn(
+    session: &floe_agent::AgentSession,
+) -> Option<(Uuid, String, String, LearningObservationKind)> {
+    let (user_index, turn_id, user_text) =
+        session
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, message)| match message {
+                floe_agent::AgentMessage::User { turn_id, text } => {
+                    Some((index, *turn_id, text.trim()))
+                }
+                _ => None,
+            })?;
+    let signal = floe_agent::explicit_learning_signal(user_text)?;
+    let assistant_text =
+        session.messages[user_index + 1..]
+            .iter()
+            .find_map(|message| match message {
+                floe_agent::AgentMessage::Assistant {
+                    turn_id: assistant_turn,
+                    text,
+                } if *assistant_turn == turn_id => Some(text.trim()),
+                _ => None,
+            })?;
+    if assistant_text.is_empty() {
+        return None;
+    }
+    Some((
+        turn_id,
+        user_text.to_owned(),
+        assistant_text.to_owned(),
+        signal,
+    ))
+}
+
+fn bounded_digest_text(value: &str) -> &str {
+    if value.len() <= MAX_LEARNER_DIGEST_TEXT_BYTES {
+        return value;
+    }
+    let mut end = MAX_LEARNER_DIGEST_TEXT_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn learning_signal_name(signal: LearningObservationKind) -> &'static str {
+    match signal {
+        LearningObservationKind::ExplicitRemember => "explicit_remember",
+        LearningObservationKind::UserCorrection => "user_correction",
+        LearningObservationKind::OutcomeConflict => "outcome_conflict",
+        LearningObservationKind::ReusableProcedure => "reusable_procedure",
     }
 }
 

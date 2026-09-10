@@ -4,6 +4,22 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5 explicit conversation learning discovery — 2026-09-10
+
+- Added a narrow deterministic trigger for explicit remember/forget and correction
+  phrases in Korean and English. It only schedules Review work; it never interprets
+  the statement into Memory or activates knowledge.
+- The encrypted vault now discovers eligible completed Personal conversations in a
+  bounded scan, requires the latest user turn to have a matching assistant outcome,
+  builds a Unicode-safe bounded digest and snapshots only confirmed Memory context.
+- Ordinary conversation, synthetic/scoped sessions, halted turns and incomplete
+  exchanges are excluded. Repeated discovery is content-idempotent and source revision
+  validation remains enforced by the durable queue before model work.
+- Signal tests and the complete 22-test encrypted-vault suite pass. Production local
+  Learner inference and idle worker invocation remain, so discovery creates no Memory
+  candidate by itself and S5 stays 0/6.
+  [Evidence and limits](docs/validation/s5-learning-discovery.md).
+
 ### S5 durable Learner review queue — 2026-09-10
 
 - Added an encrypted Person-scoped queue for immutable Learner inputs. Enqueue is

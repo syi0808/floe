@@ -14,6 +14,50 @@ use crate::{
 
 const MAX_LEARNER_VERSION_BYTES: usize = 128;
 
+pub fn explicit_learning_signal(text: &str) -> Option<LearningObservationKind> {
+    let normalized = text.trim().to_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.starts_with("remember ")
+        || [
+            "please remember",
+            "기억해줘",
+            "기억해 줘",
+            "기억해 주세요",
+            "기억해둬",
+            "기억해 둬",
+        ]
+        .iter()
+        .any(|signal| normalized.contains(signal))
+    {
+        return Some(LearningObservationKind::ExplicitRemember);
+    }
+    if normalized.starts_with("forget ")
+        || ["please forget", "잊어줘", "잊어 줘", "기억에서 지워"]
+            .iter()
+            .any(|signal| normalized.contains(signal))
+    {
+        return Some(LearningObservationKind::UserCorrection);
+    }
+    if [
+        "actually,",
+        "correction:",
+        "that's not right",
+        "that is not right",
+        "정확히는",
+        "정정할게",
+        "정정할게요",
+        "그게 아니라",
+    ]
+    .iter()
+    .any(|signal| normalized.contains(signal))
+    {
+        return Some(LearningObservationKind::UserCorrection);
+    }
+    None
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LearnerReviewInput {
@@ -366,6 +410,27 @@ mod tests {
             used_tokens: 120,
             cost_micros: 10,
         }
+    }
+
+    #[test]
+    fn explicit_signal_detection_is_narrow_and_multilingual() {
+        assert_eq!(
+            explicit_learning_signal("회의는 오후가 좋다고 기억해 줘"),
+            Some(LearningObservationKind::ExplicitRemember)
+        );
+        assert_eq!(
+            explicit_learning_signal("Actually, I prefer meetings after 2 PM"),
+            Some(LearningObservationKind::UserCorrection)
+        );
+        assert_eq!(
+            explicit_learning_signal("Please forget my old office preference"),
+            Some(LearningObservationKind::UserCorrection)
+        );
+        assert_eq!(
+            explicit_learning_signal("I remember that meeting from last year"),
+            None
+        );
+        assert_eq!(explicit_learning_signal("오늘 일정 알려줘"), None);
     }
 
     #[tokio::test]

@@ -795,6 +795,69 @@ async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
 }
 
 #[tokio::test]
+async fn explicit_completed_conversations_discover_bounded_review_jobs() {
+    let root = private_root();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let mut ordinary = vault.create_session().await.unwrap();
+    let ordinary_turn = Uuid::new_v4();
+    ordinary.messages = vec![
+        AgentMessage::User {
+            turn_id: ordinary_turn,
+            text: "오늘 일정 알려줘".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: ordinary_turn,
+            text: "일정을 확인했어요".into(),
+        },
+    ];
+    ordinary.revision = 1;
+    ordinary.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&ordinary, 0).await.unwrap();
+
+    let mut explicit = vault.create_session().await.unwrap();
+    let explicit_turn = Uuid::new_v4();
+    explicit.messages = vec![
+        AgentMessage::User {
+            turn_id: explicit_turn,
+            text: format!("집중 업무는 오전이 좋다고 기억해 줘 {}", "가".repeat(3_000)),
+        },
+        AgentMessage::Assistant {
+            turn_id: explicit_turn,
+            text: format!("검토 항목으로 준비할게요 {}", "나".repeat(3_000)),
+        },
+    ];
+    explicit.revision = 1;
+    explicit.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&explicit, 0).await.unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 9, 10, 15, 0, 0).unwrap();
+
+    assert_eq!(
+        vault.discover_explicit_learner_reviews(now, 0).await,
+        Err(AgentFailure::InvalidInput)
+    );
+    let jobs = vault
+        .discover_explicit_learner_reviews(now, 8)
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].state, LearnerJobState::Queued);
+    assert_eq!(jobs[0].input.session_id, explicit.id);
+    assert_eq!(jobs[0].input.turn_ids, [explicit_turn]);
+    assert!(jobs[0].input.digest.len() <= 4 * 1024);
+    assert!(jobs[0].input.digest.contains("signal: explicit_remember"));
+    assert_eq!(
+        vault
+            .discover_explicit_learner_reviews(now + chrono::Duration::seconds(1), 8)
+            .await
+            .unwrap(),
+        jobs
+    );
+}
+
+#[tokio::test]
 async fn vaults_enforce_person_revision_version_and_size_boundaries() {
     let root = private_root();
     let person = PersonId::new();
