@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 provider-neutral route arbitration — 2026-09-10
+
+- Added explicit logical-source routing over common connector snapshots. Selection rejects stale or
+  nonconforming candidates and ranks health, freshness, configured provider priority and stable ID
+  without asking the model to choose a provider.
+- One View is selected per logical source and duplicate physical source handles are suppressed;
+  missing logical sources remain typed instead of becoming fake empty context.
+- Google/Microsoft/Android/Health Connect-shaped fixture tests pass 2/2. Actual parity adapters and
+  live routing remain, so S5.5-C3 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-context-routing.md).
+
 ### S5.5 Relationships, Focus and Wellbeing contracts — 2026-09-10
 
 - Added isolated prompt roles and typed results for Relationships, Focus & Attention and Wellbeing.
