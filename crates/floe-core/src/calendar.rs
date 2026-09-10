@@ -95,6 +95,7 @@ impl FloeCore {
                         last_success_at: None,
                         last_range: None,
                         error: None,
+                        error_at: None,
                         source_statuses: previous.as_ref().map_or_else(
                             Default::default,
                             |mirror| {
@@ -136,6 +137,7 @@ impl FloeCore {
         mirror.connection.last_success_at = None;
         mirror.connection.last_range = None;
         mirror.connection.error = None;
+        mirror.connection.error_at = None;
         self.store
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
             .await
@@ -177,6 +179,7 @@ impl FloeCore {
                         last_success_at: None,
                         last_range: None,
                         error: None,
+                        error_at: None,
                     },
                 );
             }
@@ -197,12 +200,14 @@ impl FloeCore {
         person_id: PersonId,
         expected_revision: u64,
         failure: CalendarFailure,
+        now: DateTime<Utc>,
     ) -> Result<(), CoreError> {
         let mut mirror = self
             .calendar_at_revision(person_id, expected_revision)
             .await?;
         let previous = mirror.clone();
         mirror.connection.error = Some(failure);
+        mirror.connection.error_at = Some(now);
         for calendar in mirror.connection.selected_calendars() {
             let status = mirror
                 .connection
@@ -212,8 +217,10 @@ impl FloeCore {
                     last_success_at: mirror.connection.last_success_at,
                     last_range: mirror.connection.last_range.clone(),
                     error: None,
+                    error_at: None,
                 });
             status.error = Some(failure);
+            status.error_at = Some(now);
         }
         mirror.connection.revision += 1;
         self.store
@@ -240,6 +247,7 @@ impl FloeCore {
         mirror.connection.last_success_at = Some(now);
         mirror.connection.last_range = Some(range.clone());
         mirror.connection.error = None;
+        mirror.connection.error_at = None;
         for calendar in mirror.connection.selected_calendars() {
             mirror.connection.source_statuses.insert(
                 calendar.calendar_id,
@@ -247,6 +255,7 @@ impl FloeCore {
                     last_success_at: Some(now),
                     last_range: Some(range.clone()),
                     error: None,
+                    error_at: None,
                 },
             );
         }
@@ -318,6 +327,7 @@ impl FloeCore {
                     last_success_at: previous.connection.last_success_at,
                     last_range: previous.connection.last_range.clone(),
                     error: None,
+                    error_at: None,
                 });
             match result {
                 Ok(events) => {
@@ -327,9 +337,13 @@ impl FloeCore {
                         last_success_at: Some(now),
                         last_range: Some(range.clone()),
                         error: None,
+                        error_at: None,
                     };
                 }
-                Err(failure) => status.error = Some(failure),
+                Err(failure) => {
+                    status.error = Some(failure);
+                    status.error_at = Some(now);
+                }
             }
         }
         mirror.connection.error = mirror
@@ -337,6 +351,12 @@ impl FloeCore {
             .source_statuses
             .values()
             .find_map(|status| status.error);
+        mirror.connection.error_at = mirror
+            .connection
+            .source_statuses
+            .values()
+            .filter_map(|status| status.error_at)
+            .max();
         if mirror.connection.error.is_none() {
             mirror.connection.last_success_at = Some(now);
             mirror.connection.last_range = Some(range);

@@ -8,6 +8,7 @@ mod agent_vault;
 mod calendar;
 mod calendar_action;
 mod calendar_view;
+mod connected_calendar;
 mod core;
 mod error;
 mod store;

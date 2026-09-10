@@ -75,8 +75,10 @@ pub struct ConnectorDescriptor {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionState {
+    Pending,
     Ready,
     Degraded,
+    Unavailable,
     Disconnected,
     Revoked,
     Unsupported,
@@ -101,7 +103,7 @@ pub enum SourceFailureKind {
 #[serde(deny_unknown_fields)]
 pub struct SourceFailure {
     pub kind: SourceFailureKind,
-    pub occurred_at_unix_ms: u64,
+    pub observed_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -133,7 +135,7 @@ pub struct ViewSnapshot {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConnectorConformanceFixture {
+pub struct ConnectorSnapshot {
     pub descriptor: ConnectorDescriptor,
     pub connection: ConnectorConnectionSnapshot,
     pub views: Vec<ViewSnapshot>,
@@ -209,13 +211,13 @@ impl SituationConformanceReport {
     }
 }
 
-pub fn validate_connector_fixture(
-    fixture: &ConnectorConformanceFixture,
+pub fn validate_connector_snapshot(
+    snapshot: &ConnectorSnapshot,
     now_unix_ms: u64,
 ) -> Vec<ConformanceViolation> {
     let mut violations = Vec::new();
-    let descriptor = &fixture.descriptor;
-    let connection = &fixture.connection;
+    let descriptor = &snapshot.descriptor;
+    let connection = &snapshot.connection;
     validate_version(descriptor.schema_version, &descriptor.id, &mut violations);
     validate_identifier(&descriptor.id, "connector", &mut violations);
     validate_identifier(&descriptor.version, &descriptor.id, &mut violations);
@@ -305,7 +307,7 @@ pub fn validate_connector_fixture(
         || connection
             .last_failure
             .as_ref()
-            .is_some_and(|failure| failure.occurred_at_unix_ms > connection.observed_at_unix_ms)
+            .is_some_and(|failure| failure.observed_at_unix_ms > connection.observed_at_unix_ms)
     {
         push(
             &mut violations,
@@ -329,7 +331,7 @@ pub fn validate_connector_fixture(
             ConformanceCode::InvalidLifecycle,
             &connection.connector_id,
         ),
-        ConnectionState::Revoked | ConnectionState::Unsupported
+        ConnectionState::Unavailable | ConnectionState::Revoked | ConnectionState::Unsupported
             if connection.last_failure.is_none() =>
         {
             push(
@@ -375,7 +377,7 @@ pub fn validate_connector_fixture(
                 .required_scopes
                 .iter()
                 .any(|scope| !granted_scopes.contains(scope.as_str()))
-            && fixture
+            && snapshot
                 .views
                 .iter()
                 .any(|view| capability.output_view_id.as_deref() == Some(view.view_id.as_str()))
@@ -388,62 +390,64 @@ pub fn validate_connector_fixture(
         }
     }
 
-    for snapshot in &fixture.views {
-        validate_version(snapshot.schema_version, &snapshot.view_id, &mut violations);
+    for view_snapshot in &snapshot.views {
+        validate_version(
+            view_snapshot.schema_version,
+            &view_snapshot.view_id,
+            &mut violations,
+        );
         let Some(view) = descriptor
             .views
             .iter()
-            .find(|view| view.id == snapshot.view_id)
+            .find(|view| view.id == view_snapshot.view_id)
         else {
             push(
                 &mut violations,
                 ConformanceCode::UnknownView,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
             continue;
         };
-        if snapshot.source_handle.trim().is_empty() {
+        if view_snapshot.source_handle.trim().is_empty() {
             push(
                 &mut violations,
                 ConformanceCode::InvalidIdentifier,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
         }
-        if !observable_views.contains(snapshot.view_id.as_str()) {
+        if !observable_views.contains(view_snapshot.view_id.as_str()) {
             push(
                 &mut violations,
                 ConformanceCode::MissingScope,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
         }
-        if snapshot.observed_at_unix_ms > connection.observed_at_unix_ms
-            || connection
-                .last_success_at_unix_ms
-                .is_none_or(|last_success| snapshot.observed_at_unix_ms > last_success)
-            || snapshot.expires_at_unix_ms <= snapshot.observed_at_unix_ms
-            || snapshot.expires_at_unix_ms - snapshot.observed_at_unix_ms > view.freshness_ttl_ms
+        if view_snapshot.observed_at_unix_ms > connection.observed_at_unix_ms
+            || view_snapshot.expires_at_unix_ms <= view_snapshot.observed_at_unix_ms
+            || view_snapshot.expires_at_unix_ms - view_snapshot.observed_at_unix_ms
+                > view.freshness_ttl_ms
         {
             push(
                 &mut violations,
                 ConformanceCode::InvalidTimestamp,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
         }
-        if snapshot.item_count > view.max_items || snapshot.byte_count > view.max_bytes {
+        if view_snapshot.item_count > view.max_items || view_snapshot.byte_count > view.max_bytes {
             push(
                 &mut violations,
                 ConformanceCode::ViewLimitExceeded,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
         }
         if view.provenance_required
-            && snapshot.item_count > 0
-            && snapshot.provenance_count < snapshot.item_count
+            && view_snapshot.item_count > 0
+            && view_snapshot.provenance_count < view_snapshot.item_count
         {
             push(
                 &mut violations,
                 ConformanceCode::MissingProvenance,
-                &snapshot.view_id,
+                &view_snapshot.view_id,
             );
         }
     }
@@ -452,7 +456,7 @@ pub fn validate_connector_fixture(
 
 pub fn evaluate_situation(
     situation: &SituationDescriptor,
-    fixtures: &[ConnectorConformanceFixture],
+    snapshots: &[ConnectorSnapshot],
     now_unix_ms: u64,
 ) -> SituationConformanceReport {
     let mut violations = Vec::new();
@@ -486,17 +490,17 @@ pub fn evaluate_situation(
 
     let mut available_views: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut source_issues = Vec::new();
-    for fixture in fixtures {
-        let fixture_violations = validate_connector_fixture(fixture, now_unix_ms);
-        let fixture_conforms = fixture_violations.is_empty();
-        violations.extend(fixture_violations);
-        if fixture.connection.state != ConnectionState::Ready
-            && fixture.connection.state != ConnectionState::Degraded
+    for snapshot in snapshots {
+        let snapshot_violations = validate_connector_snapshot(snapshot, now_unix_ms);
+        let snapshot_conforms = snapshot_violations.is_empty();
+        violations.extend(snapshot_violations);
+        if snapshot.connection.state != ConnectionState::Ready
+            && snapshot.connection.state != ConnectionState::Degraded
         {
             source_issues.push(SourceIssue {
-                connector_id: fixture.descriptor.id.clone(),
-                state: fixture.connection.state,
-                failure: fixture
+                connector_id: snapshot.descriptor.id.clone(),
+                state: snapshot.connection.state,
+                failure: snapshot
                     .connection
                     .last_failure
                     .as_ref()
@@ -504,28 +508,28 @@ pub fn evaluate_situation(
             });
             continue;
         }
-        if fixture.connection.state == ConnectionState::Degraded {
+        if snapshot.connection.state == ConnectionState::Degraded {
             source_issues.push(SourceIssue {
-                connector_id: fixture.descriptor.id.clone(),
-                state: fixture.connection.state,
-                failure: fixture
+                connector_id: snapshot.descriptor.id.clone(),
+                state: snapshot.connection.state,
+                failure: snapshot
                     .connection
                     .last_failure
                     .as_ref()
                     .map(|failure| failure.kind),
             });
         }
-        if !fixture_conforms {
+        if !snapshot_conforms {
             continue;
         }
-        for snapshot in &fixture.views {
-            if snapshot.expires_at_unix_ms > now_unix_ms
-                && requested.contains(snapshot.view_id.as_str())
+        for view_snapshot in &snapshot.views {
+            if view_snapshot.expires_at_unix_ms > now_unix_ms
+                && requested.contains(view_snapshot.view_id.as_str())
             {
                 available_views
-                    .entry(snapshot.view_id.clone())
+                    .entry(view_snapshot.view_id.clone())
                     .or_default()
-                    .push(snapshot.source_handle.clone());
+                    .push(view_snapshot.source_handle.clone());
             }
         }
     }

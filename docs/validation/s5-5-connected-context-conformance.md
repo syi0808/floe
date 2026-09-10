@@ -9,7 +9,7 @@
   capabilities, provider-neutral Views and explicit foreground Situations.
 - Added retention, freshness, size, data-class and provenance constraints to each View.
 - Added connection snapshots with granted scopes, last success, typed last failure and
-  ready/degraded/disconnected/revoked/unsupported lifecycle states.
+  pending/ready/degraded/unavailable/disconnected/revoked/unsupported lifecycle states.
 - Added a provider-neutral conformance harness that rejects missing scopes, credential
   projections, Observe/Act authority mixing, stale or oversized Views and incomplete
   provenance.

@@ -482,7 +482,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
     parse_date(&request.day.date)?;
-    parse_time(&request.day.now, "day.now")?;
+    let request_now = parse_time(&request.day.now, "day.now")?;
     let mut changed_item = None;
     let mut capture = None;
 
@@ -636,6 +636,7 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     person_id,
                     expected_revision,
                     failure,
+                    request_now,
                 ))
                 .map_err(core_error)?;
         }

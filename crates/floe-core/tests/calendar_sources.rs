@@ -174,6 +174,11 @@ async fn partial_success_commits_only_healthy_source_and_survives_restart() {
         connection.source_statuses["work"].error,
         Some(CalendarFailure::PermissionDenied)
     );
+    assert_eq!(
+        connection.source_statuses["work"].error_at,
+        Some(updated_at)
+    );
+    assert_eq!(connection.error_at, Some(updated_at));
     assert_eq!(connection.last_success_at, Some(now()));
 }
 

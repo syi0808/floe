@@ -1,15 +1,15 @@
 use floe_agent::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConnectionState,
-    ConnectorCapabilityDescriptor, ConnectorConformanceFixture, ConnectorConnectionSnapshot,
-    ConnectorDescriptor, DataClass, ExecutionLocation, RetentionClass, SituationDescriptor,
+    ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor,
+    ConnectorSnapshot, DataClass, ExecutionLocation, RetentionClass, SituationDescriptor,
     SituationTrigger, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
-    evaluate_situation, validate_connector_fixture,
+    evaluate_situation, validate_connector_snapshot,
 };
 
 const NOW: u64 = 2_000_000;
 
-fn fixture(connector_id: &str, view_id: &str, source_handle: &str) -> ConnectorConformanceFixture {
-    ConnectorConformanceFixture {
+fn fixture(connector_id: &str, view_id: &str, source_handle: &str) -> ConnectorSnapshot {
+    ConnectorSnapshot {
         descriptor: ConnectorDescriptor {
             schema_version: CONNECTED_CONTEXT_VERSION,
             id: connector_id.into(),
@@ -86,11 +86,11 @@ fn conforming_connector_keeps_observe_separate_from_act() {
             output_view_id: None,
         });
 
-    assert!(validate_connector_fixture(&fixture, NOW).is_empty());
+    assert!(validate_connector_snapshot(&fixture, NOW).is_empty());
 
     fixture.descriptor.capabilities[1].output_view_id = Some("view.timeline".into());
     assert!(
-        validate_connector_fixture(&fixture, NOW)
+        validate_connector_snapshot(&fixture, NOW)
             .iter()
             .any(|violation| {
                 violation.code == ConformanceCode::InvalidAuthority
@@ -105,7 +105,7 @@ fn missing_scope_and_provenance_fail_conformance() {
     fixture.connection.granted_scopes.clear();
     fixture.views[0].provenance_count = 1;
 
-    let violations = validate_connector_fixture(&fixture, NOW);
+    let violations = validate_connector_snapshot(&fixture, NOW);
     assert!(violations.iter().any(|violation| {
         violation.code == ConformanceCode::MissingScope
             && violation.subject == "view.communication.read"
@@ -123,7 +123,7 @@ fn degraded_optional_source_does_not_block_required_view() {
     mail.connection.state = ConnectionState::Degraded;
     mail.connection.last_failure = Some(SourceFailure {
         kind: SourceFailureKind::PartialFetch,
-        occurred_at_unix_ms: NOW,
+        observed_at_unix_ms: NOW,
     });
     mail.views.clear();
 

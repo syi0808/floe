@@ -4,6 +4,23 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 durable Calendar connector snapshot — 2026-09-10
+
+- Projected the existing durable Calendar mirror into the common versioned connector
+  contract with provider-neutral `calendar.timeline` View metadata, device execution,
+  mirror retention, five-minute freshness and bounded provenance requirements.
+- Calendar Observe and Act descriptors remain separate and the connection snapshot grants
+  read only. Provider-native calendar identifiers are hashed in source handles; names,
+  external IDs and credentials do not enter the common snapshot.
+- Persisted aggregate and per-source Calendar failure observation times. Ready, pending,
+  degraded, unavailable and disconnected states now survive reopen, while successful
+  imports clear prior failures.
+- New Core integration tests pass 4/4, including partial-source degraded recovery and
+  disconnect/reconnect without stale View resurrection. Full Rust workspace check and
+  tests pass. Shared Connections UI, other adapters and signed live EventKit evidence remain,
+  so S5.5 stays **0/14**.
+  [Evidence and limits](docs/validation/s5-5-calendar-connector-snapshot.md).
+
 ### S5.5 connected context conformance foundation — 2026-09-10
 
 - Added strict versioned descriptors for connector execution location, Observe/Act/Interact
@@ -327,7 +344,7 @@ verified criteria, not estimated implementation percentages.
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
 | S5 — Memory/self-improvement | Planned; foundations started | Encrypted Session Archive plus staged Memory candidate/revision ledger fixtures | 0/6 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
-| S5.5 — Connected domains | Planned; foundation started | Versioned connector/View/Situation descriptors and fixture conformance harness | 0/14 | S5 Accepted; live source/provider host access; connector/Expert corpora | Complete one cross-domain briefing with degraded-source recovery |
+| S5.5 — Connected domains | Planned; foundation started | Common conformance harness plus durable Calendar connector snapshot and degraded-source fixture | 0/14 | S5 Accepted; live source/provider host access; connector/Expert corpora | Complete one cross-domain briefing with degraded-source recovery |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5.5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
 | S8 — Cross-device/server | Planned | None | 0/4 | S7 Accepted; sync/security PoCs | Same result on two devices |

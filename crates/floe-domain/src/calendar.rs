@@ -110,6 +110,8 @@ pub struct CalendarConnection {
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_statuses: BTreeMap<String, CalendarSyncStatus>,
 }
@@ -119,6 +121,8 @@ pub struct CalendarSyncStatus {
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

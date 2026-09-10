@@ -235,24 +235,22 @@ async fn failure_and_cached_events_survive_reopen_and_retry() {
     core.import_calendar(person, 1, range(0), vec![record("today", 0)], now())
         .await
         .unwrap();
-    core.record_calendar_failure(person, 2, CalendarFailure::PermissionDenied)
+    core.record_calendar_failure(person, 2, CalendarFailure::PermissionDenied, now())
         .await
         .unwrap();
     drop(core);
     let core = FloeCore::open(&path).await.unwrap();
     let cached = snapshot(&core, person, 0).await;
     assert_eq!(cached.items.len(), 1);
-    assert_eq!(
-        cached.calendar.unwrap().error,
-        Some(CalendarFailure::PermissionDenied)
-    );
+    let connection = cached.calendar.unwrap();
+    assert_eq!(connection.error, Some(CalendarFailure::PermissionDenied));
+    assert_eq!(connection.error_at, Some(now()));
     core.import_calendar(person, 3, range(0), vec![record("today", 0)], now())
         .await
         .unwrap();
-    assert_eq!(
-        snapshot(&core, person, 0).await.calendar.unwrap().error,
-        None
-    );
+    let connection = snapshot(&core, person, 0).await.calendar.unwrap();
+    assert_eq!(connection.error, None);
+    assert_eq!(connection.error_at, None);
     drop(core);
     let _ = std::fs::remove_file(path);
 }
