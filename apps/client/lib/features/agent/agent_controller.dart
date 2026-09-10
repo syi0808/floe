@@ -12,6 +12,7 @@ import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
 import 'agent_vault_gateway.dart';
+import 'application/agent_registry_controller.dart';
 
 enum AgentProgress {
   idle,
@@ -24,7 +25,21 @@ enum AgentProgress {
 }
 
 final class AgentController extends ChangeNotifier {
-  AgentController({required this.gateway, required this.personId});
+  AgentController({required this.gateway, required this.personId}) {
+    registryController = AgentRegistryController(
+      gateway: gateway is AgentRegistryGateway
+          ? gateway as AgentRegistryGateway
+          : null,
+      personId: personId,
+      canOperate: () =>
+          !_busy &&
+          !_sealed &&
+          !_disposed &&
+          _locking == null &&
+          vaultState == AgentVaultState.ready,
+      onFatalFailure: _fail,
+    )..addListener(_notify);
+  }
 
   final AgentFixtureStreamingGateway gateway;
   final String personId;
@@ -44,9 +59,10 @@ final class AgentController extends ChangeNotifier {
   bool _sealed = false;
   Completer<void>? _operationDone;
   Future<void>? _locking;
-  AgentRegistryView? registry;
-  String? registryFailure;
-  bool registryLoaded = false;
+  late final AgentRegistryController registryController;
+  AgentRegistryView? get registry => registryController.registry;
+  String? get registryFailure => registryController.failure;
+  bool get registryLoaded => registryController.loaded;
   AgentCalendarExperts? calendarExperts;
   String? calendarExpertFailure;
   List<AgentMemoryCandidate>? memoryCandidates;
@@ -78,7 +94,7 @@ final class AgentController extends ChangeNotifier {
   bool canInspectProposal(AgentCapabilityMessage message) =>
       usesVault &&
       gateway is AgentProposalGateway &&
-      !_busy &&
+      !busy &&
       !_sealed &&
       !_disposed &&
       _locking == null &&
@@ -354,14 +370,11 @@ final class AgentController extends ChangeNotifier {
         if (result.receiptFor(pending) != null) _pendingCalendarSetup = null;
       }
       calendarExperts = result;
-      registry = result.registry;
-      registryLoaded = true;
-      registryFailure = null;
+      registryController.replace(result.registry);
     } on Object catch (error) {
       if (_sealed || _disposed) return;
       calendarExperts = null;
-      registry = null;
-      registryLoaded = false;
+      registryController.clear();
       calendarExpertFailure = error is AgentVaultException
           ? error.failure
           : 'storage_unavailable';
@@ -375,14 +388,13 @@ final class AgentController extends ChangeNotifier {
     }
   }
 
-  bool get hasRegistryManagement =>
-      usesVault && gateway is AgentRegistryGateway;
+  bool get hasRegistryManagement => usesVault && registryController.available;
 
   bool get hasMemoryReview => usesVault && gateway is AgentMemoryReviewGateway;
   bool get hasMemory => usesVault && gateway is AgentMemoryGateway;
   bool get canReadMemory =>
       hasMemory &&
-      !_busy &&
+      !busy &&
       !_sealed &&
       !_disposed &&
       _locking == null &&
@@ -420,7 +432,7 @@ final class AgentController extends ChangeNotifier {
 
   bool get canReviewMemory =>
       hasMemoryReview &&
-      !_busy &&
+      !busy &&
       !_sealed &&
       !_disposed &&
       _locking == null &&
@@ -475,117 +487,23 @@ final class AgentController extends ChangeNotifier {
   }
 
   bool get canManageRegistry =>
-      hasRegistryManagement &&
-      !_busy &&
-      !_sealed &&
-      !_disposed &&
-      _locking == null &&
-      vaultState == AgentVaultState.ready;
+      hasRegistryManagement && registryController.canManage;
 
-  Future<void> loadRegistry() => _registryOperation(null);
+  Future<void> loadRegistry() => registryController.load();
 
   Future<void> configureRegistry(
     AgentRegistryTarget target,
     String id,
     bool enabled,
-  ) async {
-    final current = registry;
-    if (current == null) return;
-    await _registryOperation(
-      () => (gateway as AgentRegistryGateway).configureRegistry(
-        current,
-        target: target,
-        id: id,
-        enabled: enabled,
-      ),
-    );
-  }
+  ) => registryController.configure(target, id, enabled);
 
   Future<void> configureCapability(String installationId, bool enabled) async {
-    final current = registry;
-    if (current == null) return;
-    final installation = current.installations
-        .where((entry) => entry.id == installationId)
-        .singleOrNull;
-    if (installation == null) return;
-    final assignments = current.assignments
-        .where((entry) => entry.installationId == installationId)
-        .toList();
-    final changes = <(AgentRegistryTarget, String)>[
-      if (enabled && !installation.enabled)
-        (AgentRegistryTarget.installation, installation.id),
-      if (enabled)
-        for (final assignment in assignments)
-          if (!assignment.enabled)
-            (AgentRegistryTarget.assignment, assignment.id),
-      if (!enabled)
-        for (final assignment in assignments)
-          if (assignment.enabled)
-            (AgentRegistryTarget.assignment, assignment.id),
-      if (!enabled && installation.enabled)
-        (AgentRegistryTarget.installation, installation.id),
-    ];
-    if (changes.isEmpty) return;
-    await _registryOperation(() async {
-      var next = current;
-      for (final (target, id) in changes) {
-        final configured = await (gateway as AgentRegistryGateway)
-            .configureRegistry(next, target: target, id: id, enabled: enabled);
-        if (configured.instanceId != next.instanceId ||
-            configured.revision != next.revision + 1) {
-          throw const FormatException('Registry configuration mismatch');
-        }
-        next = configured;
-      }
-      return next;
-    }, expectedChanges: changes.length);
-    if (hasCalendarExpertManagement && canManageCalendarExperts) {
+    final changed = await registryController.configureCapability(
+      installationId,
+      enabled,
+    );
+    if (changed && hasCalendarExpertManagement && canManageCalendarExperts) {
       await loadCalendarExperts();
-    }
-  }
-
-  Future<void> _registryOperation(
-    Future<AgentRegistryView> Function()? change, {
-    int expectedChanges = 1,
-  }) async {
-    if (!canManageRegistry) return;
-    final previous = registry;
-    _begin();
-    registryFailure = null;
-    _notify();
-    try {
-      final result = change == null
-          ? await (gateway as AgentRegistryGateway).readRegistry(personId)
-          : await change();
-      if (_sealed || _disposed) return;
-      if (result != null && result.personId != personId) {
-        throw const FormatException('Registry Person mismatch');
-      }
-      if (change != null &&
-          (result == null ||
-              previous == null ||
-              result.instanceId != previous.instanceId ||
-              result.revision != previous.revision + expectedChanges)) {
-        throw const FormatException('Registry configuration mismatch');
-      }
-      registry = result;
-      registryLoaded = true;
-      calendarExperts = null;
-    } on Object catch (error) {
-      if (_sealed || _disposed) return;
-      registry = null;
-      registryLoaded = false;
-      calendarExperts = null;
-      registryFailure = error is AgentVaultException
-          ? error.failure
-          : 'storage_unavailable';
-      if (registryFailure == 'vault_unavailable' ||
-          registryFailure == 'interrupted') {
-        _fail(registryFailure!);
-      }
-    } finally {
-      _end();
-      _notify();
     }
   }
 
@@ -597,11 +515,11 @@ final class AgentController extends ChangeNotifier {
   bool get isConnectedConversation => isGeneralConversation;
   bool get isPersonalConversation => isGeneralConversation;
 
-  bool get busy => _busy;
+  bool get busy => _busy || registryController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
   bool get canSend =>
-      !_busy && !needsReload && !needsRecovery && session != null;
+      !busy && !needsReload && !needsRecovery && session != null;
   bool get canContinue =>
       canSend &&
       session?.continuation != null &&
@@ -620,7 +538,7 @@ final class AgentController extends ChangeNotifier {
     if (_locking case final locking?) {
       await locking;
     }
-    if (_busy || _disposed) return;
+    if (busy || _disposed) return;
     _sealed = false;
     _begin();
     progress = AgentProgress.loading;
@@ -663,7 +581,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   Future<void> recover() async {
-    if (_busy || _disposed || !needsRecovery) return;
+    if (busy || _disposed || !needsRecovery) return;
     _begin();
     progress = AgentProgress.loading;
     _notify();
@@ -940,7 +858,7 @@ final class AgentController extends ChangeNotifier {
   }
 
   Future<void> unlock({bool create = false}) async {
-    if (_busy ||
+    if (busy ||
         _disposed ||
         _locking != null ||
         gateway is! AgentVaultGateway) {
@@ -980,9 +898,7 @@ final class AgentController extends ChangeNotifier {
   Future<void> _lock() async {
     _sealed = true;
     _clearProposals();
-    registry = null;
-    registryFailure = null;
-    registryLoaded = false;
+    registryController.clear();
     calendarExperts = null;
     calendarExpertFailure = null;
     memoryCandidates = null;
@@ -1033,8 +949,7 @@ final class AgentController extends ChangeNotifier {
           'storage_unavailable',
           'interrupted',
         }.contains(reason)) {
-      registry = null;
-      registryLoaded = false;
+      registryController.clear();
       calendarExperts = null;
       memoryCandidates = null;
       memoryOverview = null;
@@ -1048,6 +963,7 @@ final class AgentController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    registryController.removeListener(_notify);
     unawaited(closeView());
     super.dispose();
   }
