@@ -228,7 +228,12 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 			delete(console.connectorAttempts, identifier)
 		}
 	}
-	connectionID := stableConnectionID(scope.PersonID, definition.ID)
+	connectionID, err := newConnectionID()
+	if err != nil {
+		console.mu.Unlock()
+		failure(writer, http.StatusInternalServerError, "connection_identity_unavailable")
+		return
+	}
 	record := connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope}
 	credentialNamespace := definition.CredentialName
 	if credentialNamespace == "" {
@@ -647,11 +652,6 @@ func (console *Console) connectionForPerson(connectorID, personID string) (conne
 		}
 	}
 	return connectionRecord{}, false
-}
-
-func stableConnectionID(personID, connectorID string) string {
-	hexadecimal := digest(personID + "\x00" + connectorID)
-	return hexadecimal[:8] + "-" + hexadecimal[8:12] + "-5" + hexadecimal[13:16] + "-a" + hexadecimal[17:20] + "-" + hexadecimal[20:32]
 }
 
 func (console *Console) connectionForConnector(connectorID string) (connectionRecord, bool) {

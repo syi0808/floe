@@ -69,6 +69,17 @@ func digest(value string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+func newConnectionID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	bytes[6] = bytes[6]&0x0f | 0x40
+	bytes[8] = bytes[8]&0x3f | 0x80
+	hexadecimal := hex.EncodeToString(bytes)
+	return hexadecimal[:8] + "-" + hexadecimal[8:12] + "-" + hexadecimal[12:16] + "-" + hexadecimal[16:20] + "-" + hexadecimal[20:], nil
+}
+
 func writePrivate(path string, value []byte) error {
 	file, err := os.CreateTemp(filepath.Dir(path), ".floe-*")
 	if err != nil {
