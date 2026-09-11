@@ -124,13 +124,7 @@ async fn optional_task_views(
 ) -> Result<Vec<NativeContextView>, AgentFailure> {
     let handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
     match core
-        .task_context_view(
-            person_id,
-            handle,
-            chrono::Utc::now(),
-            16,
-            8 * 1024,
-        )
+        .task_context_view(person_id, handle, chrono::Utc::now(), 16, 8 * 1024)
         .await
     {
         Ok(view) => Ok(vec![view]),
@@ -285,7 +279,10 @@ impl PersonalViewSource<'_> {
         if !self.server_fallback_allowed() {
             return Ok(vec![]);
         }
-        match model.read_calendar_context_view(deadline, cancellation).await {
+        match model
+            .read_calendar_context_view(deadline, cancellation)
+            .await
+        {
             Ok(view) => Ok(vec![view]),
             Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
             Err(error) => Err(error),
@@ -777,11 +774,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                     .people_view(request.deadline, &request.cancellation)
                     .await?;
                 let confirmed_interactions = personal_views
-                    .confirmed_interaction_views(
-                        &people,
-                        request.deadline,
-                        &request.cancellation,
-                    )
+                    .confirmed_interaction_views(&people, request.deadline, &request.cancellation)
                     .await?;
                 let result: RelationshipsExpertResult = run_relationships_expert_with_views(
                     self.model,
@@ -1445,13 +1438,24 @@ mod tests {
             .unwrap();
         let result: CommitmentsExpertResult =
             serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
-        assert_eq!(result.source_handle, floe_agent::COMMITMENTS_AGGREGATE_SOURCE_HANDLE);
+        assert_eq!(
+            result.source_handle,
+            floe_agent::COMMITMENTS_AGGREGATE_SOURCE_HANDLE
+        );
         assert_eq!(result.findings.len(), 4);
         assert_eq!(result.expires_at_unix_ms, now + 180_000);
         assert!(result.source_handles.contains(&"mail:selected".into()));
         assert!(result.source_handles.contains(&"calendar:selected".into()));
-        assert!(result.source_handles.contains(&format!("floe.tasks:{task_handle}")));
-        assert!(result.source_handles.contains(&format!("memory:{memory_id}:2")));
+        assert!(
+            result
+                .source_handles
+                .contains(&format!("floe.tasks:{task_handle}"))
+        );
+        assert!(
+            result
+                .source_handles
+                .contains(&format!("memory:{memory_id}:2"))
+        );
         server.await.unwrap();
     }
 
@@ -1715,12 +1719,8 @@ mod tests {
                 .await;
 
                 let optional_paths: &[&str] = match agent_id {
-                    RELATIONSHIPS_AGENT_ID => {
-                        &["/v1/views/relationships.confirmed_interactions"]
-                    }
-                    FOCUS_AGENT_ID => {
-                        &["/v1/views/calendar.timeline", "/v1/views/work.context"]
-                    }
+                    RELATIONSHIPS_AGENT_ID => &["/v1/views/relationships.confirmed_interactions"],
+                    FOCUS_AGENT_ID => &["/v1/views/calendar.timeline", "/v1/views/work.context"],
                     WELLBEING_AGENT_ID => &["/v1/views/calendar.timeline"],
                     _ => unreachable!(),
                 };
@@ -1868,7 +1868,10 @@ mod tests {
                 serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
             assert_eq!(data["source_handle"], source_handle);
             if agent_id == RELATIONSHIPS_AGENT_ID {
-                assert_eq!(data["source_handles"], serde_json::json!(["contacts:local"]));
+                assert_eq!(
+                    data["source_handles"],
+                    serde_json::json!(["contacts:local"])
+                );
                 assert_eq!(data["follow_ups"], serde_json::json!([]));
             }
             if agent_id == FOCUS_AGENT_ID {
@@ -1882,11 +1885,7 @@ mod tests {
                 );
                 assert_eq!(
                     data["evidence_handles"],
-                    serde_json::json!([
-                        "attention:aggregate",
-                        "calendar:review",
-                        "work:release"
-                    ])
+                    serde_json::json!(["attention:aggregate", "calendar:review", "work:release"])
                 );
             }
         }
