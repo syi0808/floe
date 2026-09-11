@@ -1,8 +1,8 @@
 use floe_agent::{
-    A2A_PROTOCOL_VERSION, A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
-    A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
-    AgentFailure, AgentRuntime, AttentionView, CalendarContextView, CapabilityDescriptor,
-    CapabilityHost, CapabilityInvocation, CommitmentsContextViews, CommitmentsExpertResult,
+    A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
+    AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent, AgentFailure,
+    AgentRuntime, AttentionView, CalendarContextView, CapabilityDescriptor, CapabilityHost,
+    CapabilityInvocation, CommitmentsContextViews, CommitmentsExpertResult,
     CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE, FeasibilityView,
     FocusContextViews, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
     InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
@@ -67,6 +67,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
     let task_views = optional_task_views(core, person_id).await?;
+    let expert_cards = vault.enabled_expert_cards().await?;
     let capabilities = ConversationCapabilities {
         model: &model,
         policy: &policy,
@@ -78,6 +79,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         context: &context,
         local_context,
         task_views: &task_views,
+        cards: expert_cards,
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
@@ -505,13 +507,13 @@ fn default_communication_limit() -> usize {
     25
 }
 
-const COMMITMENTS_AGENT_ID: &str = "floe.commitments";
-const COMMUNICATION_AGENT_ID: &str = "floe.communication";
-const WORK_CONTEXT_AGENT_ID: &str = "floe.work-context";
-const LIFE_LOGISTICS_AGENT_ID: &str = "floe.life-logistics";
-const RELATIONSHIPS_AGENT_ID: &str = "floe.relationships";
-const FOCUS_AGENT_ID: &str = "floe.focus-attention";
-const WELLBEING_AGENT_ID: &str = "floe.wellbeing";
+const COMMITMENTS_AGENT_ID: &str = "floe.builtin.commitments";
+const COMMUNICATION_AGENT_ID: &str = "floe.builtin.communication";
+const WORK_CONTEXT_AGENT_ID: &str = "floe.builtin.work-context";
+const LIFE_LOGISTICS_AGENT_ID: &str = "floe.builtin.life-logistics";
+const RELATIONSHIPS_AGENT_ID: &str = "floe.builtin.relationships";
+const FOCUS_AGENT_ID: &str = "floe.builtin.focus-attention";
+const WELLBEING_AGENT_ID: &str = "floe.builtin.wellbeing";
 
 struct ConversationExperts<'model> {
     model: &'model Model,
@@ -519,95 +521,22 @@ struct ConversationExperts<'model> {
     context: &'model AgentContext,
     local_context: &'model LocalContextStore,
     task_views: &'model [NativeContextView],
+    cards: Vec<AgentCard>,
 }
 
 impl InProcessAgent for ConversationExperts<'_> {
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        let cards = vec![
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: COMMITMENTS_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Commitments Expert".into(),
-                description: "Finds obligations, deadlines, expected replies and follow-up gaps from bounded evidence.".into(),
-                domain_tags: vec!["commitments".into()],
-                skills: vec!["Distinguish explicit commitments from inferred follow-up candidates.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: COMMUNICATION_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Communication Expert".into(),
-                description: "Judges reply need, summary, tone and optional email drafts from bounded evidence.".into(),
-                domain_tags: vec!["communication".into()],
-                skills: vec!["Prepare evidence-linked reply guidance without sending messages.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: WORK_CONTEXT_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Work Context Expert".into(),
-                description: "Finds blockers and next actions from a bounded selected workspace.".into(),
-                domain_tags: vec!["work-context".into()],
-                skills: vec!["Prepare evidence-linked work guidance without changing project state.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: LIFE_LOGISTICS_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Life Logistics Expert".into(),
-                description: "Finds preparations from bounded home and logistics state.".into(),
-                domain_tags: vec!["life-logistics".into()],
-                skills: vec!["Prepare evidence-linked logistics guidance without taking actions.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: RELATIONSHIPS_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Relationships Expert".into(),
-                description: "Finds evidence-linked relationship follow-ups from a bounded identity projection.".into(),
-                domain_tags: vec!["relationships".into()],
-                skills: vec!["Suggest relationship follow-ups without messaging or modifying contacts.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: FOCUS_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Focus & Attention Expert".into(),
-                description: "Judges interruption pressure from a bounded coarse attention projection.".into(),
-                domain_tags: vec!["focus".into(), "attention".into()],
-                skills: vec!["Recommend whether to protect focus without reading raw activity history.".into()],
-            },
-            AgentCard {
-                schema_version: AGENT_VERSION,
-                protocol_version: A2A_PROTOCOL_VERSION.into(),
-                id: WELLBEING_AGENT_ID.into(),
-                version: "1.0.0".into(),
-                name: "Wellbeing Expert".into(),
-                description: "Suggests schedule impact from a bounded derived wellbeing projection.".into(),
-                domain_tags: vec!["wellbeing".into()],
-                skills: vec!["Offer non-diagnostic capacity guidance without reading raw health samples.".into()],
-            },
-        ];
-        if matches!(self.model, Model::Server(_)) {
-            cards
-        } else {
-            cards
-                .into_iter()
-                .filter(|card| {
-                    matches!(
+        self.cards
+            .iter()
+            .filter(|card| {
+                matches!(self.model, Model::Server(_))
+                    || matches!(
                         card.id.as_str(),
                         RELATIONSHIPS_AGENT_ID | FOCUS_AGENT_ID | WELLBEING_AGENT_ID
                     )
-                })
-                .collect()
-        }
+            })
+            .cloned()
+            .collect()
     }
 
     async fn handle_message(
@@ -617,16 +546,10 @@ impl InProcessAgent for ConversationExperts<'_> {
         if request.schema_version != AGENT_VERSION
             || request.message.role != A2AMessageRole::User
             || request.message.task_id.is_none()
-            || !matches!(
-                request.agent_id.as_str(),
-                COMMITMENTS_AGENT_ID
-                    | COMMUNICATION_AGENT_ID
-                    | WORK_CONTEXT_AGENT_ID
-                    | LIFE_LOGISTICS_AGENT_ID
-                    | RELATIONSHIPS_AGENT_ID
-                    | FOCUS_AGENT_ID
-                    | WELLBEING_AGENT_ID
-            )
+            || !self
+                .agent_cards(request.person_id)
+                .iter()
+                .any(|card| card.id == request.agent_id)
         {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -872,6 +795,30 @@ mod tests {
 
     use super::*;
 
+    fn test_expert_cards() -> Vec<AgentCard> {
+        [
+            (COMMITMENTS_AGENT_ID, "Commitments Expert"),
+            (COMMUNICATION_AGENT_ID, "Communication Expert"),
+            (WORK_CONTEXT_AGENT_ID, "Work Context Expert"),
+            (LIFE_LOGISTICS_AGENT_ID, "Life Logistics Expert"),
+            (RELATIONSHIPS_AGENT_ID, "Relationships Expert"),
+            (FOCUS_AGENT_ID, "Focus & Attention Expert"),
+            (WELLBEING_AGENT_ID, "Wellbeing Expert"),
+        ]
+        .into_iter()
+        .map(|(id, name)| AgentCard {
+            schema_version: AGENT_VERSION,
+            protocol_version: floe_agent::A2A_PROTOCOL_VERSION.into(),
+            id: id.into(),
+            version: "1.0.0".into(),
+            name: name.into(),
+            description: format!("Bounded {name} fixture."),
+            domain_tags: vec!["test".into()],
+            skills: vec!["Read bounded context".into()],
+        })
+        .collect()
+    }
+
     async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
         let mut bytes = Vec::new();
         let length = loop {
@@ -1060,6 +1007,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &[],
+            cards: test_expert_cards(),
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1071,6 +1019,50 @@ mod tests {
         assert_eq!(cards[5].id, FOCUS_AGENT_ID);
         assert_eq!(cards[6].id, WELLBEING_AGENT_ID);
         assert!(cards.iter().all(|card| card.validate().is_ok()));
+    }
+
+    #[tokio::test]
+    async fn unregistered_expert_card_cannot_be_invoked_directly() {
+        let model = Model::new(None).unwrap();
+        let policy = policy(&model, None);
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let local_context = LocalContextStore::default();
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+            local_context: &local_context,
+            task_views: &[],
+            cards: vec![],
+        };
+        let result = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id: PersonId::new(),
+                session_id: uuid::Uuid::new_v4(),
+                parent_turn_id: uuid::Uuid::new_v4(),
+                agent_id: RELATIONSHIPS_AGENT_ID.into(),
+                message: floe_agent::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(uuid::Uuid::new_v4()),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Find a follow-up.".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await;
+        assert_eq!(result, Err(AgentFailure::CapabilityDenied));
     }
 
     #[tokio::test]
@@ -1213,6 +1205,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &[],
+            cards: test_expert_cards(),
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -1412,6 +1405,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &tasks,
+            cards: test_expert_cards(),
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -1588,6 +1582,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &[],
+            cards: test_expert_cards(),
         };
         let mut results = vec![];
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -1839,6 +1834,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &[],
+            cards: test_expert_cards(),
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let task = experts
@@ -1929,6 +1925,7 @@ mod tests {
             context: &context,
             local_context: &local_context,
             task_views: &[],
+            cards: test_expert_cards(),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
