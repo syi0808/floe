@@ -131,6 +131,12 @@ impl Event {
         self.revision = self.revision.next();
         Ok(())
     }
+
+    pub fn delete(&mut self, now: DateTime<Utc>) {
+        self.deleted_at = Some(now);
+        self.updated_at = now;
+        self.revision = self.revision.next();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -189,6 +195,27 @@ impl Task {
         self.updated_at = now;
         self.revision = self.revision.next();
     }
+
+    pub fn update(
+        &mut self,
+        title: impl Into<String>,
+        deadline: Option<DateTime<Utc>>,
+        priority: Priority,
+        now: DateTime<Utc>,
+    ) -> Result<(), DomainError> {
+        self.title = required(title, "title")?;
+        self.deadline = deadline;
+        self.priority = priority;
+        self.updated_at = now;
+        self.revision = self.revision.next();
+        Ok(())
+    }
+
+    pub fn delete(&mut self, now: DateTime<Utc>) {
+        self.deleted_at = Some(now);
+        self.updated_at = now;
+        self.revision = self.revision.next();
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -220,6 +247,23 @@ impl Note {
             revision: Revision::default(),
             deleted_at: None,
         })
+    }
+
+    pub fn update(
+        &mut self,
+        content: impl Into<String>,
+        now: DateTime<Utc>,
+    ) -> Result<(), DomainError> {
+        self.content = required(content, "content")?;
+        self.updated_at = now;
+        self.revision = self.revision.next();
+        Ok(())
+    }
+
+    pub fn delete(&mut self, now: DateTime<Utc>) {
+        self.deleted_at = Some(now);
+        self.updated_at = now;
+        self.revision = self.revision.next();
     }
 }
 

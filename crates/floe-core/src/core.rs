@@ -194,19 +194,7 @@ impl FloeCore {
             .await?
             .ok_or_else(|| not_found("task", task_id))?;
         ensure_revision(task.revision, expected_revision)?;
-        let validated = Task::new(
-            task.person_id,
-            title,
-            deadline,
-            priority,
-            task.source.clone(),
-            now,
-        )?;
-        task.title = validated.title;
-        task.deadline = deadline;
-        task.priority = priority;
-        task.updated_at = now;
-        task.revision = task.revision.next();
+        task.update(title, deadline, priority, now)?;
         self.store.put_task(&task).await?;
         Ok(task)
     }
@@ -224,10 +212,7 @@ impl FloeCore {
             .await?
             .ok_or_else(|| not_found("note", note_id))?;
         ensure_revision(note.revision, expected_revision)?;
-        let validated = Note::new(note.person_id, content, note.source.clone(), now)?;
-        note.content = validated.content;
-        note.updated_at = now;
-        note.revision = note.revision.next();
+        note.update(content, now)?;
         self.store.put_note(&note).await?;
         Ok(note)
     }
@@ -247,9 +232,7 @@ impl FloeCore {
                     .ok_or_else(|| not_found("event", id))?;
                 ensure_revision(value.revision, expected_revision)?;
                 ensure_local_event(&value)?;
-                value.deleted_at = Some(now);
-                value.updated_at = now;
-                value.revision = value.revision.next();
+                value.delete(now);
                 self.store.put_event(&value).await?;
             }
             DomainRef::Task(id) => {
@@ -259,9 +242,7 @@ impl FloeCore {
                     .await?
                     .ok_or_else(|| not_found("task", id))?;
                 ensure_revision(value.revision, expected_revision)?;
-                value.deleted_at = Some(now);
-                value.updated_at = now;
-                value.revision = value.revision.next();
+                value.delete(now);
                 self.store.put_task(&value).await?;
             }
             DomainRef::Note(id) => {
@@ -271,9 +252,7 @@ impl FloeCore {
                     .await?
                     .ok_or_else(|| not_found("note", id))?;
                 ensure_revision(value.revision, expected_revision)?;
-                value.deleted_at = Some(now);
-                value.updated_at = now;
-                value.revision = value.revision.next();
+                value.delete(now);
                 self.store.put_note(&value).await?;
             }
         }
