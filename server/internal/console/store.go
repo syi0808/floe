@@ -149,7 +149,7 @@ func readState(directory string) (diskState, string, error) {
 		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || state.Cleanups == nil || state.Attempts == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 || len(state.Cleanups) > 16 || len(state.Attempts) > 64 {
 			return state, "", errors.New("invalid server state")
 		}
-		if len(state.Cleanups) > 1 || len(state.Cleanups) != 0 && len(state.Attempts) != 0 {
+		if len(state.Cleanups) > 1 {
 			return state, "", errors.New("invalid server state")
 		}
 		if state.Routes == nil {
@@ -181,6 +181,9 @@ func readState(directory string) (diskState, string, error) {
 			}
 			personID = client.PersonID
 		}
+		connectionIdentities := map[string]bool{}
+		credentialIdentities := map[string]bool{}
+		connectorIdentities := map[string]bool{}
 		for key, cleanup := range state.Cleanups {
 			if key != cleanup.PersonID || !validPersonID(cleanup.PersonID) || personID != "" && personID != cleanup.PersonID || len(cleanup.Connections) == 0 || len(cleanup.Connections) > len(clientConnectorDefinitions) {
 				return state, "", errors.New("invalid server state")
@@ -188,9 +191,15 @@ func readState(directory string) (diskState, string, error) {
 			personID = cleanup.PersonID
 			for _, step := range cleanup.Connections {
 				definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
-				if !exists || !validConnectionID(step.ConnectionID) || definition.AuthKind == "secret" && !step.RuntimeComplete || step.Credential == "" && !step.VaultComplete {
+				ownerKey := cleanup.PersonID + "\x00" + step.ConnectorID
+				if !exists || !validConnectionID(step.ConnectionID) || connectionIdentities[step.ConnectionID] || credentialIdentities[step.Credential] || connectorIdentities[ownerKey] || definition.AuthKind == "secret" && !step.RuntimeComplete || step.Credential == "" && !step.VaultComplete {
 					return state, "", errors.New("invalid server state")
 				}
+				connectionIdentities[step.ConnectionID] = true
+				if step.Credential != "" {
+					credentialIdentities[step.Credential] = true
+				}
+				connectorIdentities[ownerKey] = true
 				credentialNamespace := definition.CredentialName
 				if credentialNamespace == "" {
 					credentialNamespace = definition.OAuthCredential
@@ -205,13 +214,16 @@ func readState(directory string) (diskState, string, error) {
 		for _, client := range state.Clients {
 			personOwners[client.PersonID] = true
 		}
-		connectorOwners := make(map[string]bool, len(state.Connections))
 		for key, connection := range state.Connections {
 			ownerKey := connection.PersonID + "\x00" + connection.ConnectorID
-			if key != connection.ConnectionID || !validConnectionID(connection.ConnectionID) || !connectorIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connectorOwners[ownerKey] || connection.Revision == 0 || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
+			if key != connection.ConnectionID || !validConnectionID(connection.ConnectionID) || connectionIdentities[connection.ConnectionID] || credentialIdentities[connection.Credential] || !connectorIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connectorIdentities[ownerKey] || connection.Revision == 0 || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
-			connectorOwners[ownerKey] = true
+			connectionIdentities[connection.ConnectionID] = true
+			if connection.Credential != "" {
+				credentialIdentities[connection.Credential] = true
+			}
+			connectorIdentities[ownerKey] = true
 			if definition, exists := clientConnectorDefinitionFor(connection.ConnectorID); exists {
 				if _, err := validatedConnectorScope(definition, connection.Scope); err != nil {
 					return state, "", errors.New("invalid server state")
@@ -229,7 +241,6 @@ func readState(directory string) (diskState, string, error) {
 				}
 			}
 		}
-		attemptOwners := make(map[string]bool, len(state.Attempts))
 		for key, attempt := range state.Attempts {
 			definition, exists := clientConnectorDefinitionFor(attempt.ConnectorID)
 			clientOwned := false
@@ -242,11 +253,12 @@ func readState(directory string) (diskState, string, error) {
 			}
 			expectedCredential, _ := credentials.ConnectionName(credentialNamespace, attempt.ConnectionID, attempt.PersonID)
 			ownerKey := attempt.PersonID + "\x00" + attempt.ConnectorID
-			_, connectionExists := state.Connections[attempt.ConnectionID]
-			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || definition.AuthKind != "oauth_pkce" || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionExists || attemptOwners[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
+			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || definition.AuthKind != "oauth_pkce" || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionIdentities[attempt.ConnectionID] || credentialIdentities[attempt.Credential] || connectorIdentities[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
 				return state, "", errors.New("invalid server state")
 			}
-			attemptOwners[ownerKey] = true
+			connectionIdentities[attempt.ConnectionID] = true
+			credentialIdentities[attempt.Credential] = true
+			connectorIdentities[ownerKey] = true
 			if _, err := validatedConnectorScope(definition, attempt.Scope); err != nil {
 				return state, "", errors.New("invalid server state")
 			}

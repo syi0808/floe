@@ -418,6 +418,56 @@ func TestPersistedStateRequiresConnectionAttemptLedger(test *testing.T) {
 	}
 }
 
+func TestPersistedAttemptCleanupIdentityOverlapIsRejected(test *testing.T) {
+	tests := []struct {
+		name             string
+		attemptConnector string
+		reuseConnection  bool
+		reuseCredential  bool
+	}{
+		{name: "connector", attemptConnector: "microsoft.mail"},
+		{name: "connection", attemptConnector: "gmail", reuseConnection: true},
+		{name: "credential", attemptConnector: "gmail", reuseCredential: true},
+	}
+	for _, current := range tests {
+		test.Run(current.name, func(test *testing.T) {
+			fixture := setup(test)
+			fixture.pair()
+			cleanupConnectionID := "00000000-0000-4000-8000-000000000031"
+			attemptConnectionID := "00000000-0000-4000-8000-000000000032"
+			if current.reuseConnection {
+				attemptConnectionID = cleanupConnectionID
+			}
+			cleanupCredential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", cleanupConnectionID, fixturePersonID)
+			attemptNamespace := "FLOE_MICROSOFT_MAIL_OAUTH"
+			if current.attemptConnector == "gmail" {
+				attemptNamespace = "FLOE_GMAIL_OAUTH"
+			}
+			attemptCredential, _ := credentials.ConnectionName(attemptNamespace, attemptConnectionID, fixturePersonID)
+			if current.reuseCredential {
+				attemptCredential = cleanupCredential
+			}
+			fixture.console.mu.Lock()
+			fixture.console.state.Cleanups[fixturePersonID] = personCleanup{PersonID: fixturePersonID, Connections: []connectionCleanupStep{{
+				ConnectionID: cleanupConnectionID, ConnectorID: "microsoft.mail", Credential: cleanupCredential,
+			}}}
+			fixture.console.state.Attempts["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] = connectionAttemptRecord{
+				AttemptID: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", PersonID: fixturePersonID, DeviceID: fixtureDeviceID,
+				ConnectorID: current.attemptConnector, ConnectionID: attemptConnectionID, Credential: attemptCredential,
+				Scope: map[string]any{}, CreatedAtUnixMs: time.Now().UnixMilli(), CleanupKind: "oauth_logout",
+			}
+			if err := fixture.console.save(fixture.console.state); err != nil {
+				fixture.console.mu.Unlock()
+				test.Fatal(err)
+			}
+			fixture.console.mu.Unlock()
+			if _, _, err := readState(fixture.console.directory); err == nil {
+				test.Fatalf("overlapping %s identity was accepted", current.name)
+			}
+		})
+	}
+}
+
 func TestUnscopedConnectorCredentialStateIsRejected(test *testing.T) {
 	directory := filepath.Join(test.TempDir(), "node")
 	if err := os.MkdirAll(directory, 0700); err != nil {

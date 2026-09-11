@@ -105,6 +105,15 @@ func (console *Console) recoverConnectionAttemptsLocked() error {
 		next.Cleanups[attempt.PersonID] = cleanup
 		delete(next.Attempts, identifier)
 	}
+	for personID, cleanup := range next.Cleanups {
+		sort.Slice(cleanup.Connections, func(left, right int) bool {
+			if cleanup.Connections[left].ConnectorID == cleanup.Connections[right].ConnectorID {
+				return cleanup.Connections[left].ConnectionID < cleanup.Connections[right].ConnectionID
+			}
+			return cleanup.Connections[left].ConnectorID < cleanup.Connections[right].ConnectorID
+		})
+		next.Cleanups[personID] = cleanup
+	}
 	if err := console.save(next); err != nil {
 		return err
 	}

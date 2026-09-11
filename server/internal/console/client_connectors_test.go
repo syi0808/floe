@@ -1033,6 +1033,86 @@ func TestRestartCleansDurableOAuthAttemptAfterCallbackTokenSave(test *testing.T)
 	}
 }
 
+func TestRestartMergesPendingAttemptWithDisconnectCleanup(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+	if started["status"] != "pending" {
+		test.Fatalf("OAuth attempt did not remain pending: %#v", started)
+	}
+	if response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1, "secret": "github-secret-token",
+		"scope": map[string]any{"owner": "floe", "repository": "server"},
+	}, token); response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	precondition := connectorMutationPrecondition(test, fixture, "github.issues")
+	githubConnectionID := precondition["connection_id"].(string)
+	fixture.console.mu.Lock()
+	githubCredential := fixture.console.state.Connections[githubConnectionID].Credential
+	fixture.console.mu.Unlock()
+	vault := &blockingDeleteVault{
+		values:        fixture.vault.values,
+		deleteEntered: make(chan struct{}),
+		releaseDelete: make(chan struct{}),
+		putCalled:     make(chan struct{}, 1),
+		failDelete:    true,
+	}
+	fixture.console.vault = vault
+	disconnected := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		disconnected <- fixture.call(http.MethodDelete, "/v1/connectors/github.issues", precondition, token)
+	}()
+	<-vault.deleteEntered
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil || len(persisted.Attempts) != 1 || len(persisted.Cleanups[fixturePersonID].Connections) != 1 {
+		test.Fatalf("pending attempt and disconnect cleanup did not coexist durably: attempts=%#v cleanups=%#v err=%v", persisted.Attempts, persisted.Cleanups, err)
+	}
+	var attemptCredential string
+	for _, attempt := range persisted.Attempts {
+		attemptCredential = attempt.Credential
+	}
+	close(vault.releaseDelete)
+	if response := <-disconnected; response.Code != http.StatusInternalServerError {
+		test.Fatalf("disconnect cleanup failure was hidden: %d %s", response.Code, response.Body.String())
+	}
+	vault.mu.Lock()
+	vault.failDelete = true
+	vault.mu.Unlock()
+
+	restarted, err := New(fixture.console.directory, fixture.console.address, vault, nil)
+	if err != nil {
+		test.Fatalf("restart rejected coexisting attempt and cleanup: %v", err)
+	}
+	restarted.mu.Lock()
+	cleanup := restarted.state.Cleanups[fixturePersonID]
+	attemptsRemaining := len(restarted.state.Attempts)
+	restarted.mu.Unlock()
+	if attemptsRemaining != 0 || len(cleanup.Connections) != 2 || cleanup.Connections[0].ConnectorID != "github.issues" || cleanup.Connections[1].ConnectorID != "microsoft.mail" {
+		test.Fatalf("restart did not stably merge cleanup work: attempts=%d cleanup=%#v", attemptsRemaining, cleanup)
+	}
+	vault.mu.Lock()
+	vault.failDelete = false
+	vault.mu.Unlock()
+	runtime.credential = "wrong-credential"
+	restarted.SetMicrosoftMail(runtime, nil)
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if cleanupPending || runtime.credential != attemptCredential {
+		test.Fatalf("merged cleanup did not converge: pending=%v credential=%q", cleanupPending, runtime.credential)
+	}
+	if githubSecret, _ := vault.Get(githubCredential); githubSecret != "" {
+		test.Fatalf("disconnect credential remained after merged retry: %q", githubSecret)
+	}
+	if oauthSecret, _ := vault.Get(attemptCredential); oauthSecret != "" {
+		test.Fatalf("attempt credential remained after merged retry: %q", oauthSecret)
+	}
+}
+
 func TestOAuthCancelRuntimeFailureLeavesRetryableAttempt(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
