@@ -65,9 +65,24 @@ Device Agent는 서버의 thin client가 아니라 독립적인 compute/privacy 
 
 Server가 없어도 일부 로컬 기능이 동작할 수 있도록 설계 여지를 남긴다.
 
-## Open Questions
+## Context Policy
 
-- Device Protocol의 형태
+Device Agent는 raw OS/provider data를 곧바로 sync하지 않는다. source별 observation을
+로컬에서 provider-neutral View로 정규화·축소하고, purpose/freshness/transfer policy가
+허용한 View만 다른 기기 또는 서버에 제공한다.
+
+- Location과 Attention은 현재 interaction/presence device에 묶인 device-scoped context다.
+- raw Health, raw Screen Time/activity와 precise location은 device-only다.
+- cross-device 최신 context는 일반 DB 복제가 아니라 만료되는 bounded query lease로 읽는다.
+- device-native Act는 해당 권한을 가진 execution owner가 수행한다.
+- macOS Attention은 public activity heuristic이며 Apple Screen Time으로 표시하지 않는다.
+
+상세 source matrix, routing, freshness, disagreement와 S5.5/S8 경계는
+[ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md)를 따른다.
+
+## Remaining Questions
+
+- Device Protocol의 wire encoding과 transport
 - offline operation 범위
 - local-only Person 가능성
-- server authority vs device authority
+- end-to-end key recovery와 opaque relay 구현

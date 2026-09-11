@@ -2,6 +2,10 @@
 
 > Status: High-risk design area
 
+> Context collection, execution ownership, query lease, freshness and convergence semantics are
+> fixed by [ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md). Storage,
+> transport and key-recovery implementation remain S8 PoC decisions.
+
 ## 목표
 
 같은 Person의 Floe가 macOS, Windows, iOS, Android에서 일관된 Timeline/Memory를 제공해야 한다.
@@ -55,6 +59,25 @@ EventKit mirror → Floe
 - Personal Memory: 강한 encryption / policy-dependent
 - temporary AI context: sync하지 않음
 
+## Context Is Not One Sync Stream
+
+Cross-device data movement uses three distinct mechanisms.
+
+| Mechanism | 대상 | 예시 |
+| --- | --- | --- |
+| durable convergence | Floe canonical record, normalized mirror, tombstone | Timeline, confirmed Memory, Calendar mirror, Review result |
+| encrypted derived snapshot | 명시적으로 허용된 bounded derived state | coarse Wellbeing state |
+| expiring query lease | 빠르게 변하거나 device presence에 묶인 context | Location, ETA, Attention |
+
+Raw Health/Screen Time/activity, precise location, credential과 Temporary AI Context는 durable
+sync 대상이 아니다. query lease는 producer device가 local privacy projection을 수행한 뒤
+authorized consumer에게만 전달하며, cross-device permission과 remote-model transfer consent를
+분리한다.
+
+Source route는 timestamp 하나로 선택하지 않는다. source-of-truth, selected scope, execution
+owner, interaction/device presence, freshness와 health를 적용하고, disagreement를 보존한다.
+Location과 Attention은 device-scoped이며 여러 기기의 값을 자동 평균하지 않는다.
+
 ## Device Arbitration
 
 "Floe" 호출을 여러 기기가 동시에 듣는 복잡한 arbitration은 초기 핵심 요구에서 제외한다.
@@ -72,3 +95,5 @@ EventKit mirror → Floe
 - end-to-end encryption 범위
 - key recovery
 - multi-person instance isolation
+- device directory/lease transport
+- clock-skew bound and relay receipt protocol

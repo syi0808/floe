@@ -103,6 +103,7 @@ The canonical planning specification is now **floe-planning v0.8** in [`docs/pla
 - [Ambient assistant, domain Experts and capability connectors](docs/decisions/0020-ambient-assistant-expert-connector-model.md)
 - [S5.5 connected domain expansion](docs/decisions/0021-s5-5-connected-domain-expansion.md)
 - [Page-independent assistant conversation](docs/decisions/0023-page-independent-assistant-conversation.md)
+- [Device context collection and cross-device convergence](docs/decisions/0024-device-context-collection-and-convergence.md)
 - [Planning specification v0.8](docs/planning/README.md)
 - [Floe design system](DESIGN.md)
 - [Interface and screen specifications](docs/design/README.md)

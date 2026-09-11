@@ -483,3 +483,23 @@ S6 now depends on S5.5 Accepted. Cross-device delivery remains S8 and autonomous
 background Situation/intervention remains S9.
 
 See [ADR 0021](../../decisions/0021-s5-5-connected-domain-expansion.md).
+
+---
+
+## D-045 — Device context is collected locally and converges by policy
+
+**Status:** Accepted — 2026-09-11
+
+Each source declares its authority owner, execution owner, trigger, freshness, retention,
+sensitivity and transfer class. Device-native raw data is reduced locally; durable canonical
+records, allowed derived snapshots and expiring context query leases use separate cross-device
+paths. Location and Attention are device-scoped and route by interaction/presence rather than the
+newest timestamp. Duplicate or disagreeing observations remain visible instead of being silently
+merged.
+
+macOS uses an opt-in public local-activity heuristic for coarse Attention and reports Apple Screen
+Time itself as unsupported. Private Screen Time/Knowledge databases, Full Disk Access and raw app
+history are excluded. S5.5 validates sources on their native hosts; S8 adds authenticated leases,
+encrypted relay/sync, revocation and physical-device convergence.
+
+See [ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md).
