@@ -132,6 +132,17 @@ fn google_drive_work_view_crosses_the_go_rust_contract() {
 }
 
 #[test]
+fn microsoft_teams_work_view_crosses_the_go_rust_contract() {
+    let view: WorkContextView = serde_json::from_str(include_str!(
+        "../../../server/internal/connectors/microsoftteams/testdata/work_context.json"
+    ))
+    .unwrap();
+    validate_work_context_view(&view, 1_789_128_000_000).unwrap();
+    assert_eq!(view.items[0].kind, WorkItemKind::Communication);
+    assert_eq!(view.items[0].title, "Release review");
+}
+
+#[test]
 fn gmail_logistics_view_crosses_the_go_rust_contract() {
     let view: LogisticsView = serde_json::from_str(include_str!(
         "../../../server/internal/connectors/gmail/testdata/logistics_view.json"

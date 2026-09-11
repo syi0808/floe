@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "view_id": "work.context",
+  "source_handle": "teams:75510d0717298ee73eac394f4035161f8004dd43cecc65e3a935a0b503448b42",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789128300000,
+  "coverage_complete": true,
+  "scope_handle": "teams-channel:921567d737b3457665caf78fd19b1072b0f399672827fa46643c32bf3d8879dd",
+  "items": [{"evidence_handle": "teams-message:01db669b49b9b2fff833ea916e7520bc54718d4e0cb432c6560636652fd67aa0", "kind": "communication", "title": "Release review", "excerpt": "Release review\nAttach the validation evidence.", "status": "message", "observed_at_unix_ms": 1789127970000}]
+}

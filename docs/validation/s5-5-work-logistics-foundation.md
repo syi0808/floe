@@ -50,6 +50,12 @@
 - Slack configuration and tokens use the same private console/Keychain lifecycle. GitHub and Slack
   Work Context Views merge behind one provider-neutral Agent route with deterministic aggregate
   handles, duplicate rejection and partial-provider tolerance.
+- Added a server-native Microsoft Teams adapter for one explicitly selected team/channel. It makes
+  one GET-only Microsoft Graph request for at most 50 root messages under the delegated
+  `ChannelMessage.Read.All` scope and emits the same bounded Work Context communication shape.
+  Message markup is reduced to plain untrusted text; user identity, attachments, provider IDs,
+  URLs, reactions and send authority remain outside the View. This checkpoint includes the strict
+  adapter/service and cross-language fixtures; OAuth and product routing are the next boundary.
 - Added a Google Drive adapter for one explicitly selected folder. Each foreground read lists at
   most eight recent entries and reads only supported text or Google Document content, capped at
   16 KiB fetched and 2 KiB projected per file. Binary/unsupported types, file/folder IDs, MIME
@@ -77,6 +83,8 @@ go -C server test -race ./internal/console
 go -C server vet ./internal/console
 go -C server test -race ./internal/connectors/slack
 go -C server vet ./internal/connectors/slack
+go -C server test -race ./internal/connectors/microsoftteams
+go -C server vet ./internal/connectors/microsoftteams
 go -C server test -race ./internal/connectors/googledrive ./internal/googleauth
 go -C server vet ./internal/connectors/googledrive ./internal/googleauth
 go -C server test -race ./internal/connectors/common ./internal/connectors/gmail
@@ -94,5 +102,6 @@ delegations fetch fresh Views and return source-linked typed A2A artifacts.
 ## Remaining gate
 
 No live provider evidence was used. The Agent path is stateless rather than a durable registry
-assignment. No Teams or dedicated live travel/delivery provider adapter exists yet. Broader
-cross-domain scenarios and live evidence remain required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+assignment. Microsoft Teams OAuth/product routing and a dedicated live travel/delivery provider
+adapter remain. Broader cross-domain scenarios and live evidence are also required. S5.5-C4/C5 and
+S5.5-E7/E8 remain pending.

@@ -4,6 +4,18 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 bounded Microsoft Teams adapter foundation — 2026-09-11
+
+- Added a selected-team/channel, GET-only Microsoft Graph adapter using the least-privilege
+  delegated `ChannelMessage.Read.All` scope contract. It reads at most 50 root messages and emits
+  only bounded communication items into the shared `work.context` View.
+- HTML bodies are reduced to plain untrusted text while user identity, attachments, provider IDs,
+  URLs and all send authority remain excluded. Unsafe selections/endpoints and unknown body types
+  fail closed; credential, permission, rate-limit and partial failures are typed.
+- Focused Go race tests/vet and Rust View/connector conformance tests pass. OAuth, startup,
+  management-console and Work Context route wiring remain before this adapter is product-usable;
+  S5.5-C4/E7 and the slice remain **0/14**.
+
 ### S5.5 Android Calendar settings route — 2026-09-11
 
 - Added a bounded native calendar catalog and a device-private selection of at most four visible

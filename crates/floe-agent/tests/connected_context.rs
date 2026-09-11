@@ -311,6 +311,24 @@ fn go_microsoft_calendar_descriptor_conforms_to_the_shared_rust_contract() {
 }
 
 #[test]
+fn go_microsoft_teams_descriptor_conforms_to_the_shared_rust_contract() {
+    let snapshot: ConnectorSnapshot = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../server/internal/connectors/microsoftteams/testdata/ready_snapshot.json"
+    )))
+    .unwrap();
+    assert!(validate_connector_snapshot(&snapshot, 1_789_128_000_000).is_empty());
+    assert_eq!(snapshot.descriptor.provider, "microsoft_teams");
+    assert!(
+        snapshot
+            .descriptor
+            .capabilities
+            .iter()
+            .all(|capability| capability.authority == CapabilityAuthority::Observe)
+    );
+}
+
+#[test]
 fn android_context_descriptors_conform_to_the_shared_contract() {
     for (source, connector, provider) in [
         (
