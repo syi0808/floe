@@ -1,13 +1,15 @@
 use floe_agent::{
     A2A_PROTOCOL_VERSION, A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
     A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
-    AgentFailure, AgentRuntime, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
-    CommitmentsExpertResult, CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE,
-    InProcessA2ATransport, InProcessAgent, InferencePolicyDecision, LifeLogisticsExpertResult,
-    MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
-    PortfolioExpertInvocation, SessionStore, TransferConsent, WorkContextExpertResult,
-    run_commitments_expert, run_communication_expert, run_life_logistics_expert,
-    run_work_context_expert,
+    AgentFailure, AgentRuntime, AttentionView, CapabilityDescriptor, CapabilityHost,
+    CapabilityInvocation, CommitmentsExpertResult, CommunicationExpertResult, DataClass,
+    EXPERT_RESULT_MEDIA_TYPE, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
+    InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
+    ModelRequest, ModelResponse, ModelRunner, PeopleView, PersonalExpertInvocation,
+    PortfolioExpertInvocation, RelationshipsExpertResult, SessionStore, TransferConsent,
+    WellbeingExpertResult, WellbeingView, WorkContextExpertResult, run_commitments_expert,
+    run_communication_expert, run_focus_expert, run_life_logistics_expert,
+    run_relationships_expert, run_wellbeing_expert, run_work_context_expert,
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -175,6 +177,61 @@ impl ModelRunner for Model {
     }
 }
 
+trait PersonalViewSource {
+    async fn people_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PeopleView, AgentFailure>;
+
+    async fn attention_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<AttentionView, AgentFailure>;
+
+    async fn wellbeing_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<WellbeingView, AgentFailure>;
+}
+
+impl PersonalViewSource for Model {
+    async fn people_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PeopleView, AgentFailure> {
+        match self {
+            Self::Server(model) => model.read_people_view(deadline, cancellation).await,
+            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        }
+    }
+
+    async fn attention_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<AttentionView, AgentFailure> {
+        match self {
+            Self::Server(model) => model.read_attention_view(deadline, cancellation).await,
+            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        }
+    }
+
+    async fn wellbeing_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<WellbeingView, AgentFailure> {
+        match self {
+            Self::Server(model) => model.read_wellbeing_view(deadline, cancellation).await,
+            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        }
+    }
+}
+
 struct NoCapabilities;
 
 impl CapabilityHost for NoCapabilities {
@@ -215,6 +272,9 @@ impl CapabilityHost for ConversationCapabilities<'_> {
             },
             read_capability("work.context.read"),
             read_capability("life.logistics.read"),
+            read_capability("people.identity.read"),
+            read_capability("attention.coarse.read"),
+            read_capability("wellbeing.derived.read"),
         ]
     }
 
@@ -248,24 +308,43 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                         .await?,
                 )
             }
-            "work.context.read" | "life.logistics.read" => {
+            "work.context.read"
+            | "life.logistics.read"
+            | "people.identity.read"
+            | "attention.coarse.read"
+            | "wellbeing.derived.read" => {
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct Empty {}
                 serde_json::from_str::<Empty>(&invocation.input)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                if invocation.capability_id == "work.context.read" {
-                    serde_json::to_value(
+                match invocation.capability_id.as_str() {
+                    "work.context.read" => serde_json::to_value(
                         model
                             .read_work_context_view(invocation.deadline, &invocation.cancellation)
                             .await?,
-                    )
-                } else {
-                    serde_json::to_value(
+                    ),
+                    "life.logistics.read" => serde_json::to_value(
                         model
                             .read_logistics_view(invocation.deadline, &invocation.cancellation)
                             .await?,
-                    )
+                    ),
+                    "people.identity.read" => serde_json::to_value(
+                        self.model
+                            .people_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    ),
+                    "attention.coarse.read" => serde_json::to_value(
+                        self.model
+                            .attention_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    ),
+                    "wellbeing.derived.read" => serde_json::to_value(
+                        self.model
+                            .wellbeing_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    ),
+                    _ => unreachable!(),
                 }
             }
             _ => return Err(AgentFailure::CapabilityDenied),
@@ -298,6 +377,9 @@ const COMMITMENTS_AGENT_ID: &str = "floe.commitments";
 const COMMUNICATION_AGENT_ID: &str = "floe.communication";
 const WORK_CONTEXT_AGENT_ID: &str = "floe.work-context";
 const LIFE_LOGISTICS_AGENT_ID: &str = "floe.life-logistics";
+const RELATIONSHIPS_AGENT_ID: &str = "floe.relationships";
+const FOCUS_AGENT_ID: &str = "floe.focus-attention";
+const WELLBEING_AGENT_ID: &str = "floe.wellbeing";
 
 struct ConversationExperts<'model> {
     model: &'model Model,
@@ -351,6 +433,36 @@ impl InProcessAgent for ConversationExperts<'_> {
                 domain_tags: vec!["life-logistics".into()],
                 skills: vec!["Prepare evidence-linked logistics guidance without taking actions.".into()],
             },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: RELATIONSHIPS_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Relationships Expert".into(),
+                description: "Finds evidence-linked relationship follow-ups from a bounded identity projection.".into(),
+                domain_tags: vec!["relationships".into()],
+                skills: vec!["Suggest relationship follow-ups without messaging or modifying contacts.".into()],
+            },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: FOCUS_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Focus & Attention Expert".into(),
+                description: "Judges interruption pressure from a bounded coarse attention projection.".into(),
+                domain_tags: vec!["focus".into(), "attention".into()],
+                skills: vec!["Recommend whether to protect focus without reading raw activity history.".into()],
+            },
+            AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: A2A_PROTOCOL_VERSION.into(),
+                id: WELLBEING_AGENT_ID.into(),
+                version: "1.0.0".into(),
+                name: "Wellbeing Expert".into(),
+                description: "Suggests schedule impact from a bounded derived wellbeing projection.".into(),
+                domain_tags: vec!["wellbeing".into()],
+                skills: vec!["Offer non-diagnostic capacity guidance without reading raw health samples.".into()],
+            },
         ]
     }
 
@@ -367,6 +479,9 @@ impl InProcessAgent for ConversationExperts<'_> {
                     | COMMUNICATION_AGENT_ID
                     | WORK_CONTEXT_AGENT_ID
                     | LIFE_LOGISTICS_AGENT_ID
+                    | RELATIONSHIPS_AGENT_ID
+                    | FOCUS_AGENT_ID
+                    | WELLBEING_AGENT_ID
             )
         {
             return Err(AgentFailure::CapabilityDenied);
@@ -396,6 +511,19 @@ impl InProcessAgent for ConversationExperts<'_> {
             cancellation: request.cancellation.clone(),
         };
         let portfolio_invocation = || PortfolioExpertInvocation {
+            usage: request.usage.clone(),
+            person_id: request.person_id,
+            invocation_id,
+            assignment: assignment.clone(),
+            current_time_unix_ms,
+            context: self.context.clone(),
+            max_output_bytes: request.max_output_bytes,
+            max_model_tokens: 40_960,
+            max_model_cost_micros: 50_000,
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
+        let personal_invocation = || PersonalExpertInvocation {
             usage: request.usage.clone(),
             person_id: request.person_id,
             invocation_id,
@@ -469,6 +597,46 @@ impl InProcessAgent for ConversationExperts<'_> {
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
                     "Life Logistics expert result",
+                )
+            }
+            RELATIONSHIPS_AGENT_ID => {
+                let view = self
+                    .model
+                    .people_view(request.deadline, &request.cancellation)
+                    .await?;
+                let result: RelationshipsExpertResult =
+                    run_relationships_expert(model, self.policy, personal_invocation(), view)
+                        .await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Relationships expert result",
+                )
+            }
+            FOCUS_AGENT_ID => {
+                let view = self
+                    .model
+                    .attention_view(request.deadline, &request.cancellation)
+                    .await?;
+                let result: FocusExpertResult =
+                    run_focus_expert(model, self.policy, personal_invocation(), view).await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Focus & Attention expert result",
+                )
+            }
+            WELLBEING_AGENT_ID => {
+                let view = self
+                    .model
+                    .wellbeing_view(request.deadline, &request.cancellation)
+                    .await?;
+                let result: WellbeingExpertResult =
+                    run_wellbeing_expert(model, self.policy, personal_invocation(), view).await?;
+                (
+                    result.summary.clone(),
+                    serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
+                    "Wellbeing expert result",
                 )
             }
             _ => return Err(AgentFailure::CapabilityDenied),
@@ -556,6 +724,18 @@ mod tests {
         assert!(matches!(Model::new(None).unwrap(), Model::Foundation(_)));
     }
 
+    #[tokio::test]
+    async fn device_model_has_no_implicit_cross_device_personal_view_route() {
+        let model = Model::new(None).unwrap();
+        let result = model
+            .attention_view(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                &floe_agent::Cancellation::default(),
+            )
+            .await;
+        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
+    }
+
     #[test]
     fn server_route_exposes_only_bounded_context_observe_capabilities() {
         let model = Model::new(Some(AgentRemoteRouteDto {
@@ -568,7 +748,7 @@ mod tests {
         .unwrap();
         let capabilities = ConversationCapabilities { model: &model };
         let descriptors = capabilities.descriptors(PersonId::new());
-        assert_eq!(descriptors.len(), 3);
+        assert_eq!(descriptors.len(), 6);
         assert_eq!(
             descriptors
                 .iter()
@@ -577,7 +757,10 @@ mod tests {
             [
                 "mail.communication.read",
                 "work.context.read",
-                "life.logistics.read"
+                "life.logistics.read",
+                "people.identity.read",
+                "attention.coarse.read",
+                "wellbeing.derived.read"
             ]
         );
         for descriptor in &descriptors {
@@ -600,11 +783,14 @@ mod tests {
             context: &context,
         };
         let cards = experts.agent_cards(PersonId::new());
-        assert_eq!(cards.len(), 4);
+        assert_eq!(cards.len(), 7);
         assert_eq!(cards[0].id, COMMITMENTS_AGENT_ID);
         assert_eq!(cards[1].id, COMMUNICATION_AGENT_ID);
         assert_eq!(cards[2].id, WORK_CONTEXT_AGENT_ID);
         assert_eq!(cards[3].id, LIFE_LOGISTICS_AGENT_ID);
+        assert_eq!(cards[4].id, RELATIONSHIPS_AGENT_ID);
+        assert_eq!(cards[5].id, FOCUS_AGENT_ID);
+        assert_eq!(cards[6].id, WELLBEING_AGENT_ID);
         assert!(cards.iter().all(|card| card.validate().is_ok()));
     }
 
@@ -928,6 +1114,246 @@ mod tests {
         assert_eq!(work.insights[0].evidence_handle, "github:issue");
         assert_eq!(logistics.source_handle, "home:fresh");
         assert_eq!(logistics.preparations[0].evidence_handle, "home:sensor");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn personal_delegations_use_bounded_views_and_capability_free_experts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let cases = [
+            (
+                RELATIONSHIPS_AGENT_ID,
+                "/v1/views/people.identity",
+                "Relationships Expert",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view_id": "people.identity",
+                    "source_handle": "contacts:local",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "identities": [{
+                        "identity_handle": "person:alex",
+                        "display_name": "Alex",
+                        "aliases": ["alex@example.com"],
+                        "confidence_millis": 1000,
+                        "evidence_handles": ["contact:alex"]
+                    }]
+                }),
+                serde_json::json!({
+                    "summary": "Alex has an evidence-linked follow-up.",
+                    "follow_ups": [{
+                        "identity_handle": "person:alex",
+                        "reason": "A confirmed interaction needs follow-up.",
+                        "evidence_handles": ["contact:alex"],
+                        "confidence_millis": 900
+                    }]
+                }),
+                "contacts:local",
+            ),
+            (
+                FOCUS_AGENT_ID,
+                "/v1/views/attention.coarse",
+                "Focus & Attention Expert",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view_id": "attention.coarse",
+                    "source_handle": "attention:mac-local",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "state": "focused",
+                    "confidence_millis": 800,
+                    "evidence_handles": ["attention:aggregate"]
+                }),
+                serde_json::json!({
+                    "summary": "Protect the current focus period.",
+                    "recommendation": "protect_focus",
+                    "rationale": "The coarse state reports focused work.",
+                    "evidence_handles": ["attention:aggregate"]
+                }),
+                "attention:mac-local",
+            ),
+            (
+                WELLBEING_AGENT_ID,
+                "/v1/views/wellbeing.derived",
+                "Wellbeing Expert",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view_id": "wellbeing.derived",
+                    "source_handle": "health:derived-local",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "capacity": "reduced",
+                    "recovery": "needs_recovery",
+                    "confidence_millis": 750,
+                    "evidence_handles": ["health:aggregate"]
+                }),
+                serde_json::json!({
+                    "summary": "Reduce optional load and preserve recovery time.",
+                    "schedule_impact": "protect_recovery",
+                    "rationale": "Derived capacity is reduced and recovery is needed.",
+                    "evidence_handles": ["health:aggregate"]
+                }),
+                "health:derived-local",
+            ),
+        ];
+        let server_cases = cases.clone();
+        let server = tokio::spawn(async move {
+            for (_, path, role, view, answer, _) in server_cases {
+                let (socket, _) = listener.accept().await.unwrap();
+                let (view_request, socket) = request(socket).await;
+                assert!(view_request.starts_with(&format!("POST {path} ")));
+                assert!(view_request.contains(r#"{"schema_version":1}"#));
+                respond(
+                    socket,
+                    serde_json::json!({"schema_version": 1, "view": view}).to_string(),
+                )
+                .await;
+
+                let (socket, _) = listener.accept().await.unwrap();
+                let (model_request, socket) = request(socket).await;
+                assert!(model_request.starts_with("POST /v1/agent "));
+                assert!(model_request.contains(role));
+                assert!(model_request.contains(r#""tools":[]"#));
+                assert!(!model_request.contains("notification.send"));
+                let output = serde_json::json!({
+                    "output": [{"kind": "answer", "text": answer.to_string()}],
+                    "used_tokens": 64,
+                    "call_ids": []
+                })
+                .to_string();
+                respond(
+                    socket,
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "purpose": "everyday_assistance",
+                        "output": output,
+                        "trace_id": "0123456789abcdef0123456789abcdef",
+                        "routing": {
+                            "placement": "server_local",
+                            "external_transfer": false,
+                            "replay_source": "a".repeat(64)
+                        }
+                    })
+                    .to_string(),
+                )
+                .await;
+            }
+        });
+        let route = AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        };
+        let model = Model::new(Some(route.clone())).unwrap();
+        let policy = policy(&model, Some(&route));
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+        };
+        for (agent_id, _, _, _, _, source_handle) in cases {
+            let task = experts
+                .handle_message(A2ASendMessageRequest {
+                    usage: floe_agent::UsageLedger::default(),
+                    schema_version: AGENT_VERSION,
+                    person_id: PersonId::new(),
+                    session_id: uuid::Uuid::new_v4(),
+                    parent_turn_id: uuid::Uuid::new_v4(),
+                    agent_id: agent_id.into(),
+                    message: floe_agent::A2AMessage {
+                        message_id: uuid::Uuid::new_v4(),
+                        context_id: uuid::Uuid::new_v4(),
+                        task_id: Some(uuid::Uuid::new_v4()),
+                        role: A2AMessageRole::User,
+                        parts: vec![A2APart::Text {
+                            text: "Assess only the supplied personal context.".into(),
+                        }],
+                    },
+                    max_output_bytes: 16_384,
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                    cancellation: floe_agent::Cancellation::default(),
+                })
+                .await
+                .unwrap();
+            let data: serde_json::Value =
+                serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
+            assert_eq!(data["source_handle"], source_handle);
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (view_request, mut socket) = request(socket).await;
+            assert!(view_request.starts_with("POST /v1/views/attention.coarse "));
+            socket
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let route = AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        };
+        let model = Model::new(Some(route.clone())).unwrap();
+        let policy = policy(&model, Some(&route));
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+        };
+        let result = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id: PersonId::new(),
+                session_id: uuid::Uuid::new_v4(),
+                parent_turn_id: uuid::Uuid::new_v4(),
+                agent_id: FOCUS_AGENT_ID.into(),
+                message: floe_agent::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(uuid::Uuid::new_v4()),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Assess my current attention.".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await;
+        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
         server.await.unwrap();
     }
 }

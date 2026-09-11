@@ -1,10 +1,12 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, CommunicationView, LogisticsView, MAX_COMMUNICATION_BYTES,
-    MAX_COMMUNICATION_ITEMS, MAX_PORTFOLIO_VIEW_BYTES, ModelPlacement, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, SessionProtection, WorkContextView, validate_communication_view,
-    validate_logistics_view, validate_work_context_view,
+    AGENT_VERSION, AgentFailure, AttentionView, CommunicationView, LogisticsView,
+    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PERSONAL_CONTEXT_BYTES,
+    MAX_PORTFOLIO_VIEW_BYTES, ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+    PeopleView, SessionProtection, WellbeingView, WorkContextView, validate_attention_view,
+    validate_communication_view, validate_logistics_view, validate_people_view,
+    validate_wellbeing_view, validate_work_context_view,
 };
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
@@ -98,6 +100,66 @@ impl ServerModelRunner {
             deadline,
             cancellation,
             validate_logistics_view,
+        )
+        .await
+    }
+
+    pub async fn read_people_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PeopleView, AgentFailure> {
+        self.read_personal_view(
+            "/v1/views/people.identity",
+            deadline,
+            cancellation,
+            validate_people_view,
+        )
+        .await
+    }
+
+    pub async fn read_attention_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<AttentionView, AgentFailure> {
+        self.read_personal_view(
+            "/v1/views/attention.coarse",
+            deadline,
+            cancellation,
+            validate_attention_view,
+        )
+        .await
+    }
+
+    pub async fn read_wellbeing_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<WellbeingView, AgentFailure> {
+        self.read_personal_view(
+            "/v1/views/wellbeing.derived",
+            deadline,
+            cancellation,
+            validate_wellbeing_view,
+        )
+        .await
+    }
+
+    async fn read_personal_view<View: DeserializeOwned>(
+        &self,
+        path: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+        validate: impl FnOnce(&View, i64) -> Result<(), AgentFailure>,
+    ) -> Result<View, AgentFailure> {
+        self.read_view(
+            path,
+            json!({"schema_version": AGENT_VERSION}),
+            MAX_PERSONAL_CONTEXT_BYTES,
+            deadline,
+            cancellation,
+            validate,
         )
         .await
     }
