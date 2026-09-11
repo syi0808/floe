@@ -17,6 +17,7 @@ func invalidConnectorToken(token string) bool {
 
 type connectorAttempt struct {
 	ID               string
+	ClientID         string
 	ConnectorID      string
 	ConnectionID     string
 	PersonID         string
@@ -139,7 +140,7 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 		}
 		var latest *connectorAttempt
 		for _, attempt := range console.connectorAttempts {
-			if attempt.ConnectorID == definition.ID && attempt.PersonID == scope.PersonID && attempt.DeviceID == scope.DeviceID && (latest == nil || attempt.CreatedAt.After(latest.CreatedAt)) {
+			if attempt.ConnectorID == definition.ID && attempt.ClientID == scope.ClientID && (latest == nil || attempt.CreatedAt.After(latest.CreatedAt)) {
 				latest = attempt
 			}
 		}
@@ -299,7 +300,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 	attemptID := attempt.ID
 	next := cloneState(console.state)
 	next.Attempts[attemptID] = connectionAttemptRecord{
-		AttemptID: attemptID, PersonID: scope.PersonID, DeviceID: scope.DeviceID,
+		AttemptID: attemptID, ClientID: scope.ClientID, PersonID: scope.PersonID, DeviceID: scope.DeviceID,
 		ConnectorID: definition.ID, ConnectionID: connectionID, Credential: record.Credential,
 		Scope: cloneConnectorScope(record.Scope), CreatedAtUnixMs: attempt.CreatedAt.UnixMilli(), CleanupKind: "oauth_logout",
 	}
@@ -378,7 +379,7 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 		return
 	}
 	attempt, exists := console.connectorAttempts[attemptID]
-	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
+	if !exists || attempt.ConnectorID != definition.ID || attempt.ClientID != scope.ClientID {
 		console.mu.Unlock()
 		failure(writer, http.StatusNotFound, "attempt_not_found")
 		return
@@ -433,7 +434,7 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 			}
 		}
 		console.mu.Lock()
-		if current := console.connectorAttempts[attemptID]; current != nil && current.PersonID == scope.PersonID {
+		if current := console.connectorAttempts[attemptID]; current != nil && current.ClientID == scope.ClientID {
 			current.Status, current.AuthorizationURL, current.ErrorCode = copy.Status, copy.AuthorizationURL, copy.ErrorCode
 			current.Polling = false
 			copy = *current
@@ -455,7 +456,7 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 		return
 	}
 	attempt, exists := console.connectorAttempts[attemptID]
-	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
+	if !exists || attempt.ConnectorID != definition.ID || attempt.ClientID != scope.ClientID {
 		console.mu.Unlock()
 		failure(writer, http.StatusNotFound, "attempt_not_found")
 		return
@@ -707,7 +708,7 @@ func (console *Console) newConnectorAttempt(connectorID, connectionID string, sc
 			delete(console.connectorAttempts, oldestID)
 		}
 	}
-	attempt := &connectorAttempt{ID: randomToken(), ConnectorID: connectorID, ConnectionID: connectionID, PersonID: scope.PersonID, DeviceID: scope.DeviceID, Status: status, AuthorizationURL: authorizationURL, CreatedAt: now}
+	attempt := &connectorAttempt{ID: randomToken(), ClientID: scope.ClientID, ConnectorID: connectorID, ConnectionID: connectionID, PersonID: scope.PersonID, DeviceID: scope.DeviceID, Status: status, AuthorizationURL: authorizationURL, CreatedAt: now}
 	console.connectorAttempts[attempt.ID] = attempt
 	return attempt
 }

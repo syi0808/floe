@@ -9,6 +9,47 @@ import (
 
 var errConnectorLifecycleInProgress = errors.New("connector lifecycle in progress")
 
+func (console *Console) removeClientAttemptsLocked(state *diskState, clientID string) {
+	client, exists := state.Clients[clientID]
+	if !exists {
+		return
+	}
+	cleanup := state.Cleanups[client.PersonID]
+	cleanup.PersonID = client.PersonID
+	seenConnections := map[string]bool{}
+	for _, step := range cleanup.Connections {
+		seenConnections[step.ConnectionID] = true
+	}
+	for attemptID, attempt := range state.Attempts {
+		if attempt.ClientID != clientID {
+			continue
+		}
+		if !seenConnections[attempt.ConnectionID] {
+			cleanup.Connections = append(cleanup.Connections, connectionCleanupStep{
+				ConnectionID: attempt.ConnectionID, ConnectorID: attempt.ConnectorID, Credential: attempt.Credential,
+			})
+			seenConnections[attempt.ConnectionID] = true
+		}
+		delete(state.Attempts, attemptID)
+		delete(console.connectorAttempts, attemptID)
+	}
+	for attemptID, attempt := range console.connectorAttempts {
+		if attempt.ClientID == clientID {
+			delete(console.connectorAttempts, attemptID)
+		}
+	}
+	if len(cleanup.Connections) == 0 {
+		return
+	}
+	sort.Slice(cleanup.Connections, func(left, right int) bool {
+		if cleanup.Connections[left].ConnectorID == cleanup.Connections[right].ConnectorID {
+			return cleanup.Connections[left].ConnectionID < cleanup.Connections[right].ConnectionID
+		}
+		return cleanup.Connections[left].ConnectorID < cleanup.Connections[right].ConnectorID
+	})
+	state.Cleanups[client.PersonID] = cleanup
+}
+
 func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) error {
 	for _, client := range state.Clients {
 		if client.PersonID == personID {

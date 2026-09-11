@@ -432,7 +432,7 @@ func TestPersistedAttemptCleanupIdentityOverlapIsRejected(test *testing.T) {
 	for _, current := range tests {
 		test.Run(current.name, func(test *testing.T) {
 			fixture := setup(test)
-			fixture.pair()
+			clientID, _ := fixture.pair()
 			cleanupConnectionID := "00000000-0000-4000-8000-000000000031"
 			attemptConnectionID := "00000000-0000-4000-8000-000000000032"
 			if current.reuseConnection {
@@ -452,7 +452,7 @@ func TestPersistedAttemptCleanupIdentityOverlapIsRejected(test *testing.T) {
 				ConnectionID: cleanupConnectionID, ConnectorID: "microsoft.mail", Credential: cleanupCredential,
 			}}}
 			fixture.console.state.Attempts["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] = connectionAttemptRecord{
-				AttemptID: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", PersonID: fixturePersonID, DeviceID: fixtureDeviceID,
+				AttemptID: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID,
 				ConnectorID: current.attemptConnector, ConnectionID: attemptConnectionID, Credential: attemptCredential,
 				Scope: map[string]any{}, CreatedAtUnixMs: time.Now().UnixMilli(), CleanupKind: "oauth_logout",
 			}

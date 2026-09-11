@@ -36,6 +36,76 @@ type logoutOnlyRuntime struct {
 	credential string
 }
 
+type blockingCallbackRuntime struct {
+	mu         sync.Mutex
+	credential string
+	status     string
+	vault      Vault
+	entered    chan struct{}
+	release    chan struct{}
+	once       sync.Once
+	failLogout bool
+}
+
+type clientDriveRuntime struct {
+	*clientOAuthRuntime
+}
+
+func (*clientDriveRuntime) Token(context.Context) (string, error) {
+	return "drive-token", nil
+}
+
+func (runtime *blockingCallbackRuntime) BindCredential(credential string) error {
+	runtime.mu.Lock()
+	runtime.credential = credential
+	runtime.mu.Unlock()
+	return nil
+}
+
+func (runtime *blockingCallbackRuntime) Ready() bool {
+	runtime.mu.Lock()
+	credential := runtime.credential
+	runtime.mu.Unlock()
+	value, err := runtime.vault.Get(credential)
+	return err == nil && value != ""
+}
+
+func (runtime *blockingCallbackRuntime) Action(_ context.Context, action string) (any, error) {
+	runtime.mu.Lock()
+	credential := runtime.credential
+	switch action {
+	case "login":
+		runtime.status = "pending"
+		runtime.mu.Unlock()
+		return map[string]any{"status": "pending", "auth_url": "https://login.example.test/authorize"}, nil
+	case "status":
+		runtime.status = "connected"
+		runtime.mu.Unlock()
+		if err := runtime.vault.Put(credential, `{"access_token":"callback"}`); err != nil {
+			return nil, err
+		}
+		runtime.once.Do(func() { close(runtime.entered) })
+		<-runtime.release
+		return map[string]any{"status": "connected"}, nil
+	case "logout":
+		fail := runtime.failLogout
+		if !fail {
+			runtime.status = "disconnected"
+		}
+		runtime.mu.Unlock()
+		if fail {
+			return nil, errors.New("logout failed")
+		}
+		if err := runtime.vault.Delete(credential); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "disconnected"}, nil
+	default:
+		runtime.mu.Unlock()
+		return nil, errors.New("unsupported")
+	}
+}
+
 func (runtime *logoutOnlyRuntime) BindCredential(credential string) error {
 	runtime.credential = credential
 	return nil
@@ -1110,6 +1180,148 @@ func TestRestartMergesPendingAttemptWithDisconnectCleanup(test *testing.T) {
 	}
 	if oauthSecret, _ := vault.Get(attemptCredential); oauthSecret != "" {
 		test.Fatalf("attempt credential remained after merged retry: %q", oauthSecret)
+	}
+}
+
+func TestRevokedInitiatingClientCannotCommitOAuthCallback(test *testing.T) {
+	fixture := setup(test)
+	clientA, tokenA := fixture.pair()
+	clientB, tokenB := "client-b", "client-b-token"
+	fixture.console.mu.Lock()
+	next := cloneState(fixture.console.state)
+	next.Clients[clientB] = pairedClient{TokenHash: digest(tokenB), PersonID: fixturePersonID, DeviceID: "device-b"}
+	if err := fixture.console.save(next); err != nil {
+		fixture.console.mu.Unlock()
+		test.Fatal(err)
+	}
+	fixture.console.state = next
+	fixture.console.mu.Unlock()
+	runtime := &blockingCallbackRuntime{status: "disconnected", vault: fixture.vault, entered: make(chan struct{}), release: make(chan struct{})}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, tokenA)
+	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+	if response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1, "secret": "client-b-github-token",
+		"scope": map[string]any{"owner": "floe", "repository": "server"},
+	}, tokenB); response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	pollResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		pollResult <- fixture.call(http.MethodGet, "/v1/connectors/microsoft.mail/connection-attempts/"+started["attempt_id"].(string), nil, tokenA)
+	}()
+	<-runtime.entered
+	runtime.mu.Lock()
+	callbackCredential := runtime.credential
+	runtime.mu.Unlock()
+	if response := fixture.call(http.MethodPost, "/manage/api/client/delete", map[string]string{"id": clientA}, ""); response.Code != http.StatusOK {
+		test.Fatalf("initiating client revocation failed: %d %s", response.Code, response.Body.String())
+	}
+	close(runtime.release)
+	if response := <-pollResult; response.Code != http.StatusConflict {
+		test.Fatalf("revoked callback settled: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.mu.Lock()
+	_, connected := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
+	_, githubPreserved := fixture.console.connectionForPerson("github.issues", fixturePersonID)
+	_, cleanupPending := fixture.console.state.Cleanups[fixturePersonID]
+	_, clientBPreserved := fixture.console.state.Clients[clientB]
+	fixture.console.mu.Unlock()
+	if connected || !githubPreserved || cleanupPending || !clientBPreserved || fixture.vault.values[callbackCredential] != "" {
+		test.Fatalf("client-scoped revocation corrupted Person state: connected=%v github=%v cleanup=%v clientB=%v", connected, githubPreserved, cleanupPending, clientBPreserved)
+	}
+	if response := fixture.call(http.MethodGet, "/v1/connectors", nil, tokenA); response.Code != http.StatusUnauthorized {
+		test.Fatalf("revoked client A remained authorized: %d %s", response.Code, response.Body.String())
+	}
+	if response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, tokenB); response.Code != http.StatusCreated {
+		test.Fatalf("client B could not reconnect after cleanup: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRevokedClientAttemptCleanupResumesAfterRestart(test *testing.T) {
+	fixture := setup(test)
+	clientA, tokenA := fixture.pair()
+	clientB, tokenB := "client-b", "client-b-token"
+	fixture.console.mu.Lock()
+	next := cloneState(fixture.console.state)
+	next.Clients[clientB] = pairedClient{TokenHash: digest(tokenB), PersonID: fixturePersonID, DeviceID: "device-b"}
+	if err := fixture.console.save(next); err != nil {
+		fixture.console.mu.Unlock()
+		test.Fatal(err)
+	}
+	fixture.console.state = next
+	fixture.console.mu.Unlock()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault, failures: map[string]error{"logout": errors.New("logout failed")}}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	if response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, tokenA); response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	if response := fixture.call(http.MethodPost, "/manage/api/client/delete", map[string]string{"id": clientA}, ""); response.Code != http.StatusInternalServerError {
+		test.Fatalf("cleanup failure was hidden: %d %s", response.Code, response.Body.String())
+	}
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil || len(persisted.Attempts) != 0 || len(persisted.Cleanups[fixturePersonID].Connections) != 1 || persisted.Clients[clientB].DeviceID != "device-b" {
+		test.Fatalf("revoked client attempt cleanup was not durable: %#v err=%v", persisted, err)
+	}
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	delete(runtime.failures, "logout")
+	restarted.SetMicrosoftMail(runtime, nil)
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	_, clientBPreserved := restarted.state.Clients[clientB]
+	restarted.mu.Unlock()
+	if cleanupPending || !clientBPreserved {
+		test.Fatalf("restart cleanup removed client B: cleanup=%v clientB=%v", cleanupPending, clientBPreserved)
+	}
+	restartedFixture := *fixture
+	restartedFixture.console = restarted
+	if response := restartedFixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, tokenB); response.Code != http.StatusCreated {
+		test.Fatalf("client B could not connect after restart cleanup: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRevokingClientPreservesOtherClientOAuthAttempt(test *testing.T) {
+	fixture := setup(test)
+	clientA, tokenA := fixture.pair()
+	clientB, tokenB := "client-b", "client-b-token"
+	fixture.console.mu.Lock()
+	next := cloneState(fixture.console.state)
+	next.Clients[clientB] = pairedClient{TokenHash: digest(tokenB), PersonID: fixturePersonID, DeviceID: "device-b"}
+	if err := fixture.console.save(next); err != nil {
+		fixture.console.mu.Unlock()
+		test.Fatal(err)
+	}
+	fixture.console.state = next
+	fixture.console.mu.Unlock()
+	microsoft := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+	drive := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}}
+	fixture.console.SetMicrosoftMail(microsoft, nil)
+	if err := fixture.console.SetDriveAuth(drive); err != nil {
+		test.Fatal(err)
+	}
+	if response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, tokenA); response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	driveStartedResponse := fixture.call(http.MethodPost, "/v1/connectors/google_drive.files/connect", map[string]any{"schema_version": 1, "scope": map[string]any{"folder_id": "folder-b-123"}}, tokenB)
+	if driveStartedResponse.Code != http.StatusCreated {
+		test.Fatal(driveStartedResponse.Body.String())
+	}
+	driveStarted := createdValue(test, strings.NewReader(driveStartedResponse.Body.String()))
+	if response := fixture.call(http.MethodPost, "/manage/api/client/delete", map[string]string{"id": clientA}, ""); response.Code != http.StatusOK {
+		test.Fatalf("client A revocation failed: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.mu.Lock()
+	remaining, preserved := fixture.console.state.Attempts[driveStarted["attempt_id"].(string)]
+	fixture.console.mu.Unlock()
+	if !preserved || remaining.ClientID != clientB {
+		test.Fatalf("client B attempt was removed with client A: %#v", remaining)
+	}
+	response := fixture.call(http.MethodGet, "/v1/connectors/google_drive.files/connection-attempts/"+driveStarted["attempt_id"].(string), nil, tokenB)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"connected"`) {
+		test.Fatalf("client B attempt could not settle: %d %s", response.Code, response.Body.String())
 	}
 }
 

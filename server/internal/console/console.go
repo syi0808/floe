@@ -964,6 +964,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			failure(writer, 404, "client_not_found")
 			return
 		}
+		console.removeClientAttemptsLocked(&next, input.ID)
 		delete(next.Clients, input.ID)
 		if err := console.removePersonConnectionsLocked(&next, removed.PersonID); err != nil {
 			failure(writer, 500, "connection_cleanup_failed")

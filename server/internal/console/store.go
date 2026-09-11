@@ -33,6 +33,7 @@ type diskState struct {
 
 type connectionAttemptRecord struct {
 	AttemptID       string         `json:"attempt_id"`
+	ClientID        string         `json:"client_id"`
 	PersonID        string         `json:"person_id"`
 	DeviceID        string         `json:"device_id"`
 	ConnectorID     string         `json:"connector_id"`
@@ -243,10 +244,8 @@ func readState(directory string) (diskState, string, error) {
 		}
 		for key, attempt := range state.Attempts {
 			definition, exists := clientConnectorDefinitionFor(attempt.ConnectorID)
-			clientOwned := false
-			for _, client := range state.Clients {
-				clientOwned = clientOwned || client.PersonID == attempt.PersonID && client.DeviceID == attempt.DeviceID
-			}
+			client, clientOwned := state.Clients[attempt.ClientID]
+			clientOwned = clientOwned && client.PersonID == attempt.PersonID && client.DeviceID == attempt.DeviceID
 			credentialNamespace := ""
 			if exists {
 				credentialNamespace = definition.OAuthCredential
