@@ -163,6 +163,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
             0,
             person,
             CalendarProvider::EventKit,
+            "test-device".into(),
             vec!["work".into(), "home".into()],
         )
         .unwrap();
@@ -201,7 +202,13 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
         (0..5).map(|index| index.to_string()).collect(),
     ] {
         assert_eq!(
-            registry.register_calendar_view(2, person, CalendarProvider::Fixture, calendars),
+            registry.register_calendar_view(
+                2,
+                person,
+                CalendarProvider::Fixture,
+                "test-device".into(),
+                calendars,
+            ),
             Err(AgentFailure::InvalidInput)
         );
         assert_eq!(registry.revision(), 2);
@@ -228,6 +235,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
             handle: fixture.view.handle,
             person_id: fixture.person,
             provider: CalendarProvider::Fixture,
+            device_id: "test-device".into(),
             calendar_ids: vec!["home".into()],
             enabled: true,
         };
@@ -328,7 +336,9 @@ impl Fixture {
                     version: "1.0.0".into(),
                 },
                 publisher: "floe".into(),
-                implementation: PackageImplementation::Schedule,
+                implementation: PackageImplementation::Builtin {
+                    expert: BuiltinExpertKind::Schedule,
+                },
                 expert_metadata: Some(ExpertMetadata {
                     name: "Schedule Expert".into(),
                     description: "Reviews schedules".into(),

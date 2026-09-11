@@ -9,6 +9,7 @@ pub struct CalendarExpertSetup {
     pub expected_revision: u64,
     pub setup_id: Uuid,
     pub provider: CalendarProvider,
+    pub device_id: String,
     pub calendar_ids: Vec<String>,
 }
 
@@ -50,6 +51,7 @@ pub enum CalendarAccessChange {
     SetScope {
         replacement_setup_id: Uuid,
         provider: CalendarProvider,
+        device_id: String,
         calendar_ids: Vec<String>,
     },
     Remove {},
@@ -147,6 +149,7 @@ impl AgentRegistry {
         if receipt.person_id != person_id
             || receipt.expected_revision != request.expected_revision
             || original.provider != binding.provider
+            || original.device_id != binding.device_id
             || original.calendar_ids != binding.calendar_ids
         {
             return Err(AgentFailure::Conflict);
@@ -285,6 +288,7 @@ impl AgentRegistry {
             CalendarAccessChange::SetScope {
                 replacement_setup_id,
                 provider,
+                device_id,
                 calendar_ids,
             } => {
                 if replacement_setup_id.is_nil()
@@ -301,6 +305,7 @@ impl AgentRegistry {
                     expected_revision: configuration.expected_revision,
                     setup_id: *replacement_setup_id,
                     provider: *provider,
+                    device_id: device_id.clone(),
                     calendar_ids: calendar_ids.clone(),
                 };
                 let mut staged = Self::restore(self.snapshot(), self.instance_id())?;
@@ -318,7 +323,7 @@ impl AgentRegistry {
         Ok(())
     }
 
-    pub(super) fn validate_calendar_setups(&self) -> Result<(), AgentFailure> {
+    pub(in crate::registry) fn validate_calendar_setups(&self) -> Result<(), AgentFailure> {
         for (index, receipt) in self.snapshot.calendar_setups.iter().enumerate() {
             if receipt.setup_id.is_nil()
                 || receipt.tool_installation_id.is_nil()
@@ -420,6 +425,7 @@ fn setup_binding(
         handle: request.setup_id,
         person_id,
         provider: request.provider,
+        device_id: request.device_id.clone(),
         calendar_ids,
         enabled: false,
     };
@@ -428,45 +434,12 @@ fn setup_binding(
 }
 
 fn setup_packages(provider: CalendarProvider) -> [AgentPackage; 2] {
-    let (source, data_class) = match provider {
-        CalendarProvider::Fixture => ("fixture", DataClass::Synthetic),
-        CalendarProvider::EventKit => ("eventkit", DataClass::Personal),
-        CalendarProvider::Google => ("google", DataClass::Personal),
-        CalendarProvider::Microsoft => ("microsoft", DataClass::Personal),
-        CalendarProvider::Android => ("android", DataClass::Personal),
+    let data_class = match provider {
+        CalendarProvider::Fixture => DataClass::Synthetic,
+        CalendarProvider::EventKit
+        | CalendarProvider::Google
+        | CalendarProvider::Microsoft
+        | CalendarProvider::Android => DataClass::Personal,
     };
-    let tool = PackageRef {
-        kind: PackageKind::Tool,
-        id: format!("floe.calendar.{source}.timeline"),
-        version: "1.0.0".into(),
-    };
-    [
-        AgentPackage {
-            schema_version: AGENT_VERSION,
-            reference: tool.clone(),
-            publisher: "floe".into(),
-            implementation: PackageImplementation::TimelineRead { data_class },
-            expert_metadata: None,
-            required_tools: vec![],
-            state_schema_version: 1,
-        },
-        AgentPackage {
-            schema_version: AGENT_VERSION,
-            reference: PackageRef {
-                kind: PackageKind::Expert,
-                id: format!("floe.calendar.{source}.schedule"),
-                version: "1.0.0".into(),
-            },
-            publisher: "floe".into(),
-            implementation: PackageImplementation::Schedule,
-            expert_metadata: Some(ExpertMetadata {
-                name: "Schedule Expert".into(),
-                description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
-                domain_tags: vec!["schedule".into(), "calendar".into()],
-                skills: vec!["Provide independent scheduling judgment".into()],
-            }),
-            required_tools: vec![tool],
-            state_schema_version: 1,
-        },
-    ]
+    BuiltinExpertKind::Schedule.packages(data_class)
 }

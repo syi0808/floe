@@ -2,20 +2,20 @@ use floe_agent::*;
 use floe_domain::{CalendarProvider, PersonId};
 use uuid::Uuid;
 
-fn request(registry: &AgentRegistry, provider: CalendarProvider) -> CalendarExpertSetup {
+fn setup_request(registry: &AgentRegistry, provider: CalendarProvider) -> CalendarExpertSetup {
     CalendarExpertSetup {
         instance_id: registry.instance_id(),
         expected_revision: registry.revision(),
         setup_id: Uuid::new_v4(),
         provider,
+        device_id: "test-device".into(),
         calendar_ids: vec!["work".into(), "home".into()],
     }
 }
 
 #[test]
-fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
+fn setup_is_one_revision_default_off_and_uses_the_builtin_schedule_catalog() {
     let person = PersonId::new();
-    let mut registry = AgentRegistry::new(Uuid::new_v4());
     for (provider, data_class) in [
         (CalendarProvider::Fixture, DataClass::Synthetic),
         (CalendarProvider::EventKit, DataClass::Personal),
@@ -23,7 +23,8 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
         (CalendarProvider::Microsoft, DataClass::Personal),
         (CalendarProvider::Android, DataClass::Personal),
     ] {
-        let request = request(&registry, provider);
+        let mut registry = AgentRegistry::new(Uuid::new_v4());
+        let request = setup_request(&registry, provider);
         let setup = registry.install_calendar_expert(person, &request).unwrap();
         assert_eq!(registry.revision(), request.expected_revision + 1);
         let snapshot = registry.snapshot();
@@ -58,7 +59,7 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
         registry
             .set_calendar_view_enabled(registry.revision(), person, setup.view_handle, true)
             .unwrap();
-        assert!(
+        assert_eq!(
             registry
                 .expert_card(
                     person,
@@ -67,22 +68,22 @@ fn setup_is_one_revision_default_off_and_uses_provider_pinned_packages() {
                     setup.view_handle,
                 )
                 .unwrap()
-                .id
-                .ends_with(".schedule")
+                .id,
+            BuiltinExpertKind::Schedule.package_id()
         );
+        assert_eq!(registry.snapshot().packages.len(), 2);
+        let next = setup_request(&registry, provider);
+        registry.install_calendar_expert(person, &next).unwrap();
+        assert_eq!(registry.snapshot().packages.len(), 2);
+        assert_eq!(registry.snapshot().installations.len(), 4);
     }
-    assert_eq!(registry.snapshot().packages.len(), 10);
-    let next = request(&registry, CalendarProvider::EventKit);
-    registry.install_calendar_expert(person, &next).unwrap();
-    assert_eq!(registry.snapshot().packages.len(), 10);
-    assert_eq!(registry.snapshot().installations.len(), 12);
 }
 
 #[test]
 fn calendar_access_changes_scope_enablement_and_removal_atomically() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
-    let request = request(&registry, CalendarProvider::EventKit);
+    let request = setup_request(&registry, CalendarProvider::EventKit);
     let setup = registry.install_calendar_expert(person, &request).unwrap();
 
     let configure = |registry: &AgentRegistry, setup_id, change| CalendarAccessConfiguration {
@@ -117,6 +118,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
                 CalendarAccessChange::SetScope {
                     replacement_setup_id,
                     provider: CalendarProvider::EventKit,
+                    device_id: "test-device".into(),
                     calendar_ids: vec!["shared".into(), "home".into()],
                 },
             ),
@@ -142,6 +144,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
         CalendarAccessChange::SetScope {
             replacement_setup_id,
             provider: CalendarProvider::Fixture,
+            device_id: "test-device".into(),
             calendar_ids: vec!["other".into()],
         },
     );
@@ -185,7 +188,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
 fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
-    let request = request(&registry, CalendarProvider::EventKit);
+    let request = setup_request(&registry, CalendarProvider::EventKit);
     let setup = registry.install_calendar_expert(person, &request).unwrap();
     registry
         .set_calendar_view_enabled(registry.revision(), person, setup.view_handle, true)
@@ -210,7 +213,7 @@ fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
         setup
     );
     assert_eq!(registry.snapshot(), recorded);
-    for mode in 0..6 {
+    for mode in 0..7 {
         let mut changed = request.clone();
         let mut owner = person;
         match mode {
@@ -219,6 +222,7 @@ fn exact_replay_preserves_revocation_and_state_but_changed_intent_conflicts() {
             2 => changed.expected_revision = registry.revision(),
             3 => owner = PersonId::new(),
             4 => changed.instance_id = Uuid::new_v4(),
+            5 => changed.device_id = "other-device".into(),
             _ => changed.setup_id = Uuid::new_v4(),
         }
         assert!(registry.install_calendar_expert(owner, &changed).is_err());
@@ -237,7 +241,7 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
         vec!["x".repeat(513)],
         (0..5).map(|index| index.to_string()).collect(),
     ] {
-        let mut request = request(&registry, CalendarProvider::Fixture);
+        let mut request = setup_request(&registry, CalendarProvider::Fixture);
         request.calendar_ids = identifiers;
         let before = registry.snapshot();
         assert_eq!(
@@ -246,7 +250,17 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
         );
         assert_eq!(registry.snapshot(), before);
     }
-    let first = request(&registry, CalendarProvider::Fixture);
+    for device_id in ["".to_owned(), "x".repeat(129)] {
+        let mut request = setup_request(&registry, CalendarProvider::EventKit);
+        request.device_id = device_id;
+        let before = registry.snapshot();
+        assert_eq!(
+            registry.install_calendar_expert(person, &request),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(registry.snapshot(), before);
+    }
+    let first = setup_request(&registry, CalendarProvider::Fixture);
     registry.install_calendar_expert(person, &first).unwrap();
     let mut full = registry.snapshot();
     while full.installations.len() < 128 {
@@ -255,7 +269,7 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
         full.installations.push(installation);
     }
     registry = AgentRegistry::restore(full.clone(), registry.instance_id()).unwrap();
-    let next = request(&registry, CalendarProvider::EventKit);
+    let next = setup_request(&registry, CalendarProvider::Fixture);
     assert_eq!(
         registry.install_calendar_expert(person, &next),
         Err(AgentFailure::BudgetExceeded)
@@ -267,7 +281,7 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
     package.publisher = "different".into();
     collision.register(0, package).unwrap();
     let before = collision.snapshot();
-    let next = request(&collision, CalendarProvider::Fixture);
+    let next = setup_request(&collision, CalendarProvider::Fixture);
     assert_eq!(
         collision.install_calendar_expert(person, &next),
         Err(AgentFailure::Conflict)
@@ -279,10 +293,10 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
 fn corrupt_setup_receipts_fail_restore() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
-    let request = request(&registry, CalendarProvider::Fixture);
+    let request = setup_request(&registry, CalendarProvider::Fixture);
     registry.install_calendar_expert(person, &request).unwrap();
     let before = registry.snapshot();
-    for mode in 0..7 {
+    for mode in 0..8 {
         let mut invalid = before.clone();
         match mode {
             0 => invalid.calendar_setups[0].setup_id = Uuid::nil(),
@@ -293,6 +307,7 @@ fn corrupt_setup_receipts_fail_restore() {
                 .calendar_setups
                 .push(invalid.calendar_setups[0].clone()),
             5 => invalid.assignments[1].granted_view_handles = vec![Uuid::new_v4()],
+            6 => invalid.calendar_views[0].device_id.clear(),
             _ => invalid.calendar_setups[0].expert_assignment_id = Uuid::new_v4(),
         }
         assert!(AgentRegistry::restore(invalid, registry.instance_id()).is_err());

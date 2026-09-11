@@ -35,7 +35,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
           'id': calendarToolInstallation,
           'package': {
             'kind': 'tool',
-            'id': 'floe.calendar.eventkit.timeline',
+            'id': 'floe.builtin.schedule.context',
             'version': '1.0.0',
           },
           'enabled': false,
@@ -44,7 +44,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
           'id': registryInstallation,
           'package': {
             'kind': 'expert',
-            'id': 'floe.calendar.eventkit.schedule',
+            'id': 'floe.builtin.schedule',
             'version': '1.0.0',
           },
           'enabled': false,
@@ -80,6 +80,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'handle': calendarViewId,
         'person_id': registryPerson,
         'provider': 'event_kit',
+        'device_id': 'test-device',
         'calendar_ids': ['home', 'work'],
         'enabled': false,
       },
@@ -233,7 +234,7 @@ class TestCalendarExpertGateway extends TestVaultGateway
     implements AgentRegistryGateway, AgentCalendarExpertGateway {
   TestCalendarExpertGateway() : super(personId: registryPerson) {
     state = AgentVaultState.ready;
-    native = NativeAgentVaultGateway(transport.call);
+    native = NativeAgentVaultGateway(transport.call, deviceId: 'test-device');
   }
 
   final transport = CalendarExpertTransport();

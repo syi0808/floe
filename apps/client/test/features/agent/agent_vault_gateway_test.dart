@@ -18,6 +18,7 @@ void main() {
       final gateway = await FfiDayGateway.open(
         libraryPath: File('../../target/debug/libfloe_ffi.dylib').absolute.path,
         databasePath: path,
+        deviceId: 'test-device',
       );
       addTearDown(() async {
         await gateway.close();
@@ -87,7 +88,10 @@ void main() {
     'lost create response is drained without provisioning a second key',
     () async {
       final transport = _Transport()..loseSubmit = true;
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       await expectLater(gateway.createVault('test'), throwsStateError);
       expect(transport.creates, 1);
       expect(await gateway.vaultStatus('test'), AgentVaultState.ready);
@@ -100,7 +104,10 @@ void main() {
     'lost release acknowledgement is resolved by read-only lookup',
     () async {
       final transport = _Transport()..loseRelease = true;
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       await expectLater(gateway.createVault('test'), throwsStateError);
       expect(await gateway.vaultStatus('test'), AgentVaultState.ready);
       expect(transport.creates, 1);
@@ -114,6 +121,7 @@ void main() {
         ...await transport.call(request),
         'request_id': 'wrong-id',
       },
+      deviceId: 'test-device',
     );
     await expectLater(gateway.vaultStatus('test'), throwsFormatException);
   });

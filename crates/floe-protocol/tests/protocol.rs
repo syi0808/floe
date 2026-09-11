@@ -16,6 +16,7 @@ fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_
             "expected_revision": 0,
             "setup_id": "00000000-0000-4000-8000-000000000002",
             "provider": "event_kit",
+            "device_id": "test-device",
             "calendar_ids": ["explicit-calendar"]
         }
     });
@@ -52,6 +53,7 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
             "kind": "set_scope",
             "replacement_setup_id": "00000000-0000-4000-8000-000000000003",
             "provider": "event_kit",
+            "device_id": "test-device",
             "calendar_ids": ["home", "work"]
         }),
         serde_json::json!({"kind": "remove"}),
@@ -119,6 +121,7 @@ fn general_conversation_transport_has_no_model_or_capability_selector() {
         "request": {
             "session_id": Uuid::new_v4(),
             "expected_revision": 2,
+            "device_id": "test-device",
             "text": "Help me plan the afternoon"
         }
     });
@@ -129,6 +132,7 @@ fn general_conversation_transport_has_no_model_or_capability_selector() {
         "request": {
             "session_id": Uuid::new_v4(),
             "expected_revision": 3,
+            "device_id": "test-device",
             "text": "Help me plan the afternoon",
             "continuation": true
         }

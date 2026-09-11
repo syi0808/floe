@@ -219,6 +219,7 @@ impl LocalContextStore {
     pub(crate) fn calendar_observation(
         &self,
         person_id: PersonId,
+        device_id: &str,
         provider: CalendarProvider,
         calendar_ids: &[String],
         connection_revision: u64,
@@ -233,10 +234,11 @@ impl LocalContextStore {
         expected_ids.sort();
         observations
             .iter()
-            .filter(|((person, _), observation)| {
+            .filter(|((person, device), observation)| {
                 let mut actual_ids = observation.calendar_ids.clone();
                 actual_ids.sort();
                 *person == person_id
+                    && device == device_id
                     && observation.provider == provider
                     && observation.connection_revision == connection_revision
                     && actual_ids == expected_ids
@@ -459,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn calendar_observation_is_person_provider_scope_and_revision_bound() {
+    fn calendar_observation_is_person_device_provider_scope_and_revision_bound() {
         let store = LocalContextStore::default();
         let owner = person();
         let other = person();
@@ -470,22 +472,62 @@ mod tests {
                 calendar_publication(now, "iphone", CalendarProvider::EventKit),
             )
             .unwrap();
+        store
+            .request(
+                owner,
+                calendar_publication(now + 1, "ipad", CalendarProvider::EventKit),
+            )
+            .unwrap();
 
         let observation = store
-            .calendar_observation(owner, CalendarProvider::EventKit, &["primary".into()], 7)
+            .calendar_observation(
+                owner,
+                "iphone",
+                CalendarProvider::EventKit,
+                &["primary".into()],
+                7,
+            )
             .unwrap();
         assert_eq!(observation.device_id, "iphone");
         assert_eq!(observation.batches[0].records[0].external_id, "event-1");
         assert!(matches!(
-            store.calendar_observation(other, CalendarProvider::EventKit, &["primary".into()], 7,),
+            store.calendar_observation(
+                other,
+                "iphone",
+                CalendarProvider::EventKit,
+                &["primary".into()],
+                7,
+            ),
             Err(AgentFailure::CapabilityUnavailable)
         ));
         assert!(matches!(
-            store.calendar_observation(owner, CalendarProvider::Android, &["primary".into()], 7,),
+            store.calendar_observation(
+                owner,
+                "iphone",
+                CalendarProvider::Android,
+                &["primary".into()],
+                7,
+            ),
             Err(AgentFailure::CapabilityUnavailable)
         ));
         assert!(matches!(
-            store.calendar_observation(owner, CalendarProvider::EventKit, &["primary".into()], 8,),
+            store.calendar_observation(
+                owner,
+                "iphone",
+                CalendarProvider::EventKit,
+                &["primary".into()],
+                8,
+            ),
+            Err(AgentFailure::CapabilityUnavailable)
+        ));
+        assert!(matches!(
+            store.calendar_observation(
+                owner,
+                "mac",
+                CalendarProvider::EventKit,
+                &["primary".into()],
+                7,
+            ),
             Err(AgentFailure::CapabilityUnavailable)
         ));
     }

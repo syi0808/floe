@@ -20,6 +20,7 @@ pub struct CalendarTimelineGrant {
     pub person_id: PersonId,
     pub handle: Uuid,
     pub provider: CalendarProvider,
+    pub device_id: String,
     pub calendar_ids: Vec<String>,
     pub connection_revision: u64,
     pub day: CalendarRange,
@@ -44,6 +45,8 @@ impl CalendarTimelineGrant {
         let (day_start, day_end) = range_bounds(&self.day)?;
         let range_days = (self.day.end_date_exclusive - self.day.start_date).num_days();
         if !(1..=MAX_TIMELINE_VIEW_DAYS).contains(&range_days)
+            || self.device_id.trim().is_empty()
+            || self.device_id.len() > 128
             || self.calendar_ids.is_empty()
             || self.calendar_ids.len() > 4
             || identifiers.len() != self.calendar_ids.len()
@@ -67,6 +70,7 @@ impl CalendarTimelineGrant {
 
 pub struct CalendarReadAccessRequest {
     pub person_id: PersonId,
+    pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
     pub deadline: Instant,
@@ -75,6 +79,7 @@ pub struct CalendarReadAccessRequest {
 
 pub struct CalendarObserveRequest {
     pub person_id: PersonId,
+    pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
     pub starts_at: DateTime<Utc>,
@@ -117,6 +122,7 @@ pub struct ProjectedCalendarItem {
 pub struct CalendarReadAccessStamp {
     pub schema_version: u32,
     pub person_id: PersonId,
+    pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
     pub generation: String,
@@ -191,6 +197,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .access
             .check(CalendarReadAccessRequest {
                 person_id: self.grant.person_id,
+                device_id: self.grant.device_id.clone(),
                 provider: self.grant.provider,
                 calendar_ids: self.grant.calendar_ids.clone(),
                 deadline,
@@ -203,6 +210,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         expected.sort();
         if actual.schema_version != 1
             || actual.person_id != self.grant.person_id
+            || actual.device_id != self.grant.device_id
             || actual.provider != self.grant.provider
             || actual.calendar_ids != expected
             || actual.generation.is_empty()
@@ -353,6 +361,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .access
             .observe_projected(CalendarObserveRequest {
                 person_id: self.grant.person_id,
+                device_id: self.grant.device_id.clone(),
                 provider: self.grant.provider,
                 calendar_ids: self.grant.calendar_ids.clone(),
                 starts_at: range_start,
@@ -377,6 +386,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .access
             .observe(CalendarObserveRequest {
                 person_id: self.grant.person_id,
+                device_id: self.grant.device_id.clone(),
                 provider: self.grant.provider,
                 calendar_ids: self.grant.calendar_ids.clone(),
                 starts_at: range_start,

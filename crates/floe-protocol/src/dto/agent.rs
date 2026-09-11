@@ -44,6 +44,7 @@ pub struct CalendarExpertSetupDto {
     pub expected_revision: u64,
     pub setup_id: Uuid,
     pub provider: floe_domain::CalendarProvider,
+    pub device_id: String,
     pub calendar_ids: Vec<String>,
 }
 
@@ -65,6 +66,7 @@ pub enum CalendarAccessChangeDto {
     SetScope {
         replacement_setup_id: Uuid,
         provider: floe_domain::CalendarProvider,
+        device_id: String,
         calendar_ids: Vec<String>,
     },
     Remove {},
@@ -159,6 +161,7 @@ pub struct AgentConversationTurnRequestDto {
     pub session_id: String,
     pub expected_revision: u64,
     pub text: String,
+    pub device_id: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

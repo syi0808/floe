@@ -27,6 +27,14 @@ use crate::{
 
 use super::session_uuid;
 
+struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
+    core: &'a FloeCore,
+    vault: &'a EncryptedAgentVault<Keys>,
+    local_context: &'a LocalContextStore,
+    person_id: PersonId,
+    request: &'a AgentConversationTurnRequestDto,
+}
+
 pub(super) async fn run<Keys: VaultKeyProvider>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
@@ -34,10 +42,14 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     person_id: PersonId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
-    mut emit: impl FnMut(AgentEvent) + Send,
+    emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let text = request.text.trim();
-    if text.is_empty() || text.len() > 8_192 {
+    if text.is_empty()
+        || text.len() > 8_192
+        || request.device_id.trim().is_empty()
+        || request.device_id.len() > 128
+    {
         return Err(AgentFailure::InvalidInput);
     }
     let session_id = session_uuid(&request.session_id)?;
@@ -54,20 +66,28 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         memories: vault.personal_memory_context(chrono::Utc::now()).await?,
         evidence: vec![],
     };
-    if let Some(session) = super::schedule_conversation::try_run_with_schedule_expert(
+    let inputs = ConversationTurnInputs {
         core,
         vault,
         local_context,
         person_id,
         request,
-        context.clone(),
-        cancellation.clone(),
-        &mut emit,
-    )
-    .await?
-    {
-        return Ok(session);
-    }
+    };
+    expert_dispatch::run(&inputs, context, cancellation, emit).await
+}
+
+async fn run_general_turn<Keys: VaultKeyProvider>(
+    inputs: &ConversationTurnInputs<'_, Keys>,
+    context: AgentContext,
+    cancellation: floe_agent::Cancellation,
+    emit: impl FnMut(AgentEvent) + Send,
+) -> Result<floe_agent::AgentSession, AgentFailure> {
+    let core = inputs.core;
+    let vault = inputs.vault;
+    let local_context = inputs.local_context;
+    let person_id = inputs.person_id;
+    let request = inputs.request;
+    let session_id = session_uuid(&request.session_id)?;
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
     let task_views = optional_task_views(core, person_id).await?;
@@ -119,7 +139,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
                     person_id,
                     session_id,
                     expected_revision: request.expected_revision,
-                    text: text.into(),
+                    text: request.text.trim().into(),
                 },
                 context.clone(),
                 &agents,

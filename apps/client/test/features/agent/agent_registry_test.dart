@@ -44,7 +44,10 @@ void main() {
 
   test('native gateway sends only instance revision and explicit enablement target', () async {
     final transport = RegistryTransport();
-    final gateway = NativeAgentVaultGateway(transport.call);
+    final gateway = NativeAgentVaultGateway(
+      transport.call,
+      deviceId: 'test-device',
+    );
     final before = (await gateway.readRegistry(registryPerson))!;
     final after = await gateway.configureRegistry(
       before,
@@ -70,7 +73,10 @@ void main() {
     'lost mutation reply is drained and reread without replaying configuration',
     () async {
       final transport = RegistryTransport();
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       final before = (await gateway.readRegistry(registryPerson))!;
       transport.loseMutationReply = true;
       await expectLater(
@@ -94,7 +100,10 @@ void main() {
     () async {
       final transport = RegistryTransport()
         ..snapshot['person_id'] = registryInstance;
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       await expectLater(
         gateway.readRegistry(registryPerson),
         throwsFormatException,

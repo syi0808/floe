@@ -23,6 +23,7 @@ void main() {
         databasePath: '${directory.path}/actions.db',
         calendarAdapter: adapter,
         clock: () => DateTime.utc(2000),
+        deviceId: 'test-device',
       );
       var gateway = await open();
       try {

@@ -68,6 +68,7 @@ void main() {
     final gateway = await FfiDayGateway.open(
       libraryPath: library.path,
       databasePath: '${directory.path}/fixture.db',
+      deviceId: 'test-device',
     );
     addTearDown(() async {
       await gateway.close();
@@ -130,6 +131,7 @@ void main() {
       final gateway = await FfiDayGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
+        deviceId: 'test-device',
       );
       final controller = AgentController(
         gateway: gateway,
@@ -183,6 +185,7 @@ void main() {
       gateway = await FfiDayGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
+        deviceId: 'test-device',
       );
       final initial = await gateway.startAgentFixture(localPersonId);
       expect(initial.session.messages, isEmpty);
@@ -238,6 +241,7 @@ void main() {
       gateway = await FfiDayGateway.open(
         libraryPath: library.path,
         databasePath: '${directory.path}/fixture.db',
+        deviceId: 'test-device',
       );
       final restored = await gateway.loadAgentFixture(
         localPersonId,

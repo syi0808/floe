@@ -1,6 +1,7 @@
 use super::*;
 
-pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
+mod schedule;
+pub use schedule::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -126,8 +127,8 @@ impl AgentRegistry {
             .revision
             .checked_add(1)
             .ok_or(AgentFailure::BudgetExceeded)?;
-        let mut receipts = Vec::with_capacity(BuiltinExpertKind::ALL.len());
-        for expert in BuiltinExpertKind::ALL {
+        let mut receipts = Vec::with_capacity(BuiltinExpertKind::BUILTIN_SETUP.len());
+        for expert in BuiltinExpertKind::BUILTIN_SETUP {
             let views = expert
                 .required_sources()
                 .iter()
@@ -326,12 +327,12 @@ impl AgentRegistry {
         for (index, receipt) in self.snapshot.builtin_setups.iter().enumerate() {
             if receipt.setup_id.is_nil()
                 || receipt.expected_revision >= self.revision()
-                || receipt.assignments.len() != BuiltinExpertKind::ALL.len()
+                || receipt.assignments.len() != BuiltinExpertKind::BUILTIN_SETUP.len()
                 || !receipt
                     .assignments
                     .iter()
                     .map(|entry| entry.expert)
-                    .eq(BuiltinExpertKind::ALL)
+                    .eq(BuiltinExpertKind::BUILTIN_SETUP)
                 || self.snapshot.builtin_setups[..index].iter().any(|other| {
                     other.setup_id == receipt.setup_id || other.person_id == receipt.person_id
                 })
@@ -409,35 +410,5 @@ fn validate_sources(sources: &[BuiltinSourceBinding]) -> Result<(), AgentFailure
 }
 
 fn builtin_packages(kind: BuiltinExpertKind) -> [AgentPackage; 2] {
-    let tool = PackageRef {
-        kind: PackageKind::Tool,
-        id: kind.tool_id(),
-        version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
-    };
-    [
-        AgentPackage {
-            schema_version: AGENT_VERSION,
-            reference: tool.clone(),
-            publisher: "floe".into(),
-            implementation: PackageImplementation::TimelineRead {
-                data_class: kind.context_data_class(),
-            },
-            expert_metadata: None,
-            required_tools: vec![],
-            state_schema_version: 1,
-        },
-        AgentPackage {
-            schema_version: AGENT_VERSION,
-            reference: PackageRef {
-                kind: PackageKind::Expert,
-                id: kind.package_id().into(),
-                version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
-            },
-            publisher: "floe".into(),
-            implementation: PackageImplementation::Builtin { expert: kind },
-            expert_metadata: Some(kind.metadata()),
-            required_tools: vec![tool],
-            state_schema_version: 1,
-        },
-    ]
+    kind.packages(kind.context_data_class())
 }

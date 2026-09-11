@@ -47,7 +47,7 @@ void main() {
       );
       expect(() => parsed.views.clear(), throwsUnsupportedError);
       expect(() => parsed.setups.clear(), throwsUnsupportedError);
-      for (var mode = 0; mode < 13; mode++) {
+      for (var mode = 0; mode < 14; mode++) {
         final fixture = calendarExpertsFixture();
         final registry = fixture['registry'] as Map;
         final view = (fixture['views'] as List).single as Map;
@@ -81,6 +81,8 @@ void main() {
             setup['setup_id'] = '00000000-0000-0000-0000-000000000000';
           case 12:
             (fixture['views'] as List).add(Map<String, Object>.from(view));
+          case 13:
+            view['device_id'] = '';
         }
         expect(
           () => AgentCalendarExperts.fromJson(fixture),
@@ -93,7 +95,10 @@ void main() {
 
   test('read-only inspection supplies instance and revision zero before the first sample', () async {
     final transport = CalendarExpertTransport();
-    final gateway = NativeAgentVaultGateway(transport.call);
+    final gateway = NativeAgentVaultGateway(
+      transport.call,
+      deviceId: 'test-device',
+    );
     final empty = await gateway.readCalendarExperts(registryPerson);
     expect(empty.registry.instanceId, registryInstance);
     expect(empty.registry.revision, 0);
@@ -104,11 +109,17 @@ void main() {
 
   test('setup uses explicit stable identity and retries tolerate later revocation or state changes', () async {
     final transport = CalendarExpertTransport();
-    final gateway = NativeAgentVaultGateway(transport.call);
+    final gateway = NativeAgentVaultGateway(
+      transport.call,
+      deviceId: 'test-device',
+    );
     final request = calendarSetupRequest();
     final installed = await gateway.installCalendarExpert(request);
     expect(installed.views.single.enabled, false);
-    expect(transport.committedSetup, request.toJson());
+    expect(transport.committedSetup, {
+      ...request.toJson(),
+      'device_id': 'test-device',
+    });
     var registry = await gateway.configureRegistry(
       installed.registry,
       target: AgentRegistryTarget.calendarView,
@@ -131,7 +142,10 @@ void main() {
   test('uncertain submit poll and release are drained before exact setup reconciliation', () async {
     for (final loss in ['submit', 'poll', 'release_before', 'release_after']) {
       final transport = CalendarExpertTransport()..loss = loss;
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       final request = calendarSetupRequest();
       await expectLater(
         gateway.installCalendarExpert(request),
@@ -149,7 +163,10 @@ void main() {
     'refresh reconciles accepted installation without submitting it again',
     () async {
       final transport = CalendarExpertTransport()..loss = 'submit';
-      final gateway = NativeAgentVaultGateway(transport.call);
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
       final request = calendarSetupRequest();
       await expectLater(
         gateway.installCalendarExpert(request),
@@ -164,7 +181,7 @@ void main() {
   test(
     'foreign or mismatched setup results and unavailable vaults fail closed',
     () async {
-      for (var mode = 0; mode < 6; mode++) {
+      for (var mode = 0; mode < 7; mode++) {
         final transport = CalendarExpertTransport();
         final gateway = NativeAgentVaultGateway((request) async {
           final result = await transport.call(request);
@@ -185,10 +202,13 @@ void main() {
                 result['state'] = 'locked';
               case 5:
                 result['failure'] = 'vault_unavailable';
+              case 6:
+                ((overview['views'] as List).single as Map)['device_id'] =
+                    'other-device';
             }
           }
           return result;
-        });
+        }, deviceId: 'test-device');
         await expectLater(
           gateway.installCalendarExpert(calendarSetupRequest()),
           mode == 5

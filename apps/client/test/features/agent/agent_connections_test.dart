@@ -28,7 +28,7 @@ void main() {
           'connections': [_connection],
           'failure': null,
         };
-      });
+      }, deviceId: 'test-device');
 
       final connections = await gateway.readConnections('person-1');
 

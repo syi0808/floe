@@ -77,7 +77,7 @@ void main() {
         'failure': failure,
         if (includeProposal) 'proposal': response,
       };
-    });
+    }, deviceId: 'test-device');
     Future<AgentProposalInspection> inspect() => gateway.inspectProposal(
       personId: proposalPerson,
       sessionId: proposalSession,

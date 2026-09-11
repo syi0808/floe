@@ -40,18 +40,18 @@ final class FfiDayGateway
     this._clock,
     this._calendarAdapter,
     this.serverClient,
-    String? deviceId,
-  ) : _calendarObservationPublisher = deviceId == null
-          ? null
-          : CalendarObservationPublisher(
-              transport: _transport,
-              deviceId: deviceId,
-            );
+    String deviceId,
+  ) : _deviceId = deviceId,
+      _calendarObservationPublisher = CalendarObservationPublisher(
+        transport: _transport,
+        deviceId: deviceId,
+      );
 
   final NativeTransport _transport;
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
-  final CalendarObservationPublisher? _calendarObservationPublisher;
+  final CalendarObservationPublisher _calendarObservationPublisher;
+  final String _deviceId;
   final LocalServerClient serverClient;
   LocalContextTransport get localContextTransport => _transport;
   late final AgentFixtureStreamingGateway _agentFixtureGateway =
@@ -61,6 +61,7 @@ final class FfiDayGateway
   Future<void> _calendarOperationTail = Future.value();
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
+    deviceId: _deviceId,
     resolveRemoteRoute: _remoteRoute,
   );
 
@@ -119,7 +120,7 @@ final class FfiDayGateway
     DateTime Function()? clock,
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
     LocalServerClient? serverClient,
-    String? deviceId,
+    required String deviceId,
   }) async {
     final transport = await _openTransport(
       NativeTransport.open(
@@ -478,9 +479,9 @@ final class FfiDayGateway
             batches.isNotEmpty &&
             batches.every((batch) => batch['failure'] == 'permission_denied');
         if (permissionRevoked) {
-          await _calendarObservationPublisher?.revoke(personId: query.personId);
+          await _calendarObservationPublisher.revoke(personId: query.personId);
         } else {
-          await _calendarObservationPublisher?.publish(
+          await _calendarObservationPublisher.publish(
             personId: query.personId,
             connection: syncedConnection,
             observedAt: _clock().toUtc(),
@@ -492,8 +493,8 @@ final class FfiDayGateway
       }
       return snapshot;
     } on Object catch (error) {
-      if (_calendarObservationPublisher?.supports(provider) ?? false) {
-        await _calendarObservationPublisher!.revoke(personId: query.personId);
+      if (_calendarObservationPublisher.supports(provider)) {
+        await _calendarObservationPublisher.revoke(personId: query.personId);
       }
       if (error is FfiDayGatewayException && error.code != 'validation') {
         rethrow;
@@ -517,9 +518,8 @@ final class FfiDayGateway
   Future<DaySnapshot> _disconnectCalendar(DayQuery query) async {
     final current = await loadDay(query);
     if (current.calendar == null) return current;
-    if (_calendarObservationPublisher?.supports(current.calendar!.provider) ??
-        false) {
-      await _calendarObservationPublisher!.revoke(personId: query.personId);
+    if (_calendarObservationPublisher.supports(current.calendar!.provider)) {
+      await _calendarObservationPublisher.revoke(personId: query.personId);
     }
     final data = await _request(
       'execute',

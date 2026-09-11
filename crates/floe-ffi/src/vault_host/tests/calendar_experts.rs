@@ -35,6 +35,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
         provider: floe_domain::CalendarProvider::EventKit,
+        device_id: "mac-local".into(),
         calendar_ids: vec!["explicit-native-setup-canary".into()],
     };
     let action = AgentVaultActionDto::CalendarExperts {
@@ -171,6 +172,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
         provider: floe_domain::CalendarProvider::Fixture,
+        device_id: "test-device".into(),
         calendar_ids: vec!["bounded-scope".into()],
     };
     *keys.0.paused.lock().unwrap() = true;

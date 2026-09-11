@@ -7,9 +7,10 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentRegistry, Cancellation,
-    CapabilityDescriptor, DataClass, ExpertRule, InferencePolicyDecision, ModelRequest,
-    ModelRunner, ModelStep, PackageImplementation, PackageRef, schedule_expert_prompt,
+    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentRegistry, BuiltinExpertKind,
+    Cancellation, CapabilityDescriptor, DataClass, ExpertRule, InferencePolicyDecision,
+    ModelRequest, ModelRunner, ModelStep, PackageImplementation, PackageRef,
+    schedule_expert_prompt,
 };
 
 pub const MAX_TIMELINE_VIEW_DAYS: i64 = 31;
@@ -256,7 +257,9 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
             return Err(AgentFailure::Conflict);
         }
         let minimum = match &resolved.package.implementation {
-            PackageImplementation::Schedule => focus_minutes,
+            PackageImplementation::Builtin {
+                expert: BuiltinExpertKind::Schedule,
+            } => focus_minutes,
             PackageImplementation::Declarative { rules } => match rules.as_slice() {
                 [ExpertRule::FindFocusWindow { minimum_minutes }] => Some(
                     focus_minutes
@@ -270,7 +273,9 @@ impl<Views: ExpertViews> ExpertHost<'_, Views> {
         let (view, summary, model_calls, view_calls, action_proposals) =
             match (&resolved.package.implementation, reasoning) {
                 (
-                    PackageImplementation::Schedule,
+                    PackageImplementation::Builtin {
+                        expert: BuiltinExpertKind::Schedule,
+                    },
                     ExpertReasoning::Lightweight { model, policy },
                 ) => {
                     let (summary, model_calls, view, view_calls) = run_schedule_reasoning(

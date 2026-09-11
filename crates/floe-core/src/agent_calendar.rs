@@ -99,7 +99,10 @@ impl FloeCore {
             let binding = registry.calendar_view(views.grant().person_id, views.grant().handle)?;
             let mut calendars = views.grant().calendar_ids.clone();
             calendars.sort();
-            if binding.provider != views.grant().provider || binding.calendar_ids != calendars {
+            if binding.provider != views.grant().provider
+                || binding.device_id != views.grant().device_id
+                || binding.calendar_ids != calendars
+            {
                 return Err(AgentFailure::CapabilityDenied);
             }
             let card = registry.expert_card(

@@ -4,34 +4,35 @@ use floe_agent::{
 };
 use floe_core::{
     CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
-    CalendarReadAccessStamp, CalendarTimelineGrant, EncryptedAgentVault, FloeCore,
-    ProjectedCalendarItem, ProjectedCalendarObservation, VaultKeyProvider,
+    CalendarReadAccessStamp, CalendarTimelineGrant, ProjectedCalendarItem,
+    ProjectedCalendarObservation, VaultKeyProvider,
 };
 use floe_domain::{CalendarProvider, PersonId};
-use floe_protocol::{AgentConversationTurnRequestDto, PROTOCOL_VERSION};
+use floe_protocol::PROTOCOL_VERSION;
 
 use crate::{
     local_context::LocalContextStore,
     local_model::FoundationModelRunner,
-    native_calendar::NativeCalendar,
     remote_model::{CalendarContextRequest, ServerModelRunner},
 };
 
-use super::session_uuid;
+use super::super::super::session_uuid;
+use super::ConversationTurnInputs;
 
-pub(super) async fn try_run_with_schedule_expert<
+pub(in crate::vault_host::conversation_turn) async fn try_run<
     Keys: VaultKeyProvider,
     Emit: FnMut(AgentEvent) + Send,
 >(
-    core: &FloeCore,
-    vault: &EncryptedAgentVault<Keys>,
-    local_context: &LocalContextStore,
-    person_id: PersonId,
-    request: &AgentConversationTurnRequestDto,
+    inputs: &ConversationTurnInputs<'_, Keys>,
     context: floe_agent::AgentContext,
     cancellation: floe_agent::Cancellation,
     emit: &mut Emit,
 ) -> Result<Option<floe_agent::AgentSession>, AgentFailure> {
+    let core = inputs.core;
+    let vault = inputs.vault;
+    let local_context = inputs.local_context;
+    let person_id = inputs.person_id;
+    let request = inputs.request;
     let session_id = session_uuid(&request.session_id)?;
     let session = vault.load(person_id, session_id).await?;
     if session.scope.is_some()
@@ -42,10 +43,11 @@ pub(super) async fn try_run_with_schedule_expert<
     }
     let overview = vault.calendar_expert_overview().await?;
     let Some((setup, binding)) = overview.setups.iter().find_map(|setup| {
-        let binding = overview
-            .views
-            .iter()
-            .find(|binding| binding.handle == setup.view_handle && binding.enabled)?;
+        let binding = overview.views.iter().find(|binding| {
+            binding.handle == setup.view_handle
+                && binding.enabled
+                && binding.device_id == request.device_id
+        })?;
         let installations_enabled = [setup.tool_installation_id, setup.expert_installation_id]
             .iter()
             .all(|id| {
@@ -102,6 +104,7 @@ pub(super) async fn try_run_with_schedule_expert<
             vault,
             &Access::new(
                 binding.provider,
+                binding.device_id.clone(),
                 binding.calendar_ids.clone(),
                 connection.revision,
                 &model,
@@ -131,6 +134,7 @@ pub(super) async fn try_run_with_schedule_expert<
                     person_id,
                     handle: setup.view_handle,
                     provider: binding.provider,
+                    device_id: binding.device_id.clone(),
                     calendar_ids: binding.calendar_ids.clone(),
                     connection_revision: connection.revision,
                     day: range,
@@ -147,7 +151,7 @@ pub(super) async fn try_run_with_schedule_expert<
                 continuation: request.continuation,
             },
             chrono::Utc::now,
-            |event| emit(event),
+            emit,
         )
         .await?;
     Ok(Some(result.session))
@@ -195,17 +199,21 @@ enum Access<'model> {
 impl<'model> Access<'model> {
     fn new(
         provider: CalendarProvider,
+        device_id: String,
         calendar_ids: Vec<String>,
         connection_revision: u64,
         model: &'model Model,
         local_context: &'model LocalContextStore,
     ) -> Self {
         match provider {
-            CalendarProvider::Fixture => Self::Fixture(FixtureAccess { calendar_ids }),
+            CalendarProvider::Fixture => Self::Fixture(FixtureAccess {
+                device_id,
+                calendar_ids,
+            }),
             CalendarProvider::EventKit => Self::Device(DeviceCalendarAccess {
                 local_context,
                 provider,
-                native: Some(NativeCalendar::new(calendar_ids.clone())),
+                device_id,
                 calendar_ids,
                 connection_revision,
             }),
@@ -213,12 +221,14 @@ impl<'model> Access<'model> {
                 Model::Server(model) => Self::Remote(RemoteCalendarAccess {
                     model: Some(model),
                     provider,
+                    device_id,
                     calendar_ids,
                     connection_revision,
                 }),
                 Model::Foundation(_) => Self::Remote(RemoteCalendarAccess {
                     model: None,
                     provider,
+                    device_id,
                     calendar_ids,
                     connection_revision,
                 }),
@@ -226,7 +236,7 @@ impl<'model> Access<'model> {
             CalendarProvider::Android => Self::Device(DeviceCalendarAccess {
                 local_context,
                 provider,
-                native: None,
+                device_id,
                 calendar_ids,
                 connection_revision,
             }),
@@ -271,7 +281,7 @@ impl CalendarReadAccess for Access<'_> {
 struct DeviceCalendarAccess<'store> {
     local_context: &'store LocalContextStore,
     provider: CalendarProvider,
-    native: Option<NativeCalendar>,
+    device_id: String,
     calendar_ids: Vec<String>,
     connection_revision: u64,
 }
@@ -287,11 +297,15 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        if request.provider != self.provider || request.calendar_ids != self.calendar_ids {
+        if request.device_id != self.device_id
+            || request.provider != self.provider
+            || request.calendar_ids != self.calendar_ids
+        {
             return Err(AgentFailure::CapabilityDenied);
         }
         match self.local_context.calendar_observation(
             request.person_id,
+            &self.device_id,
             request.provider,
             &request.calendar_ids,
             self.connection_revision,
@@ -299,6 +313,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
             Ok(observation) => Ok(CalendarReadAccessStamp {
                 schema_version: PROTOCOL_VERSION,
                 person_id: request.person_id,
+                device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
                 generation: format!(
@@ -308,10 +323,6 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                     observation.observed_at_unix_ms
                 ),
             }),
-            Err(AgentFailure::CapabilityUnavailable) => match &self.native {
-                Some(native) => native.check(request).await,
-                None => Err(AgentFailure::CapabilityUnavailable),
-            },
             Err(error) => Err(error),
         }
     }
@@ -320,8 +331,15 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         &self,
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<floe_core::CalendarObservation>, AgentFailure> {
+        if request.device_id != self.device_id
+            || request.provider != self.provider
+            || request.calendar_ids != self.calendar_ids
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         match self.local_context.calendar_observation(
             request.person_id,
+            &self.device_id,
             request.provider,
             &request.calendar_ids,
             self.connection_revision,
@@ -339,6 +357,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                     stamp: CalendarReadAccessStamp {
                         schema_version: PROTOCOL_VERSION,
                         person_id: request.person_id,
+                        device_id: request.device_id,
                         provider: request.provider,
                         calendar_ids: request.calendar_ids,
                         generation: format!(
@@ -352,10 +371,6 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                     batches: observation.batches,
                 }))
             }
-            Err(AgentFailure::CapabilityUnavailable) => match &self.native {
-                Some(native) => native.observe(request).await,
-                None => Err(AgentFailure::CapabilityUnavailable),
-            },
             Err(error) => Err(error),
         }
     }
@@ -364,6 +379,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
 struct RemoteCalendarAccess<'model> {
     model: Option<&'model ServerModelRunner>,
     provider: CalendarProvider,
+    device_id: String,
     calendar_ids: Vec<String>,
     connection_revision: u64,
 }
@@ -379,7 +395,10 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        if request.provider != self.provider || request.calendar_ids != self.calendar_ids {
+        if request.device_id != self.device_id
+            || request.provider != self.provider
+            || request.calendar_ids != self.calendar_ids
+        {
             return Err(AgentFailure::CapabilityDenied);
         }
         if self.model.is_none() {
@@ -392,7 +411,10 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         &self,
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
-        if request.provider != self.provider || request.calendar_ids != self.calendar_ids {
+        if request.device_id != self.device_id
+            || request.provider != self.provider
+            || request.calendar_ids != self.calendar_ids
+        {
             return Err(AgentFailure::CapabilityDenied);
         }
         let model = self.model.ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -454,6 +476,7 @@ impl RemoteCalendarAccess<'_> {
         CalendarReadAccessStamp {
             schema_version: PROTOCOL_VERSION,
             person_id,
+            device_id: self.device_id.clone(),
             provider: self.provider,
             calendar_ids: self.calendar_ids.clone(),
             generation: format!("server-{}", self.connection_revision),
@@ -462,6 +485,7 @@ impl RemoteCalendarAccess<'_> {
 }
 
 struct FixtureAccess {
+    device_id: String,
     calendar_ids: Vec<String>,
 }
 
@@ -476,7 +500,8 @@ impl CalendarReadAccess for FixtureAccess {
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        if request.provider != CalendarProvider::Fixture
+        if request.device_id != self.device_id
+            || request.provider != CalendarProvider::Fixture
             || request.calendar_ids != self.calendar_ids
         {
             return Err(AgentFailure::CapabilityDenied);
@@ -484,6 +509,7 @@ impl CalendarReadAccess for FixtureAccess {
         Ok(CalendarReadAccessStamp {
             schema_version: PROTOCOL_VERSION,
             person_id: request.person_id,
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: "bounded-fixture".into(),
@@ -526,7 +552,68 @@ impl ModelRunner for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_protocol::{CalendarBatchDto, LocalContextOperationDto};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn publish_device_calendar(
+        store: &LocalContextStore,
+        person_id: PersonId,
+        device_id: &str,
+        observed_at_unix_ms: i64,
+    ) {
+        store
+            .request(
+                person_id,
+                LocalContextOperationDto::PublishCalendarObservation {
+                    device_id: device_id.into(),
+                    connection_revision: 7,
+                    provider: CalendarProvider::EventKit,
+                    calendar_ids: vec!["primary".into()],
+                    observed_at_unix_ms,
+                    expires_at_unix_ms: observed_at_unix_ms + 240_000,
+                    range_start_unix_ms: observed_at_unix_ms - 60_000,
+                    range_end_unix_ms: observed_at_unix_ms + 60_000,
+                    batches: vec![CalendarBatchDto {
+                        calendar_id: "primary".into(),
+                        records: vec![],
+                        failure: None,
+                    }],
+                },
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn device_calendar_access_never_consumes_another_devices_observation() {
+        let store = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let now = chrono::Utc::now().timestamp_millis();
+        publish_device_calendar(&store, person_id, "iphone", now - 2);
+        publish_device_calendar(&store, person_id, "ipad", now - 1);
+        let access = DeviceCalendarAccess {
+            local_context: &store,
+            provider: CalendarProvider::EventKit,
+            device_id: "iphone".into(),
+            calendar_ids: vec!["primary".into()],
+            connection_revision: 7,
+        };
+        let request = |device_id: &str| CalendarReadAccessRequest {
+            person_id,
+            device_id: device_id.into(),
+            provider: CalendarProvider::EventKit,
+            calendar_ids: vec!["primary".into()],
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            cancellation: floe_agent::Cancellation::default(),
+        };
+
+        let stamp = access.check(request("iphone")).await.unwrap();
+        assert_eq!(stamp.device_id, "iphone");
+        assert!(stamp.generation.starts_with("device-iphone-7-"));
+        assert_eq!(
+            access.check(request("ipad")).await,
+            Err(AgentFailure::CapabilityDenied)
+        );
+    }
 
     async fn receive_request(mut socket: tokio::net::TcpStream) -> serde_json::Value {
         let mut bytes = Vec::new();
@@ -600,12 +687,14 @@ mod tests {
         let access = RemoteCalendarAccess {
             model: Some(&model),
             provider: CalendarProvider::Google,
+            device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
             connection_revision: 9,
         };
         let now = chrono::Utc::now();
         let request = floe_core::CalendarObserveRequest {
             person_id: PersonId::new(),
+            device_id: "test-device".into(),
             provider: CalendarProvider::Google,
             calendar_ids: vec!["primary".into()],
             starts_at: now - chrono::Duration::minutes(1),
@@ -629,6 +718,7 @@ mod tests {
         let access = RemoteCalendarAccess {
             model: None,
             provider: CalendarProvider::Android,
+            device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
             connection_revision: 1,
         };
@@ -636,6 +726,7 @@ mod tests {
         let unavailable = access
             .check(CalendarReadAccessRequest {
                 person_id,
+                device_id: "test-device".into(),
                 provider: CalendarProvider::Android,
                 calendar_ids: vec!["primary".into()],
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
@@ -646,6 +737,7 @@ mod tests {
         let denied = access
             .check(CalendarReadAccessRequest {
                 person_id,
+                device_id: "test-device".into(),
                 provider: CalendarProvider::Google,
                 calendar_ids: vec!["primary".into()],
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),

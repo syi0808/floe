@@ -6,6 +6,7 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
         expected_revision: revision,
         setup_id: Uuid::new_v4(),
         provider: floe_domain::CalendarProvider::EventKit,
+        device_id: "test-device".into(),
         calendar_ids: vec!["setup-private-calendar-canary".into()],
     }
 }
@@ -63,6 +64,7 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
                 CalendarAccessChange::SetScope {
                     replacement_setup_id,
                     provider: floe_domain::CalendarProvider::EventKit,
+                    device_id: "test-device".into(),
                     calendar_ids: vec!["work".into(), "home".into()],
                 },
             ),

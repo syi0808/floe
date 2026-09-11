@@ -144,20 +144,19 @@ final class AgentCalendarExperts {
           view == null) {
         throw const FormatException('Invalid Calendar setup receipt');
       }
-      final source = view.provider == 'event_kit' ? 'eventkit' : 'fixture';
-      for (final (kind, installationId, assignmentId, suffix, tools) in [
+      for (final (kind, installationId, assignmentId, packageId, tools) in [
         (
           'tool',
           setup.toolInstallationId,
           setup.toolAssignmentId,
-          'timeline',
+          'floe.builtin.schedule.context',
           0,
         ),
         (
           'expert',
           setup.expertInstallationId,
           setup.expertAssignmentId,
-          'schedule',
+          'floe.builtin.schedule',
           1,
         ),
       ]) {
@@ -170,7 +169,7 @@ final class AgentCalendarExperts {
         if (installation == null ||
             assignment == null ||
             installation.kind != kind ||
-            installation.packageId != 'floe.calendar.$source.$suffix' ||
+            installation.packageId != packageId ||
             installation.version != '1.0.0' ||
             assignment.installationId != installation.id ||
             assignment.grantedViewCount != 1 ||
@@ -231,12 +230,14 @@ final class AgentCalendarView {
     : handle = _identifier(json['handle']),
       personId = _identifier(json['person_id']),
       provider = _provider(json['provider']),
+      deviceId = _deviceIdentifier(json['device_id']),
       calendarIds = _scope(json['calendar_ids'], canonical: true),
       enabled = _flag(json['enabled']);
 
   final String handle;
   final String personId;
   final String provider;
+  final String deviceId;
   final List<String> calendarIds;
   final bool enabled;
 }
@@ -280,10 +281,23 @@ int _counter(Object? value) {
 }
 
 String _provider(Object? value) {
-  if (value != 'event_kit' && value != 'fixture') {
+  if (!const {
+    'event_kit',
+    'google',
+    'microsoft',
+    'android',
+    'fixture',
+  }.contains(value)) {
     throw const FormatException('Invalid Calendar provider');
   }
   return value as String;
+}
+
+String _deviceIdentifier(Object? value) {
+  if (value is! String || value.trim().isEmpty || value.length > 128) {
+    throw const FormatException('Invalid Calendar device identifier');
+  }
+  return value;
 }
 
 bool _flag(Object? value) {

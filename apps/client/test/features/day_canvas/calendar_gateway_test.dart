@@ -136,6 +136,7 @@ void main() {
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
         clock: () => query.now,
+        deviceId: 'test-device',
       );
       try {
         var snapshot = await gateway.selectCalendars(adapter.inventory, query);
@@ -188,6 +189,7 @@ void main() {
       databasePath: '${directory.path}/scope.db',
       calendarAdapter: adapter,
       clock: () => query.now,
+      deviceId: 'test-device',
     );
     var gateway = await open();
     try {
@@ -248,6 +250,7 @@ void main() {
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
         clock: () => query.now,
+        deviceId: 'test-device',
       );
       var gateway = await open();
       const calendars = [
@@ -321,6 +324,7 @@ void main() {
         databasePath: '${directory.path}/calendar.db',
         calendarAdapter: adapter,
         clock: () => query.now,
+        deviceId: 'test-device',
       );
       try {
         await gateway.selectCalendar((await gateway.calendars()).single, query);
@@ -342,6 +346,7 @@ void main() {
           databasePath: '${directory.path}/calendar.db',
           calendarAdapter: adapter,
           clock: () => query.now,
+          deviceId: 'test-device',
         );
         snapshot = await gateway.loadDay(query);
         expect(snapshot.calendar!.error, 'permission_denied');

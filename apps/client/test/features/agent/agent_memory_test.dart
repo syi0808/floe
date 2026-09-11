@@ -21,7 +21,7 @@ void main() {
         'memory': _overview,
         'failure': null,
       };
-    });
+    }, deviceId: 'test-device');
 
     final overview = await gateway.readMemory('person-1');
 

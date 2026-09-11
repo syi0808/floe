@@ -4,7 +4,7 @@ mod personal;
 mod portfolio;
 mod schedule;
 
-pub use catalog::{BuiltinContextSource, BuiltinExpertKind};
+pub use catalog::{BUILTIN_EXPERT_PACKAGE_VERSION, BuiltinContextSource, BuiltinExpertKind};
 pub use mail::*;
 pub use personal::*;
 pub use portfolio::*;

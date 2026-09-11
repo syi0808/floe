@@ -169,6 +169,7 @@ impl CalendarReadAccess for Access {
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: request.person_id,
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: "fixture-generation".into(),
@@ -379,6 +380,7 @@ impl Fixture {
                     registry.revision(),
                     person,
                     provider,
+                    "test-device".into(),
                     vec!["private-calendar-id".into()],
                 )
                 .unwrap();
@@ -407,7 +409,13 @@ impl Fixture {
                 PackageImplementation::TimelineRead { data_class: class },
                 vec![],
             ),
-            (expert, PackageImplementation::Schedule, vec![tool]),
+            (
+                expert,
+                PackageImplementation::Builtin {
+                    expert: floe_agent::BuiltinExpertKind::Schedule,
+                },
+                vec![tool],
+            ),
         ] {
             registry
                 .register(
@@ -471,6 +479,7 @@ impl Fixture {
                 person_id: person,
                 handle,
                 provider,
+                device_id: "test-device".into(),
                 calendar_ids: vec!["private-calendar-id".into()],
                 connection_revision: 2,
                 day,
@@ -615,6 +624,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             expected_revision: fixture.revision,
             setup_id: Uuid::new_v4(),
             provider: fixture.grant.provider,
+            device_id: "test-device".into(),
             calendar_ids: fixture.grant.calendar_ids.clone(),
         };
         let installed = fixture
@@ -1549,7 +1559,7 @@ async fn model_cannot_delegate_an_empty_natural_language_assignment() {
 #[tokio::test]
 async fn missing_revoked_or_different_durable_calendar_scope_is_denied_before_model_and_native_access()
  {
-    for mode in 0..4 {
+    for mode in 0..5 {
         let fixture = Fixture::with_binding(DataClass::Synthetic, mode != 0).await;
         let model = Model::default();
         let access = Access::default();
@@ -1560,6 +1570,7 @@ async fn missing_revoked_or_different_durable_calendar_scope_is_denied_before_mo
                 .calendar_ids
                 .push("unapproved-calendar".into()),
             2 => request.grant.calendar_ids = vec!["different-calendar".into()],
+            4 => request.grant.device_id = "other-device".into(),
             3 => {
                 let mut registry = AgentRegistry::restore(
                     fixture.state().await,

@@ -28,6 +28,7 @@ void main() {
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
+      deviceId: 'test-device',
     );
     expect((await gateway.loadDay(query)).items, isEmpty);
 
@@ -74,6 +75,7 @@ void main() {
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
+      deviceId: 'test-device',
     );
     snapshot = await gateway.loadDay(query);
     expect(snapshot.items, hasLength(3));
@@ -89,6 +91,7 @@ void main() {
       libraryPath: library.path,
       databasePath: databasePath,
       clock: () => now,
+      deviceId: 'test-device',
     );
     expect((await gateway.loadDay(query)).items, isEmpty);
     await gateway.close();

@@ -1,10 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DataClass, ExpertMetadata};
+use crate::{
+    AGENT_VERSION, AgentPackage, DataClass, ExpertMetadata, PackageImplementation, PackageKind,
+    PackageRef,
+};
+
+pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinExpertKind {
+    Schedule,
     Commitments,
     Communication,
     Relationships,
@@ -15,7 +21,18 @@ pub enum BuiltinExpertKind {
 }
 
 impl BuiltinExpertKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
+        Self::Schedule,
+        Self::Commitments,
+        Self::Communication,
+        Self::Relationships,
+        Self::FocusAttention,
+        Self::Wellbeing,
+        Self::WorkContext,
+        Self::LifeLogistics,
+    ];
+
+    pub const BUILTIN_SETUP: [Self; 7] = [
         Self::Commitments,
         Self::Communication,
         Self::Relationships,
@@ -27,6 +44,7 @@ impl BuiltinExpertKind {
 
     pub const fn package_id(self) -> &'static str {
         match self {
+            Self::Schedule => "floe.builtin.schedule",
             Self::Commitments => "floe.builtin.commitments",
             Self::Communication => "floe.builtin.communication",
             Self::Relationships => "floe.builtin.relationships",
@@ -59,6 +77,7 @@ impl BuiltinExpertKind {
         use BuiltinContextSource::*;
 
         match self {
+            Self::Schedule => &[Calendar],
             Self::Commitments => &[Mail, Calendar, Tasks, ConfirmedMemory],
             Self::Communication => &[Mail],
             Self::Relationships => &[Contacts, ConfirmedInteractions],
@@ -71,6 +90,7 @@ impl BuiltinExpertKind {
 
     pub const fn mandatory_source(self) -> BuiltinContextSource {
         match self {
+            Self::Schedule => BuiltinContextSource::Calendar,
             Self::Commitments | Self::Communication => BuiltinContextSource::Mail,
             Self::Relationships => BuiltinContextSource::Contacts,
             Self::FocusAttention => BuiltinContextSource::Attention,
@@ -83,12 +103,13 @@ impl BuiltinExpertKind {
     pub const fn supports_device_model(self) -> bool {
         matches!(
             self,
-            Self::Relationships | Self::FocusAttention | Self::Wellbeing
+            Self::Schedule | Self::Relationships | Self::FocusAttention | Self::Wellbeing
         )
     }
 
     pub const fn result_artifact_name(self) -> &'static str {
         match self {
+            Self::Schedule => "Schedule expert result",
             Self::Commitments => "Commitments expert result",
             Self::Communication => "Communication expert result",
             Self::Relationships => "Relationships expert result",
@@ -101,6 +122,12 @@ impl BuiltinExpertKind {
 
     pub(crate) fn metadata(self) -> ExpertMetadata {
         let (name, description, domain_tags, skills) = match self {
+            Self::Schedule => (
+                "Schedule Expert",
+                "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.",
+                vec!["schedule", "calendar"],
+                "Provide independent scheduling judgment",
+            ),
             Self::Commitments => (
                 "Commitments Expert",
                 "Finds obligations and follow-ups across the bounded personal context granted to it.",
@@ -150,6 +177,38 @@ impl BuiltinExpertKind {
             domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
             skills: vec![skills.into()],
         }
+    }
+
+    pub(crate) fn packages(self, data_class: DataClass) -> [AgentPackage; 2] {
+        let tool = PackageRef {
+            kind: PackageKind::Tool,
+            id: self.tool_id(),
+            version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
+        };
+        [
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: tool.clone(),
+                publisher: "floe".into(),
+                implementation: PackageImplementation::TimelineRead { data_class },
+                expert_metadata: None,
+                required_tools: vec![],
+                state_schema_version: 1,
+            },
+            AgentPackage {
+                schema_version: AGENT_VERSION,
+                reference: PackageRef {
+                    kind: PackageKind::Expert,
+                    id: self.package_id().into(),
+                    version: BUILTIN_EXPERT_PACKAGE_VERSION.into(),
+                },
+                publisher: "floe".into(),
+                implementation: PackageImplementation::Builtin { expert: self },
+                expert_metadata: Some(self.metadata()),
+                required_tools: vec![tool],
+                state_schema_version: 1,
+            },
+        ]
     }
 }
 

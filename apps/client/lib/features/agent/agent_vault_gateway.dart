@@ -35,9 +35,14 @@ final class NativeAgentVaultGateway
         AgentConnectionsGateway,
         AgentMemoryGateway,
         AgentMemoryReviewGateway {
-  NativeAgentVaultGateway(this.request, {this.resolveRemoteRoute});
+  NativeAgentVaultGateway(
+    this.request, {
+    required this.deviceId,
+    this.resolveRemoteRoute,
+  });
 
   final Future<Map<String, dynamic>> Function(Map<String, Object?>) request;
+  final String deviceId;
   final Future<Map<String, Object?>?> Function()? resolveRemoteRoute;
   _VaultJob? _pending;
   AgentSession? _run;
@@ -156,6 +161,7 @@ final class NativeAgentVaultGateway
       _conversationRun = turn;
     }
     final serialized = turn.toJson();
+    serialized['device_id'] = deviceId;
     if (resolveRemoteRoute != null) {
       serialized['remote_route'] = await resolveRemoteRoute!();
     }
@@ -257,9 +263,11 @@ final class NativeAgentVaultGateway
   Future<AgentCalendarExperts> installCalendarExpert(
     AgentCalendarSetup setup,
   ) async {
+    final serialized = setup.toJson();
+    serialized['device_id'] = deviceId;
     final result = await _perform(setup.personId, {
       'kind': 'calendar_experts',
-      'setup': setup.toJson(),
+      'setup': serialized,
     });
     final overview = _calendarExperts(setup.personId, result);
     if (overview.receiptFor(setup) == null) {
@@ -272,9 +280,14 @@ final class NativeAgentVaultGateway
   Future<AgentCalendarExperts> configureCalendarAccess(
     AgentCalendarAccessRequest request,
   ) async {
+    final serialized = request.toJson();
+    if (request.operation == AgentCalendarAccessOperation.setScope) {
+      final change = serialized['change']! as Map<String, Object>;
+      change['device_id'] = deviceId;
+    }
     final result = await _perform(request.personId, {
       'kind': 'calendar_access',
-      'change': request.toJson(),
+      'change': serialized,
     });
     return _calendarExperts(request.personId, result);
   }
@@ -286,7 +299,9 @@ final class NativeAgentVaultGateway
     final overview = AgentCalendarExperts.fromJson(
       Map<String, dynamic>.from(result['calendar_experts'] as Map),
     );
-    if (overview.registry.personId != personId || result['state'] != 'ready') {
+    if (overview.registry.personId != personId ||
+        result['state'] != 'ready' ||
+        overview.views.any((view) => view.deviceId != deviceId)) {
       throw const FormatException('Calendar Expert Person or vault mismatch');
     }
     return overview;

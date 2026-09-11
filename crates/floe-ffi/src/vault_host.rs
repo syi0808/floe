@@ -31,7 +31,6 @@ use crate::local_context::LocalContextStore;
 
 mod conversation_turn;
 mod learner_worker;
-mod schedule_conversation;
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
@@ -907,7 +906,7 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
             )
             .await?
     };
-    if result.setup.assignments.len() != BuiltinExpertKind::ALL.len() {
+    if result.setup.assignments.len() != BuiltinExpertKind::BUILTIN_SETUP.len() {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(())

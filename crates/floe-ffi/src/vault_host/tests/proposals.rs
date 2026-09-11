@@ -19,6 +19,7 @@ impl CalendarReadAccess for Access {
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: request.person_id,
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: "synthetic-generation".into(),
@@ -122,6 +123,7 @@ async fn seed(
                 expected_revision: 0,
                 setup_id: Uuid::new_v4(),
                 provider: CalendarProvider::Fixture,
+                device_id: "test-device".into(),
                 calendar_ids: vec!["test-calendar".into()],
             },
             Cancellation::default(),
@@ -229,6 +231,7 @@ async fn seed(
                     person_id: person,
                     handle: setup.view_handle,
                     provider: CalendarProvider::Fixture,
+                    device_id: "test-device".into(),
                     calendar_ids: vec!["test-calendar".into()],
                     connection_revision: revision,
                     day,

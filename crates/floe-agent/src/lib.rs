@@ -63,12 +63,12 @@ pub use contract::{
     SessionRecoveryPointer, SessionStore,
 };
 pub use experts::{
-    CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView,
-    FocusContextViews, FocusExpertResult, FocusRecommendation, PersonalExpertInvocation,
-    RelationshipFollowUp, RelationshipsContextViews, RelationshipsExpertResult, ScheduleImpact,
-    WellbeingContextViews, WellbeingExpertResult, run_focus_expert_with_views,
-    run_relationships_expert_with_views, run_wellbeing_expert_with_views,
-    validate_confirmed_interaction_view,
+    BUILTIN_EXPERT_PACKAGE_VERSION, CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction,
+    ConfirmedInteractionView, FocusContextViews, FocusExpertResult, FocusRecommendation,
+    PersonalExpertInvocation, RelationshipFollowUp, RelationshipsContextViews,
+    RelationshipsExpertResult, ScheduleImpact, WellbeingContextViews, WellbeingExpertResult,
+    run_focus_expert_with_views, run_relationships_expert_with_views,
+    run_wellbeing_expert_with_views, validate_confirmed_interaction_view,
 };
 pub use experts::{
     CommitmentEvidenceSource, CommitmentFinding, CommitmentKind, CommitmentsContextViews,
@@ -137,8 +137,8 @@ pub use prompts::{
     work_context_expert_prompt,
 };
 pub use registry::{
-    AgentPackage, AgentRegistry, AssignmentOverview, BUILTIN_EXPERT_PACKAGE_VERSION,
-    BuiltinContextSource, BuiltinExpertAssignmentReceipt, BuiltinExpertKind, BuiltinExpertSetup,
+    AgentPackage, AgentRegistry, AssignmentOverview, BuiltinContextSource,
+    BuiltinExpertAssignmentReceipt, BuiltinExpertKind, BuiltinExpertSetup,
     BuiltinExpertSetupReceipt, BuiltinExpertSetupResult, BuiltinSourceBinding, BuiltinSourceState,
     CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertOverview, CalendarExpertSetup,
     CalendarExpertSetupReceipt, CalendarExpertSetupResult, CalendarViewBinding, ExpertMetadata,

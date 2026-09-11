@@ -1,5 +1,21 @@
 use super::*;
 
+mod schedule;
+
+pub(super) async fn run<Keys: VaultKeyProvider>(
+    inputs: &ConversationTurnInputs<'_, Keys>,
+    context: AgentContext,
+    cancellation: floe_agent::Cancellation,
+    mut emit: impl FnMut(AgentEvent) + Send,
+) -> Result<floe_agent::AgentSession, AgentFailure> {
+    if let Some(session) =
+        schedule::try_run(inputs, context.clone(), cancellation.clone(), &mut emit).await?
+    {
+        return Ok(session);
+    }
+    run_general_turn(inputs, context, cancellation, emit).await
+}
+
 pub(super) struct ConversationExperts<'model> {
     pub(super) model: &'model Model,
     pub(super) policy: &'model InferencePolicyDecision,
@@ -125,6 +141,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             person_id: request.person_id,
         };
         let (summary, data) = match expert {
+            BuiltinExpertKind::Schedule => return Err(AgentFailure::CapabilityDenied),
             BuiltinExpertKind::Commitments => {
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);

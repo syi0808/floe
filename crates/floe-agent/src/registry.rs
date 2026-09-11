@@ -7,9 +7,7 @@ use crate::{AGENT_VERSION, AgentFailure, DataClass};
 pub use crate::experts::{BuiltinContextSource, BuiltinExpertKind};
 
 mod builtin_setup;
-mod calendar_setup;
 pub use builtin_setup::*;
-pub use calendar_setup::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,7 +34,6 @@ pub enum ExpertRule {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageImplementation {
     TimelineRead { data_class: DataClass },
-    Schedule,
     Builtin { expert: BuiltinExpertKind },
     Declarative { rules: Vec<ExpertRule> },
 }
@@ -93,9 +90,6 @@ impl AgentPackage {
                 if self.reference.kind == PackageKind::Tool
                     && self.required_tools.is_empty()
                     && !matches!(data_class, DataClass::Credential | DataClass::DeviceOnlyRaw) => {}
-            PackageImplementation::Schedule if self.reference.kind == PackageKind::Expert => {
-                self.validate_requirements()?;
-            }
             PackageImplementation::Builtin { .. } if self.reference.kind == PackageKind::Expert => {
                 self.validate_requirements()?;
             }
@@ -192,6 +186,7 @@ pub struct CalendarViewBinding {
     pub handle: Uuid,
     pub person_id: PersonId,
     pub provider: floe_domain::CalendarProvider,
+    pub device_id: String,
     pub calendar_ids: Vec<String>,
     pub enabled: bool,
 }
@@ -208,7 +203,9 @@ impl CalendarViewBinding {
     }
 
     fn validate(&self) -> Result<(), AgentFailure> {
+        let device_binding_valid = !self.device_id.trim().is_empty() && self.device_id.len() <= 128;
         if self.handle.is_nil()
+            || !device_binding_valid
             || self.calendar_ids.is_empty()
             || self.calendar_ids.len() > 4
             || self
@@ -672,6 +669,7 @@ impl AgentRegistry {
         expected_revision: u64,
         person_id: PersonId,
         provider: floe_domain::CalendarProvider,
+        device_id: String,
         mut calendar_ids: Vec<String>,
     ) -> Result<Uuid, AgentFailure> {
         self.check_revision(expected_revision)?;
@@ -683,6 +681,7 @@ impl AgentRegistry {
             handle: Uuid::new_v4(),
             person_id,
             provider,
+            device_id,
             calendar_ids,
             enabled: false,
         };

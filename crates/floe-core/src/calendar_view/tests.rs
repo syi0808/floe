@@ -96,6 +96,7 @@ impl Fixture {
             person_id: self.person,
             handle: Uuid::new_v4(),
             provider: CalendarProvider::Fixture,
+            device_id: "test-device".into(),
             calendar_ids: vec!["home-secret-id".into()],
             connection_revision: 2,
             day: day(),
@@ -138,6 +139,7 @@ impl CalendarReadAccess for Access {
             } else {
                 request.person_id
             },
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: if self.change_on_second && call > 0 {
@@ -165,6 +167,7 @@ impl CalendarReadAccess for ProjectedObservationAccess {
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: request.person_id,
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: "server-7".into(),
@@ -179,6 +182,7 @@ impl CalendarReadAccess for ProjectedObservationAccess {
             stamp: CalendarReadAccessStamp {
                 schema_version: 1,
                 person_id: request.person_id,
+                device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
                 generation: "server-7".into(),
@@ -208,6 +212,7 @@ impl CalendarReadAccess for ObservationAccess {
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: request.person_id,
+            device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
             generation: "live-observation".into(),
@@ -222,6 +227,7 @@ impl CalendarReadAccess for ObservationAccess {
             stamp: CalendarReadAccessStamp {
                 schema_version: 1,
                 person_id: request.person_id,
+                device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
                 generation: "live-observation".into(),
@@ -445,6 +451,7 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
         person_id: fixture.person,
         handle: Uuid::new_v4(),
         provider: CalendarProvider::Fixture,
+        device_id: "test-device".into(),
         calendar_ids: vec!["home-secret-id".into()],
         connection_revision: 3,
         day: range.clone(),
@@ -963,6 +970,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         handle: snapshot.assignments[0].granted_view_handles[0],
         person_id: fixture.person,
         provider: CalendarProvider::Fixture,
+        device_id: "test-device".into(),
         calendar_ids: fixture.grant().calendar_ids,
         enabled: true,
     });

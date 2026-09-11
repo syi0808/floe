@@ -539,7 +539,9 @@ impl FixtureCapabilities {
                 schema_version: 1,
                 reference: expert.clone(),
                 publisher: "floe".into(),
-                implementation: PackageImplementation::Schedule,
+                implementation: PackageImplementation::Builtin {
+                    expert: floe_agent::BuiltinExpertKind::Schedule,
+                },
                 expert_metadata: Some(ExpertMetadata {
                     name: "Schedule Expert".into(),
                     description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),

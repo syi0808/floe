@@ -27,7 +27,7 @@ void main() {
         },
         'failure': null,
       };
-    });
+    }, deviceId: 'test-device');
 
     final review = await gateway.readMemoryReview('person-1');
     expect(submittedAction, {'kind': 'memory_review'});
