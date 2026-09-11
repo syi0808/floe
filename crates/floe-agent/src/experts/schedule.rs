@@ -1012,6 +1012,7 @@ fn bounded_calendar_view(
     Ok(bounded)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn generate_schedule_step<Model: ModelRunner + Sync>(
     model: &Model,
     policy: &InferencePolicyDecision,

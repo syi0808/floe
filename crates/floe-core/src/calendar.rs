@@ -65,6 +65,7 @@ impl FloeCore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_calendar_scope(
         &self,
         person_id: PersonId,

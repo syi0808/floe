@@ -330,19 +330,18 @@ pub fn validate_connector_snapshot(
             &connection.connector_id,
         ),
     }
-    if let Some(binding) = &connection.device_binding {
-        if !matches!(
+    if let Some(binding) = &connection.device_binding
+        && (!matches!(
             &descriptor.execution,
             ExecutionLocation::Device { device_id } if device_id == &binding.device_id
         ) || binding.device_id.trim().is_empty()
-            || binding.device_id.len() > 128
-        {
-            push(
-                &mut violations,
-                ConformanceCode::ConnectorMismatch,
-                &connection.connector_id,
-            );
-        }
+            || binding.device_id.len() > 128)
+    {
+        push(
+            &mut violations,
+            ConformanceCode::ConnectorMismatch,
+            &connection.connector_id,
+        );
     }
     if connection.observed_at_unix_ms > now_unix_ms
         || connection

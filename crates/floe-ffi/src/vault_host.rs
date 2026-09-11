@@ -385,9 +385,9 @@ impl Worker {
                                                 failure,
                                                 AgentFailure::VaultUnavailable
                                                     | AgentFailure::Interrupted
-                                            ) || !vault
+                                            ) || vault
                                                 .as_ref()
-                                                .is_some_and(|(person, _)| *person == job.person)
+                                                .is_none_or(|(person, _)| *person != job.person)
                                             {
                                                 AgentVaultStateDto::Unavailable
                                             } else {
@@ -501,10 +501,10 @@ impl Worker {
                     progress: Mutex::new(Progress::default()),
                 });
                 self.foreground_pending.store(true, Ordering::Release);
-                if let Ok(background) = self.background.lock() {
-                    if let Some(cancellation) = background.as_ref() {
-                        cancellation.cancel();
-                    }
+                if let Ok(background) = self.background.lock()
+                    && let Some(cancellation) = background.as_ref()
+                {
+                    cancellation.cancel();
                 }
                 if self.sender.try_send(job.clone()).is_err() {
                     self.foreground_pending.store(false, Ordering::Release);
@@ -569,15 +569,15 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.closing.store(true, Ordering::Release);
-        if let Ok(active) = self.active.lock() {
-            if let Some(job) = active.as_ref() {
-                job.cancellation.cancel();
-            }
+        if let Ok(active) = self.active.lock()
+            && let Some(job) = active.as_ref()
+        {
+            job.cancellation.cancel();
         }
-        if let Ok(background) = self.background.lock() {
-            if let Some(cancellation) = background.as_ref() {
-                cancellation.cancel();
-            }
+        if let Ok(background) = self.background.lock()
+            && let Some(cancellation) = background.as_ref()
+        {
+            cancellation.cancel();
         }
     }
 }

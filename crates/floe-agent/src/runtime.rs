@@ -203,6 +203,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn continue_turn_with_agents<Agents: A2AHost>(
         &self,
         person_id: floe_domain::PersonId,
@@ -428,6 +429,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn recorded<T>(
         &self,
         future: impl Future<Output = Result<T, AgentFailure>>,
@@ -471,6 +473,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             emit_event(session, turn_id, AgentEventKind::ModelAttempt { record }, emit);
                         }
                         crate::model_journal::JournalRecord::Capability(record) => {
+                            let record = *record;
                             let previous = session.capability_executions.clone();
                             if record.state == CapabilityExecutionState::Started {
                                 if session.capability_executions.iter().any(|saved| saved.call_id == record.call_id) {
@@ -533,6 +536,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn drive<Agents: A2AHost>(
         &self,
         session: &mut AgentSession,

@@ -695,6 +695,7 @@ impl AgentRegistry {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn register_calendar_view(
         &mut self,
         expected_revision: u64,

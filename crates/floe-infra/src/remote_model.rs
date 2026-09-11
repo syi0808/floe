@@ -1156,7 +1156,11 @@ mod tests {
         let mut foreign = route.clone();
         foreign.base_url = "http://127.0.0.1:9431".into();
         assert_eq!(
-            restore_replay(&[replay.clone()], &foreign, &mut original.clone()),
+            restore_replay(
+                std::slice::from_ref(&replay),
+                &foreign,
+                &mut original.clone()
+            ),
             Err(AgentFailure::PolicyDenied)
         );
         let mut orphan = replay;

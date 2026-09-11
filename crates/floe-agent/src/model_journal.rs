@@ -29,7 +29,7 @@ pub struct ModelAttemptRecord {
 #[derive(Debug)]
 pub(crate) enum JournalRecord {
     Model(ModelAttemptRecord),
-    Capability(crate::CapabilityExecution),
+    Capability(Box<crate::CapabilityExecution>),
 }
 
 #[derive(Debug)]

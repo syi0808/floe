@@ -83,8 +83,10 @@ impl UsageLedger {
         &self,
         record: crate::CapabilityExecution,
     ) -> Result<(), AgentFailure> {
-        self.record_entry(crate::model_journal::JournalRecord::Capability(record))
-            .await
+        self.record_entry(crate::model_journal::JournalRecord::Capability(Box::new(
+            record,
+        )))
+        .await
     }
 
     async fn record_entry(

@@ -829,8 +829,10 @@ mod tests {
     async fn learner_preempts_in_flight_review_on_cancellation_or_deadline() {
         let first_input = input();
         let sink = Sink::new(first_input.person_id);
-        let mut budget = LearnerBudget::default();
-        budget.deadline_ms = 1;
+        let budget = LearnerBudget {
+            deadline_ms: 1,
+            ..LearnerBudget::default()
+        };
         let runtime = LearnerRuntime {
             model: &PendingModel,
             candidates: &sink,

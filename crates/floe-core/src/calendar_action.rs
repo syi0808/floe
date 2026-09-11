@@ -196,6 +196,7 @@ impl FloeCore {
         Ok(action)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn direct_calendar_action(
         &self,
         person_id: PersonId,
@@ -455,13 +456,12 @@ impl FloeCore {
             }
         }
         let mirror = self.store.calendar_mirror(action.person_id).await?;
-        if let Some(mutation) = &action.mutation {
-            if mirror
+        if let Some(mutation) = &action.mutation
+            && mirror
                 .as_ref()
                 .is_none_or(|mirror| !mirror.events.contains(&mutation.original))
-            {
-                return Ok(Some(ActionBlockReason::CalendarChanged));
-            }
+        {
+            return Ok(Some(ActionBlockReason::CalendarChanged));
         }
         if mirror.is_none_or(|mirror| {
             mirror.connection.revision != action.connection_revision
