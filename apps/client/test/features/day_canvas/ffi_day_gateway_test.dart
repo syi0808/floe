@@ -7,6 +7,52 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'Android selection uses the persisted device connection identity',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      if (!library.existsSync()) {
+        markTestSkipped('cargo build -p floe-ffi가 필요합니다.');
+        return;
+      }
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'floe-android-calendar-binding-test-',
+      );
+      final now = DateTime.utc(2026, 9, 3, 9);
+      final query = DayQuery(
+        personId: localPersonId,
+        date: now,
+        now: now,
+        timezoneOffsetSeconds: 0,
+      );
+      final gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${temporaryDirectory.path}/floe.db',
+        clock: () => now,
+        deviceId: 'local-00000000-0000-4000-8000-000000000011',
+      );
+      final snapshot = await gateway.selectCalendars(const [
+        CalendarChoice(
+          'android-selected',
+          'Selected Android calendars',
+          provider: 'android',
+        ),
+      ], query);
+      expect(
+        snapshot.calendar!.connectionId,
+        '00000000-0000-4000-8000-000000000011',
+      );
+      expect(
+        snapshot.calendar!.deviceId,
+        'local-00000000-0000-4000-8000-000000000011',
+      );
+      expect(snapshot.calendar!.provider, 'android');
+      expect(snapshot.calendar!.selectedCalendarIds, ['android-selected']);
+      await gateway.close();
+      await temporaryDirectory.delete(recursive: true);
+    },
+  );
+
+  test(
     'server Calendar identity and selector survive a Rust restart',
     () async {
       final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
