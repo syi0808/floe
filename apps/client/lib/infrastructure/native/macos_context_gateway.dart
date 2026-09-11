@@ -49,6 +49,12 @@ void validateMacOSAttentionView(Map<String, dynamic> view) {
     'high_interruption_pressure',
     'unknown',
   };
+  const allowedEvidence = {
+    'attention.macos:stable_activity',
+    'attention.macos:recent_input',
+    'attention.macos:switch_pressure',
+    'attention.macos:mixed_activity',
+  };
   if (observed < 0 ||
       expires <= observed ||
       expires - observed > 300000 ||
@@ -58,7 +64,10 @@ void validateMacOSAttentionView(Map<String, dynamic> view) {
       (state == 'unknown') != (confidence == 0) ||
       evidence.length > 16 ||
       (state != 'unknown' && evidence.isEmpty) ||
-      evidence.any((value) => !_validHandle(value))) {
+      evidence.toSet().length != evidence.length ||
+      evidence.any(
+        (value) => !_validHandle(value) || !allowedEvidence.contains(value),
+      )) {
     throw const FormatException('Invalid macOS Attention View envelope.');
   }
 }

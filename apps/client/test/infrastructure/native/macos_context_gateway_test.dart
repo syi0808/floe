@@ -43,4 +43,22 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('macOS Attention projection cannot describe absence as available', () {
+    final invalidAbsence = <String, dynamic>{
+      'schema_version': 1,
+      'view_id': 'attention.coarse',
+      'source_handle': 'attention:macos_local',
+      'observed_at_unix_ms': 1000,
+      'expires_at_unix_ms': 61000,
+      'state': 'available',
+      'confidence_millis': 850,
+      'evidence_handles': <String>['attention.macos:session_idle'],
+    };
+
+    expect(
+      () => validateMacOSAttentionView(invalidAbsence),
+      throwsFormatException,
+    );
+  });
 }

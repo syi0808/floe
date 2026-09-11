@@ -32,11 +32,7 @@ final class MacOSAttentionReducer {
   func projection(at date: Date, idleSeconds: TimeInterval) -> MacOSAttentionProjection {
     prune(at: date)
     if !sessionIsActive || idleSeconds >= 300 {
-      return MacOSAttentionProjection(
-        state: "available",
-        confidenceMillis: 850,
-        evidenceHandles: ["attention.macos:session_idle"]
-      )
+      return MacOSAttentionProjection(state: "unknown", confidenceMillis: 0, evidenceHandles: [])
     }
     guard date.timeIntervalSince(startedAt) >= 60 else {
       return MacOSAttentionProjection(state: "unknown", confidenceMillis: 0, evidenceHandles: [])
