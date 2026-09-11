@@ -1,12 +1,13 @@
 use std::time::{Duration, SystemTime};
 
 use floe_agent::{
-    AGENT_VERSION, AgentFailure, AttentionView, CommunicationView, LogisticsView,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, MAX_PERSONAL_CONTEXT_BYTES,
-    MAX_PORTFOLIO_VIEW_BYTES, ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep,
-    PeopleView, SessionProtection, WellbeingView, WorkContextView, validate_attention_view,
-    validate_communication_view, validate_logistics_view, validate_people_view,
-    validate_wellbeing_view, validate_work_context_view,
+    AGENT_VERSION, AgentFailure, AttentionView, CalendarContextView, CommunicationView,
+    ConfirmedInteractionView, LogisticsView, MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES,
+    MAX_COMMUNICATION_ITEMS, MAX_PERSONAL_CONTEXT_BYTES, MAX_PORTFOLIO_VIEW_BYTES, ModelPlacement,
+    ModelRequest, ModelResponse, ModelRunner, ModelStep, PeopleView, SessionProtection,
+    WellbeingView, WorkContextView, validate_attention_view, validate_calendar_context_view,
+    validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view,
+    validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
@@ -84,6 +85,37 @@ impl ServerModelRunner {
             deadline,
             cancellation,
             validate_work_context_view,
+        )
+        .await
+    }
+
+    pub async fn read_calendar_context_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarContextView, AgentFailure> {
+        self.read_view(
+            "/v1/views/calendar.timeline",
+            json!({"schema_version": AGENT_VERSION}),
+            MAX_CALENDAR_CONTEXT_BYTES,
+            deadline,
+            cancellation,
+            validate_calendar_context_view,
+        )
+        .await
+    }
+
+    pub async fn read_confirmed_interaction_view(
+        &self,
+        people: &PeopleView,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<ConfirmedInteractionView, AgentFailure> {
+        self.read_personal_view(
+            "/v1/views/relationships.confirmed_interactions",
+            deadline,
+            cancellation,
+            |view, now| validate_confirmed_interaction_view(view, people, now),
         )
         .await
     }

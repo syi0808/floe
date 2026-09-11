@@ -427,7 +427,7 @@ struct RelationshipMemoryLink {
     valid_until_unix_ms: Option<i64>,
 }
 
-fn validate_confirmed_interaction_view(
+pub fn validate_confirmed_interaction_view(
     view: &ConfirmedInteractionView,
     people: &PeopleView,
     now_unix_ms: i64,

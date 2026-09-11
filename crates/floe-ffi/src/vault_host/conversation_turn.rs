@@ -1,15 +1,18 @@
 use floe_agent::{
     A2A_PROTOCOL_VERSION, A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask,
     A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
-    AgentFailure, AgentRuntime, AttentionView, CapabilityDescriptor, CapabilityHost,
-    CapabilityInvocation, CommitmentsExpertResult, CommunicationExpertResult, DataClass,
-    EXPERT_RESULT_MEDIA_TYPE, FeasibilityView, FocusExpertResult, InProcessA2ATransport,
-    InProcessAgent, InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation,
-    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, PeopleView, PersonalExpertInvocation,
-    PortfolioExpertInvocation, RelationshipsExpertResult, SessionStore, TransferConsent,
-    WellbeingExpertResult, WellbeingView, WorkContextExpertResult, run_commitments_expert,
-    run_communication_expert, run_focus_expert, run_life_logistics_expert,
-    run_relationships_expert, run_wellbeing_expert, run_work_context_expert,
+    AgentFailure, AgentRuntime, AttentionView, CalendarContextView, CapabilityDescriptor,
+    CapabilityHost, CapabilityInvocation, CommitmentsContextViews, CommitmentsExpertResult,
+    CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE, FeasibilityView,
+    FocusContextViews, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
+    InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
+    ModelRequest, ModelResponse, ModelRunner, NativeContextView, PeopleView,
+    PersonalExpertInvocation, PortfolioExpertInvocation, RelationshipsContextViews,
+    RelationshipsExpertResult, SessionStore, TransferConsent, WellbeingContextViews,
+    WellbeingExpertResult, WellbeingView, WorkContextExpertResult,
+    run_commitments_expert_with_views, run_communication_expert, run_focus_expert_with_views,
+    run_life_logistics_expert, run_relationships_expert_with_views,
+    run_wellbeing_expert_with_views, run_work_context_expert,
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
@@ -62,6 +65,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     }
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
+    let task_views = optional_task_views(core, person_id).await?;
     let capabilities = ConversationCapabilities {
         model: &model,
         policy: &policy,
@@ -72,6 +76,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         policy: &policy,
         context: &context,
         local_context,
+        task_views: &task_views,
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
@@ -109,6 +114,27 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
                 emit,
             )
             .await
+    }
+}
+
+async fn optional_task_views(
+    core: &FloeCore,
+    person_id: PersonId,
+) -> Result<Vec<NativeContextView>, AgentFailure> {
+    let handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
+    match core
+        .task_context_view(
+            person_id,
+            handle,
+            chrono::Utc::now(),
+            16,
+            8 * 1024,
+        )
+        .await
+    {
+        Ok(view) => Ok(vec![view]),
+        Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
+        Err(error) => Err(error),
     }
 }
 
@@ -243,6 +269,64 @@ impl PersonalViewSource<'_> {
                 };
                 model.read_wellbeing_view(deadline, cancellation).await
             }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn calendar_views(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<Vec<CalendarContextView>, AgentFailure> {
+        let Model::Server(model) = self.model else {
+            return Ok(vec![]);
+        };
+        if !self.server_fallback_allowed() {
+            return Ok(vec![]);
+        }
+        match model.read_calendar_context_view(deadline, cancellation).await {
+            Ok(view) => Ok(vec![view]),
+            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn confirmed_interaction_views(
+        &self,
+        people: &PeopleView,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<Vec<floe_agent::ConfirmedInteractionView>, AgentFailure> {
+        let Model::Server(model) = self.model else {
+            return Ok(vec![]);
+        };
+        if !self.server_fallback_allowed() {
+            return Ok(vec![]);
+        }
+        match model
+            .read_confirmed_interaction_view(people, deadline, cancellation)
+            .await
+        {
+            Ok(view) => Ok(vec![view]),
+            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn work_context_views(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<Vec<floe_agent::WorkContextView>, AgentFailure> {
+        let Model::Server(model) = self.model else {
+            return Ok(vec![]);
+        };
+        if !self.server_fallback_allowed() {
+            return Ok(vec![]);
+        }
+        match model.read_work_context_view(deadline, cancellation).await {
+            Ok(view) => Ok(vec![view]),
+            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
             Err(error) => Err(error),
         }
     }
@@ -436,6 +520,7 @@ struct ConversationExperts<'model> {
     policy: &'model InferencePolicyDecision,
     context: &'model AgentContext,
     local_context: &'model LocalContextStore,
+    task_views: &'model [NativeContextView],
 }
 
 impl InProcessAgent for ConversationExperts<'_> {
@@ -614,8 +699,19 @@ impl InProcessAgent for ConversationExperts<'_> {
                         &request.cancellation,
                     )
                     .await?;
-                let result: CommitmentsExpertResult =
-                    run_commitments_expert(model, self.policy, mail_invocation(view)).await?;
+                let calendars = personal_views
+                    .calendar_views(request.deadline, &request.cancellation)
+                    .await?;
+                let result: CommitmentsExpertResult = run_commitments_expert_with_views(
+                    model,
+                    self.policy,
+                    mail_invocation(view),
+                    CommitmentsContextViews {
+                        calendars,
+                        tasks: self.task_views.to_vec(),
+                    },
+                )
+                .await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -676,12 +772,26 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             RELATIONSHIPS_AGENT_ID => {
-                let view = personal_views
+                let people = personal_views
                     .people_view(request.deadline, &request.cancellation)
                     .await?;
-                let result: RelationshipsExpertResult =
-                    run_relationships_expert(self.model, self.policy, personal_invocation(), view)
-                        .await?;
+                let confirmed_interactions = personal_views
+                    .confirmed_interaction_views(
+                        &people,
+                        request.deadline,
+                        &request.cancellation,
+                    )
+                    .await?;
+                let result: RelationshipsExpertResult = run_relationships_expert_with_views(
+                    self.model,
+                    self.policy,
+                    personal_invocation(),
+                    RelationshipsContextViews {
+                        people,
+                        confirmed_interactions,
+                    },
+                )
+                .await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -689,11 +799,26 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             FOCUS_AGENT_ID => {
-                let view = personal_views
+                let attention = personal_views
                     .attention_view(request.deadline, &request.cancellation)
                     .await?;
-                let result: FocusExpertResult =
-                    run_focus_expert(self.model, self.policy, personal_invocation(), view).await?;
+                let calendars = personal_views
+                    .calendar_views(request.deadline, &request.cancellation)
+                    .await?;
+                let active_work = personal_views
+                    .work_context_views(request.deadline, &request.cancellation)
+                    .await?;
+                let result: FocusExpertResult = run_focus_expert_with_views(
+                    self.model,
+                    self.policy,
+                    personal_invocation(),
+                    FocusContextViews {
+                        attention,
+                        calendars,
+                        active_work,
+                    },
+                )
+                .await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -701,12 +826,22 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             WELLBEING_AGENT_ID => {
-                let view = personal_views
+                let wellbeing = personal_views
                     .wellbeing_view(request.deadline, &request.cancellation)
                     .await?;
-                let result: WellbeingExpertResult =
-                    run_wellbeing_expert(self.model, self.policy, personal_invocation(), view)
-                        .await?;
+                let calendars = personal_views
+                    .calendar_views(request.deadline, &request.cancellation)
+                    .await?;
+                let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
+                    self.model,
+                    self.policy,
+                    personal_invocation(),
+                    WellbeingContextViews {
+                        wellbeing,
+                        calendars,
+                    },
+                )
+                .await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -776,6 +911,13 @@ mod tests {
                 )
                 .as_bytes(),
             )
+            .await
+            .unwrap();
+    }
+
+    async fn respond_not_found(mut socket: tokio::net::TcpStream) {
+        socket
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await
             .unwrap();
     }
@@ -923,6 +1065,7 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            task_views: &[],
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1011,6 +1154,11 @@ mod tests {
             .await;
 
             let (socket, _) = listener.accept().await.unwrap();
+            let (calendar_request, socket) = request(socket).await;
+            assert!(calendar_request.starts_with("POST /v1/views/calendar.timeline "));
+            respond_not_found(socket).await;
+
+            let (socket, _) = listener.accept().await.unwrap();
             let (model_request, socket) = request(socket).await;
             assert!(model_request.starts_with("POST /v1/agent "));
             assert!(model_request.contains("Commitments Expert"));
@@ -1070,6 +1218,7 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            task_views: &[],
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -1232,6 +1381,7 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            task_views: &[],
         };
         let mut results = vec![];
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -1351,7 +1501,7 @@ mod tests {
         ];
         let server_cases = cases.clone();
         let server = tokio::spawn(async move {
-            for (_, path, role, view, answer, _) in server_cases {
+            for (agent_id, path, role, view, answer, _) in server_cases {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (view_request, socket) = request(socket).await;
                 assert!(view_request.starts_with(&format!("POST {path} ")));
@@ -1361,6 +1511,23 @@ mod tests {
                     serde_json::json!({"schema_version": 1, "view": view}).to_string(),
                 )
                 .await;
+
+                let optional_paths: &[&str] = match agent_id {
+                    RELATIONSHIPS_AGENT_ID => {
+                        &["/v1/views/relationships.confirmed_interactions"]
+                    }
+                    FOCUS_AGENT_ID => {
+                        &["/v1/views/calendar.timeline", "/v1/views/work.context"]
+                    }
+                    WELLBEING_AGENT_ID => &["/v1/views/calendar.timeline"],
+                    _ => unreachable!(),
+                };
+                for path in optional_paths {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let (optional_request, socket) = request(socket).await;
+                    assert!(optional_request.starts_with(&format!("POST {path} ")));
+                    respond_not_found(socket).await;
+                }
 
                 let (socket, _) = listener.accept().await.unwrap();
                 let (model_request, socket) = request(socket).await;
@@ -1413,6 +1580,7 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            task_views: &[],
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let task = experts
@@ -1481,6 +1649,7 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            task_views: &[],
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
