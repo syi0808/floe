@@ -199,9 +199,7 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
         ["floe.builtin.focus-attention"]
     );
 
-    let focus = registry
-        .snapshot()
-        .builtin_setups[0]
+    let focus = registry.snapshot().builtin_setups[0]
         .assignments
         .iter()
         .find(|assignment| assignment.expert == BuiltinExpertKind::FocusAttention)
@@ -215,11 +213,13 @@ fn atomic_enabled_install_only_advertises_executable_experts() {
         .install_builtin_experts_enabled(person, &request)
         .unwrap();
     assert_eq!(registry.revision(), revision);
-    assert!(!registry
-        .snapshot()
-        .assignments
-        .iter()
-        .find(|assignment| assignment.id == focus)
-        .unwrap()
-        .enabled);
+    assert!(
+        !registry
+            .snapshot()
+            .assignments
+            .iter()
+            .find(|assignment| assignment.id == focus)
+            .unwrap()
+            .enabled
+    );
 }
