@@ -6,6 +6,7 @@ use floe_domain::{
 use serde_json::{from_str, to_string};
 use turso::{Builder, Connection};
 
+use crate::ports::TimelineRepository;
 use crate::{CoreError, ErrorCode};
 
 pub struct TursoStore {
@@ -528,6 +529,63 @@ impl TursoStore {
             let _ = connection.execute("ROLLBACK", ()).await;
         }
         result
+    }
+}
+
+impl TimelineRepository for TursoStore {
+    async fn put_capture(&self, value: &Capture) -> Result<(), CoreError> {
+        TursoStore::put_capture(self, value).await
+    }
+
+    async fn put_event(&self, value: &Event) -> Result<(), CoreError> {
+        TursoStore::put_event(self, value).await
+    }
+
+    async fn put_task(&self, value: &Task) -> Result<(), CoreError> {
+        TursoStore::put_task(self, value).await
+    }
+
+    async fn put_note(&self, value: &Note) -> Result<(), CoreError> {
+        TursoStore::put_note(self, value).await
+    }
+
+    async fn get_capture(&self, id: CaptureId) -> Result<Option<Capture>, CoreError> {
+        TursoStore::get_capture(self, id).await
+    }
+
+    async fn get_event(&self, id: EventId) -> Result<Option<Event>, CoreError> {
+        TursoStore::get_event(self, id).await
+    }
+
+    async fn get_task(&self, id: TaskId) -> Result<Option<Task>, CoreError> {
+        TursoStore::get_task(self, id).await
+    }
+
+    async fn get_note(&self, id: NoteId) -> Result<Option<Note>, CoreError> {
+        TursoStore::get_note(self, id).await
+    }
+
+    async fn list_events(&self, person_id: PersonId) -> Result<Vec<Event>, CoreError> {
+        TursoStore::list_events(self, person_id).await
+    }
+
+    async fn list_tasks(&self, person_id: PersonId) -> Result<Vec<Task>, CoreError> {
+        TursoStore::list_tasks(self, person_id).await
+    }
+
+    async fn list_notes(&self, person_id: PersonId) -> Result<Vec<Note>, CoreError> {
+        TursoStore::list_notes(self, person_id).await
+    }
+
+    async fn classify(&self, capture: &Capture, item: &TimelineItem) -> Result<(), CoreError> {
+        TursoStore::classify(self, capture, item).await
+    }
+
+    async fn calendar_mirror(
+        &self,
+        person_id: PersonId,
+    ) -> Result<Option<floe_domain::CalendarMirror>, CoreError> {
+        TursoStore::calendar_mirror(self, person_id).await
     }
 }
 

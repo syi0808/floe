@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_domain::*;
 
+use crate::ports::TimelineRepository;
 use crate::{CoreError, ErrorCode, TursoStore};
 
 pub struct FloeCore {
@@ -30,6 +31,10 @@ impl FloeCore {
         })
     }
 
+    fn timeline_repository(&self) -> &impl TimelineRepository {
+        &self.store
+    }
+
     pub async fn submit_capture(
         &self,
         person_id: PersonId,
@@ -37,7 +42,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Capture, CoreError> {
         let capture = Capture::new(person_id, input, now, CaptureSource::Typed)?;
-        self.store.put_capture(&capture).await?;
+        self.timeline_repository().put_capture(&capture).await?;
         Ok(capture)
     }
 
@@ -49,7 +54,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Event, CoreError> {
         let event = Event::new(person_id, title, schedule, SourceRef::Manual, now)?;
-        self.store.put_event(&event).await?;
+        self.timeline_repository().put_event(&event).await?;
         Ok(event)
     }
 
@@ -62,7 +67,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
         let task = Task::new(person_id, title, deadline, priority, SourceRef::Manual, now)?;
-        self.store.put_task(&task).await?;
+        self.timeline_repository().put_task(&task).await?;
         Ok(task)
     }
 
@@ -73,7 +78,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Note, CoreError> {
         let note = Note::new(person_id, content, SourceRef::Manual, now)?;
-        self.store.put_note(&note).await?;
+        self.timeline_repository().put_note(&note).await?;
         Ok(note)
     }
 
@@ -85,7 +90,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<TimelineItem, CoreError> {
         let mut capture = self
-            .store
+            .timeline_repository()
             .get_capture(capture_id)
             .await?
             .ok_or_else(|| not_found("capture", capture_id))?;
@@ -123,7 +128,7 @@ impl FloeCore {
             TimelineItem::Note(value) => DomainRef::Note(value.id),
         };
         capture.classify(target, now);
-        self.store.classify(&capture, &item).await?;
+        self.timeline_repository().classify(&capture, &item).await?;
         Ok(item)
     }
 
@@ -135,7 +140,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
         let mut task = self
-            .store
+            .timeline_repository()
             .get_task(task_id)
             .await?
             .ok_or_else(|| not_found("task", task_id))?;
@@ -145,7 +150,7 @@ impl FloeCore {
         } else {
             task.reopen(now);
         }
-        self.store.put_task(&task).await?;
+        self.timeline_repository().put_task(&task).await?;
         Ok(task)
     }
 
@@ -168,14 +173,14 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Event, CoreError> {
         let mut event = self
-            .store
+            .timeline_repository()
             .get_event(event_id)
             .await?
             .ok_or_else(|| not_found("event", event_id))?;
         ensure_revision(event.revision, expected_revision)?;
         ensure_local_event(&event)?;
         event.update(title, schedule, now)?;
-        self.store.put_event(&event).await?;
+        self.timeline_repository().put_event(&event).await?;
         Ok(event)
     }
 
@@ -189,13 +194,13 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Task, CoreError> {
         let mut task = self
-            .store
+            .timeline_repository()
             .get_task(task_id)
             .await?
             .ok_or_else(|| not_found("task", task_id))?;
         ensure_revision(task.revision, expected_revision)?;
         task.update(title, deadline, priority, now)?;
-        self.store.put_task(&task).await?;
+        self.timeline_repository().put_task(&task).await?;
         Ok(task)
     }
 
@@ -207,13 +212,13 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<Note, CoreError> {
         let mut note = self
-            .store
+            .timeline_repository()
             .get_note(note_id)
             .await?
             .ok_or_else(|| not_found("note", note_id))?;
         ensure_revision(note.revision, expected_revision)?;
         note.update(content, now)?;
-        self.store.put_note(&note).await?;
+        self.timeline_repository().put_note(&note).await?;
         Ok(note)
     }
 
@@ -226,34 +231,34 @@ impl FloeCore {
         match reference {
             DomainRef::Event(id) => {
                 let mut value = self
-                    .store
+                    .timeline_repository()
                     .get_event(id)
                     .await?
                     .ok_or_else(|| not_found("event", id))?;
                 ensure_revision(value.revision, expected_revision)?;
                 ensure_local_event(&value)?;
                 value.delete(now);
-                self.store.put_event(&value).await?;
+                self.timeline_repository().put_event(&value).await?;
             }
             DomainRef::Task(id) => {
                 let mut value = self
-                    .store
+                    .timeline_repository()
                     .get_task(id)
                     .await?
                     .ok_or_else(|| not_found("task", id))?;
                 ensure_revision(value.revision, expected_revision)?;
                 value.delete(now);
-                self.store.put_task(&value).await?;
+                self.timeline_repository().put_task(&value).await?;
             }
             DomainRef::Note(id) => {
                 let mut value = self
-                    .store
+                    .timeline_repository()
                     .get_note(id)
                     .await?
                     .ok_or_else(|| not_found("note", id))?;
                 ensure_revision(value.revision, expected_revision)?;
                 value.delete(now);
-                self.store.put_note(&value).await?;
+                self.timeline_repository().put_note(&value).await?;
             }
         }
         Ok(())
@@ -289,8 +294,9 @@ impl FloeCore {
         if !range.is_valid() {
             return Err(CoreError::new(ErrorCode::Validation, "invalid day offsets"));
         }
-        let mirror = self.store.calendar_mirror(person_id).await?;
-        let mut events = self.store.list_events(person_id).await?;
+        let repository = self.timeline_repository();
+        let mirror = repository.calendar_mirror(person_id).await?;
+        let mut events = repository.list_events(person_id).await?;
         if let Some(mirror) = &mirror {
             events.extend(mirror.events.clone());
         }
@@ -301,8 +307,8 @@ impl FloeCore {
             end_timezone_offset_seconds,
             now,
             events,
-            self.store.list_tasks(person_id).await?,
-            self.store.list_notes(person_id).await?,
+            repository.list_tasks(person_id).await?,
+            repository.list_notes(person_id).await?,
         );
         snapshot.calendar = mirror
             .filter(|mirror| !mirror.connection.disconnected)

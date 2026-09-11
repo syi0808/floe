@@ -12,6 +12,7 @@ mod connected_calendar;
 mod core;
 mod error;
 mod native_context;
+pub mod ports;
 mod store;
 
 pub use action_authority::{ActionAuthority, ActionAuthorityMode};
