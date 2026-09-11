@@ -420,11 +420,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .find(|receipt| receipt.setup_id == setup_id)
                     .map(|receipt| receipt.view_handle)
             });
-            if previous
-                .calendar_setups
-                .iter()
-                .any(|receipt| !snapshot.calendar_setups.contains(receipt))
-            {
+            let calendar_receipt_allowed =
+                |before: &floe_agent::CalendarExpertSetupReceipt,
+                 after: &floe_agent::CalendarExpertSetupReceipt| {
+                    before == after
+                        || (mutable_calendar_setup == Some(before.setup_id)
+                            && before.setup_id == after.setup_id
+                            && before.person_id == after.person_id
+                            && before.expected_revision == after.expected_revision
+                            && before.view_handle == after.view_handle
+                            && before.tool_installation_id == after.tool_installation_id
+                            && before.expert_installation_id == after.expert_installation_id
+                            && before.tool_assignment_id == after.tool_assignment_id
+                            && before.expert_assignment_id == after.expert_assignment_id)
+                };
+            if previous.calendar_setups.iter().any(|before| {
+                !snapshot
+                    .calendar_setups
+                    .iter()
+                    .any(|after| calendar_receipt_allowed(before, after))
+            }) {
                 return Err(AgentFailure::Conflict);
             }
             if previous
@@ -479,8 +494,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::Conflict);
             }
             for receipt in &snapshot.calendar_setups {
-                if previous.calendar_setups.contains(receipt) {
-                    continue;
+                if let Some(before) = previous
+                    .calendar_setups
+                    .iter()
+                    .find(|before| before.setup_id == receipt.setup_id)
+                {
+                    if calendar_receipt_allowed(before, receipt) {
+                        continue;
+                    }
+                    return Err(AgentFailure::Conflict);
                 }
                 if receipt.expected_revision != expected_revision
                     || previous
@@ -519,7 +541,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         if entry.person_id == binding.person_id
                             && entry.provider == binding.provider
                             && entry.device_id == binding.device_id
-                            && entry.calendar_ids == binding.calendar_ids => {}
+                            && entry.calendar_ids == binding.calendar_ids
+                            && entry.connection_scope == binding.connection_scope
+                            && entry.connection_revision == binding.connection_revision => {}
                     Some(entry)
                         if mutable_calendar_view == Some(binding.handle)
                             && entry.person_id == binding.person_id => {}

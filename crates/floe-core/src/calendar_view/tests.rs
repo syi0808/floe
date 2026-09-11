@@ -972,6 +972,8 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         provider: CalendarProvider::Fixture,
         device_id: "test-device".into(),
         calendar_ids: fixture.grant().calendar_ids,
+        connection_scope: floe_domain::CalendarScope::Selected,
+        connection_revision: fixture.grant().connection_revision,
         enabled: true,
     });
     vault.initialize_expert_registry(&snapshot).await.unwrap();

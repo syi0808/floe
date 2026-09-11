@@ -7,8 +7,9 @@ use floe_core::{
     CalendarReadAccessStamp, CalendarTimelineGrant, ProjectedCalendarItem,
     ProjectedCalendarObservation, VaultKeyProvider,
 };
-use floe_domain::{CalendarProvider, PersonId};
+use floe_domain::{CalendarConnection, CalendarProvider, PersonId};
 use floe_protocol::PROTOCOL_VERSION;
+use uuid::Uuid;
 
 use crate::{
     local_context::LocalContextStore,
@@ -42,42 +43,56 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         return Err(AgentFailure::Conflict);
     }
     let overview = vault.calendar_expert_overview().await?;
-    let Some((setup, binding)) = overview.setups.iter().find_map(|setup| {
-        let binding = overview.views.iter().find(|binding| {
-            binding.handle == setup.view_handle
-                && binding.enabled
-                && binding.device_id == request.device_id
-        })?;
-        let installations_enabled = [setup.tool_installation_id, setup.expert_installation_id]
-            .iter()
-            .all(|id| {
-                overview
-                    .registry
-                    .installations
-                    .iter()
-                    .any(|entry| entry.id == *id && entry.enabled)
-            });
-        let assignments_enabled = [setup.tool_assignment_id, setup.expert_assignment_id]
-            .iter()
-            .all(|id| {
-                overview
-                    .registry
-                    .assignments
-                    .iter()
-                    .any(|entry| entry.id == *id && entry.enabled)
-            });
-        (installations_enabled && assignments_enabled).then_some((setup, binding))
-    }) else {
+    let active_setups: Vec<_> = overview
+        .setups
+        .iter()
+        .filter_map(|setup| {
+            let binding = overview
+                .views
+                .iter()
+                .find(|binding| binding.handle == setup.view_handle && binding.enabled)?;
+            let installations_enabled = [setup.tool_installation_id, setup.expert_installation_id]
+                .iter()
+                .all(|id| {
+                    overview
+                        .registry
+                        .installations
+                        .iter()
+                        .any(|entry| entry.id == *id && entry.enabled)
+                });
+            let assignments_enabled = [setup.tool_assignment_id, setup.expert_assignment_id]
+                .iter()
+                .all(|id| {
+                    overview
+                        .registry
+                        .assignments
+                        .iter()
+                        .any(|entry| entry.id == *id && entry.enabled)
+                });
+            (installations_enabled && assignments_enabled).then_some((setup, binding))
+        })
+        .collect();
+    if active_setups.is_empty() {
         return Ok(None);
-    };
+    }
     let connection = core
         .calendar_connection(person_id)
         .await
         .map_err(|_| AgentFailure::StorageUnavailable)?
         .ok_or(AgentFailure::StaleContext)?;
-    if connection.disconnected || connection.provider != binding.provider {
-        return Err(AgentFailure::StaleContext);
-    }
+    let connection_id =
+        Uuid::parse_str(&connection.connection_id).map_err(|_| AgentFailure::StaleContext)?;
+    let (setup, binding) = active_setups
+        .into_iter()
+        .find(|(setup, _)| setup.setup_id == connection_id)
+        .ok_or(AgentFailure::StaleContext)?;
+    validate_active_connection(
+        setup,
+        binding,
+        &connection,
+        &request.device_id,
+        request.remote_route.as_ref(),
+    )?;
     let local = chrono::Local::now();
     let offset = local.offset().local_minus_utc();
     let range = floe_domain::CalendarRange {
@@ -106,6 +121,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                 binding.provider,
                 binding.device_id.clone(),
                 binding.calendar_ids.clone(),
+                connection.connection_id.clone(),
                 connection.revision,
                 &model,
                 local_context,
@@ -157,6 +173,67 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     Ok(Some(result.session))
 }
 
+fn validate_active_connection(
+    setup: &floe_agent::CalendarExpertSetupReceipt,
+    binding: &floe_agent::CalendarViewBinding,
+    connection: &CalendarConnection,
+    request_device_id: &str,
+    remote_route: Option<&floe_protocol::AgentRemoteRouteDto>,
+) -> Result<(), AgentFailure> {
+    let connection_id =
+        Uuid::parse_str(&connection.connection_id).map_err(|_| AgentFailure::StaleContext)?;
+    let calendar_ids: Vec<_> = connection
+        .calendars
+        .iter()
+        .map(|calendar| calendar.calendar_id.clone())
+        .collect();
+    if connection.disconnected
+        || connection.revision == 0
+        || setup.setup_id != connection_id
+        || setup.view_handle != binding.handle
+        || setup.connection_scope != connection.scope
+        || setup.connection_revision != connection.revision
+        || connection.device_id != binding.device_id
+        || binding.device_id != request_device_id
+        || connection.provider != binding.provider
+        || calendar_ids != binding.calendar_ids
+        || binding.connection_scope != connection.scope
+        || binding.connection_revision != connection.revision
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    let connector_id = match connection.provider {
+        CalendarProvider::Google => Some("calendar.google"),
+        CalendarProvider::Microsoft => Some("calendar.microsoft"),
+        CalendarProvider::Fixture | CalendarProvider::EventKit | CalendarProvider::Android => None,
+    };
+    match (connector_id, remote_route) {
+        (Some(connector_id), Some(route)) => {
+            let candidates: Vec<_> = route
+                .calendar_connections
+                .iter()
+                .filter(|candidate| candidate.connector_id == connector_id)
+                .collect();
+            if !matches!(candidates.as_slice(), [candidate]
+                    if candidate.connection_id == connection.connection_id
+                        && candidate.connection_revision == connection.revision)
+                || route.calendar_connections.iter().any(|candidate| {
+                    candidate.connector_id != connector_id
+                        && candidate.connection_id == connection.connection_id
+                })
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+        }
+        (Some(_), _) => return Err(AgentFailure::StaleContext),
+        (None, Some(route)) if !route.calendar_connections.is_empty() => {
+            return Err(AgentFailure::StaleContext);
+        }
+        (None, _) => {}
+    }
+    Ok(())
+}
+
 fn optional_local_view<T>(result: Result<T, AgentFailure>) -> Result<Option<T>, AgentFailure> {
     match result {
         Ok(view) => Ok(Some(view)),
@@ -201,6 +278,7 @@ impl<'model> Access<'model> {
         provider: CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,
+        connection_id: String,
         connection_revision: u64,
         model: &'model Model,
         local_context: &'model LocalContextStore,
@@ -223,6 +301,7 @@ impl<'model> Access<'model> {
                     provider,
                     device_id,
                     calendar_ids,
+                    connection_id,
                     connection_revision,
                 }),
                 Model::Foundation(_) => Self::Remote(RemoteCalendarAccess {
@@ -230,6 +309,7 @@ impl<'model> Access<'model> {
                     provider,
                     device_id,
                     calendar_ids,
+                    connection_id,
                     connection_revision,
                 }),
             },
@@ -381,6 +461,7 @@ struct RemoteCalendarAccess<'model> {
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
+    connection_id: String,
     connection_revision: u64,
 }
 
@@ -421,11 +502,13 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         let view = model
             .read_calendar_context_view(
                 CalendarContextRequest {
-                    connector_id: Some(match self.provider {
+                    connector_id: match self.provider {
                         CalendarProvider::Google => "calendar.google",
                         CalendarProvider::Microsoft => "calendar.microsoft",
                         _ => return Err(AgentFailure::CapabilityDenied),
-                    }),
+                    },
+                    connection_id: &self.connection_id,
+                    connection_revision: self.connection_revision,
                     range_start_unix_ms: request.starts_at.timestamp_millis(),
                     range_end_unix_ms: request.ends_at.timestamp_millis(),
                     cursor: "",
@@ -552,8 +635,243 @@ impl ModelRunner for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_domain::{CalendarScope, CalendarSelection, CalendarSyncStatus};
     use floe_protocol::{CalendarBatchDto, LocalContextOperationDto};
+    use std::collections::BTreeMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn active_identity(
+        provider: CalendarProvider,
+    ) -> (
+        floe_agent::CalendarExpertSetupReceipt,
+        floe_agent::CalendarViewBinding,
+        CalendarConnection,
+    ) {
+        let setup_id = Uuid::new_v4();
+        let view_handle = Uuid::new_v4();
+        let setup = floe_agent::CalendarExpertSetupReceipt {
+            setup_id,
+            person_id: PersonId::new(),
+            expected_revision: 0,
+            connection_scope: CalendarScope::Selected,
+            connection_revision: 7,
+            view_handle,
+            tool_installation_id: Uuid::new_v4(),
+            expert_installation_id: Uuid::new_v4(),
+            tool_assignment_id: Uuid::new_v4(),
+            expert_assignment_id: Uuid::new_v4(),
+        };
+        let binding = floe_agent::CalendarViewBinding {
+            handle: view_handle,
+            person_id: setup.person_id,
+            provider,
+            device_id: "device-a".into(),
+            calendar_ids: vec!["primary".into()],
+            connection_scope: CalendarScope::Selected,
+            connection_revision: 7,
+            enabled: true,
+        };
+        let connection = CalendarConnection {
+            connection_id: setup_id.to_string(),
+            device_id: binding.device_id.clone(),
+            disconnected: false,
+            scope: CalendarScope::Selected,
+            provider,
+            calendars: vec![CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            revision: 7,
+            last_success_at: None,
+            last_range: None,
+            error: None,
+            error_at: None,
+            source_statuses: BTreeMap::<String, CalendarSyncStatus>::new(),
+        };
+        (setup, binding, connection)
+    }
+
+    fn remote_route(
+        connector_id: &str,
+        connection: &CalendarConnection,
+    ) -> floe_protocol::AgentRemoteRouteDto {
+        floe_protocol::AgentRemoteRouteDto {
+            base_url: "http://127.0.0.1:8080/".into(),
+            bearer_token: "a".repeat(32),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+            calendar_connections: vec![floe_protocol::AgentRemoteCalendarConnectionDto {
+                connector_id: connector_id.into(),
+                connection_id: connection.connection_id.clone(),
+                connection_revision: connection.revision,
+            }],
+        }
+    }
+
+    #[test]
+    fn device_schedule_dispatch_requires_one_exact_active_identity() {
+        for provider in [CalendarProvider::EventKit, CalendarProvider::Android] {
+            let (setup, binding, connection) = active_identity(provider);
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &connection, "device-a", None),
+                Ok(())
+            );
+
+            let mut stale = connection.clone();
+            stale.device_id = "device-b".into();
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &stale, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut stale = connection.clone();
+            stale.calendars[0].calendar_id = "relabelled".into();
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &stale, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut stale = connection.clone();
+            stale.scope = CalendarScope::All;
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &stale, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut all_setup = setup.clone();
+            let mut all_binding = binding.clone();
+            let mut all_connection = connection.clone();
+            all_setup.connection_scope = CalendarScope::All;
+            all_binding.connection_scope = CalendarScope::All;
+            all_connection.scope = CalendarScope::All;
+            assert_eq!(
+                validate_active_connection(
+                    &all_setup,
+                    &all_binding,
+                    &all_connection,
+                    "device-a",
+                    None,
+                ),
+                Ok(())
+            );
+            let mut stale = connection.clone();
+            stale.revision = 0;
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &stale, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut stale_setup = setup.clone();
+            stale_setup.setup_id = Uuid::new_v4();
+            assert_eq!(
+                validate_active_connection(&stale_setup, &binding, &connection, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut stale = connection.clone();
+            stale.provider = match provider {
+                CalendarProvider::EventKit => CalendarProvider::Android,
+                CalendarProvider::Android => CalendarProvider::EventKit,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &stale, "device-a", None),
+                Err(AgentFailure::StaleContext)
+            );
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &connection, "device-b", None),
+                Err(AgentFailure::StaleContext)
+            );
+        }
+    }
+
+    #[test]
+    fn remote_schedule_dispatch_rejects_relabelled_or_stale_connection() {
+        for (provider, connector_id) in [
+            (CalendarProvider::Google, "calendar.google"),
+            (CalendarProvider::Microsoft, "calendar.microsoft"),
+        ] {
+            let (setup, binding, connection) = active_identity(provider);
+            let route = remote_route(connector_id, &connection);
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &connection, "device-a", Some(&route),),
+                Ok(())
+            );
+            let mut multi_provider_route = route.clone();
+            multi_provider_route.calendar_connections.push(
+                floe_protocol::AgentRemoteCalendarConnectionDto {
+                    connector_id: match provider {
+                        CalendarProvider::Google => "calendar.microsoft".into(),
+                        CalendarProvider::Microsoft => "calendar.google".into(),
+                        _ => unreachable!(),
+                    },
+                    connection_id: Uuid::new_v4().to_string(),
+                    connection_revision: 3,
+                },
+            );
+            assert_eq!(
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(&multi_provider_route),
+                ),
+                Ok(())
+            );
+
+            let mut stale_route = route.clone();
+            stale_route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
+            assert_eq!(
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(&stale_route),
+                ),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut stale_route = route.clone();
+            stale_route.calendar_connections[0].connection_revision += 1;
+            assert_eq!(
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(&stale_route),
+                ),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut relabelled_route = route.clone();
+            relabelled_route.calendar_connections[0].connector_id = match provider {
+                CalendarProvider::Google => "calendar.microsoft".into(),
+                CalendarProvider::Microsoft => "calendar.google".into(),
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(&relabelled_route),
+                ),
+                Err(AgentFailure::StaleContext)
+            );
+            let mut duplicate_route = route.clone();
+            duplicate_route
+                .calendar_connections
+                .push(route.calendar_connections[0].clone());
+            assert_eq!(
+                validate_active_connection(
+                    &setup,
+                    &binding,
+                    &connection,
+                    "device-a",
+                    Some(&duplicate_route),
+                ),
+                Err(AgentFailure::StaleContext)
+            );
+        }
+    }
 
     fn publish_device_calendar(
         store: &LocalContextStore,
@@ -682,6 +1000,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         })
         .unwrap();
         let access = RemoteCalendarAccess {
@@ -689,6 +1008,7 @@ mod tests {
             provider: CalendarProvider::Google,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
+            connection_id: "00000000-0000-4000-8000-000000000009".into(),
             connection_revision: 9,
         };
         let now = chrono::Utc::now();
@@ -708,9 +1028,14 @@ mod tests {
         let body = server.await.unwrap();
         assert_eq!(body["schema_version"], 1);
         assert_eq!(body["connector_id"], "calendar.google");
+        assert_eq!(
+            body["connection_id"],
+            "00000000-0000-4000-8000-000000000009"
+        );
+        assert_eq!(body["connection_revision"], 9);
         assert_eq!(body["cursor"], "");
         assert_eq!(body["limit"], floe_agent::MAX_CALENDAR_CONTEXT_ITEMS);
-        assert_eq!(body.as_object().unwrap().len(), 6);
+        assert_eq!(body.as_object().unwrap().len(), 8);
     }
 
     #[tokio::test]
@@ -720,6 +1045,7 @@ mod tests {
             provider: CalendarProvider::Android,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
+            connection_id: "00000000-0000-4000-8000-000000000001".into(),
             connection_revision: 1,
         };
         let person_id = PersonId::new();

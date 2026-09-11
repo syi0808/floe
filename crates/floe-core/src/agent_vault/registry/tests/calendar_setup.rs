@@ -8,6 +8,8 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
         provider: floe_domain::CalendarProvider::EventKit,
         device_id: "test-device".into(),
         calendar_ids: vec!["setup-private-calendar-canary".into()],
+        connection_scope: floe_domain::CalendarScope::Selected,
+        connection_revision: 1,
     }
 }
 
@@ -64,6 +66,8 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
                     provider: floe_domain::CalendarProvider::EventKit,
                     device_id: "test-device".into(),
                     calendar_ids: vec!["work".into(), "home".into()],
+                    connection_scope: floe_domain::CalendarScope::All,
+                    connection_revision: 2,
                 },
             ),
             Cancellation::default(),
@@ -512,13 +516,15 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
         .await
         .unwrap();
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();
-    for mode in 0..4 {
+    for mode in 0..6 {
         let mut changed = before.clone();
         changed.revision += 1;
         match mode {
             0 => changed.calendar_setups.clear(),
             1 => changed.calendar_setups[0].setup_id = Uuid::new_v4(),
             2 => changed.calendar_setups[0].expected_revision = before.revision,
+            3 => changed.calendar_setups[0].connection_revision += 1,
+            4 => changed.calendar_setups[0].connection_scope = floe_domain::CalendarScope::All,
             _ => {
                 let mut registry =
                     AgentRegistry::restore(before.clone(), request.instance_id).unwrap();
@@ -532,12 +538,17 @@ async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_an
                 changed.installations.last_mut().unwrap().enabled = true;
             }
         }
+        let expected = if matches!(mode, 3 | 4) {
+            AgentFailure::CapabilityDenied
+        } else {
+            AgentFailure::Conflict
+        };
         assert_eq!(
             fixture
                 .vault
                 .save_expert_registry(before.revision, &changed)
                 .await,
-            Err(AgentFailure::Conflict)
+            Err(expected)
         );
         assert_eq!(
             fixture.vault.expert_registry().await.unwrap(),

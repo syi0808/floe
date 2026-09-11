@@ -17,7 +17,9 @@ fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_
             "setup_id": "00000000-0000-4000-8000-000000000002",
             "provider": "event_kit",
             "device_id": "test-device",
-            "calendar_ids": ["explicit-calendar"]
+            "calendar_ids": ["explicit-calendar"],
+            "connection_scope": "selected",
+            "connection_revision": 7
         }
     });
     let parsed: AgentVaultActionDto = serde_json::from_value(action.clone()).unwrap();
@@ -53,7 +55,9 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
             "kind": "set_scope",
             "provider": "event_kit",
             "device_id": "test-device",
-            "calendar_ids": ["home", "work"]
+            "calendar_ids": ["home", "work"],
+            "connection_scope": "all",
+            "connection_revision": 8
         }),
         serde_json::json!({"kind": "remove"}),
     ] {

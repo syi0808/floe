@@ -24,6 +24,8 @@ final class AgentCalendarAccessRequest {
     this.enabled,
     this.provider,
     List<String>? calendarIds,
+    this.connectionScope,
+    this.connectionRevision,
   }) : personId = _identifier(personId),
        instanceId = _identifier(instanceId),
        expectedRevision = _counter(expectedRevision),
@@ -34,9 +36,17 @@ final class AgentCalendarAccessRequest {
     if ((operation == AgentCalendarAccessOperation.setEnabled &&
             enabled == null) ||
         (operation == AgentCalendarAccessOperation.setScope &&
-            (provider == null || this.calendarIds == null)) ||
+            (provider == null ||
+                this.calendarIds == null ||
+                !const {'selected', 'all'}.contains(connectionScope) ||
+                connectionRevision == null ||
+                connectionRevision! <= 0)) ||
         (operation == AgentCalendarAccessOperation.remove &&
-            (enabled != null || provider != null || calendarIds != null))) {
+            (enabled != null ||
+                provider != null ||
+                calendarIds != null ||
+                connectionScope != null ||
+                connectionRevision != null))) {
       throw const FormatException('Invalid Calendar access change');
     }
     if (provider != null) _provider(provider);
@@ -50,6 +60,8 @@ final class AgentCalendarAccessRequest {
   final bool? enabled;
   final String? provider;
   final List<String>? calendarIds;
+  final String? connectionScope;
+  final int? connectionRevision;
 
   Map<String, Object> toJson() => {
     'instance_id': instanceId,
@@ -64,6 +76,8 @@ final class AgentCalendarAccessRequest {
         'kind': 'set_scope',
         'provider': provider!,
         'calendar_ids': calendarIds!,
+        'connection_scope': connectionScope!,
+        'connection_revision': connectionRevision!,
       },
       AgentCalendarAccessOperation.remove => {'kind': 'remove'},
     },
@@ -78,12 +92,16 @@ final class AgentCalendarSetup {
     required String setupId,
     required String provider,
     required List<String> calendarIds,
+    required String connectionScope,
+    required int connectionRevision,
   }) : personId = _identifier(personId),
        instanceId = _identifier(instanceId),
        expectedRevision = _counter(expectedRevision),
        setupId = _identifier(setupId),
        provider = _provider(provider),
-       calendarIds = _scope(calendarIds, canonical: false);
+       calendarIds = _scope(calendarIds, canonical: false),
+       connectionScope = _connectionScope(connectionScope),
+       connectionRevision = _positiveCounter(connectionRevision);
 
   final String personId;
   final String instanceId;
@@ -91,6 +109,8 @@ final class AgentCalendarSetup {
   final String setupId;
   final String provider;
   final List<String> calendarIds;
+  final String connectionScope;
+  final int connectionRevision;
 
   Map<String, Object> toJson() => {
     'instance_id': instanceId,
@@ -98,6 +118,8 @@ final class AgentCalendarSetup {
     'setup_id': setupId,
     'provider': provider,
     'calendar_ids': calendarIds,
+    'connection_scope': connectionScope,
+    'connection_revision': connectionRevision,
   };
 }
 
@@ -133,7 +155,9 @@ final class AgentCalendarExperts {
           .singleOrNull;
       if (setup.personId != registry.personId ||
           setup.expectedRevision >= registry.revision ||
-          view == null) {
+          view == null ||
+          setup.connectionScope != view.connectionScope ||
+          setup.connectionRevision != view.connectionRevision) {
         throw const FormatException('Invalid Calendar setup receipt');
       }
       for (final (kind, installationId, assignmentId, packageId, tools) in [
@@ -206,6 +230,10 @@ final class AgentCalendarExperts {
     );
     if (receipt.expectedRevision != request.expectedRevision ||
         view.provider != request.provider ||
+        receipt.connectionScope != request.connectionScope ||
+        receipt.connectionRevision != request.connectionRevision ||
+        view.connectionScope != request.connectionScope ||
+        view.connectionRevision != request.connectionRevision ||
         view.calendarIds.length != request.calendarIds.length ||
         !List.generate(
           view.calendarIds.length,
@@ -224,6 +252,8 @@ final class AgentCalendarView {
       provider = _provider(json['provider']),
       deviceId = _deviceIdentifier(json['device_id']),
       calendarIds = _scope(json['calendar_ids'], canonical: true),
+      connectionScope = _connectionScope(json['connection_scope']),
+      connectionRevision = _positiveCounter(json['connection_revision']),
       enabled = _flag(json['enabled']);
 
   final String handle;
@@ -231,6 +261,8 @@ final class AgentCalendarView {
   final String provider;
   final String deviceId;
   final List<String> calendarIds;
+  final String connectionScope;
+  final int connectionRevision;
   final bool enabled;
 }
 
@@ -239,6 +271,8 @@ final class AgentCalendarSetupReceipt {
     : setupId = _identifier(json['setup_id']),
       personId = _identifier(json['person_id']),
       expectedRevision = _counter(json['expected_revision']),
+      connectionScope = _connectionScope(json['connection_scope']),
+      connectionRevision = _positiveCounter(json['connection_revision']),
       viewHandle = _identifier(json['view_handle']),
       toolInstallationId = _identifier(json['tool_installation_id']),
       expertInstallationId = _identifier(json['expert_installation_id']),
@@ -248,6 +282,8 @@ final class AgentCalendarSetupReceipt {
   final String setupId;
   final String personId;
   final int expectedRevision;
+  final String connectionScope;
+  final int connectionRevision;
   final String viewHandle;
   final String toolInstallationId;
   final String expertInstallationId;
@@ -268,6 +304,20 @@ String _identifier(Object? value) {
 int _counter(Object? value) {
   if (value is! int || value < 0) {
     throw const FormatException('Invalid Calendar setup revision');
+  }
+  return value;
+}
+
+int _positiveCounter(Object? value) {
+  if (value is! int || value <= 0) {
+    throw const FormatException('Invalid Calendar connection revision');
+  }
+  return value;
+}
+
+String _connectionScope(Object? value) {
+  if (value is! String || !const {'selected', 'all'}.contains(value)) {
+    throw const FormatException('Invalid Calendar connection scope');
   }
   return value;
 }

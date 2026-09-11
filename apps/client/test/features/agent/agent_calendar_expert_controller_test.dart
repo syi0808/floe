@@ -23,6 +23,8 @@ void main() {
       setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['work', 'home'],
+      connectionScope: 'selected',
+      connectionRevision: 1,
     );
     expect(controller.busy, true);
     expect(controller.canSend, false);
@@ -32,6 +34,8 @@ void main() {
       setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['different'],
+      connectionScope: 'selected',
+      connectionRevision: 1,
     );
     await controller.retryCalendarSetup();
     expect(gateway.requests, hasLength(1));
@@ -65,6 +69,8 @@ void main() {
         setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['home', 'work'],
+        connectionScope: 'selected',
+        connectionRevision: 1,
       );
       final pending = controller.pendingCalendarSetup;
       expect(pending, isNotNull);
@@ -75,6 +81,8 @@ void main() {
         setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['different'],
+        connectionScope: 'selected',
+        connectionRevision: 1,
       );
       expect(gateway.requests, hasLength(1));
       if (retry) {
@@ -108,6 +116,8 @@ void main() {
       setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['home', 'work'],
+      connectionScope: 'selected',
+      connectionRevision: 1,
     );
     controller.discardUncommittedCalendarSetup();
     expect(controller.pendingCalendarSetup, isNotNull);
@@ -134,6 +144,8 @@ void main() {
         setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['home', 'work'],
+        connectionScope: 'selected',
+        connectionRevision: 1,
       );
       final setupId = controller.calendarExperts!.setups.single.setupId;
       gateway.gate = Completer<void>();
@@ -172,6 +184,8 @@ void main() {
           setupId: connectionId,
           provider: 'event_kit',
           calendarIds: ['home', 'work'],
+          connectionScope: 'selected',
+          connectionRevision: 1,
         );
       }
       final setupId = operationKind == 'configure'
@@ -184,6 +198,8 @@ void main() {
           setupId: connectionId,
           provider: 'event_kit',
           calendarIds: ['home', 'work'],
+          connectionScope: 'selected',
+          connectionRevision: 1,
         ),
         _ => controller.setCalendarAccessEnabled(setupId!, false),
       };
@@ -216,6 +232,8 @@ void main() {
       setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['home', 'work'],
+      connectionScope: 'selected',
+      connectionRevision: 1,
     );
     expect(controller.vaultState, AgentVaultState.unavailable);
     expect(controller.session, isNull);

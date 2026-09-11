@@ -382,6 +382,8 @@ impl Fixture {
                     provider,
                     "test-device".into(),
                     vec!["private-calendar-id".into()],
+                    floe_domain::CalendarScope::Selected,
+                    1,
                 )
                 .unwrap();
             registry
@@ -626,6 +628,8 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             provider: fixture.grant.provider,
             device_id: "test-device".into(),
             calendar_ids: fixture.grant.calendar_ids.clone(),
+            connection_scope: floe_domain::CalendarScope::Selected,
+            connection_revision: fixture.grant.connection_revision,
         };
         let installed = fixture
             .vault

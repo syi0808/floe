@@ -10,6 +10,7 @@ final class AgentCalendarSources {
        connectionId = connection.connectionId,
        deviceId = connection.deviceId,
        revision = connection.revision,
+       connectionScope = connection.includeAll ? 'all' : 'selected',
        calendars = List.unmodifiable(
          connection.calendars.map((calendar) {
            return AgentCalendarSource(
@@ -25,6 +26,7 @@ final class AgentCalendarSources {
   final String connectionId;
   final String deviceId;
   final int revision;
+  final String connectionScope;
   final List<AgentCalendarSource> calendars;
 
   bool get usable =>
@@ -49,6 +51,7 @@ final class AgentCalendarSources {
     deviceId,
     provider,
     revision,
+    connectionScope,
     for (final calendar in calendars)
       [calendar.id, calendar.name, calendar.error],
   ]);

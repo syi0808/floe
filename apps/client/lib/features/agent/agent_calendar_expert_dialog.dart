@@ -118,6 +118,8 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               setupId: sources.connectionId,
               provider: sources.provider,
               calendarIds: selected.toList(),
+              connectionScope: sources.connectionScope,
+              connectionRevision: sources.revision,
             );
             if (!dialogContext.mounted) return;
             if (controller.calendarExpertFailure == null) {
@@ -226,12 +228,16 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         setupId: sources.connectionId,
         provider: sources.provider,
         calendarIds: _selected.toList(),
+        connectionScope: sources.connectionScope,
+        connectionRevision: sources.revision,
       );
     } else {
       await controller.changeCalendarAccessScope(
         setupId: setupId,
         provider: sources.provider,
         calendarIds: _selected.toList(),
+        connectionScope: sources.connectionScope,
+        connectionRevision: sources.revision,
       );
     }
     if (mounted && controller.calendarExpertFailure == null) {

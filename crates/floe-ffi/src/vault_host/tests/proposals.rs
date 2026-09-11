@@ -125,6 +125,8 @@ async fn seed(
                 provider: CalendarProvider::Fixture,
                 device_id: "test-device".into(),
                 calendar_ids: vec!["test-calendar".into()],
+                connection_scope: floe_domain::CalendarScope::Selected,
+                connection_revision: 1,
             },
             Cancellation::default(),
         )

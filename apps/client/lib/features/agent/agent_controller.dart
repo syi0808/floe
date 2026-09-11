@@ -240,10 +240,14 @@ final class AgentController extends ChangeNotifier {
     required String setupId,
     required String provider,
     required List<String> calendarIds,
+    required String connectionScope,
+    required int connectionRevision,
   }) => calendarExpertController.install(
     setupId: setupId,
     provider: provider,
     calendarIds: calendarIds,
+    connectionScope: connectionScope,
+    connectionRevision: connectionRevision,
   );
 
   Future<void> retryCalendarSetup() => calendarExpertController.retrySetup();
@@ -261,10 +265,14 @@ final class AgentController extends ChangeNotifier {
     required String setupId,
     required String provider,
     required List<String> calendarIds,
+    required String connectionScope,
+    required int connectionRevision,
   }) => calendarExpertController.changeCalendarAccessScope(
     setupId: setupId,
     provider: provider,
     calendarIds: calendarIds,
+    connectionScope: connectionScope,
+    connectionRevision: connectionRevision,
   );
 
   Future<void> removeCalendarAccess(String setupId) =>

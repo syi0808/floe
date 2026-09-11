@@ -1,4 +1,4 @@
-use floe_domain::CalendarProvider;
+use floe_domain::{CalendarProvider, CalendarScope};
 
 use super::*;
 
@@ -11,6 +11,8 @@ pub struct CalendarExpertSetup {
     pub provider: CalendarProvider,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
+    pub connection_scope: CalendarScope,
+    pub connection_revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -19,6 +21,8 @@ pub struct CalendarExpertSetupReceipt {
     pub setup_id: Uuid,
     pub person_id: PersonId,
     pub expected_revision: u64,
+    pub connection_scope: CalendarScope,
+    pub connection_revision: u64,
     pub view_handle: Uuid,
     pub tool_installation_id: Uuid,
     pub expert_installation_id: Uuid,
@@ -52,6 +56,8 @@ pub enum CalendarAccessChange {
         provider: CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,
+        connection_scope: CalendarScope,
+        connection_revision: u64,
     },
     Remove {},
 }
@@ -150,6 +156,10 @@ impl AgentRegistry {
             || original.provider != binding.provider
             || original.device_id != binding.device_id
             || original.calendar_ids != binding.calendar_ids
+            || original.connection_scope != binding.connection_scope
+            || original.connection_revision != binding.connection_revision
+            || receipt.connection_scope != binding.connection_scope
+            || receipt.connection_revision != binding.connection_revision
         {
             return Err(AgentFailure::Conflict);
         }
@@ -171,6 +181,8 @@ impl AgentRegistry {
             setup_id: request.setup_id,
             person_id,
             expected_revision: request.expected_revision,
+            connection_scope: request.connection_scope,
+            connection_revision: request.connection_revision,
             view_handle: binding.handle,
             tool_installation_id: Uuid::new_v4(),
             expert_installation_id: Uuid::new_v4(),
@@ -288,6 +300,8 @@ impl AgentRegistry {
                 provider,
                 device_id,
                 calendar_ids,
+                connection_scope,
+                connection_revision,
             } => {
                 let binding = next
                     .calendar_views
@@ -300,7 +314,16 @@ impl AgentRegistry {
                 binding.device_id = device_id.clone();
                 binding.calendar_ids = calendar_ids.clone();
                 binding.calendar_ids.sort();
+                binding.connection_scope = *connection_scope;
+                binding.connection_revision = *connection_revision;
                 binding.validate()?;
+                let setup = next
+                    .calendar_setups
+                    .iter_mut()
+                    .find(|entry| entry.setup_id == receipt.setup_id)
+                    .ok_or(AgentFailure::NotFound)?;
+                setup.connection_scope = *connection_scope;
+                setup.connection_revision = *connection_revision;
             }
             CalendarAccessChange::Remove {} => {
                 disable_setup(&mut next, &receipt, person_id)?;
@@ -319,6 +342,7 @@ impl AgentRegistry {
                 || receipt.tool_assignment_id.is_nil()
                 || receipt.expert_assignment_id.is_nil()
                 || receipt.expected_revision >= self.revision()
+                || receipt.connection_revision == 0
                 || self.snapshot.calendar_setups[..index].iter().any(|other| {
                     other.setup_id == receipt.setup_id
                         || other.view_handle == receipt.view_handle
@@ -337,7 +361,10 @@ impl AgentRegistry {
                 .find(|binding| binding.handle == receipt.view_handle)
                 .ok_or(AgentFailure::NotFound)?;
             let [tool, expert] = setup_packages(binding.provider);
-            if binding.person_id != receipt.person_id {
+            if binding.person_id != receipt.person_id
+                || binding.connection_scope != receipt.connection_scope
+                || binding.connection_revision != receipt.connection_revision
+            {
                 return Err(AgentFailure::CapabilityDenied);
             }
             for (package, installation_id, assignment_id, tools) in [
@@ -415,6 +442,8 @@ fn setup_binding(
         provider: request.provider,
         device_id: request.device_id.clone(),
         calendar_ids,
+        connection_scope: request.connection_scope,
+        connection_revision: request.connection_revision,
         enabled: false,
     };
     binding.validate()?;

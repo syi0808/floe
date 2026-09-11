@@ -19,6 +19,8 @@ void main() {
       'setup_id',
       'provider',
       'calendar_ids',
+      'connection_scope',
+      'connection_revision',
     ]);
     final unicode = calendarSetupRequest(calendarIds: ['\u{10000}', '\ue000']);
     expect(unicode.calendarIds, ['\ue000', '\u{10000}']);

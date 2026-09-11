@@ -185,6 +185,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         setupId: connection.connectionId,
         provider: connection.provider,
         calendarIds: connection.selectedCalendarIds,
+        connectionScope: connection.includeAll ? 'all' : 'selected',
+        connectionRevision: connection.revision,
       );
       return;
     }
@@ -193,11 +195,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
     final expected = [...connection.selectedCalendarIds]..sort();
     if (view.provider != connection.provider ||
+        view.deviceId != connection.deviceId ||
+        view.connectionScope != (connection.includeAll ? 'all' : 'selected') ||
+        view.connectionRevision != connection.revision ||
         !listEquals(view.calendarIds, expected)) {
       await agent.changeCalendarAccessScope(
         setupId: setup.setupId,
         provider: connection.provider,
         calendarIds: expected,
+        connectionScope: connection.includeAll ? 'all' : 'selected',
+        connectionRevision: connection.revision,
       );
     }
   }

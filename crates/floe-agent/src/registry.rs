@@ -188,6 +188,8 @@ pub struct CalendarViewBinding {
     pub provider: floe_domain::CalendarProvider,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
+    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_revision: u64,
     pub enabled: bool,
 }
 
@@ -213,6 +215,7 @@ impl CalendarViewBinding {
                 .iter()
                 .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
             || self.calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            || self.connection_revision == 0
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -671,6 +674,8 @@ impl AgentRegistry {
         provider: floe_domain::CalendarProvider,
         device_id: String,
         mut calendar_ids: Vec<String>,
+        connection_scope: floe_domain::CalendarScope,
+        connection_revision: u64,
     ) -> Result<Uuid, AgentFailure> {
         self.check_revision(expected_revision)?;
         if self.snapshot.calendar_views.len() >= 256 {
@@ -683,6 +688,8 @@ impl AgentRegistry {
             provider,
             device_id,
             calendar_ids,
+            connection_scope,
+            connection_revision,
             enabled: false,
         };
         binding.validate()?;

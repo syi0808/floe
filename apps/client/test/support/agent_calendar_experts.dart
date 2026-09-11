@@ -21,6 +21,8 @@ AgentCalendarSetup calendarSetupRequest({List<String>? calendarIds}) =>
       setupId: calendarSetupId,
       provider: 'event_kit',
       calendarIds: calendarIds ?? ['work', 'home'],
+      connectionScope: 'selected',
+      connectionRevision: 1,
     );
 
 Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
@@ -82,6 +84,8 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'provider': 'event_kit',
         'device_id': 'test-device',
         'calendar_ids': ['home', 'work'],
+        'connection_scope': 'selected',
+        'connection_revision': 1,
         'enabled': false,
       },
   ],
@@ -91,6 +95,8 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'setup_id': calendarSetupId,
         'person_id': registryPerson,
         'expected_revision': 0,
+        'connection_scope': 'selected',
+        'connection_revision': 1,
         'view_handle': calendarViewId,
         'tool_installation_id': calendarToolInstallation,
         'expert_installation_id': registryInstallation,
@@ -132,6 +138,14 @@ final class CalendarExpertTransport {
               setup['setup_id'];
           ((snapshot['views'] as List).single as Map)['calendar_ids'] =
               setup['calendar_ids'];
+          ((snapshot['views'] as List).single as Map)['connection_scope'] =
+              setup['connection_scope'];
+          ((snapshot['views'] as List).single as Map)['connection_revision'] =
+              setup['connection_revision'];
+          ((snapshot['setups'] as List).single as Map)['connection_scope'] =
+              setup['connection_scope'];
+          ((snapshot['setups'] as List).single as Map)['connection_revision'] =
+              setup['connection_revision'];
         }
       }
       if (action['kind'] == 'registry') {
@@ -173,6 +187,15 @@ final class CalendarExpertTransport {
             ((snapshot['views'] as List).single as Map)['calendar_ids'] = [
               ...change['calendar_ids'] as List,
             ]..sort();
+            ((snapshot['views'] as List).single as Map)['connection_scope'] =
+                change['connection_scope'];
+            ((snapshot['views'] as List).single as Map)['connection_revision'] =
+                change['connection_revision'];
+            ((snapshot['setups'] as List).single as Map)['connection_scope'] =
+                change['connection_scope'];
+            ((snapshot['setups'] as List).single
+                    as Map)['connection_revision'] =
+                change['connection_revision'];
           case 'remove':
             (snapshot['setups'] as List).clear();
             (snapshot['views'] as List).clear();
