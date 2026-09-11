@@ -1,0 +1,20 @@
+{
+  "attention": {
+    "confidence_millis": 0,
+    "evidence_handles": [],
+    "expires_at_unix_ms": 1789056120000,
+    "observed_at_unix_ms": 1789056000000,
+    "schema_version": 1,
+    "source_handle": "attention:apple-device-activity",
+    "state": "unknown",
+    "view_id": "attention.coarse"
+  },
+  "capability": {
+    "authorization": "approved",
+    "observed_at_unix_ms": 1789056000000,
+    "outcome": "supported",
+    "region_availability": "not_required",
+    "schema_version": 1,
+    "source_handle": "attention:apple-device-activity"
+  }
+}

@@ -148,7 +148,7 @@ public struct AttentionView: Codable, Equatable, Sendable {
   public let confidenceMillis: Int
   public let evidenceHandles: [String]
 
-  public init(
+  init(
     observedAtUnixMs: Int64,
     expiresAtUnixMs: Int64,
     state: AttentionState,
@@ -161,7 +161,7 @@ public struct AttentionView: Codable, Equatable, Sendable {
     self.expiresAtUnixMs = expiresAtUnixMs
     self.state = state
     self.confidenceMillis = confidenceMillis
-    evidenceHandles = ["attention:device-activity:aggregate"]
+    evidenceHandles = state == .unknown ? [] : ["attention:device-activity:aggregate"]
   }
 }
 
@@ -199,7 +199,7 @@ public enum ScreenTimeAttentionReducer {
       confidenceMillis = 650
     } else {
       state = .unknown
-      confidenceMillis = 500
+      confidenceMillis = 0
     }
 
     return AttentionView(

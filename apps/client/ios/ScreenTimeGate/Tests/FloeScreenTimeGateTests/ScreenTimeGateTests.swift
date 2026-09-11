@@ -69,8 +69,24 @@ struct ScreenTimeGateTests {
     }
   }
 
+  @Test func inconclusiveAggregateFailsClosedAsStrictUnknown() throws {
+    let view = try ScreenTimeAttentionReducer.reduce(
+      CoarseActivityAggregate(
+        observedAtUnixMs: now,
+        intervalSeconds: 900,
+        activeSeconds: 400,
+        interruptionCount: 4
+      ),
+      capability: supportedCapability()
+    )
+
+    #expect(view.state == .unknown)
+    #expect(view.confidenceMillis == 0)
+    #expect(view.evidenceHandles.isEmpty)
+  }
+
   @Test func fixturesContainOnlyCapabilityOrCoarseView() throws {
-    for name in ["supported_attention", "unsupported_capability"] {
+    for name in ["supported_attention", "unknown_attention", "unsupported_capability"] {
       let url = try #require(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures"))
       let data = try Data(contentsOf: url)
       _ = try JSONDecoder.floeScreenTimeDecoder().decode(ScreenTimeExport.self, from: data)

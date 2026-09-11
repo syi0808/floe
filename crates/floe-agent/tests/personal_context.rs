@@ -50,6 +50,41 @@ fn health_connect_fixture_crosses_the_derived_wellbeing_boundary() {
 }
 
 #[test]
+fn apple_screen_time_fixture_crosses_the_strict_attention_boundary() {
+    for fixture in [
+        include_str!(
+            "../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/supported_attention.json"
+        ),
+        include_str!(
+            "../../../apps/client/ios/ScreenTimeGate/Tests/FloeScreenTimeGateTests/Fixtures/unknown_attention.json"
+        ),
+    ] {
+        let export: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        let attention = export.get("attention").unwrap().clone();
+        let view: AttentionView = serde_json::from_value(attention.clone()).unwrap();
+
+        validate_attention_view(&view, view.observed_at_unix_ms).unwrap();
+        if matches!(view.state, AttentionState::Unknown) {
+            assert_eq!(view.confidence_millis, 0);
+            assert!(view.evidence_handles.is_empty());
+        }
+        let serialized = serde_json::to_string(&attention).unwrap();
+        for forbidden in [
+            "application",
+            "bundle",
+            "domain",
+            "notification",
+            "pickup",
+            "shield",
+            "active_seconds",
+            "interruption_count",
+        ] {
+            assert!(!serialized.to_lowercase().contains(forbidden));
+        }
+    }
+}
+
+#[test]
 fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
     let people = people();
     validate_people_view(&people, NOW).unwrap();
