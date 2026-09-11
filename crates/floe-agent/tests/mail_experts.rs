@@ -1,10 +1,14 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent::{
-    AGENT_VERSION, AgentContext, AgentFailure, Cancellation, CommunicationItem, CommunicationView,
-    FindingEpistemicStatus, InferencePolicyDecision, MailExpertInvocation, ModelPlacement,
-    ModelRequest, ModelResponse, ModelRunner, ModelStep, PromptRole, TransferConsent, UsageLedger,
-    run_commitments_expert, run_communication_expert,
+    AGENT_VERSION, AgentContext, AgentFailure, CalendarContextItem, CalendarContextView,
+    Cancellation, CommitmentEvidenceSource, CommitmentsContextViews, CommunicationItem,
+    CommunicationResultKind, CommunicationView, ContextMemory, DataClass, EpistemicStatus,
+    FindingEpistemicStatus, InferencePolicyDecision, LearningEvidenceRef, MailExpertInvocation,
+    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep, NativeContextItem,
+    NativeContextView, PersonalMemoryKind, PromptRole, TaskContextPriority, TransferConsent,
+    UsageLedger, run_commitments_expert, run_commitments_expert_with_views,
+    run_communication_expert,
 };
 use floe_domain::PersonId;
 use serde::Deserialize;
@@ -130,6 +134,20 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
             scenario.expected_reply
         );
         assert!(communication.assessments[0].draft.is_none() || scenario.expected_reply);
+        assert_eq!(
+            communication.assessments[0].result,
+            if communication.assessments[0].draft.is_some() {
+                CommunicationResultKind::DraftForReview
+            } else if scenario.expected_reply {
+                CommunicationResultKind::ReplyRecommended
+            } else {
+                CommunicationResultKind::NoReply
+            }
+        );
+        assert_eq!(
+            communication.assessments[0].requires_review,
+            communication.assessments[0].draft.is_some()
+        );
         let requests = model.requests.lock().unwrap();
         assert_eq!(requests[0].prompt.role, PromptRole::CommitmentsExpert);
         assert_eq!(requests[1].prompt.role, PromptRole::CommunicationExpert);
@@ -144,6 +162,117 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
             assert!(!request.prompt.render().contains("mail.send"));
         }
     }
+}
+
+#[tokio::test]
+async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sources() {
+    let mail_item = CommunicationItem {
+        evidence_handle: "mail:evidence".into(),
+        thread_handle: "mail:thread".into(),
+        received_unix_ms: NOW - 1,
+        from: "alex@example.com".into(),
+        to: "person@example.com".into(),
+        subject: "Project follow-up".into(),
+        snippet: "Please reply this week.".into(),
+        labels: vec!["INBOX".into()],
+    };
+    let mut invocation = invocation("Assess all bounded commitment evidence", mail_item);
+    let person_id = invocation.person_id;
+    let memory_id = Uuid::new_v4();
+    invocation.context.memories.push(ContextMemory {
+        target_id: memory_id,
+        revision: 1,
+        kind: PersonalMemoryKind::Commitment,
+        statement: "The user confirmed a Friday delivery.".into(),
+        epistemic_status: EpistemicStatus::Fact,
+        confidence_millis: 1000,
+        observed_at_unix_ms: NOW - 1_000,
+        valid_from_unix_ms: None,
+        valid_until_unix_ms: Some(NOW + 200_000),
+        source_refs: vec![LearningEvidenceRef {
+            session_id: Uuid::new_v4(),
+            turn_id: Uuid::new_v4(),
+        }],
+    });
+    let task_id = Uuid::new_v4();
+    let views = CommitmentsContextViews {
+        calendars: vec![CalendarContextView {
+            schema_version: AGENT_VERSION,
+            view_id: "calendar.timeline".into(),
+            source_handle: "calendar:primary".into(),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: NOW + 250_000,
+            range_start_unix_ms: NOW - 86_400_000,
+            range_end_unix_ms: NOW + 86_400_000,
+            coverage_complete: true,
+            next_cursor: None,
+            items: vec![CalendarContextItem {
+                evidence_handle: "calendar:event".into(),
+                untrusted_title: "Delivery review".into(),
+                starts_at_unix_ms: NOW + 10_000,
+                ends_at_unix_ms: NOW + 20_000,
+                all_day: false,
+            }],
+        }],
+        tasks: vec![NativeContextView {
+            schema_version: AGENT_VERSION,
+            handle: Uuid::new_v4(),
+            person_id,
+            view_id: "floe.tasks".into(),
+            data_class: DataClass::Personal,
+            source_handle: "floe:tasks".into(),
+            observed_at_unix_ms: NOW as u64,
+            expires_at_unix_ms: (NOW + 240_000) as u64,
+            coverage_complete: true,
+            next_cursor: None,
+            items: vec![NativeContextItem::Task {
+                evidence_handle: task_id,
+                untrusted_title: "Prepare delivery".into(),
+                deadline_unix_ms: Some((NOW + 30_000) as u64),
+                priority: TaskContextPriority::High,
+            }],
+        }],
+    };
+    let model = Model::new([serde_json::json!({
+        "summary": "Four bounded sources contain commitment evidence.",
+        "findings": [
+            {"evidence_handle":"mail:evidence","kind":"request_to_user","statement":"A reply was requested.","epistemic_status":"observed","confidence_millis":1000},
+            {"evidence_handle":"calendar:event","kind":"user_commitment","statement":"A review is scheduled.","epistemic_status":"observed","confidence_millis":1000},
+            {"evidence_handle":task_id.to_string(),"kind":"user_commitment","statement":"A delivery task exists.","epistemic_status":"observed","confidence_millis":1000},
+            {"evidence_handle":memory_id.to_string(),"kind":"user_commitment","statement":"Friday was previously confirmed.","epistemic_status":"observed","confidence_millis":1000}
+        ]
+    })]);
+
+    let result = run_commitments_expert_with_views(&model, &policy(), invocation, views)
+        .await
+        .unwrap();
+
+    assert_eq!(result.expires_at_unix_ms, NOW + 200_000);
+    assert_eq!(
+        result.findings[0].evidence_source,
+        CommitmentEvidenceSource::Mail
+    );
+    assert_eq!(
+        result.findings[1].evidence_source,
+        CommitmentEvidenceSource::Calendar
+    );
+    assert_eq!(
+        result.findings[2].evidence_source,
+        CommitmentEvidenceSource::FloeTask
+    );
+    assert_eq!(
+        result.findings[3].evidence_source,
+        CommitmentEvidenceSource::ConfirmedMemory
+    );
+    assert_eq!(result.findings[1].source_handle, "calendar:primary");
+    assert!(result.source_handles.contains(&"mail:corpus".into()));
+    let round_trip: floe_agent::CommitmentsExpertResult =
+        serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+    assert_eq!(round_trip, result);
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests[0].context.evidence.len(), 3);
+    assert_eq!(requests[0].context.memories.len(), 1);
+    assert!(requests[0].capabilities.is_empty());
 }
 
 #[tokio::test]
