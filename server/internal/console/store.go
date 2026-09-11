@@ -252,7 +252,7 @@ func readState(directory string) (diskState, string, error) {
 			}
 			expectedCredential, _ := credentials.ConnectionName(credentialNamespace, attempt.ConnectionID, attempt.PersonID)
 			ownerKey := attempt.PersonID + "\x00" + attempt.ConnectorID
-			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || definition.AuthKind != "oauth_pkce" || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionIdentities[attempt.ConnectionID] || credentialIdentities[attempt.Credential] || connectorIdentities[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
+			if key != attempt.AttemptID || len(attempt.AttemptID) < 32 || len(attempt.AttemptID) > 128 || !exists || !isOAuthAuthKind(definition.AuthKind) || !clientOwned || !validConnectionID(attempt.ConnectionID) || connectionIdentities[attempt.ConnectionID] || credentialIdentities[attempt.Credential] || connectorIdentities[ownerKey] || attempt.Credential != expectedCredential || attempt.CleanupKind != "oauth_logout" || attempt.RuntimeComplete || attempt.VaultComplete || attempt.CreatedAtUnixMs <= 0 {
 				return state, "", errors.New("invalid server state")
 			}
 			connectionIdentities[attempt.ConnectionID] = true

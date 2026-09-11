@@ -216,6 +216,7 @@ final class ServerConnectorAttempt {
     required this.status,
     required this.createdAt,
     this.authorizationUrl,
+    this.userCode,
     this.errorCode,
   });
 
@@ -225,6 +226,7 @@ final class ServerConnectorAttempt {
   final ServerConnectorStatus status;
   final DateTime createdAt;
   final String? authorizationUrl;
+  final String? userCode;
   final String? errorCode;
 }
 
@@ -728,7 +730,7 @@ ServerConnector _serverConnector(Object? raw) {
       : Map<String, Object?>.from(value['scope'] as Map);
   if (id.isEmpty ||
       name.isEmpty ||
-      !const {'oauth_pkce', 'secret'}.contains(authKind) ||
+      !const {'oauth_pkce', 'oauth_device', 'secret'}.contains(authKind) ||
       value['available'] is! bool ||
       requiredScopes.length > 32 ||
       scopeFields.length > 16 ||
@@ -783,6 +785,7 @@ ServerConnectorAttempt _connectorAttempt(
       status: _connectorStatus(value['status'] as String),
       createdAt: DateTime.parse(value['created_at'] as String),
       authorizationUrl: value['authorization_url'] as String?,
+      userCode: value['user_code'] as String?,
       errorCode: error,
     );
   } on Object {

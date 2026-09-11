@@ -48,7 +48,7 @@ func main() {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
 		}
 		if clientID := os.Getenv("FLOE_GITHUB_OAUTH_CLIENT_ID"); clientID != "" {
-			githubAuth, authError := workoauth.NewGitHub(vault, workoauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GITHUB_OAUTH_CLIENT_SECRET")})
+			githubAuth, authError := workoauth.NewGitHub(vault, workoauth.Config{ClientID: clientID})
 			if authError != nil || management.SetGitHubAuth(githubAuth) != nil {
 				log.Fatal("Cannot configure GitHub OAuth")
 			}

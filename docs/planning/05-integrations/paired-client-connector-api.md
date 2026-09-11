@@ -70,7 +70,7 @@ grant revocation fails.
 | --- | --- | --- |
 | `gmail` | Google OAuth PKCE | none |
 | `microsoft.mail` | Microsoft OAuth PKCE | none |
-| `github.issues` | GitHub App OAuth PKCE | `owner`, `repository` |
+| `github.issues` | GitHub App Device Flow | `owner`, `repository` |
 | `slack.conversations` | Slack user OAuth PKCE | `channel`, optional `thread` |
 | `google_drive.files` | Google OAuth PKCE | `folder_id` |
 | `calendar.google` | Google OAuth PKCE | `calendar_id` |

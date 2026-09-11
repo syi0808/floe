@@ -336,6 +336,14 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                   SizedBox(height: FloeSpace.base),
                 FloeInfoNote(text: error!),
               ],
+              if (displayStatus == ServerConnectorStatus.connecting)
+                if (attempt?.userCode case final userCode?) ...[
+                  SizedBox(height: FloeSpace.base),
+                  FloeInfoNote(
+                    text:
+                        'Enter this code on the authorization page: $userCode',
+                  ),
+                ],
               if (widget.connector.scopeFields.isNotEmpty) ...[
                 SizedBox(height: FloeSpace.lg),
                 Text('Source scope', style: FloeType.controlLabel),
@@ -420,7 +428,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
               Text('Server boundary', style: FloeType.controlLabel),
               SizedBox(height: FloeSpace.xs),
               Text(
-                'OAuth state, PKCE verifier, token exchange, refresh tokens, and stored credentials stay on the Floe server.',
+                'OAuth flow state, token exchange, refresh tokens, and stored credentials stay on the Floe server.',
                 style: FloeType.bodySmall.copyWith(
                   color: FloePalette.neutral600,
                   height: 1.6,

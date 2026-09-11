@@ -112,6 +112,37 @@ void main() {
     },
   );
 
+  testWidgets('device OAuth displays the user code while polling', (
+    tester,
+  ) async {
+    final pending = _attempt(
+      ServerConnectorStatus.connecting,
+      authorizationUrl: 'https://github.com/login/device',
+      userCode: 'ABCD-EFGH',
+    );
+    await tester.pumpWidget(
+      _host(
+        ServerConnectorPanel(
+          connector: _oauthConnector(),
+          connection: _connection,
+          client: _ConnectorClient(startResult: pending, pollResult: pending),
+          onBack: () {},
+          onChanged: () async {},
+          authorizationLauncher: (_) async => true,
+          pollInterval: const Duration(days: 1),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Continue to authorize'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Enter this code on the authorization page: ABCD-EFGH'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('pending OAuth attempt can be cancelled', (tester) async {
     final pending = _attempt(
       ServerConnectorStatus.connecting,
@@ -166,6 +197,7 @@ ServerConnector _oauthConnector() => const ServerConnector(
 ServerConnectorAttempt _attempt(
   ServerConnectorStatus status, {
   String? authorizationUrl,
+  String? userCode,
 }) => ServerConnectorAttempt(
   id: 'attempt',
   connectorId: 'microsoft.mail',
@@ -173,6 +205,7 @@ ServerConnectorAttempt _attempt(
   status: status,
   createdAt: DateTime.utc(2026, 9, 11),
   authorizationUrl: authorizationUrl,
+  userCode: userCode,
 );
 
 final class _ConnectorClient extends LocalServerClient {

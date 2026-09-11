@@ -24,6 +24,7 @@ type connectorAttempt struct {
 	DeviceID         string
 	Status           string
 	AuthorizationURL string
+	UserCode         string
 	ErrorCode        string
 	CreatedAt        time.Time
 	Scope            map[string]any
@@ -46,7 +47,7 @@ type clientConnectorDefinition struct {
 var clientConnectorDefinitions = []clientConnectorDefinition{
 	{ID: "gmail", Name: "Gmail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GMAIL_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/gmail.readonly"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.gmail }, Available: func(console *Console) bool { return console.gmail != nil }},
 	{ID: "microsoft.mail", Name: "Microsoft Mail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_MAIL_OAUTH", RequiredScopes: []string{"Mail.Read"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftAuth }, Available: func(console *Console) bool { return console.microsoftAuth != nil }},
-	{ID: "github.issues", Name: "GitHub Issues", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GITHUB_OAUTH", RequiredScopes: []string{"github.issues.read"}, ScopeFields: []string{"owner", "repository"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.githubAuth }, Available: func(console *Console) bool { return console.githubAuth != nil }},
+	{ID: "github.issues", Name: "GitHub Issues", AuthKind: "oauth_device", OAuthCredential: "FLOE_GITHUB_OAUTH", RequiredScopes: []string{"github.issues.read"}, ScopeFields: []string{"owner", "repository"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.githubAuth }, Available: func(console *Console) bool { return console.githubAuth != nil }},
 	{ID: "slack.conversations", Name: "Slack", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_SLACK_OAUTH", RequiredScopes: []string{"channels:history", "groups:history"}, ScopeFields: []string{"channel", "thread"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.slackAuth }, Available: func(console *Console) bool { return console.slackAuth != nil }},
 	{ID: "google_drive.files", Name: "Google Drive", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_DRIVE_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/drive.readonly"}, ScopeFields: []string{"folder_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.driveAuth }, Available: func(console *Console) bool { return console.driveAuth != nil }},
 	{ID: "calendar.google", Name: "Google Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GOOGLE_CALENDAR_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ScopeFields: []string{"calendar_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.calendarAuth }, Available: func(console *Console) bool { return console.calendarAuth != nil }},
@@ -120,7 +121,7 @@ func (console *Console) serveClientConnectors(writer http.ResponseWriter, reques
 func connectorCapabilities(definition clientConnectorDefinition) map[string]any {
 	return map[string]any{
 		"connect":      true,
-		"cancel":       definition.AuthKind == "oauth_pkce",
+		"cancel":       isOAuthAuthKind(definition.AuthKind),
 		"disconnect":   true,
 		"scope_update": len(definition.ScopeFields) > 0,
 	}
@@ -187,7 +188,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
-	if definition.AuthKind == "oauth_pkce" && input.Secret != "" || definition.AuthKind == "secret" && input.Secret == "" {
+	if isOAuthAuthKind(definition.AuthKind) && input.Secret != "" || definition.AuthKind == "secret" && input.Secret == "" {
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
@@ -207,7 +208,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 			failure(writer, http.StatusConflict, "already_connected")
 			return
 		}
-		if definition.AuthKind == "oauth_pkce" && existing.Credential != "" {
+		if isOAuthAuthKind(definition.AuthKind) && existing.Credential != "" {
 			if console.vault.Delete(existing.Credential) != nil {
 				console.mu.Unlock()
 				failure(writer, http.StatusServiceUnavailable, "credential_cleanup_failed")
@@ -332,7 +333,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusBadGateway, "connector_authorization_unavailable")
 		return
 	}
-	status, authorizationURL, valid := oauthActionStatus(value)
+	status, authorizationURL, userCode, valid := oauthActionStatus(value)
 	if !valid || status != "pending" && status != "connected" {
 		console.failClientOAuthAttempt(attemptID, runtime)
 		failure(writer, http.StatusBadGateway, "invalid_connector_response")
@@ -348,7 +349,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusConflict, "connection_changed")
 		return
 	}
-	attempt.Status, attempt.AuthorizationURL, attempt.Polling = status, authorizationURL, false
+	attempt.Status, attempt.AuthorizationURL, attempt.UserCode, attempt.Polling = status, authorizationURL, userCode, false
 	console.mu.Unlock()
 	if status == "connected" && !console.finishClientOAuthAttempt(attemptID) {
 		console.failClientOAuthAttempt(attemptID, runtime)
@@ -414,8 +415,8 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 		}
 		if err != nil {
 			copy.ErrorCode = "connector_authorization_unavailable"
-		} else if status, authorizationURL, valid := oauthActionStatus(value); valid {
-			copy.Status, copy.AuthorizationURL, copy.ErrorCode = status, authorizationURL, ""
+		} else if status, authorizationURL, userCode, valid := oauthActionStatus(value); valid {
+			copy.Status, copy.AuthorizationURL, copy.UserCode, copy.ErrorCode = status, authorizationURL, userCode, ""
 			if status == "disconnected" {
 				copy.Status, copy.ErrorCode = "failed", "authorization_interrupted"
 			}
@@ -423,7 +424,7 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 			copy.Status, copy.ErrorCode = "failed", "invalid_connector_response"
 		}
 		if copy.Status != "pending" {
-			copy.AuthorizationURL = ""
+			copy.AuthorizationURL, copy.UserCode = "", ""
 		}
 		if copy.Status == "connected" && !console.finishClientOAuthAttempt(attemptID) {
 			copy.Status, copy.ErrorCode = "failed", "credential_commit_failed"
@@ -435,7 +436,7 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 		}
 		console.mu.Lock()
 		if current := console.connectorAttempts[attemptID]; current != nil && current.ClientID == scope.ClientID {
-			current.Status, current.AuthorizationURL, current.ErrorCode = copy.Status, copy.AuthorizationURL, copy.ErrorCode
+			current.Status, current.AuthorizationURL, current.UserCode, current.ErrorCode = copy.Status, copy.AuthorizationURL, copy.UserCode, copy.ErrorCode
 			current.Polling = false
 			copy = *current
 		}
@@ -653,20 +654,21 @@ func (console *Console) requireCurrentClientScope(writer http.ResponseWriter, sc
 	return console.requireCurrentClientScopeLocked(writer, scope)
 }
 
-func oauthActionStatus(value any) (string, string, bool) {
+func oauthActionStatus(value any) (string, string, string, bool) {
 	statusValue, ok := value.(map[string]any)
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
 	status, ok := statusValue["status"].(string)
 	if !ok || status != "pending" && status != "connected" && status != "disconnected" {
-		return "", "", false
+		return "", "", "", false
 	}
 	authorizationURL, _ := statusValue["auth_url"].(string)
+	userCode, _ := statusValue["user_code"].(string)
 	if status == "pending" && authorizationURL == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return status, authorizationURL, true
+	return status, authorizationURL, userCode, true
 }
 
 func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, record connectionRecord) error {
@@ -682,6 +684,9 @@ func connectorAttemptResponse(attempt *connectorAttempt) map[string]any {
 	}
 	if attempt.AuthorizationURL != "" {
 		value["authorization_url"] = attempt.AuthorizationURL
+	}
+	if attempt.UserCode != "" {
+		value["user_code"] = attempt.UserCode
 	}
 	if attempt.ErrorCode != "" {
 		value["error"] = map[string]string{"code": attempt.ErrorCode}
@@ -722,11 +727,15 @@ func (console *Console) connectionCredentialReady(record connectionRecord) bool 
 		return false
 	}
 	definition, exists := clientConnectorDefinitionFor(record.ConnectorID)
-	if !exists || definition.AuthKind != "oauth_pkce" {
+	if !exists || !isOAuthAuthKind(definition.AuthKind) {
 		return true
 	}
 	runtime := definition.OAuthRuntime(console)
 	return runtime != nil && runtime.Ready()
+}
+
+func isOAuthAuthKind(value string) bool {
+	return value == "oauth_pkce" || value == "oauth_device"
 }
 
 func (console *Console) finishClientOAuthAttempt(attemptID string) bool {

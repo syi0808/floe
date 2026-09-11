@@ -23,7 +23,7 @@
   Only bounded title/body excerpt/status/blocker metadata enters Work Context.
 - The GitHub connector publishes a common server execution descriptor with one Observe capability
   and no Act authority. Static View and snapshot fixtures cross the Go/Rust strict validators.
-- GitHub now uses a server-owned GitHub App authorization-code flow with PKCE and connection-scoped
+- GitHub now uses a GitHub App Device Flow without a client secret and with connection-scoped
   Keychain tokens; the paired client no longer accepts a personal access token.
 - Added a server-native, read-only Home Assistant adapter for an explicit allowlist of at most 16
   sensor, binary-sensor, climate, light or switch entities. It rejects security-control domains,

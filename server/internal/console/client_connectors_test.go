@@ -562,7 +562,7 @@ func TestPairedConnectorCatalogIncludesDisconnectedAndUnavailableProviders(test 
 		connector := item.(map[string]any)
 		byID[connector["id"].(string)] = connector
 	}
-	if byID["github.issues"]["status"] != "disconnected" || byID["github.issues"]["available"] != true || byID["github.issues"]["auth_kind"] != "oauth_pkce" {
+	if byID["github.issues"]["status"] != "disconnected" || byID["github.issues"]["available"] != true || byID["github.issues"]["auth_kind"] != "oauth_device" {
 		test.Fatalf("GitHub OAuth connector missing from catalog: %#v", byID["github.issues"])
 	}
 	if byID["slack.conversations"]["status"] != "disconnected" || byID["slack.conversations"]["available"] != true || byID["slack.conversations"]["auth_kind"] != "oauth_pkce" {

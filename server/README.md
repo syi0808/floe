@@ -124,20 +124,18 @@ policy, calendar IDs, bodies, locations or attendees to Agent context.
 
 ### GitHub App user authorization
 
-Create a GitHub App with **Issues: read-only** repository permission and no write permission. Set
-its callback URL to `http://127.0.0.1/oauth/github/callback`, then start the local node with the
-app's OAuth client credentials:
+Create a GitHub App with **Issues: read-only** repository permission and no write permission, then
+enable **Device Flow** in the app settings. Start the local node with the public client ID:
 
 ```sh
 export FLOE_GITHUB_OAUTH_CLIENT_ID='your-github-app-client-id'
-export FLOE_GITHUB_OAUTH_CLIENT_SECRET='your-github-app-client-secret'
 go run ./cmd/floe-server
 ```
 
-GitHub accepts the per-login ephemeral loopback port for a `127.0.0.1` callback. Floe uses the
-authorization-code flow with PKCE, stores the resulting user and refresh tokens in the macOS
-Keychain, and reads only the repository selected in **Connections → GitHub Issues**. Personal
-access-token entry is no longer exposed.
+Floe opens GitHub's device page, displays the short-lived user code, polls at GitHub's required
+interval, and stores the resulting user and refresh tokens in the macOS Keychain. No client secret
+or redirect URL is used. Floe reads only the repository selected in **Connections → GitHub
+Issues**. Personal access-token entry is no longer exposed.
 
 ### Slack user authorization
 

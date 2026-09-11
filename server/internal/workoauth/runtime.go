@@ -41,13 +41,14 @@ type Config struct {
 type providerProfile struct {
 	name, credential, authURL, tokenURL, callbackPath, callbackHost, callbackAddress string
 	requiredScopes                                                                   []string
+	deviceFlow                                                                       bool
 }
 
 var githubProfile = providerProfile{
 	name: "GitHub", credential: GitHubCredential,
-	authURL: "https://github.com/login/oauth/authorize", tokenURL: "https://github.com/login/oauth/access_token",
-	callbackPath: "/oauth/github/callback", callbackHost: "127.0.0.1", callbackAddress: "127.0.0.1:0",
+	authURL: "https://github.com/login/device/code", tokenURL: "https://github.com/login/oauth/access_token",
 	requiredScopes: []string{"github.issues.read"},
+	deviceFlow:     true,
 }
 
 var slackProfile = providerProfile{
@@ -67,7 +68,10 @@ type tokenBundle struct {
 
 type loginFlow struct {
 	state, verifier, authURL, redirectURI string
+	deviceCode, userCode                  string
 	expires                               time.Time
+	nextPoll                              time.Time
+	pollInterval                          time.Duration
 	server                                *http.Server
 	listener                              net.Listener
 }
@@ -86,9 +90,7 @@ type Runtime struct {
 }
 
 func NewGitHub(store Store, config Config) (*Runtime, error) {
-	if !validCredential(config.ClientSecret, 2048) {
-		return nil, ErrUnavailable
-	}
+	config.ClientSecret = ""
 	return newRuntime(store, config, githubProfile)
 }
 
@@ -175,7 +177,7 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
 		if !pending {
-			if err := runtime.startLogin(); err != nil {
+			if err := runtime.startLogin(ctx); err != nil {
 				return nil, err
 			}
 		}
@@ -183,17 +185,29 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	runtime.mu.RLock()
 	flow := runtime.flow
 	runtime.mu.RUnlock()
+	if action == "status" && flow != nil && runtime.profile.deviceFlow && !time.Now().Before(flow.nextPoll) {
+		if err := runtime.pollDeviceFlow(ctx, flow); err != nil {
+			return nil, err
+		}
+		runtime.mu.RLock()
+		flow = runtime.flow
+		runtime.mu.RUnlock()
+	}
 	status, authURL := "disconnected", ""
+	userCode := ""
 	if runtime.load() != nil {
 		status = "connected"
 	} else if flow != nil && flow.expires.After(time.Now()) {
-		status, authURL = "pending", flow.authURL
+		status, authURL, userCode = "pending", flow.authURL, flow.userCode
 	}
-	return map[string]any{"status": status, "auth_url": authURL, "scope": strings.Join(runtime.profile.requiredScopes, " ")}, nil
+	return map[string]any{"status": status, "auth_url": authURL, "user_code": userCode, "scope": strings.Join(runtime.profile.requiredScopes, " ")}, nil
 }
 
-func (runtime *Runtime) startLogin() error {
+func (runtime *Runtime) startLogin(ctx context.Context) error {
 	runtime.cancelLogin()
+	if runtime.profile.deviceFlow {
+		return runtime.startDeviceFlow(ctx)
+	}
 	state, err := randomValue()
 	if err != nil {
 		return err
@@ -226,6 +240,104 @@ func (runtime *Runtime) startLogin() error {
 	go func() { _ = flow.server.Serve(listener) }()
 	go runtime.expire(flow)
 	return nil
+}
+
+func (runtime *Runtime) startDeviceFlow(ctx context.Context) error {
+	form := url.Values{"client_id": {runtime.config.ClientID}}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, runtime.profile.authURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return ErrUnavailable
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json")
+	response, err := runtime.client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return ErrUnavailable
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 32769))
+	if err != nil || len(body) > 32768 || response.StatusCode != http.StatusOK {
+		return ErrUnavailable
+	}
+	var output struct {
+		DeviceCode      string `json:"device_code"`
+		UserCode        string `json:"user_code"`
+		VerificationURI string `json:"verification_uri"`
+		ExpiresIn       int64  `json:"expires_in"`
+		Interval        int64  `json:"interval"`
+	}
+	if json.Unmarshal(body, &output) != nil || !validCredential(output.DeviceCode, 512) ||
+		!validCredential(output.UserCode, 64) || output.ExpiresIn <= 0 || output.ExpiresIn > 1800 ||
+		output.Interval < 1 || output.Interval > 60 || !validHTTPSURL(output.VerificationURI) {
+		return ErrUnavailable
+	}
+	flow := &loginFlow{
+		authURL: output.VerificationURI, deviceCode: output.DeviceCode, userCode: output.UserCode,
+		expires:      time.Now().Add(time.Duration(output.ExpiresIn) * time.Second),
+		pollInterval: time.Duration(output.Interval) * time.Second,
+	}
+	flow.nextPoll = time.Now().Add(flow.pollInterval)
+	runtime.mu.Lock()
+	runtime.flow = flow
+	runtime.mu.Unlock()
+	go runtime.expire(flow)
+	return nil
+}
+
+func (runtime *Runtime) pollDeviceFlow(ctx context.Context, flow *loginFlow) error {
+	form := url.Values{
+		"client_id": {runtime.config.ClientID}, "device_code": {flow.deviceCode},
+		"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, runtime.profile.tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return ErrUnavailable
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json")
+	response, err := runtime.client.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return ErrUnavailable
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 32769))
+	if err != nil || len(body) > 32768 || response.StatusCode != http.StatusOK {
+		return ErrUnavailable
+	}
+	var status struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &status) != nil {
+		return ErrUnavailable
+	}
+	now := time.Now()
+	switch status.Error {
+	case "authorization_pending":
+		flow.nextPoll = now.Add(flow.pollInterval)
+		return nil
+	case "slow_down":
+		flow.pollInterval += 5 * time.Second
+		flow.nextPoll = now.Add(flow.pollInterval)
+		return nil
+	case "expired_token", "token_expired", "access_denied":
+		runtime.finishLogin(flow)
+		return nil
+	case "":
+		value, err := runtime.decodeGitHub(body, nil)
+		if err != nil || runtime.save(value) != nil {
+			return ErrCredentialExpired
+		}
+		runtime.finishLogin(flow)
+		return nil
+	default:
+		return ErrCredentialExpired
+	}
 }
 
 func (runtime *Runtime) expire(flow *loginFlow) {
@@ -442,7 +554,9 @@ func (runtime *Runtime) finishLogin(flow *loginFlow) {
 		runtime.flow = nil
 	}
 	runtime.mu.Unlock()
-	go func() { _ = flow.server.Shutdown(context.Background()) }()
+	if flow.server != nil {
+		go func() { _ = flow.server.Shutdown(context.Background()) }()
+	}
 }
 
 func (runtime *Runtime) cancelLogin() {
@@ -451,7 +565,9 @@ func (runtime *Runtime) cancelLogin() {
 	runtime.flow = nil
 	runtime.mu.Unlock()
 	if flow != nil {
-		_ = flow.server.Close()
+		if flow.server != nil {
+			_ = flow.server.Close()
+		}
 	}
 }
 
@@ -471,6 +587,11 @@ func randomValue() (string, error) {
 
 func validCredential(value string, limit int) bool {
 	return strings.TrimSpace(value) != "" && len(value) <= limit && !strings.ContainsAny(value, "\r\n")
+}
+
+func validHTTPSURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
 }
 
 func hasAllScopes(value string, required []string) bool {
