@@ -39,13 +39,20 @@ impl FloeCore {
         &self,
         person_id: PersonId,
         provider: CalendarProvider,
-        calendars: Vec<CalendarSelection>,
+        mut calendars: Vec<CalendarSelection>,
     ) -> Result<(), CoreError> {
-        let revision = self
-            .store
-            .calendar_mirror(person_id)
-            .await?
-            .map_or(1, |mirror| mirror.connection.revision + 1);
+        calendars.sort_by(|left, right| left.calendar_id.cmp(&right.calendar_id));
+        let previous = self.store.calendar_mirror(person_id).await?;
+        let revision = previous.as_ref().map_or(1, |mirror| {
+            if mirror.connection.provider == provider
+                && !mirror.connection.disconnected
+                && mirror.connection.calendars == calendars
+            {
+                mirror.connection.revision
+            } else {
+                mirror.connection.revision + 1
+            }
+        });
         self.set_calendar_scope(
             person_id,
             format!("calendar.{}", provider_identifier(provider)),
