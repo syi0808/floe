@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "view_id": "people.identity",
+  "source_handle": "people:apple:opaque",
+  "observed_at_unix_ms": 1000,
+  "expires_at_unix_ms": 301000,
+  "coverage_complete": true,
+  "identities": [
+    {
+      "identity_handle": "person.identity:opaque",
+      "display_name": "Alex Kim",
+      "aliases": ["email:alex@example.com"],
+      "confidence_millis": 1000,
+      "evidence_handles": ["contact.evidence:opaque"]
+    }
+  ]
+}
