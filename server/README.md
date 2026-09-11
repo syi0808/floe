@@ -69,13 +69,12 @@ model availability and subscription limits can change and require live retesting
 
 ### Gmail read-only OAuth
 
-Create a Google **Desktop app** OAuth client in a project with the Gmail API enabled, then start
-the local node with its client ID. The client secret is optional for installed-app clients and,
-when supplied, must come from the process environment rather than repository configuration.
+Floe ships its public Google **Desktop app** OAuth client ID in the local-node build. The bundled
+registration enables Gmail, Drive, and Calendar. An environment variable can override the bundled
+ID for development; a client secret is neither bundled nor required.
 
 ```sh
-export FLOE_GOOGLE_OAUTH_CLIENT_ID='your-desktop-client-id'
-export FLOE_GOOGLE_OAUTH_CLIENT_SECRET='optional-client-secret'
+export FLOE_GOOGLE_OAUTH_CLIENT_ID='optional-development-client-id'
 go run ./cmd/floe-server
 ```
 
@@ -124,11 +123,11 @@ policy, calendar IDs, bodies, locations or attendees to Agent context.
 
 ### GitHub App user authorization
 
-Create a GitHub App with **Issues: read-only** repository permission and no write permission, then
-enable **Device Flow** in the app settings. Start the local node with the public client ID:
+Floe ships the public client ID for its GitHub App, configured with **Issues: read-only** repository
+permission and **Device Flow**. An environment variable can override it for development:
 
 ```sh
-export FLOE_GITHUB_OAUTH_CLIENT_ID='your-github-app-client-id'
+export FLOE_GITHUB_OAUTH_CLIENT_ID='optional-development-client-id'
 go run ./cmd/floe-server
 ```
 
@@ -139,13 +138,12 @@ Issues**. Personal access-token entry is no longer exposed.
 
 ### Slack user authorization
 
-Create a Slack app in a development workspace. Enable PKCE, add the user scopes
-`channels:history` and `groups:history`, and register
-`http://localhost:1456/oauth/slack/callback` as its desktop redirect. Then start the local node:
+Floe ships its public Slack app client ID. The app uses PKCE user scopes `channels:history` and
+`groups:history`, with `http://localhost:1456/oauth/slack/callback` as its desktop redirect. An
+environment variable can override the bundled ID for development:
 
 ```sh
-export FLOE_SLACK_OAUTH_CLIENT_ID='your-slack-app-client-id'
-export FLOE_SLACK_OAUTH_CLIENT_SECRET='optional-for-PKCE-desktop-clients'
+export FLOE_SLACK_OAUTH_CLIENT_ID='optional-development-client-id'
 go run ./cmd/floe-server
 ```
 
