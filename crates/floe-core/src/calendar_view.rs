@@ -91,6 +91,29 @@ pub struct CalendarObservation {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProjectedCalendarObservation {
+    pub stamp: CalendarReadAccessStamp,
+    pub source_handle: String,
+    pub observed_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub range_start: DateTime<Utc>,
+    pub range_end: DateTime<Utc>,
+    pub coverage_complete: bool,
+    pub next_cursor: Option<String>,
+    pub items: Vec<ProjectedCalendarItem>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectedCalendarItem {
+    pub evidence_handle: String,
+    pub untrusted_title: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarReadAccessStamp {
     pub schema_version: u32,
     pub person_id: PersonId,
@@ -109,6 +132,14 @@ pub trait CalendarReadAccess: Sync {
         &self,
         _: CalendarObserveRequest,
     ) -> impl Future<Output = Result<Option<CalendarObservation>, AgentFailure>> + Send {
+        async { Ok(None) }
+    }
+
+    fn observe_projected(
+        &self,
+        _: CalendarObserveRequest,
+    ) -> impl Future<Output = Result<Option<ProjectedCalendarObservation>, AgentFailure>> + Send
+    {
         async { Ok(None) }
     }
 }
@@ -318,6 +349,30 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         let before = self
             .authorized(deadline, request.cancellation.clone())
             .await?;
+        if let Some(observation) = self
+            .access
+            .observe_projected(CalendarObserveRequest {
+                person_id: self.grant.person_id,
+                provider: self.grant.provider,
+                calendar_ids: self.grant.calendar_ids.clone(),
+                starts_at: range_start,
+                ends_at: range_end,
+                deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?
+        {
+            return self
+                .project_projected_observation(
+                    request,
+                    range_start,
+                    range_end,
+                    before,
+                    observation,
+                    deadline,
+                )
+                .await;
+        }
         if let Some(observation) = self
             .access
             .observe(CalendarObserveRequest {
@@ -592,6 +647,113 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .live_observation_expires_at
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(expires);
+        Ok(view)
+    }
+
+    async fn project_projected_observation(
+        &self,
+        request: &TimelineViewRead,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+        before: CalendarReadAccessStamp,
+        mut observation: ProjectedCalendarObservation,
+        deadline: Instant,
+    ) -> Result<ExpertTimelineView, AgentFailure> {
+        observation.stamp.calendar_ids.sort();
+        let now = (self.clock)();
+        if observation.stamp != before
+            || observation.observed_at > now
+            || now - observation.observed_at > chrono::Duration::minutes(5)
+            || observation.expires_at <= now
+            || observation.range_start > range_start
+            || observation.range_end < range_end
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        if observation.source_handle.trim().is_empty()
+            || observation.source_handle.len() > 128
+            || observation.expires_at <= observation.observed_at
+            || observation.expires_at - observation.observed_at > chrono::Duration::minutes(5)
+            || observation.range_start >= observation.range_end
+            || observation.coverage_complete == observation.next_cursor.is_some()
+            || observation.next_cursor.as_ref().is_some_and(|cursor| {
+                cursor.trim().is_empty()
+                    || cursor.len() > 2048
+                    || cursor.chars().any(char::is_control)
+            })
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        if observation.items.len() > request.max_items.min(MAX_TIMELINE_VIEW_ITEMS) {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut handles = HashSet::new();
+        let mut items = Vec::with_capacity(observation.items.len());
+        for item in observation.items {
+            if item.evidence_handle.trim().is_empty()
+                || item.evidence_handle.len() > 128
+                || !handles.insert(item.evidence_handle.clone())
+                || item.starts_at >= item.ends_at
+                || item.starts_at >= range_end
+                || item.ends_at <= range_start
+            {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+            items.push(TimelineViewItem {
+                evidence_handle: Uuid::new_v5(
+                    &Uuid::NAMESPACE_URL,
+                    format!(
+                        "floe:calendar:{}:{}",
+                        observation.source_handle, item.evidence_handle
+                    )
+                    .as_bytes(),
+                ),
+                untrusted_title: bounded_title(&item.untrusted_title),
+                starts_at_unix_ms: milliseconds(item.starts_at.max(range_start))?,
+                ends_at_unix_ms: milliseconds(item.ends_at.min(range_end))?,
+            });
+        }
+        items.sort_by_key(|item| {
+            (
+                item.starts_at_unix_ms,
+                item.ends_at_unix_ms,
+                item.evidence_handle,
+            )
+        });
+        let view = ExpertTimelineView {
+            schema_version: 1,
+            handle: self.grant.handle,
+            person_id: self.grant.person_id,
+            data_class: self.grant.data_class(),
+            source_handle: observation.source_handle,
+            range_start_unix_ms: milliseconds(range_start)?,
+            range_end_unix_ms: milliseconds(range_end)?,
+            expires_at_unix_ms: milliseconds(self.grant.expires_at.min(observation.expires_at))?,
+            coverage_complete: observation.coverage_complete,
+            next_cursor: observation.next_cursor,
+            items,
+        };
+        if serde_json::to_vec(&view)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
+            > request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES)
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let after = self
+            .authorized(deadline, request.cancellation.clone())
+            .await?;
+        if before != after {
+            return Err(AgentFailure::StaleContext);
+        }
+        *self
+            .stamp
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(before);
+        *self
+            .live_observation_expires_at
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(observation.expires_at);
         Ok(view)
     }
 }

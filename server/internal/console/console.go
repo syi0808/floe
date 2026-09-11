@@ -604,23 +604,44 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		}
 		var input struct {
 			SchemaVersion    int    `json:"schema_version"`
+			ConnectorID      string `json:"connector_id"`
 			RangeStartUnixMS int64  `json:"range_start_unix_ms"`
 			RangeEndUnixMS   int64  `json:"range_end_unix_ms"`
 			Cursor           string `json:"cursor"`
 			Limit            int    `json:"limit"`
 		}
-		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
+		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.ConnectorID != "" && input.ConnectorID != "calendar.google" && input.ConnectorID != "calendar.microsoft" || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
 			failure(writer, 400, "validation")
 			return
 		}
-		var view any
-		var err error
+		if input.ConnectorID == "" && len(calendars) != 1 {
+			failure(writer, http.StatusConflict, "calendar_selector_required")
+			return
+		}
+		var selected CalendarRuntime
+		var selectedSnapshot any
 		for _, runtime := range calendars {
-			view, err = runtime.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
-			if err == nil {
+			snapshot, err := runtime.ConnectionSnapshot(request.Context())
+			if err != nil {
+				continue
+			}
+			_, connectorID, _, valid := connectionSnapshotMetadata(snapshot)
+			if valid && (input.ConnectorID == "" || connectorID == input.ConnectorID) {
+				selected, selectedSnapshot = runtime, snapshot
 				break
 			}
 		}
+		if selected == nil {
+			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
+			return
+		}
+		if !scope.Legacy {
+			if _, err := console.bindConnectionOwners([]any{selectedSnapshot}, scope); err != nil {
+				failure(writer, http.StatusForbidden, "connection_owner_mismatch")
+				return
+			}
+		}
+		view, err := selected.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
 		if err != nil {
 			failure(writer, 503, "view_unavailable")
 			return

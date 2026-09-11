@@ -155,6 +155,51 @@ struct ObservationAccess {
     record: CalendarRecord,
 }
 
+struct ProjectedObservationAccess;
+
+impl CalendarReadAccess for ProjectedObservationAccess {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        Ok(CalendarReadAccessStamp {
+            schema_version: 1,
+            person_id: request.person_id,
+            provider: request.provider,
+            calendar_ids: request.calendar_ids,
+            generation: "server-7".into(),
+        })
+    }
+
+    async fn observe_projected(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
+        Ok(Some(ProjectedCalendarObservation {
+            stamp: CalendarReadAccessStamp {
+                schema_version: 1,
+                person_id: request.person_id,
+                provider: request.provider,
+                calendar_ids: request.calendar_ids,
+                generation: "server-7".into(),
+            },
+            source_handle: "calendar.timeline:server".into(),
+            observed_at: now(),
+            expires_at: now() + TimeDelta::minutes(5),
+            range_start: request.starts_at,
+            range_end: request.ends_at,
+            coverage_complete: false,
+            next_cursor: Some("next-page".into()),
+            items: vec![ProjectedCalendarItem {
+                evidence_handle: "opaque-server-event".into(),
+                untrusted_title: "Server review".into(),
+                starts_at: request.starts_at + TimeDelta::minutes(10),
+                ends_at: request.starts_at + TimeDelta::minutes(40),
+            }],
+        }))
+    }
+}
+
 impl CalendarReadAccess for ObservationAccess {
     async fn check(
         &self,
@@ -323,6 +368,34 @@ async fn request_scoped_observation_does_not_depend_on_page_mirror_coverage() {
     assert_eq!(view.range_end_unix_ms, milliseconds(requested_end).unwrap());
     assert!(view.coverage_complete);
     assert_eq!(view.items[0].untrusted_title, "Next week review");
+}
+
+#[tokio::test]
+async fn projected_observation_preserves_server_coverage_and_opaque_provenance() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let view = CalendarTimelineViews::new(
+        &fixture.core,
+        &ProjectedObservationAccess,
+        grant.clone(),
+        now,
+    )
+    .unwrap()
+    .timeline(request(&grant))
+    .await
+    .unwrap();
+
+    assert_eq!(view.source_handle, "calendar.timeline:server");
+    assert!(!view.coverage_complete);
+    assert_eq!(view.next_cursor.as_deref(), Some("next-page"));
+    assert_eq!(view.items[0].untrusted_title, "Server review");
+    assert_eq!(
+        view.items[0].evidence_handle,
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            b"floe:calendar:calendar.timeline:server:opaque-server-event"
+        )
+    );
 }
 
 #[tokio::test]

@@ -38,7 +38,8 @@ pub use calendar_action::{
 };
 pub use calendar_view::{
     CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest,
-    CalendarReadAccessStamp, CalendarTimelineGrant, CalendarTimelineViews,
+    CalendarReadAccessStamp, CalendarTimelineGrant, CalendarTimelineViews, ProjectedCalendarItem,
+    ProjectedCalendarObservation,
 };
 pub use core::{Classification, FloeCore};
 pub use error::{CoreError, ErrorCode};

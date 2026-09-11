@@ -20,7 +20,10 @@ use floe_domain::PersonId;
 use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
 use crate::local_context::LocalContextStore;
-use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner};
+use crate::{
+    local_model::FoundationModelRunner,
+    remote_model::{CalendarContextRequest, ServerModelRunner},
+};
 
 use super::session_uuid;
 
@@ -288,8 +291,22 @@ impl PersonalViewSource<'_> {
         if !self.server_fallback_allowed() {
             return Ok(vec![]);
         }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_err(|_| AgentFailure::StaleContext)?;
+        let now = i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
         match model
-            .read_calendar_context_view(deadline, cancellation)
+            .read_calendar_context_view(
+                CalendarContextRequest {
+                    connector_id: None,
+                    range_start_unix_ms: now.saturating_sub(86_400_000),
+                    range_end_unix_ms: now.saturating_add(86_400_000),
+                    cursor: "",
+                    limit: floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
+                },
+                deadline,
+                cancellation,
+            )
             .await
         {
             Ok(view) => Ok(vec![view]),
@@ -600,6 +617,22 @@ mod tests {
             }
         };
         (String::from_utf8(bytes[..length].to_vec()).unwrap(), socket)
+    }
+
+    fn assert_calendar_request_contract(request: &str) {
+        assert!(request.starts_with("POST /v1/views/calendar.timeline "));
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").expect("HTTP request body").1)
+                .unwrap();
+        assert_eq!(body["schema_version"], 1);
+        assert!(body["range_start_unix_ms"].as_i64().unwrap() >= 0);
+        assert!(
+            body["range_end_unix_ms"].as_i64().unwrap()
+                > body["range_start_unix_ms"].as_i64().unwrap()
+        );
+        assert_eq!(body["cursor"], "");
+        assert_eq!(body["limit"], floe_agent::MAX_CALENDAR_CONTEXT_ITEMS);
+        assert_eq!(body.as_object().unwrap().len(), 5);
     }
 
     async fn respond(mut socket: tokio::net::TcpStream, body: String) {
@@ -955,7 +988,7 @@ mod tests {
 
             let (socket, _) = listener.accept().await.unwrap();
             let (calendar_request, socket) = request(socket).await;
-            assert!(calendar_request.starts_with("POST /v1/views/calendar.timeline "));
+            assert_calendar_request_contract(&calendar_request);
             respond_not_found(socket).await;
 
             let (socket, _) = listener.accept().await.unwrap();
@@ -1098,7 +1131,7 @@ mod tests {
 
             let (socket, _) = listener.accept().await.unwrap();
             let (calendar_request, socket) = request(socket).await;
-            assert!(calendar_request.starts_with("POST /v1/views/calendar.timeline "));
+            assert_calendar_request_contract(&calendar_request);
             respond(
                 socket,
                 serde_json::json!({
@@ -1535,6 +1568,9 @@ mod tests {
                     let (socket, _) = listener.accept().await.unwrap();
                     let (optional_request, socket) = request(socket).await;
                     assert!(optional_request.starts_with(&format!("POST {path} ")));
+                    if *path == "/v1/views/calendar.timeline" {
+                        assert_calendar_request_contract(&optional_request);
+                    }
                     match (agent_id, *path) {
                         (FOCUS_AGENT_ID, "/v1/views/calendar.timeline") => {
                             respond(

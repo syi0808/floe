@@ -69,17 +69,28 @@ type fakeCommunicationRuntime struct {
 }
 
 type fakeCalendarRuntime struct {
-	snapshot any
-	view     any
-	err      error
+	snapshot    any
+	view        any
+	snapshotErr error
+	readErr     error
+}
+
+func calendarSnapshot(connectorID, provider string) map[string]any {
+	return map[string]any{
+		"descriptor": map[string]any{
+			"id": connectorID, "provider": provider,
+			"execution": map[string]any{"kind": "server"},
+		},
+		"connection": map[string]any{"connector_id": connectorID},
+	}
 }
 
 func (runtime *fakeCalendarRuntime) ConnectionSnapshot(context.Context) (any, error) {
-	return runtime.snapshot, runtime.err
+	return runtime.snapshot, runtime.snapshotErr
 }
 
 func (runtime *fakeCalendarRuntime) ReadCalendarView(context.Context, time.Time, time.Time, string, int) (any, error) {
-	return runtime.view, runtime.err
+	return runtime.view, runtime.readErr
 }
 
 func (runtime *fakeCommunicationRuntime) ConnectionSnapshot(context.Context) (any, error) {
@@ -596,28 +607,37 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	fixture.console.calendars = []CalendarRuntime{&fakeCalendarRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "google_calendar"}}, view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
+	fixture.console.calendars = []CalendarRuntime{&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
 	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
 		test.Fatalf("view: %#v", value)
 	}
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
 		test.Fatalf("invalid range accepted: %d", response.Code)
 	}
 }
 
-func TestCalendarRouteFallsBackToMicrosoftProvider(test *testing.T) {
+func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	fixture.console.calendars = []CalendarRuntime{
-		&fakeCalendarRuntime{err: errors.New("google unavailable")},
-		&fakeCalendarRuntime{view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
+		&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
+		&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
 	}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
+	body := map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusConflict {
+		test.Fatalf("ambiguous provider accepted: %d %s", response.Code, response.Body.String())
+	}
+	body["connector_id"] = "calendar.microsoft"
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token))
 	if value["view"].(map[string]any)["source_handle"] != "calendar.timeline:microsoft" {
 		test.Fatalf("view: %#v", value)
+	}
+	body["connector_id"] = "calendar.google"
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("selected Google failure fell through to Microsoft: %d %s", response.Code, response.Body.String())
 	}
 }
 

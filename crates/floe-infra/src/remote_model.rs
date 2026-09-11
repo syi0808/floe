@@ -19,6 +19,14 @@ pub struct ServerModelRunner {
     placement: ModelPlacement,
 }
 
+pub struct CalendarContextRequest<'input> {
+    pub connector_id: Option<&'input str>,
+    pub range_start_unix_ms: i64,
+    pub range_end_unix_ms: i64,
+    pub cursor: &'input str,
+    pub limit: usize,
+}
+
 impl ServerModelRunner {
     pub fn new(route: AgentRemoteRouteDto) -> Result<Self, AgentFailure> {
         let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
@@ -91,12 +99,34 @@ impl ServerModelRunner {
 
     pub async fn read_calendar_context_view(
         &self,
+        request: CalendarContextRequest<'_>,
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<CalendarContextView, AgentFailure> {
+        if request.connector_id.is_some_and(|identifier| {
+            !matches!(identifier, "calendar.google" | "calendar.microsoft")
+        }) || request.range_start_unix_ms < 0
+            || request.range_end_unix_ms <= request.range_start_unix_ms
+            || request.range_end_unix_ms - request.range_start_unix_ms > 32 * 86_400_000
+            || request.cursor.len() > 2048
+            || request.cursor.chars().any(char::is_control)
+            || !(1..=128).contains(&request.limit)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut input = json!({
+            "schema_version": AGENT_VERSION,
+            "range_start_unix_ms": request.range_start_unix_ms,
+            "range_end_unix_ms": request.range_end_unix_ms,
+            "cursor": request.cursor,
+            "limit": request.limit,
+        });
+        if let Some(connector_id) = request.connector_id {
+            input["connector_id"] = json!(connector_id);
+        }
         self.read_view(
             "/v1/views/calendar.timeline",
-            json!({"schema_version": AGENT_VERSION}),
+            input,
             MAX_CALENDAR_CONTEXT_BYTES,
             deadline,
             cancellation,

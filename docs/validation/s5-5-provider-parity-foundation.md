@@ -46,8 +46,9 @@
   dashboard owns OAuth login and one selected-calendar configuration; only that selection persists
   in private server state and credentials remain in Keychain.
 - Paired clients can request the selected source through `calendar.timeline` with bounded Unix-time
-  range, cursor and item limit. Unknown fields and invalid ranges fail closed, source selection is
-  never accepted from the request, and the connector snapshot joins the common inventory.
+  range, cursor and item limit. Unknown fields and invalid ranges fail closed. Schedule requests
+  include one canonical `connector_id`, and the server resolves that connector only within the
+  authenticated Person-owned connection instead of falling through to another provider.
 - Added a Microsoft Graph Calendar adapter for one selected calendar. It reads only `calendarView`
   with an explicit time range, item limit and selected fields, requests UTC projection, and emits the
   same common `calendar.timeline` View as Google Calendar. Cancelled events, bodies, locations,
@@ -62,8 +63,9 @@
   Calendar login and one selected calendar without exposing that selection to paired clients or
   storing its credential in server state.
 - Microsoft Calendar joins the common connection inventory and `calendar.timeline` endpoint. The
-  route tries configured Google then Microsoft sources in fixed order and falls back only after a
-  provider failure, keeping routing policy and provider names outside model prompts.
+  route requires an explicit connector when both Calendar providers are configured and never
+  substitutes Google for Microsoft, or Microsoft for Google, after a selected-provider failure.
+  Connector selection remains runtime metadata and is not included in model prompts.
 
 ## Automated evidence
 
