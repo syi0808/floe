@@ -41,20 +41,39 @@ impl FloeCore {
         provider: CalendarProvider,
         calendars: Vec<CalendarSelection>,
     ) -> Result<(), CoreError> {
-        self.set_calendar_scope(person_id, provider, calendars, CalendarScope::Selected)
-            .await
+        let revision = self
+            .store
+            .calendar_mirror(person_id)
+            .await?
+            .map_or(1, |mirror| mirror.connection.revision + 1);
+        self.set_calendar_scope(
+            person_id,
+            format!("calendar.{}", provider_identifier(provider)),
+            revision,
+            "fixture-device".into(),
+            provider,
+            calendars,
+            CalendarScope::Selected,
+        )
+        .await
     }
 
     pub async fn set_calendar_scope(
         &self,
         person_id: PersonId,
+        connection_id: String,
+        connection_revision: u64,
+        device_id: String,
         provider: CalendarProvider,
         mut calendars: Vec<CalendarSelection>,
         scope: CalendarScope,
     ) -> Result<(), CoreError> {
         calendars.sort_by(|left, right| left.calendar_id.cmp(&right.calendar_id));
         let mut identifiers = HashSet::new();
-        if calendars.is_empty()
+        if connection_id.trim().is_empty()
+            || device_id.trim().is_empty()
+            || connection_revision == 0
+            || calendars.is_empty()
             || calendars.iter().any(|calendar| {
                 calendar.calendar_id.trim().is_empty()
                     || calendar.calendar_name.trim().is_empty()
@@ -65,16 +84,16 @@ impl FloeCore {
         }
         let previous = self.store.calendar_mirror(person_id).await?;
         if previous.as_ref().is_some_and(|mirror| {
-            mirror.connection.provider == provider
+            mirror.connection.connection_id == connection_id
+                && mirror.connection.device_id == device_id
+                && mirror.connection.revision == connection_revision
+                && mirror.connection.provider == provider
                 && !mirror.connection.disconnected
                 && mirror.connection.scope == scope
                 && mirror.connection.calendars == calendars
         }) {
             return Ok(());
         }
-        let revision = previous
-            .as_ref()
-            .map_or(1, |mirror| mirror.connection.revision + 1);
         let events = previous.as_ref().map_or_else(Vec::new, |mirror| {
             mirror.events.iter().filter(|event| {
                 matches!(&event.source, SourceRef::Calendar(source) if source.provider == provider && identifiers.contains(&source.calendar_id))
@@ -85,11 +104,13 @@ impl FloeCore {
                 person_id,
                 &CalendarMirror {
                     connection: CalendarConnection {
+                        connection_id,
+                        device_id,
                         disconnected: false,
                         scope,
                         provider,
                         calendars,
-                        revision,
+                        revision: connection_revision,
                         last_success_at: None,
                         last_range: None,
                         error: None,
@@ -381,6 +402,16 @@ impl FloeCore {
             ));
         }
         Ok(mirror)
+    }
+}
+
+fn provider_identifier(provider: CalendarProvider) -> &'static str {
+    match provider {
+        CalendarProvider::Fixture => "fixture",
+        CalendarProvider::EventKit => "event_kit",
+        CalendarProvider::Google => "google",
+        CalendarProvider::Microsoft => "microsoft",
+        CalendarProvider::Android => "android",
     }
 }
 

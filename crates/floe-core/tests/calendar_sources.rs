@@ -313,6 +313,9 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
         .unwrap();
     core.set_calendar_scope(
         person,
+        "00000000-0000-4000-8000-000000000010".into(),
+        old.revision + 1,
+        "fixture-device".into(),
         CalendarProvider::Fixture,
         old.calendars,
         CalendarScope::All,
@@ -337,6 +340,9 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
     assert_eq!(snapshot.items.len(), 2);
     core.set_calendar_scope(
         person,
+        "00000000-0000-4000-8000-000000000010".into(),
+        connection.revision + 1,
+        "fixture-device".into(),
         CalendarProvider::Fixture,
         vec![new_calendar.clone()],
         CalendarScope::Selected,

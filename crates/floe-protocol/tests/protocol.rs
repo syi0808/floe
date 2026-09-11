@@ -51,7 +51,6 @@ fn calendar_access_transport_exposes_only_bounded_aggregate_changes() {
         serde_json::json!({"kind": "set_enabled", "enabled": true}),
         serde_json::json!({
             "kind": "set_scope",
-            "replacement_setup_id": "00000000-0000-4000-8000-000000000003",
             "provider": "event_kit",
             "device_id": "test-device",
             "calendar_ids": ["home", "work"]

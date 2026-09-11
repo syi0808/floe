@@ -95,8 +95,15 @@ fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
     let core = Core::open(&path);
     let now = chrono::Utc::now();
     let day = json!({"date": now.format("%Y-%m-%d").to_string(), "timezone_offset_seconds": 0, "now": now.to_rfc3339()});
-    data(core.call(json!({"schema_version": 1, "person_id": PERSON, "day": day,
-        "command": {"type": "select_calendar", "provider": "event_kit", "calendar_id": "target", "calendar_name": "Fixture · Target"}}), false));
+    data(core.call(
+        json!({"schema_version": 1, "person_id": PERSON, "day": day,
+        "command": {"type": "set_calendar_scope",
+            "connection_id": "00000000-0000-4000-8000-000000000010",
+            "connection_revision": 1, "device_id": "test-device",
+            "provider": "event_kit", "scope": "selected",
+            "calendars": [{"calendar_id": "target", "calendar_name": "Fixture · Target"}]}}),
+        false,
+    ));
     assert_eq!(
         data(core.action(json!({"kind": "capabilities"})))["writes_enabled"],
         true

@@ -108,7 +108,6 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
     assert!(enabled.assignments.iter().all(|entry| entry.enabled));
     assert_eq!(enabled.revision, 2);
 
-    let replacement_setup_id = Uuid::new_v4();
     registry
         .configure_calendar_access(
             person,
@@ -116,7 +115,6 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
                 &registry,
                 setup.setup_id,
                 CalendarAccessChange::SetScope {
-                    replacement_setup_id,
                     provider: CalendarProvider::EventKit,
                     device_id: "test-device".into(),
                     calendar_ids: vec!["shared".into(), "home".into()],
@@ -130,22 +128,18 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
     );
     assert_eq!(
         registry.snapshot().calendar_views[0].calendar_ids,
-        ["home", "work"]
+        ["home", "shared"]
     );
-    assert_eq!(
-        registry.snapshot().revoked_calendar_setups,
-        [setup.setup_id]
-    );
+    assert!(registry.snapshot().revoked_calendar_setups.is_empty());
 
     let before = registry.snapshot();
     let mut invalid = configure(
         &registry,
-        replacement_setup_id,
+        setup.setup_id,
         CalendarAccessChange::SetScope {
-            replacement_setup_id,
             provider: CalendarProvider::Fixture,
             device_id: "test-device".into(),
-            calendar_ids: vec!["other".into()],
+            calendar_ids: vec![],
         },
     );
     assert_eq!(
@@ -163,19 +157,15 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
     registry
         .configure_calendar_access(
             person,
-            &configure(
-                &registry,
-                replacement_setup_id,
-                CalendarAccessChange::Remove {},
-            ),
+            &configure(&registry, setup.setup_id, CalendarAccessChange::Remove {}),
         )
         .unwrap();
     let removed = registry.snapshot();
-    assert_eq!(removed.calendar_setups.len(), 2);
-    assert_eq!(removed.calendar_views.len(), 2);
-    assert_eq!(removed.installations.len(), 4);
-    assert_eq!(removed.assignments.len(), 4);
-    assert_eq!(removed.revoked_calendar_setups.len(), 2);
+    assert_eq!(removed.calendar_setups.len(), 1);
+    assert_eq!(removed.calendar_views.len(), 1);
+    assert_eq!(removed.installations.len(), 2);
+    assert_eq!(removed.assignments.len(), 2);
+    assert_eq!(removed.revoked_calendar_setups.len(), 1);
     let overview = registry.calendar_expert_overview(person);
     assert!(overview.setups.is_empty());
     assert!(overview.views.is_empty());

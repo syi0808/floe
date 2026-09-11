@@ -49,7 +49,6 @@ pub enum CalendarAccessChange {
         enabled: bool,
     },
     SetScope {
-        replacement_setup_id: Uuid,
         provider: CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,
@@ -286,33 +285,22 @@ impl AgentRegistry {
                 }
             }
             CalendarAccessChange::SetScope {
-                replacement_setup_id,
                 provider,
                 device_id,
                 calendar_ids,
             } => {
-                if replacement_setup_id.is_nil()
-                    || *replacement_setup_id == receipt.setup_id
-                    || next
-                        .calendar_setups
-                        .iter()
-                        .any(|entry| entry.setup_id == *replacement_setup_id)
-                {
+                let binding = next
+                    .calendar_views
+                    .iter_mut()
+                    .find(|entry| entry.handle == receipt.view_handle)
+                    .ok_or(AgentFailure::NotFound)?;
+                if binding.provider != *provider {
                     return Err(AgentFailure::InvalidInput);
                 }
-                let replacement = CalendarExpertSetup {
-                    instance_id: configuration.instance_id,
-                    expected_revision: configuration.expected_revision,
-                    setup_id: *replacement_setup_id,
-                    provider: *provider,
-                    device_id: device_id.clone(),
-                    calendar_ids: calendar_ids.clone(),
-                };
-                let mut staged = Self::restore(self.snapshot(), self.instance_id())?;
-                staged.install_calendar_expert(person_id, &replacement)?;
-                next = staged.snapshot();
-                disable_setup(&mut next, &receipt, person_id)?;
-                next.revoked_calendar_setups.push(receipt.setup_id);
+                binding.device_id = device_id.clone();
+                binding.calendar_ids = calendar_ids.clone();
+                binding.calendar_ids.sort();
+                binding.validate()?;
             }
             CalendarAccessChange::Remove {} => {
                 disable_setup(&mut next, &receipt, person_id)?;

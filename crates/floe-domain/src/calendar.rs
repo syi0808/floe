@@ -9,7 +9,9 @@ use crate::{Event, EventSchedule};
 pub enum CalendarProvider {
     Fixture,
     EventKit,
+    #[serde(rename = "google_calendar")]
     Google,
+    #[serde(rename = "microsoft_calendar")]
     Microsoft,
     Android,
 }
@@ -97,6 +99,8 @@ pub enum CalendarScope {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarConnection {
+    pub connection_id: String,
+    pub device_id: String,
     pub disconnected: bool,
     pub scope: CalendarScope,
     pub provider: CalendarProvider,

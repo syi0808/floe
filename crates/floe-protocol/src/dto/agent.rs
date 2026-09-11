@@ -64,7 +64,6 @@ pub enum CalendarAccessChangeDto {
         enabled: bool,
     },
     SetScope {
-        replacement_setup_id: Uuid,
         provider: floe_domain::CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,

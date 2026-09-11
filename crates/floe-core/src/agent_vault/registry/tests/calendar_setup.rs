@@ -54,7 +54,6 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
             .all(|entry| entry.enabled)
     );
 
-    let replacement_setup_id = Uuid::new_v4();
     let changed = fixture
         .vault
         .configure_calendar_access(
@@ -62,7 +61,6 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
                 2,
                 installed.setup.setup_id,
                 CalendarAccessChange::SetScope {
-                    replacement_setup_id,
                     provider: floe_domain::CalendarProvider::EventKit,
                     device_id: "test-device".into(),
                     calendar_ids: vec!["work".into(), "home".into()],
@@ -77,7 +75,7 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
     let removed = fixture
         .vault
         .configure_calendar_access(
-            configuration(3, replacement_setup_id, CalendarAccessChange::Remove {}),
+            configuration(3, installed.setup.setup_id, CalendarAccessChange::Remove {}),
             Cancellation::default(),
         )
         .await

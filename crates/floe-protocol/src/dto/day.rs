@@ -178,6 +178,9 @@ pub enum CommandDto {
         expected_revision: u64,
     },
     SetCalendarScope {
+        connection_id: String,
+        connection_revision: u64,
+        device_id: String,
         provider: floe_domain::CalendarProvider,
         calendars: Vec<floe_domain::CalendarSelection>,
         scope: floe_domain::CalendarScope,
@@ -191,15 +194,6 @@ pub enum CommandDto {
         range: floe_domain::CalendarRange,
         batches: Vec<CalendarBatchDto>,
         occurred_at: String,
-    },
-    SelectCalendars {
-        provider: floe_domain::CalendarProvider,
-        calendars: Vec<floe_domain::CalendarSelection>,
-    },
-    SelectCalendar {
-        provider: floe_domain::CalendarProvider,
-        calendar_id: String,
-        calendar_name: String,
     },
     ImportCalendar {
         expected_revision: u64,

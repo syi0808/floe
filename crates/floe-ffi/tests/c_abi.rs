@@ -433,8 +433,12 @@ fn calendar_decisions_are_person_scoped_durable_and_never_create() {
     data(&core.execute(command(
         &person,
         json!({
-        "type": "select_calendar", "provider": "fixture",
-            "calendar_id": "target", "calendar_name": "Target"
+        "type": "set_calendar_scope",
+            "connection_id": "00000000-0000-4000-8000-000000000010",
+            "connection_revision": 1,
+            "device_id": "fixture-device",
+            "provider": "fixture", "scope": "selected",
+            "calendars": [{"calendar_id": "target", "calendar_name": "Target"}]
         }),
     )));
     let now = chrono::Utc::now();

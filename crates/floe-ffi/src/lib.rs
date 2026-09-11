@@ -523,17 +523,24 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                 .map_err(core_error)?;
         }
         CommandDto::SetCalendarScope {
+            connection_id,
+            connection_revision,
+            device_id,
             provider,
             calendars,
             scope,
         } => {
             handle
                 .runtime
-                .block_on(
-                    handle
-                        .core
-                        .set_calendar_scope(person_id, provider, calendars, scope),
-                )
+                .block_on(handle.core.set_calendar_scope(
+                    person_id,
+                    connection_id,
+                    connection_revision,
+                    device_id,
+                    provider,
+                    calendars,
+                    scope,
+                ))
                 .map_err(core_error)?;
         }
         CommandDto::DiscoverCalendars {
@@ -594,30 +601,6 @@ pub fn execute(handle: &FloeHandle, request: CommandRequestDto) -> BridgeResult<
                     range,
                     batches,
                     parse_time(&occurred_at, "occurred_at")?,
-                ))
-                .map_err(core_error)?;
-        }
-        CommandDto::SelectCalendars {
-            provider,
-            calendars,
-        } => {
-            handle
-                .runtime
-                .block_on(handle.core.select_calendars(person_id, provider, calendars))
-                .map_err(core_error)?;
-        }
-        CommandDto::SelectCalendar {
-            provider,
-            calendar_id,
-            calendar_name,
-        } => {
-            handle
-                .runtime
-                .block_on(handle.core.select_calendar(
-                    person_id,
-                    provider,
-                    calendar_id,
-                    calendar_name,
                 ))
                 .map_err(core_error)?;
         }

@@ -228,9 +228,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::NotFound)?;
         let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
         registry.configure_calendar_access(self.person_id, &configuration)?;
-        self.save_expert_registry_checked(
+        self.save_expert_registry_change_checked(
             configuration.expected_revision,
             &registry.snapshot(),
+            Some(configuration.setup_id),
             || {
                 if cancellation.is_cancelled() {
                     Err(AgentFailure::Cancelled)
@@ -383,6 +384,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         snapshot: &RegistrySnapshot,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
+        self.save_expert_registry_change_checked(expected_revision, snapshot, None, check)
+            .await
+    }
+
+    async fn save_expert_registry_change_checked(
+        &self,
+        expected_revision: u64,
+        snapshot: &RegistrySnapshot,
+        mutable_calendar_setup: Option<uuid::Uuid>,
+        check: impl Fn() -> Result<(), AgentFailure> + Sync,
+    ) -> Result<(), AgentFailure> {
         check()?;
         let payload = self.registry_payload(snapshot)?;
         if expected_revision.checked_add(1) != Some(snapshot.revision) {
@@ -401,6 +413,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if previous.revision != expected_revision {
                 return Err(AgentFailure::Conflict);
             }
+            let mutable_calendar_view = mutable_calendar_setup.and_then(|setup_id| {
+                previous
+                    .calendar_setups
+                    .iter()
+                    .find(|receipt| receipt.setup_id == setup_id)
+                    .map(|receipt| receipt.view_handle)
+            });
             if previous
                 .calendar_setups
                 .iter()
@@ -499,7 +518,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     Some(entry)
                         if entry.person_id == binding.person_id
                             && entry.provider == binding.provider
+                            && entry.device_id == binding.device_id
                             && entry.calendar_ids == binding.calendar_ids => {}
+                    Some(entry)
+                        if mutable_calendar_view == Some(binding.handle)
+                            && entry.person_id == binding.person_id => {}
                     None if !binding.enabled
                         && !previous.assignments.iter().any(|assignment| {
                             assignment.granted_view_handles.contains(&binding.handle)
