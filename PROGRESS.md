@@ -6,27 +6,33 @@
 
 ### S5.5 canonical status reconciliation — 2026-09-11
 
-- The current criterion-by-criterion reconciliation separates implemented code, automated evidence,
-  live evidence and the remaining gate for all 14 criteria. All criteria remain pending, so formal
-  acceptance stays **0/14**.
-- The earlier statement that implementation increments 1–7 were complete records the Work/Life
-  endpoint reached by those code paths; it does not mean the Apple personal-context path, all
-  production Expert assignments or earlier cross-source scenarios are complete.
-- Native-host S5.5 validation follows ADR 0024 without assuming the S8 cross-device relay. See the
-  [canonical S5.5 status matrix](docs/validation/s5-5-status-matrix.md).
+- Apple Contacts, Location/ETA/Weather, derived Health and Screen Time gate packages are integrated
+  into the iOS Runner. Available Apple and Android Personal Views publish through a strict expiring
+  local FFI store; the unentitled Screen Time gate remains typed unavailable, while macOS separately
+  publishes its opt-in public-event Attention heuristic.
+- Schedule and the seven expansion Experts now have production multi-View paths. The expansion
+  Experts are installed as durable enabled assignments whose advertised cards and reads follow
+  person-scoped source grants; unavailable mandatory sources fail typed.
+- Runtime routing now enforces device presence/scope, freshness, transfer class and explicit
+  disagreement. The local FFI store is not cross-device sync: Go Device Gateway, leases, E2E relay
+  and two-device convergence remain S8-only.
+- No qualifying signed Apple/Android physical-device, SaaS live-provider or integrated
+  failure/privacy corpus has been recorded. All 14 criteria remain pending and formal acceptance
+  stays **0/14**. See the [canonical S5.5 status matrix](docs/validation/s5-5-status-matrix.md).
 
-### S5.5 implementation increments 1–7 checkpoint — 2026-09-11
+### Historical S5.5 implementation increments 1–7 checkpoint — 2026-09-11
 
-- The bounded Gmail logistics projection and selected Home Assistant source now complete increment
-  7's implementation path through the merged authenticated `life.logistics` View and isolated,
-  capability-free Life Logistics Expert. Increment 6 is likewise product-wired through the shared
-  Work Context route, including Microsoft Teams.
+- At this checkpoint, the bounded Gmail logistics projection and selected Home Assistant source
+  completed increment 7's implementation path through the merged authenticated `life.logistics`
+  View and isolated, capability-free Life Logistics Expert. Increment 6 was likewise product-wired
+  through the shared Work Context route, including Microsoft Teams.
 - Focused Go connector/console race tests and vet, Rust context/Expert conformance tests and the FFI
   fresh-View delegation integration test pass. The planned implementation order is complete through
   item 7.
-- This does not promote S5.5 acceptance: live Microsoft Teams and Home Assistant provider evidence,
-  durable registry assignment and increment 8's failure/privacy scenarios remain. The slice stays
-  **0/14**. [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+- At that checkpoint this did not promote S5.5 acceptance: live Microsoft Teams and Home Assistant
+  provider evidence, durable registry assignment and increment 8's failure/privacy scenarios
+  remained. Later implementation status is reconciled in the canonical section above. The slice
+  stayed **0/14**. [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
 
 ### S5.5 Microsoft Teams product route — 2026-09-11
 
@@ -781,7 +787,7 @@ verified criteria, not estimated implementation percentages.
 | S3 — Approved action | Integrated; validating | Signed-app approval/create/collection/restart; real response-loss recovery and exact cleanup | 2/5 | S1 Verified; live rejection/blocking/failure matrix; dogfood | Complete remaining acceptance matrix |
 | S4 — Connected Agent/Experts | Implementing | Encrypted sample and Calendar-scoped panels; Calendar consent/sessions/Core turns; saved proposal cards/S3 review | 0/14 | S3 Accepted; live key/model/source and privacy gates | Validate a live on-device Calendar conversation |
 | S5 — Memory/self-improvement | Planned; foundations started | Encrypted Session Archive plus staged Memory candidate/revision ledger fixtures | 0/6 | S4 Accepted; P0-D corpus; P0-F local vault/key | Review, reuse and roll back one Memory and Playbook change |
-| S5.5 — Connected domains | Implementing; reconciled | [Code/evidence matrix](docs/validation/s5-5-status-matrix.md); Work/Life synthetic E2E paths | 0/14 | S5 Accepted; Apple personal cohort; durable Expert assignment; live providers; failure/privacy corpus | Complete one native-host personal-context scenario |
+| S5.5 — Connected domains | Implementing; reconciled | [Code/evidence matrix](docs/validation/s5-5-status-matrix.md); native Personal and all durable Expert synthetic paths | 0/14 | S5 Accepted; signed physical-device/provider evidence; supported-or-typed-unavailable Screen Time gate; failure/privacy corpus | Complete one signed native-host personal-context scenario |
 | S6 — Transcription/voice | Planned | None | 0/5 | S5.5 Accepted; streaming/recording STT/TTS PoC | Continue Agent chat by voice and review one source-linked transcript |
 | S7 — Local wake-up | Planned | None | 0/4 | S6 Accepted; resident wake lifecycle | Wake phrase opens a visible local voice session |
 | S8 — Cross-device/server | Planned | None | 0/4 | S7 Accepted; sync/security PoCs | Same result on two devices |
