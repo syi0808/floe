@@ -21,12 +21,12 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
+    final device = await LocalDeviceIdentity.openDefault();
     final gateway = await FfiDayGateway.openDefault(
       calendarAdapter: androidNative == null
-          ? const EventKitCalendarAdapter()
+          ? EventKitCalendarAdapter(deviceId: device.id)
           : AndroidCalendarAdapter(androidNative),
     );
-    final device = await LocalDeviceIdentity.openDefault();
     Timer? macOSContextRefresh;
     final appleContext = Platform.isIOS
         ? PublishingAppleContextGateway(

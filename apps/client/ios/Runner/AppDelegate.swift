@@ -5,6 +5,7 @@ import UIKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var appleContextChannel: AppleContextChannel?
   private var unavailableAppleContextChannel: FlutterMethodChannel?
+  private var calendarChannel: CalendarChannel?
 
   override func application(
     _ application: UIApplication,
@@ -16,6 +17,7 @@ import UIKit
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "FloeAppleContext") {
+      calendarChannel = CalendarChannel(messenger: registrar.messenger())
       do {
         appleContextChannel = try AppleContextChannel(messenger: registrar.messenger())
       } catch {

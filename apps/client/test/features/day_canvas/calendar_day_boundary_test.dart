@@ -60,4 +60,29 @@ void main() {
       expect(calls.last.arguments, {'request_access': false});
     },
   );
+  test('EventKit preserves the native provider identity', () async {
+    final calls = <MethodCall>[];
+    const channel = MethodChannel('floe/calendar');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return <Object>[
+            {'id': 'primary', 'name': 'iCloud · Home', 'provider': 'event_kit'},
+          ];
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    final calendars = await const EventKitCalendarAdapter(
+      deviceId: 'local-device-1',
+    ).calendars();
+
+    expect(calendars.single.provider, 'event_kit');
+    expect(calls.single.arguments, {
+      'device_id': 'local-device-1',
+      'request_access': true,
+    });
+  });
 }

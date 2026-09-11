@@ -29,18 +29,28 @@ abstract interface class CalendarAdapter {
 }
 
 final class EventKitCalendarAdapter implements CalendarAdapter {
-  const EventKitCalendarAdapter();
+  const EventKitCalendarAdapter({String? deviceId}) : _deviceId = deviceId;
   static const _channel = MethodChannel('floe/calendar');
+  final String? _deviceId;
+
+  Map<String, Object> _arguments([Map<String, Object>? values]) => {
+    if (_deviceId != null) 'device_id': _deviceId,
+    ...?values,
+  };
 
   @override
   Future<List<CalendarChoice>> calendars({bool requestAccess = true}) async {
-    final values = await _channel.invokeListMethod<dynamic>('calendars', {
-      'request_access': requestAccess,
-    });
+    final values = await _channel.invokeListMethod<dynamic>(
+      'calendars',
+      _arguments({'request_access': requestAccess}),
+    );
     return values!
         .map(
-          (value) =>
-              CalendarChoice(value['id'] as String, value['name'] as String),
+          (value) => CalendarChoice(
+            value['id'] as String,
+            value['name'] as String,
+            provider: value['provider'] as String? ?? 'event_kit',
+          ),
         )
         .toList();
   }
@@ -50,11 +60,14 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
     String calendarId,
     DayQuery query,
   ) async {
-    final values = await _channel.invokeListMethod<dynamic>('read', {
-      'calendar_id': calendarId,
-      'starts_at': query.startsAt.toIso8601String(),
-      'ends_at': query.endsAt.toIso8601String(),
-    });
+    final values = await _channel.invokeListMethod<dynamic>(
+      'read',
+      _arguments({
+        'calendar_id': calendarId,
+        'starts_at': query.startsAt.toIso8601String(),
+        'ends_at': query.endsAt.toIso8601String(),
+      }),
+    );
     return values!
         .map(
           (value) => Map<String, dynamic>.from(
@@ -65,5 +78,6 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
   }
 
   @override
-  Future<void> openSettings() => _channel.invokeMethod<void>('settings');
+  Future<void> openSettings() =>
+      _channel.invokeMethod<void>('settings', _arguments());
 }

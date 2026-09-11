@@ -28,6 +28,10 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>Floe uses contacts you allow to resolve people in private, on-device context.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Floe reads calendars you select to show your day and prepare scheduling suggestions on this device.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Floe reads calendars you select to show your day and prepare scheduling suggestions on this device.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Floe reads selected health data to derive a short-lived capacity and recovery summary on this device.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
