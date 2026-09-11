@@ -80,6 +80,8 @@ pub struct LogicalViewRoutingPolicy {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextRoutingRuntime {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer_device_id: Option<String>,
     #[serde(default)]
     pub devices: Vec<RuntimeDeviceState>,
     #[serde(default)]
@@ -143,12 +145,13 @@ pub fn route_logical_views(
     provider_priority: &[String],
     now_unix_ms: u64,
 ) -> ContextRouteResult {
-    route_logical_views_with_runtime(
+    route_logical_views_inner(
         routes,
         snapshots,
         provider_priority,
         now_unix_ms,
         &ContextRoutingRuntime::default(),
+        false,
     )
 }
 
@@ -158,6 +161,24 @@ pub fn route_logical_views_with_runtime(
     provider_priority: &[String],
     now_unix_ms: u64,
     runtime: &ContextRoutingRuntime,
+) -> ContextRouteResult {
+    route_logical_views_inner(
+        routes,
+        snapshots,
+        provider_priority,
+        now_unix_ms,
+        runtime,
+        true,
+    )
+}
+
+fn route_logical_views_inner(
+    routes: &[LogicalViewRoute],
+    snapshots: &[ConnectorSnapshot],
+    provider_priority: &[String],
+    now_unix_ms: u64,
+    runtime: &ContextRoutingRuntime,
+    enforce_runtime_policy: bool,
 ) -> ContextRouteResult {
     let priorities: BTreeMap<_, _> = provider_priority
         .iter()
@@ -212,22 +233,35 @@ pub fn route_logical_views_with_runtime(
             .iter()
             .find(|source| source.connector_id == route.connector_id)
             .map(|source| source.transfer);
-        if policy.is_some_and(|policy| {
-            !policy.allowed_transfers.is_empty()
-                && transfer.is_none_or(|transfer| !policy.allowed_transfers.contains(&transfer))
-        }) {
-            continue;
-        }
         let producer_device_id = match &snapshot.descriptor.execution {
             crate::ExecutionLocation::Device { device_id } => Some(device_id.clone()),
             crate::ExecutionLocation::Server => None,
         };
+        let local_device_source = producer_device_id.as_deref()
+            == runtime.consumer_device_id.as_deref()
+            && producer_device_id.is_some();
+        if enforce_runtime_policy
+            && producer_device_id.is_some()
+            && !local_device_source
+            && (policy.is_none()
+                || transfer.is_none()
+                || policy.is_some_and(|policy| {
+                    policy.allowed_transfers.is_empty()
+                        || transfer.is_none_or(|transfer| {
+                            !policy.allowed_transfers.contains(&transfer)
+                                || transfer == ContextTransferClass::DeviceOnly
+                        })
+                }))
+        {
+            continue;
+        }
         let Some((availability, device_rank)) = route_device(
             policy.map(|policy| &policy.device_scope),
             producer_device_id.as_deref(),
             transfer,
             runtime,
             now_unix_ms,
+            enforce_runtime_policy,
         ) else {
             continue;
         };
@@ -329,15 +363,20 @@ fn route_device(
     transfer: Option<ContextTransferClass>,
     runtime: &ContextRoutingRuntime,
     now_unix_ms: u64,
+    enforce_runtime_policy: bool,
 ) -> Option<(RoutedAvailability, usize)> {
-    let Some(scope) = scope.filter(|scope| !matches!(scope, DeviceScope::Any)) else {
-        return Some((RoutedAvailability::Fresh, 0));
+    let scope = scope.unwrap_or(&DeviceScope::Any);
+    let Some(device_id) = producer_device_id else {
+        return matches!(scope, DeviceScope::Any).then_some((RoutedAvailability::Fresh, 0));
     };
-    let device_id = producer_device_id?;
     let device = runtime
         .devices
         .iter()
-        .find(|device| device.device_id == device_id)?;
+        .find(|device| device.device_id == device_id);
+    if matches!(scope, DeviceScope::Any) && device.is_none() && !enforce_runtime_policy {
+        return Some((RoutedAvailability::Fresh, 0));
+    }
+    let device = device?;
     let present = device.presence == DevicePresence::Present
         && device.presence_expires_at_unix_ms > now_unix_ms;
     let rank = match scope {

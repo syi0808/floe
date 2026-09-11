@@ -109,6 +109,7 @@ fn runtime(
     policies: Vec<LogicalViewRoutingPolicy>,
 ) -> ContextRoutingRuntime {
     ContextRoutingRuntime {
+        consumer_device_id: Some("consumer".into()),
         devices,
         sources: sources
             .iter()
@@ -294,7 +295,7 @@ fn location_uses_the_present_invoking_mobile_instead_of_the_newest_device() {
         route_view("current-location", "location.tablet", "location.current"),
         route_view("current-location", "location.desktop", "location.current"),
     ];
-    let runtime = runtime(
+    let mut runtime = runtime(
         vec![
             device("phone", DeviceClass::Mobile, true, true),
             device("tablet", DeviceClass::Mobile, true, false),
@@ -311,6 +312,7 @@ fn location_uses_the_present_invoking_mobile_instead_of_the_newest_device() {
             allowed_transfers: vec![],
         }],
     );
+    runtime.consumer_device_id = Some("phone".into());
 
     let result =
         route_logical_views_with_runtime(&routes, &[tablet, desktop, phone], &[], NOW, &runtime);
@@ -341,7 +343,7 @@ fn attention_stays_on_the_interaction_device_instead_of_becoming_person_global()
         route_view("current-attention", "attention.phone", "attention.coarse"),
         route_view("current-attention", "attention.desktop", "attention.coarse"),
     ];
-    let runtime = runtime(
+    let mut runtime = runtime(
         vec![
             device("phone", DeviceClass::Mobile, true, true),
             device("desktop", DeviceClass::Desktop, true, true),
@@ -357,6 +359,7 @@ fn attention_stays_on_the_interaction_device_instead_of_becoming_person_global()
             allowed_transfers: vec![],
         }],
     );
+    runtime.consumer_device_id = Some("desktop".into());
 
     let result = route_logical_views_with_runtime(&routes, &[phone, desktop], &[], NOW, &runtime);
 
@@ -390,7 +393,7 @@ fn stale_and_device_only_offline_context_fail_closed_but_relay_cache_is_degraded
             active_desktop_device_id: None,
         },
         max_age_ms: Some(120_000),
-        allowed_transfers: vec![],
+        allowed_transfers: vec![ContextTransferClass::OpaqueRelay],
     };
     let routes = [
         route_view("current-attention", "attention.stale", "attention.coarse"),
@@ -429,6 +432,116 @@ fn stale_and_device_only_offline_context_fail_closed_but_relay_cache_is_degraded
         RoutedAvailability::DegradedOfflineCache
     );
     assert_eq!(result.selected[0].view.source_handle, "attention:offline");
+}
+
+#[test]
+fn any_scope_labels_offline_device_cache_without_degrading_server_sources() {
+    let device_source = device_snapshot(
+        "calendar.device",
+        "tablet",
+        "calendar.timeline",
+        NOW - 100,
+        "calendar:device",
+    );
+    let server_source = snapshot(
+        "calendar.server",
+        "google_calendar",
+        ConnectionState::Ready,
+        NOW - 1_000,
+        "calendar:server",
+    );
+    let policy = LogicalViewRoutingPolicy {
+        logical_source_id: "personal-calendar".into(),
+        device_scope: DeviceScope::Any,
+        max_age_ms: Some(300_000),
+        allowed_transfers: vec![ContextTransferClass::EncryptedDerivedSync],
+    };
+    let runtime = runtime(
+        vec![device("tablet", DeviceClass::Mobile, false, true)],
+        &[(
+            "calendar.device",
+            ContextTransferClass::EncryptedDerivedSync,
+        )],
+        vec![policy],
+    );
+    let device_route = route_view("personal-calendar", "calendar.device", "calendar.timeline");
+    let server_route = route("personal-calendar", "calendar.server");
+
+    let cached = route_logical_views_with_runtime(
+        std::slice::from_ref(&device_route),
+        std::slice::from_ref(&device_source),
+        &[],
+        NOW,
+        &runtime,
+    );
+    assert_eq!(
+        cached.selected[0].availability,
+        RoutedAvailability::DegradedOfflineCache
+    );
+
+    let result = route_logical_views_with_runtime(
+        &[device_route, server_route],
+        &[device_source, server_source],
+        &[],
+        NOW,
+        &runtime,
+    );
+    assert_eq!(result.selected[0].connector_id, "calendar.server");
+    assert_eq!(result.selected[0].availability, RoutedAvailability::Fresh);
+}
+
+#[test]
+fn cross_device_route_requires_declared_transfer_and_allowlist() {
+    let device_source = device_snapshot(
+        "attention.tablet",
+        "tablet",
+        "attention.coarse",
+        NOW - 1_000,
+        "attention:tablet",
+    );
+    let route = route_view("current-attention", "attention.tablet", "attention.coarse");
+    let policy = LogicalViewRoutingPolicy {
+        logical_source_id: "current-attention".into(),
+        device_scope: DeviceScope::Any,
+        max_age_ms: Some(120_000),
+        allowed_transfers: vec![ContextTransferClass::OpaqueRelay],
+    };
+    let missing_policy = runtime(
+        vec![device("tablet", DeviceClass::Mobile, true, true)],
+        &[("attention.tablet", ContextTransferClass::OpaqueRelay)],
+        vec![],
+    );
+    let result = route_logical_views_with_runtime(
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&device_source),
+        &[],
+        NOW,
+        &missing_policy,
+    );
+    assert!(result.selected.is_empty());
+
+    let missing_transfer = runtime(
+        vec![device("tablet", DeviceClass::Mobile, true, true)],
+        &[],
+        vec![policy.clone()],
+    );
+    let result = route_logical_views_with_runtime(
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&device_source),
+        &[],
+        NOW,
+        &missing_transfer,
+    );
+    assert!(result.selected.is_empty());
+
+    let disallowed = runtime(
+        vec![device("tablet", DeviceClass::Mobile, true, true)],
+        &[("attention.tablet", ContextTransferClass::DeviceOnly)],
+        vec![policy],
+    );
+    let result =
+        route_logical_views_with_runtime(&[route], &[device_source], &[], NOW, &disallowed);
+    assert!(result.selected.is_empty());
 }
 
 #[test]

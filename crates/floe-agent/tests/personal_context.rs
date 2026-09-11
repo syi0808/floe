@@ -109,7 +109,7 @@ fn bounded_personal_views_expose_derived_context_without_raw_source_data() {
         view_id: "attention.coarse".into(),
         source_handle: "attention:fixture".into(),
         observed_at_unix_ms: NOW,
-        expires_at_unix_ms: NOW + 300_000,
+        expires_at_unix_ms: NOW + 120_000,
         state: AttentionState::Focused,
         confidence_millis: 800,
         evidence_handles: vec!["attention:aggregate".into()],

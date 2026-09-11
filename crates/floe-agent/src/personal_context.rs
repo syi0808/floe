@@ -7,7 +7,10 @@ pub const FEASIBILITY_VIEW_ID: &str = "schedule.feasibility";
 pub const ATTENTION_VIEW_ID: &str = "attention.coarse";
 pub const WELLBEING_VIEW_ID: &str = "wellbeing.derived";
 pub const MAX_PERSONAL_CONTEXT_BYTES: usize = 32_768;
-const MAX_FRESHNESS_MS: i64 = 300_000;
+const PEOPLE_MAX_LIFETIME_MS: i64 = 300_000;
+const FEASIBILITY_MAX_LIFETIME_MS: i64 = 300_000;
+const ATTENTION_MAX_LIFETIME_MS: i64 = 120_000;
+const WELLBEING_MAX_LIFETIME_MS: i64 = 1_800_000;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -152,7 +155,7 @@ projection!(AttentionView);
 projection!(WellbeingView);
 
 pub fn validate_people_view(view: &PeopleView, now_unix_ms: i64) -> Result<(), AgentFailure> {
-    validate_envelope(view, PEOPLE_VIEW_ID, now_unix_ms)?;
+    validate_envelope(view, PEOPLE_VIEW_ID, now_unix_ms, PEOPLE_MAX_LIFETIME_MS)?;
     if view.identities.len() > 64 {
         return Err(AgentFailure::BudgetExceeded);
     }
@@ -187,7 +190,12 @@ pub fn validate_feasibility_view(
     view: &FeasibilityView,
     now_unix_ms: i64,
 ) -> Result<(), AgentFailure> {
-    validate_envelope(view, FEASIBILITY_VIEW_ID, now_unix_ms)?;
+    validate_envelope(
+        view,
+        FEASIBILITY_VIEW_ID,
+        now_unix_ms,
+        FEASIBILITY_MAX_LIFETIME_MS,
+    )?;
     if view.items.len() > 16 {
         return Err(AgentFailure::BudgetExceeded);
     }
@@ -214,7 +222,12 @@ pub fn validate_feasibility_view(
 }
 
 pub fn validate_attention_view(view: &AttentionView, now_unix_ms: i64) -> Result<(), AgentFailure> {
-    validate_envelope(view, ATTENTION_VIEW_ID, now_unix_ms)?;
+    validate_envelope(
+        view,
+        ATTENTION_VIEW_ID,
+        now_unix_ms,
+        ATTENTION_MAX_LIFETIME_MS,
+    )?;
     validate_derived(
         view.confidence_millis,
         &view.evidence_handles,
@@ -224,7 +237,12 @@ pub fn validate_attention_view(view: &AttentionView, now_unix_ms: i64) -> Result
 }
 
 pub fn validate_wellbeing_view(view: &WellbeingView, now_unix_ms: i64) -> Result<(), AgentFailure> {
-    validate_envelope(view, WELLBEING_VIEW_ID, now_unix_ms)?;
+    validate_envelope(
+        view,
+        WELLBEING_VIEW_ID,
+        now_unix_ms,
+        WELLBEING_MAX_LIFETIME_MS,
+    )?;
     validate_derived(
         view.confidence_millis,
         &view.evidence_handles,
@@ -250,6 +268,7 @@ fn validate_envelope(
     view: &impl PersonalContextProjection,
     expected_view_id: &str,
     now_unix_ms: i64,
+    max_lifetime_ms: i64,
 ) -> Result<(), AgentFailure> {
     if view.schema_version() != AGENT_VERSION
         || view.view_id() != expected_view_id
@@ -257,7 +276,7 @@ fn validate_envelope(
         || view.observed_at_unix_ms() > now_unix_ms
         || view.expires_at_unix_ms() <= now_unix_ms
         || view.expires_at_unix_ms() <= view.observed_at_unix_ms()
-        || view.expires_at_unix_ms() - view.observed_at_unix_ms() > MAX_FRESHNESS_MS
+        || view.expires_at_unix_ms() - view.observed_at_unix_ms() > max_lifetime_ms
     {
         Err(AgentFailure::InvalidInput)
     } else {
