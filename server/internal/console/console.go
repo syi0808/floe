@@ -176,6 +176,7 @@ type Console struct {
 	connectorAttempts                            map[string]*connectorAttempt
 	connectorLifecycleMu                         sync.Mutex
 	connectorLifecycles                          map[string]*sync.Mutex
+	connectorReservations                        map[string]connectionRecord
 }
 
 func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
@@ -297,7 +298,7 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if err != nil {
 		return nil, err
 	}
-	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}}
+	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
 	console.rebuild()
 	if err := console.rebuildConnectorRuntimes(); err != nil {
 		return nil, errors.New("invalid connector configuration")
@@ -956,7 +957,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		if console.pair != nil && console.pair.ID == input.ID {
 			console.pair = nil
 		}
-		if err := console.retryPersonCleanupLocked(removed.PersonID); err != nil {
+		if err := console.retryPersonCleanupLocked(removed.PersonID); err != nil && !errors.Is(err, errConnectorLifecycleInProgress) {
 			failure(writer, 500, "connection_cleanup_pending")
 			return
 		}

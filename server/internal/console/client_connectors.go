@@ -543,30 +543,54 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		failure(writer, http.StatusInternalServerError, "save_failed")
 		return
 	}
+	console.connectorReservations[record.ConnectionID] = record
 	for identifier, attempt := range console.connectorAttempts {
 		if attempt.ConnectionID == record.ConnectionID {
 			delete(console.connectorAttempts, identifier)
 		}
 	}
 	console.mu.Unlock()
+	runtimeComplete := runtime == nil
 	if runtime != nil {
 		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		_, _ = runtime.Action(ctx, "logout")
+		_, err := runtime.Action(ctx, "logout")
+		runtimeComplete = err == nil
 		cancel()
 	}
-	if credentialName != "" && console.vault.Delete(credentialName) != nil {
-		console.mu.Lock()
-		if console.connectionCredentialReady(record) {
-			console.state = previous
-			if console.save(console.state) == nil {
-				_ = console.rebuildConnectorRuntimes()
+	vaultComplete := credentialName == ""
+	if !vaultComplete {
+		vaultComplete = console.vault.Delete(credentialName) == nil
+	}
+	console.mu.Lock()
+	delete(console.connectorReservations, record.ConnectionID)
+	cleanupErr := console.completeReservedCleanupLocked(record, runtimeComplete, vaultComplete)
+	if !vaultComplete && cleanupErr == nil {
+		if _, cleanupPending := console.state.Cleanups[record.PersonID]; !cleanupPending && console.personHasClientLocked(record.PersonID) && console.connectionCredentialReady(record) {
+			if _, exists := console.state.Connections[record.ConnectionID]; !exists {
+				next := cloneState(console.state)
+				next.Connections[record.ConnectionID] = record
+				if console.save(next) == nil {
+					console.state = next
+					_ = console.rebuildConnectorRuntimes()
+				}
 			}
 		}
-		console.mu.Unlock()
+	}
+	console.mu.Unlock()
+	if !vaultComplete || cleanupErr != nil {
 		failure(writer, http.StatusInternalServerError, "credential_cleanup_failed")
 		return
 	}
 	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "disconnected": true})
+}
+
+func (console *Console) personHasClientLocked(personID string) bool {
+	for _, client := range console.state.Clients {
+		if client.PersonID == personID {
+			return true
+		}
+	}
+	return false
 }
 
 func oauthActionStatus(value any) (string, string, bool) {

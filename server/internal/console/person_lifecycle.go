@@ -3,8 +3,11 @@ package console
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 )
+
+var errConnectorLifecycleInProgress = errors.New("connector lifecycle in progress")
 
 func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) error {
 	for _, client := range state.Clients {
@@ -49,6 +52,17 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
 		delete(console.connectorAttempts, attemptID)
 	}
+	for _, record := range console.connectorReservations {
+		if record.PersonID == personID {
+			appendStep(record.ConnectionID, record.ConnectorID, record.Credential)
+		}
+	}
+	sort.Slice(cleanup.Connections, func(left, right int) bool {
+		if cleanup.Connections[left].ConnectorID == cleanup.Connections[right].ConnectorID {
+			return cleanup.Connections[left].ConnectionID < cleanup.Connections[right].ConnectionID
+		}
+		return cleanup.Connections[left].ConnectorID < cleanup.Connections[right].ConnectorID
+	})
 	if len(cleanup.Connections) != 0 {
 		state.Cleanups[personID] = cleanup
 	}
@@ -63,6 +77,10 @@ func (console *Console) retryPersonCleanupLocked(personID string) error {
 	var cleanupErrors []error
 	for index := range cleanup.Connections {
 		step := cleanup.Connections[index]
+		if _, reserved := console.connectorReservations[step.ConnectionID]; reserved {
+			cleanupErrors = append(cleanupErrors, errConnectorLifecycleInProgress)
+			continue
+		}
 		if !step.RuntimeComplete {
 			definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
 			if !exists || definition.OAuthRuntime == nil || definition.OAuthRuntime(console) == nil {
@@ -101,6 +119,44 @@ func (console *Console) retryPersonCleanupLocked(personID string) error {
 	}
 	next := cloneState(console.state)
 	delete(next.Cleanups, personID)
+	if err := console.save(next); err != nil {
+		return err
+	}
+	console.state = next
+	return nil
+}
+
+func (console *Console) completeReservedCleanupLocked(record connectionRecord, runtimeComplete, vaultComplete bool) error {
+	cleanup, exists := console.state.Cleanups[record.PersonID]
+	if !exists {
+		return nil
+	}
+	found := false
+	for index := range cleanup.Connections {
+		if cleanup.Connections[index].ConnectionID != record.ConnectionID {
+			continue
+		}
+		cleanup.Connections[index].RuntimeComplete = cleanup.Connections[index].RuntimeComplete || runtimeComplete
+		cleanup.Connections[index].VaultComplete = cleanup.Connections[index].VaultComplete || vaultComplete
+		found = true
+		break
+	}
+	if !found {
+		return nil
+	}
+	complete := true
+	for _, step := range cleanup.Connections {
+		if !step.RuntimeComplete || !step.VaultComplete {
+			complete = false
+			break
+		}
+	}
+	next := cloneState(console.state)
+	if complete {
+		delete(next.Cleanups, record.PersonID)
+	} else {
+		next.Cleanups[record.PersonID] = cleanup
+	}
 	if err := console.save(next); err != nil {
 		return err
 	}
