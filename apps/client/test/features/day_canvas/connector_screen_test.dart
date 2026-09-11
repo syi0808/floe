@@ -563,14 +563,14 @@ final class _CatalogClient extends LocalServerClient {
       ServerConnector(
         id: 'github.issues',
         name: 'GitHub Issues',
-        authKind: 'secret',
+        authKind: 'oauth_pkce',
         available: true,
         status: ServerConnectorStatus.available,
         requiredScopes: ['github.issues.read'],
         scopeFields: ['owner', 'repository'],
         capabilities: ServerConnectorCapabilities(
           connect: true,
-          cancel: false,
+          cancel: true,
           disconnect: true,
           scopeUpdate: true,
         ),

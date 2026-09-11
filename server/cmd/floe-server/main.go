@@ -22,6 +22,7 @@ import (
 	"floe/server/internal/googleauth"
 	"floe/server/internal/inference"
 	"floe/server/internal/microsoftauth"
+	"floe/server/internal/workoauth"
 )
 
 func main() {
@@ -45,6 +46,20 @@ func main() {
 		management, err := console.New(directory, address, vault, runtime)
 		if err != nil {
 			log.Fatal("Cannot start local console: check private data directory and loopback address")
+		}
+		if clientID := os.Getenv("FLOE_GITHUB_OAUTH_CLIENT_ID"); clientID != "" {
+			githubAuth, authError := workoauth.NewGitHub(vault, workoauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GITHUB_OAUTH_CLIENT_SECRET")})
+			if authError != nil || management.SetGitHubAuth(githubAuth) != nil {
+				log.Fatal("Cannot configure GitHub OAuth")
+			}
+			defer githubAuth.Close()
+		}
+		if clientID := os.Getenv("FLOE_SLACK_OAUTH_CLIENT_ID"); clientID != "" {
+			slackAuth, authError := workoauth.NewSlack(vault, workoauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_SLACK_OAUTH_CLIENT_SECRET")})
+			if authError != nil || management.SetSlackAuth(slackAuth) != nil {
+				log.Fatal("Cannot configure Slack OAuth")
+			}
+			defer slackAuth.Close()
 		}
 		if clientID := os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_ID"); clientID != "" {
 			googleConfig := googleauth.Config{ClientID: clientID, ClientSecret: os.Getenv("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}

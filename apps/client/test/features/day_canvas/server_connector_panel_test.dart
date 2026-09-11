@@ -33,13 +33,13 @@ void main() {
       _host(
         ServerConnectorPanel(
           connector: const ServerConnector(
-            id: 'github.issues',
-            name: 'GitHub Issues',
+            id: 'home_assistant.states',
+            name: 'Home Assistant',
             authKind: 'secret',
             available: true,
             status: ServerConnectorStatus.available,
-            requiredScopes: ['github.issues.read'],
-            scopeFields: ['owner', 'repository'],
+            requiredScopes: ['home.states.read'],
+            scopeFields: ['base_url', 'entities'],
             capabilities: _capabilities,
             scope: {},
           ),
@@ -51,12 +51,12 @@ void main() {
       ),
     );
     await tester.enterText(
-      find.byKey(const Key('connector-scope-owner')),
-      'floe',
+      find.byKey(const Key('connector-scope-base_url')),
+      'https://home.example.test',
     );
     await tester.enterText(
-      find.byKey(const Key('connector-scope-repository')),
-      'client',
+      find.byKey(const Key('connector-scope-entities')),
+      'sensor.office, light.desk',
     );
     await tester.enterText(
       find.byKey(const Key('connector-secret')),
@@ -65,7 +65,10 @@ void main() {
     await tester.tap(find.text('Connect securely'));
     await tester.pumpAndSettle();
     expect(client.receivedSecret, 'one-shot-secret');
-    expect(client.receivedScope, {'owner': 'floe', 'repository': 'client'});
+    expect(client.receivedScope, {
+      'base_url': 'https://home.example.test',
+      'entities': ['sensor.office', 'light.desk'],
+    });
     expect(changed, 1);
     expect(find.byKey(const Key('connector-secret')), findsNothing);
     expect(find.text('one-shot-secret'), findsNothing);

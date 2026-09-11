@@ -252,6 +252,11 @@ func setup(test *testing.T) *fixture {
 	if err != nil {
 		test.Fatal(err)
 	}
+	github := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
+	slack := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
+	if management.SetGitHubAuth(github) != nil || management.SetSlackAuth(slack) != nil {
+		test.Fatal("could not configure fixture OAuth runtimes")
+	}
 	fixture := &fixture{console: management, vault: vault, test: test}
 	secret, _ := os.ReadFile(filepath.Join(management.directory, "admin-token"))
 	response := fixture.call("POST", "/manage/api/login", map[string]string{"token": string(secret)}, "")
@@ -306,6 +311,11 @@ func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testin
 }
 
 func (fixture *fixture) call(method, path string, body any, token string) *httptest.ResponseRecorder {
+	if method == http.MethodPost && (path == "/v1/connectors/github.issues/connect" || path == "/v1/connectors/slack.conversations/connect") {
+		if values, ok := body.(map[string]any); ok {
+			delete(values, "secret")
+		}
+	}
 	encoded, _ := json.Marshal(body)
 	request := httptest.NewRequest(method, "http://127.0.0.1:8431"+path, bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json; charset=utf-8")

@@ -48,7 +48,10 @@ func (console *Console) rebuildConnectorRuntime(connection connectionRecord) err
 	scope := connection.Scope
 	switch connection.ConnectorID {
 	case "github.issues":
-		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: connection.Credential})
+		if console.githubAuth == nil {
+			return nil
+		}
+		client, err := githubconnector.New(console.githubAuth)
 		if err != nil {
 			return err
 		}
@@ -58,7 +61,10 @@ func (console *Console) rebuildConnectorRuntime(connection connectionRecord) err
 		}
 		return err
 	case "slack.conversations":
-		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: connection.Credential})
+		if console.slackAuth == nil {
+			return nil
+		}
+		client, err := slackconnector.New(console.slackAuth)
 		if err != nil {
 			return err
 		}

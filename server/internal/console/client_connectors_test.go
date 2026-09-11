@@ -23,6 +23,7 @@ type clientOAuthRuntime struct {
 	vault      Vault
 	failures   map[string]error
 	bindError  error
+	instant    bool
 }
 
 type blockingLogoutRuntime struct {
@@ -516,7 +517,14 @@ func (runtime *clientOAuthRuntime) Action(_ context.Context, action string) (any
 	}
 	switch action {
 	case "login":
-		runtime.status = "pending"
+		if runtime.instant {
+			runtime.status = "connected"
+			if runtime.vault != nil {
+				_ = runtime.vault.Put(runtime.credential, `{"access_token":"fixture"}`)
+			}
+		} else {
+			runtime.status = "pending"
+		}
 	case "cancel":
 		runtime.status = "disconnected"
 	case "logout":
@@ -554,8 +562,11 @@ func TestPairedConnectorCatalogIncludesDisconnectedAndUnavailableProviders(test 
 		connector := item.(map[string]any)
 		byID[connector["id"].(string)] = connector
 	}
-	if byID["github.issues"]["status"] != "disconnected" || byID["github.issues"]["available"] != true {
-		test.Fatalf("PAT connector missing from catalog: %#v", byID["github.issues"])
+	if byID["github.issues"]["status"] != "disconnected" || byID["github.issues"]["available"] != true || byID["github.issues"]["auth_kind"] != "oauth_pkce" {
+		test.Fatalf("GitHub OAuth connector missing from catalog: %#v", byID["github.issues"])
+	}
+	if byID["slack.conversations"]["status"] != "disconnected" || byID["slack.conversations"]["available"] != true || byID["slack.conversations"]["auth_kind"] != "oauth_pkce" {
+		test.Fatalf("Slack OAuth connector missing from catalog: %#v", byID["slack.conversations"])
 	}
 	if byID["gmail"]["status"] != "unavailable" || byID["gmail"]["available"] != false {
 		test.Fatalf("unconfigured OAuth connector not explicit: %#v", byID["gmail"])
@@ -650,13 +661,11 @@ func TestOAuthAttemptSaveFailureDoesNotStartLogin(test *testing.T) {
 	}
 }
 
-func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing.T) {
+func TestPairedGitHubOAuthUsesScopedVaultAndNeverEchoesCredential(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	secret := "private-github-pat"
 	response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
 		"schema_version": 1,
-		"secret":         secret,
 		"scope":          map[string]any{"owner": "floe", "repository": "product"},
 	}, token)
 	if response.Code != http.StatusCreated {
@@ -664,8 +673,8 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	}
 	started := createdValue(test, strings.NewReader(response.Body.String()))
 	encoded, _ := json.Marshal(started)
-	if started["status"] != "connected" || strings.Contains(string(encoded), secret) {
-		test.Fatalf("secret connection response: %s", encoded)
+	if started["status"] != "connected" || strings.Contains(string(encoded), "access_token") {
+		test.Fatalf("OAuth connection response: %s", encoded)
 	}
 	connectionID := started["connection_id"].(string)
 	if len(connectionID) != 36 || connectionID[8] != '-' || connectionID[13] != '-' || connectionID[18] != '-' || connectionID[23] != '-' {
@@ -674,17 +683,17 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	fixture.console.mu.Lock()
 	connection, exists := fixture.console.connectionForPerson("github.issues", fixturePersonID)
 	fixture.console.mu.Unlock()
-	if !exists || connection.Credential == "" || connection.Credential == githubTokenKey || fixture.vault.values[connection.Credential] != secret {
+	if !exists || connection.Credential == "" || connection.Credential == "FLOE_GITHUB_OAUTH" || fixture.vault.values[connection.Credential] == "" {
 		test.Fatalf("credential was not connection scoped: %#v %#v", connection, fixture.vault.values)
 	}
 	state, _ := json.Marshal(fixture.console.state)
-	if strings.Contains(string(state), secret) || !strings.Contains(connection.Credential, "FLOE_CONNECTOR_GITHUB_TOKEN:") {
+	if strings.Contains(string(state), "access_token") || !strings.Contains(connection.Credential, "FLOE_GITHUB_OAUTH:") {
 		test.Fatalf("plaintext credential persisted: %s", state)
 	}
 
 	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "connection_id": connection.ConnectionID, "connection_revision": connection.Revision, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
-	if updated["connection_id"] != connection.ConnectionID || updated["connection_revision"] != float64(2) || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] != secret {
-		test.Fatalf("scope update changed ownership or secret: %#v", updated)
+	if updated["connection_id"] != connection.ConnectionID || updated["connection_revision"] != float64(2) || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] == "" {
+		test.Fatalf("scope update changed ownership or credential: %#v", updated)
 	}
 	catalog := fixture.value(fixture.call(http.MethodGet, "/v1/connectors", nil, token))
 	item := connectorCatalogItem(catalog, "github.issues")
@@ -1505,7 +1514,7 @@ func TestOAuthReconnectWaitsForPriorLogoutLifecycle(test *testing.T) {
 	}
 }
 
-func TestSecretReconnectFailsClosedForPendingVaultCleanup(test *testing.T) {
+func TestOAuthReconnectFailsClosedForPendingVaultCleanup(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	connected := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
@@ -1529,6 +1538,7 @@ func TestSecretReconnectFailsClosedForPendingVaultCleanup(test *testing.T) {
 		failDelete:    true,
 	}
 	fixture.console.vault = vault
+	fixture.console.githubAuth.(*clientDriveRuntime).vault = vault
 	disconnected := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		disconnected <- fixture.call(http.MethodDelete, "/v1/connectors/github.issues", precondition, token)
@@ -1560,8 +1570,8 @@ func TestSecretReconnectFailsClosedForPendingVaultCleanup(test *testing.T) {
 	if exists || len(cleanup.Connections) != 1 || cleanup.Connections[0].ConnectionID != oldRecord.ConnectionID {
 		test.Fatalf("failed cleanup lost disconnected tombstone: %#v", cleanup)
 	}
-	if value, _ := vault.Get(oldRecord.Credential); value != "github-secret-token" {
-		test.Fatalf("failed cleanup replaced old secret: %q", value)
+	if value, _ := vault.Get(oldRecord.Credential); value == "" {
+		test.Fatalf("failed cleanup removed old OAuth credential")
 	}
 }
 

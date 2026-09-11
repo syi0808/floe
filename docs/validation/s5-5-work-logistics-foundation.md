@@ -23,6 +23,8 @@
   Only bounded title/body excerpt/status/blocker metadata enters Work Context.
 - The GitHub connector publishes a common server execution descriptor with one Observe capability
   and no Act authority. Static View and snapshot fixtures cross the Go/Rust strict validators.
+- GitHub now uses a server-owned GitHub App authorization-code flow with PKCE and connection-scoped
+  Keychain tokens; the paired client no longer accepts a personal access token.
 - Added a server-native, read-only Home Assistant adapter for an explicit allowlist of at most 16
   sensor, binary-sensor, climate, light or switch entities. It rejects security-control domains,
   redirects, non-TLS remote endpoints, endpoint subpaths and duplicate entities. Only friendly name,
@@ -50,6 +52,8 @@
 - Slack configuration and tokens use the same paired-client/Keychain lifecycle. GitHub and Slack
   Work Context Views merge behind one provider-neutral Agent route with deterministic aggregate
   handles, duplicate rejection and partial-provider tolerance.
+- Slack now uses its PKCE desktop flow with read-only user history scopes and rotating,
+  connection-scoped Keychain tokens; the paired client no longer accepts a direct token.
 - Added a server-native Microsoft Teams adapter for one explicitly selected team/channel. It makes
   one GET-only Microsoft Graph request for at most 50 root messages under the delegated
   `ChannelMessage.Read.All` scope and emits the same bounded Work Context communication shape.

@@ -161,6 +161,8 @@ type Console struct {
 	work                                         map[string]WorkContextRuntime
 	logistics                                    map[string]LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
+	githubAuth                                   DriveAuthRuntime
+	slackAuth                                    DriveAuthRuntime
 	calendarAuth                                 DriveAuthRuntime
 	microsoftCalendarAuth                        DriveAuthRuntime
 	microsoftTeamsAuth                           DriveAuthRuntime
@@ -258,6 +260,41 @@ func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
 	console.microsoftTeamsAuth = runtime
 	console.retryPendingCleanupsLocked()
 	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) SetGitHubAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("github.issues", runtime); err != nil {
+		if !console.hasLegacyConnectorCredential("github.issues", githubTokenKey) {
+			return err
+		}
+	}
+	console.githubAuth = runtime
+	console.retryPendingCleanupsLocked()
+	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) SetSlackAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("slack.conversations", runtime); err != nil {
+		if !console.hasLegacyConnectorCredential("slack.conversations", slackTokenKey) {
+			return err
+		}
+	}
+	console.slackAuth = runtime
+	console.retryPendingCleanupsLocked()
+	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) hasLegacyConnectorCredential(connectorID, namespace string) bool {
+	for _, record := range console.state.Connections {
+		if record.ConnectorID == connectorID && strings.HasPrefix(record.Credential, namespace+":") {
+			return true
+		}
+	}
+	return false
 }
 
 func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {

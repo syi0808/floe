@@ -122,6 +122,40 @@ one calendar ID in the app. The paired timeline route tries configured Google Ca
 and Microsoft Calendar second, returning the first healthy bounded View without exposing routing
 policy, calendar IDs, bodies, locations or attendees to Agent context.
 
+### GitHub App user authorization
+
+Create a GitHub App with **Issues: read-only** repository permission and no write permission. Set
+its callback URL to `http://127.0.0.1/oauth/github/callback`, then start the local node with the
+app's OAuth client credentials:
+
+```sh
+export FLOE_GITHUB_OAUTH_CLIENT_ID='your-github-app-client-id'
+export FLOE_GITHUB_OAUTH_CLIENT_SECRET='your-github-app-client-secret'
+go run ./cmd/floe-server
+```
+
+GitHub accepts the per-login ephemeral loopback port for a `127.0.0.1` callback. Floe uses the
+authorization-code flow with PKCE, stores the resulting user and refresh tokens in the macOS
+Keychain, and reads only the repository selected in **Connections → GitHub Issues**. Personal
+access-token entry is no longer exposed.
+
+### Slack user authorization
+
+Create a Slack app in a development workspace. Enable PKCE, add the user scopes
+`channels:history` and `groups:history`, and register
+`http://localhost:1456/oauth/slack/callback` as its desktop redirect. Then start the local node:
+
+```sh
+export FLOE_SLACK_OAUTH_CLIENT_ID='your-slack-app-client-id'
+export FLOE_SLACK_OAUTH_CLIENT_SECRET='optional-for-PKCE-desktop-clients'
+go run ./cmd/floe-server
+```
+
+The flow requests user scopes rather than bot scopes so the selected public or private channel can
+be read with the authorizing user's access. Slack issues rotating desktop tokens for this PKCE
+flow; Floe keeps them in the macOS Keychain. Direct Slack token entry is no longer exposed. Port
+`1456` must be free while authorization is in progress.
+
 ## Legacy headless mode
 
 The environment-configured mode below remains for existing development fixtures.
