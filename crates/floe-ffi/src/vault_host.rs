@@ -23,6 +23,7 @@ use floe_core::{
 };
 use floe_domain::PersonId;
 use floe_protocol::*;
+use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
@@ -485,7 +486,10 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             let registry = match change {
                 Some(configuration) => Some(
                     vault
-                        .configure_registry(configuration.clone(), job.cancellation.clone())
+                        .configure_registry(
+                            decode_contract(configuration)?,
+                            job.cancellation.clone(),
+                        )
                         .await?,
                 ),
                 None => vault.registry_overview().await?,
@@ -502,7 +506,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if let Some(request) = setup {
                 vault
-                    .install_calendar_expert(request.clone(), job.cancellation.clone())
+                    .install_calendar_expert(decode_contract(request)?, job.cancellation.clone())
                     .await?;
             }
             let overview = vault.calendar_expert_overview().await?;
@@ -517,7 +521,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::CalendarAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let overview = vault
-                .configure_calendar_access(change.clone(), job.cancellation.clone())
+                .configure_calendar_access(decode_contract(change)?, job.cancellation.clone())
                 .await?;
             if job.cancellation.is_cancelled() {
                 return Err(AgentFailure::Cancelled);
@@ -913,6 +917,12 @@ fn session_uuid(value: &str) -> Result<Uuid, AgentFailure> {
     Uuid::parse_str(value).map_err(|_| AgentFailure::InvalidInput)
 }
 
+fn decode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
+    serde_json::to_value(value)
+        .and_then(serde_json::from_value)
+        .map_err(|_| AgentFailure::InvalidInput)
+}
+
 async fn sample_session(
     store: &impl SessionStore,
     person: PersonId,
@@ -1166,14 +1176,17 @@ mod tests {
             .find(|assignment| assignment.granted_tool_count == 1)
             .unwrap();
         let action = AgentVaultActionDto::Registry {
-            change: Some(RegistryConfiguration {
-                instance_id: before.instance_id,
-                expected_revision: before.revision,
-                target: RegistryConfigurationTarget::Assignment {
-                    id: assignment.id,
-                    enabled: false,
-                },
-            }),
+            change: Some(
+                RegistryConfiguration {
+                    instance_id: before.instance_id,
+                    expected_revision: before.revision,
+                    target: RegistryConfigurationTarget::Assignment {
+                        id: assignment.id,
+                        enabled: false,
+                    },
+                }
+                .into(),
+            ),
         };
         let id = Uuid::new_v4();
         worker

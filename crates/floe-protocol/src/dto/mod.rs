@@ -13,8 +13,10 @@ pub use agent::{
     AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
     AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto,
     AgentRemoteRouteDto, AgentVaultActionDto, AgentVaultOperationDto, AgentVaultRequestDto,
-    AgentVaultResultDto, AgentVaultStateDto, CalendarActionDecisionDto, CalendarActionOperationDto,
-    CalendarActionRequestDto,
+    AgentVaultResultDto, AgentVaultStateDto, CalendarAccessChangeDto,
+    CalendarAccessConfigurationDto, CalendarActionDecisionDto, CalendarActionOperationDto,
+    CalendarActionRequestDto, CalendarExpertSetupDto, RegistryConfigurationDto,
+    RegistryConfigurationTargetDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,

@@ -1,4 +1,111 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryConfigurationDto {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub target: RegistryConfigurationTargetDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RegistryConfigurationTargetDto {
+    Installation { id: Uuid, enabled: bool },
+    Assignment { id: Uuid, enabled: bool },
+    CalendarView { id: Uuid, enabled: bool },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarExpertSetupDto {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub setup_id: Uuid,
+    pub provider: floe_domain::CalendarProvider,
+    pub calendar_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarAccessConfigurationDto {
+    pub instance_id: Uuid,
+    pub expected_revision: u64,
+    pub setup_id: Uuid,
+    pub change: CalendarAccessChangeDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CalendarAccessChangeDto {
+    SetEnabled {
+        enabled: bool,
+    },
+    SetScope {
+        replacement_setup_id: Uuid,
+        provider: floe_domain::CalendarProvider,
+        calendar_ids: Vec<String>,
+    },
+    Remove {},
+}
+
+impl From<floe_agent::RegistryConfiguration> for RegistryConfigurationDto {
+    fn from(value: floe_agent::RegistryConfiguration) -> Self {
+        Self {
+            instance_id: value.instance_id,
+            expected_revision: value.expected_revision,
+            target: match value.target {
+                floe_agent::RegistryConfigurationTarget::Installation { id, enabled } => {
+                    RegistryConfigurationTargetDto::Installation { id, enabled }
+                }
+                floe_agent::RegistryConfigurationTarget::Assignment { id, enabled } => {
+                    RegistryConfigurationTargetDto::Assignment { id, enabled }
+                }
+                floe_agent::RegistryConfigurationTarget::CalendarView { id, enabled } => {
+                    RegistryConfigurationTargetDto::CalendarView { id, enabled }
+                }
+            },
+        }
+    }
+}
+
+impl From<floe_agent::CalendarExpertSetup> for CalendarExpertSetupDto {
+    fn from(value: floe_agent::CalendarExpertSetup) -> Self {
+        Self {
+            instance_id: value.instance_id,
+            expected_revision: value.expected_revision,
+            setup_id: value.setup_id,
+            provider: value.provider,
+            calendar_ids: value.calendar_ids,
+        }
+    }
+}
+
+impl From<floe_agent::CalendarAccessConfiguration> for CalendarAccessConfigurationDto {
+    fn from(value: floe_agent::CalendarAccessConfiguration) -> Self {
+        Self {
+            instance_id: value.instance_id,
+            expected_revision: value.expected_revision,
+            setup_id: value.setup_id,
+            change: match value.change {
+                floe_agent::CalendarAccessChange::SetEnabled { enabled } => {
+                    CalendarAccessChangeDto::SetEnabled { enabled }
+                }
+                floe_agent::CalendarAccessChange::SetScope {
+                    replacement_setup_id,
+                    provider,
+                    calendar_ids,
+                } => CalendarAccessChangeDto::SetScope {
+                    replacement_setup_id,
+                    provider,
+                    calendar_ids,
+                },
+                floe_agent::CalendarAccessChange::Remove {} => CalendarAccessChangeDto::Remove {},
+            },
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,13 +136,13 @@ pub enum AgentVaultActionDto {
         operation: AgentFixtureOperationDto,
     },
     Registry {
-        change: Option<floe_agent::RegistryConfiguration>,
+        change: Option<RegistryConfigurationDto>,
     },
     CalendarExperts {
-        setup: Option<floe_agent::CalendarExpertSetup>,
+        setup: Option<CalendarExpertSetupDto>,
     },
     CalendarAccess {
-        change: floe_agent::CalendarAccessConfiguration,
+        change: CalendarAccessConfigurationDto,
     },
     InspectProposal {
         session_id: String,

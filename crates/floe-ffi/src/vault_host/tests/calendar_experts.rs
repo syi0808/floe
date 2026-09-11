@@ -38,7 +38,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         calendar_ids: vec!["explicit-native-setup-canary".into()],
     };
     let action = AgentVaultActionDto::CalendarExperts {
-        setup: Some(setup.clone()),
+        setup: Some(setup.clone().into()),
     };
     let id = Uuid::new_v4();
     worker
@@ -100,7 +100,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             &worker,
             person,
             AgentVaultActionDto::CalendarExperts {
-                setup: Some(changed)
+                setup: Some(changed.into())
             }
         )
         .failure,
@@ -114,14 +114,17 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             &worker,
             person,
             AgentVaultActionDto::Registry {
-                change: Some(RegistryConfiguration {
-                    instance_id: current.registry.instance_id,
-                    expected_revision: current.registry.revision,
-                    target: RegistryConfigurationTarget::CalendarView {
-                        id: installed.views[0].handle,
-                        enabled,
-                    },
-                }),
+                change: Some(
+                    RegistryConfiguration {
+                        instance_id: current.registry.instance_id,
+                        expected_revision: current.registry.revision,
+                        target: RegistryConfigurationTarget::CalendarView {
+                            id: installed.views[0].handle,
+                            enabled,
+                        },
+                    }
+                    .into(),
+                ),
             },
         );
         assert!(result.failure.is_none());
@@ -179,7 +182,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             id,
             AgentVaultOperationDto::Submit {
                 action: AgentVaultActionDto::CalendarExperts {
-                    setup: Some(request.clone()),
+                    setup: Some(request.clone().into()),
                 },
             },
         )
@@ -225,7 +228,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         &worker,
         person,
         AgentVaultActionDto::CalendarExperts {
-            setup: Some(request),
+            setup: Some(request.into()),
         },
     );
     assert_eq!(retry.calendar_experts.unwrap().registry.revision, 1);
