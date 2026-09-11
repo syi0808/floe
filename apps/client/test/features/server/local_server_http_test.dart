@@ -94,4 +94,179 @@ void main() {
     );
     expect(calls, 1);
   });
+
+  test(
+    'pairing identity and connector lifecycle follow the paired API',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final calls = <String>[];
+      server.listen((request) async {
+        final body = request.method == 'GET' || request.method == 'DELETE'
+            ? <String, dynamic>{}
+            : jsonDecode(await utf8.decoder.bind(request).join())
+                  as Map<String, dynamic>;
+        calls.add('${request.method} ${request.uri.path}');
+        request.response.headers.contentType = ContentType.json;
+        switch (request.uri.path) {
+          case '/pair/start':
+            expect(body['person_id'], '00000000-0000-4000-8000-000000000001');
+            expect(body['device_id'], 'local-persistent-device');
+            request.response.write(
+              jsonEncode({'proof': 'proof', 'code': 'CODE'}),
+            );
+          case '/v1/connectors':
+            request.response.write(
+              jsonEncode({
+                'schema_version': 1,
+                'person_id': '00000000-0000-4000-8000-000000000001',
+                'device_id': 'local-persistent-device',
+                'legacy_unscoped': false,
+                'connectors': [
+                  {
+                    'id': 'github.issues',
+                    'name': 'GitHub Issues',
+                    'auth_kind': 'secret',
+                    'available': true,
+                    'status': 'disconnected',
+                    'required_scopes': ['github.issues.read'],
+                    'scope_fields': ['owner', 'repository'],
+                    'capabilities': {
+                      'connect': true,
+                      'cancel': false,
+                      'disconnect': true,
+                      'scope_update': true,
+                    },
+                  },
+                  {
+                    'id': 'gmail',
+                    'name': 'Gmail',
+                    'auth_kind': 'oauth_pkce',
+                    'available': false,
+                    'status': 'unavailable',
+                    'required_scopes': ['gmail.readonly'],
+                    'scope_fields': <String>[],
+                    'capabilities': {
+                      'connect': true,
+                      'cancel': true,
+                      'disconnect': true,
+                      'scope_update': false,
+                    },
+                  },
+                ],
+              }),
+            );
+          case '/v1/connectors/github.issues/connect':
+            expect(request.method, 'POST');
+            expect(body['secret'], 'one-shot-secret');
+            expect(body['scope'], {'owner': 'floe', 'repository': 'client'});
+            request.response.statusCode = 201;
+            request.response.write(
+              jsonEncode({
+                'schema_version': 1,
+                'attempt_id': 'attempt-1',
+                'connector_id': 'github.issues',
+                'connection_id': 'connection-1',
+                'status': 'connected',
+                'created_at': '2026-09-11T00:00:00Z',
+              }),
+            );
+          case '/v1/connectors/github.issues/scope':
+            expect(request.method, 'PATCH');
+            request.response.write(
+              jsonEncode({
+                'schema_version': 1,
+                'scope': {'owner': 'floe', 'repository': 'server'},
+              }),
+            );
+          case '/v1/connectors/github.issues':
+            expect(request.method, 'DELETE');
+            request.response.write(
+              jsonEncode({'schema_version': 1, 'disconnected': true}),
+            );
+          default:
+            fail('Unexpected endpoint: ${request.uri.path}');
+        }
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final client = LocalServerClient(
+        store: MemoryServerCredentials(),
+        deviceId: 'local-persistent-device',
+      );
+      final address = 'http://127.0.0.1:${server.port}';
+      await client.startPairing(address);
+      final connection = ServerConnection(
+        address: address,
+        token: 'a' * 52,
+        clientId: 'fixture',
+      );
+      final catalog = await client.connectorCatalog(connection);
+      expect(catalog.deviceId, 'local-persistent-device');
+      expect(catalog.connectors.map((item) => item.name), [
+        'GitHub Issues',
+        'Gmail',
+      ]);
+      expect(catalog.connectors.last.status, ServerConnectorStatus.unavailable);
+      final attempt = await client.connectConnector(
+        connection: connection,
+        connectorId: 'github.issues',
+        scope: {'owner': 'floe', 'repository': 'client'},
+        secret: 'one-shot-secret',
+      );
+      expect(attempt.status, ServerConnectorStatus.connected);
+      expect(
+        await client.updateConnectorScope(
+          connection: connection,
+          connectorId: 'github.issues',
+          scope: {'owner': 'floe', 'repository': 'server'},
+        ),
+        {'owner': 'floe', 'repository': 'server'},
+      );
+      await client.disconnectConnector(
+        connection: connection,
+        connectorId: 'github.issues',
+      );
+      expect(calls, [
+        'POST /pair/start',
+        'GET /v1/connectors',
+        'POST /v1/connectors/github.issues/connect',
+        'PATCH /v1/connectors/github.issues/scope',
+        'DELETE /v1/connectors/github.issues',
+      ]);
+    },
+  );
+
+  test('connector mutation errors preserve re-pair reason', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.statusCode = 403;
+      request.response.write(
+        jsonEncode({
+          'error': {'code': 'person_scope_required'},
+        }),
+      );
+      await request.response.close();
+    });
+    addTearDown(() => server.close(force: true));
+    final connection = ServerConnection(
+      address: 'http://127.0.0.1:${server.port}',
+      token: 'a' * 52,
+      clientId: 'fixture',
+    );
+    await expectLater(
+      LocalServerClient().connectConnector(
+        connection: connection,
+        connectorId: 'github.issues',
+        scope: {'owner': 'floe', 'repository': 'client'},
+        secret: 'one-shot-secret',
+      ),
+      throwsA(
+        isA<ServerConnectionException>().having(
+          (error) => error.code,
+          'code',
+          'person_scope_required',
+        ),
+      ),
+    );
+  });
 }

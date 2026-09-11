@@ -231,6 +231,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         query: controller.query,
         connection: controller.snapshot?.calendar,
         onChanged: controller.load,
+        serverClient: widget.serverClient,
+        deviceId: widget.serverClient?.deviceId,
       );
     }
     if (destination == _DestinationView.settings) {

@@ -68,7 +68,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   Future<void> _pair() => _run(() async {
     final base = LocalServerClient.normalizeAddress(address.text);
     final attempt = ++generation;
-    final response = await widget.client.request(base, '/pair/start', body: {});
+    final response = await widget.client.startPairing(base);
     final pendingProof = response['proof'] as String;
     if (!mounted || attempt != generation) {
       await widget.client.request(

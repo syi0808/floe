@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import '../../app/local_identity.dart';
+
 abstract interface class ServerCredentialStore {
   Future<String?> read();
   Future<void> write(String value);
@@ -130,11 +132,100 @@ class ServerConnectionException implements Exception {
   String toString() => code;
 }
 
+enum ServerConnectorStatus {
+  available,
+  connecting,
+  connected,
+  error,
+  unavailable,
+}
+
+final class ServerConnectorCapabilities {
+  const ServerConnectorCapabilities({
+    required this.connect,
+    required this.cancel,
+    required this.disconnect,
+    required this.scopeUpdate,
+  });
+
+  final bool connect;
+  final bool cancel;
+  final bool disconnect;
+  final bool scopeUpdate;
+}
+
+final class ServerConnector {
+  const ServerConnector({
+    required this.id,
+    required this.name,
+    required this.authKind,
+    required this.available,
+    required this.status,
+    required this.requiredScopes,
+    required this.scopeFields,
+    required this.capabilities,
+    required this.scope,
+    this.connectionId,
+  });
+
+  final String id;
+  final String name;
+  final String authKind;
+  final bool available;
+  final ServerConnectorStatus status;
+  final List<String> requiredScopes;
+  final List<String> scopeFields;
+  final ServerConnectorCapabilities capabilities;
+  final Map<String, Object?> scope;
+  final String? connectionId;
+
+  bool get isSecret => authKind == 'secret';
+}
+
+final class ServerConnectorCatalog {
+  const ServerConnectorCatalog({
+    required this.personId,
+    required this.deviceId,
+    required this.legacyUnscoped,
+    required this.connectors,
+  });
+
+  final String personId;
+  final String deviceId;
+  final bool legacyUnscoped;
+  final List<ServerConnector> connectors;
+}
+
+final class ServerConnectorAttempt {
+  const ServerConnectorAttempt({
+    required this.id,
+    required this.connectorId,
+    required this.connectionId,
+    required this.status,
+    required this.createdAt,
+    this.authorizationUrl,
+    this.errorCode,
+  });
+
+  final String id;
+  final String connectorId;
+  final String connectionId;
+  final ServerConnectorStatus status;
+  final DateTime createdAt;
+  final String? authorizationUrl;
+  final String? errorCode;
+}
+
 class LocalServerClient {
-  LocalServerClient({ServerCredentialStore? store})
-    : store = store ?? KeychainServerCredentialStore();
+  LocalServerClient({
+    ServerCredentialStore? store,
+    this.personId = defaultLocalPersonId,
+    this.deviceId = 'local-client',
+  }) : store = store ?? KeychainServerCredentialStore();
   static final shared = LocalServerClient();
   final ServerCredentialStore store;
+  final String personId;
+  final String deviceId;
 
   static String normalizeAddress(String source) {
     final address = Uri.tryParse(source.trim());
@@ -194,6 +285,21 @@ class LocalServerClient {
     String path, {
     Map<String, Object?>? body,
     String? token,
+  }) => _request(
+    address,
+    path,
+    method: body == null ? 'GET' : 'POST',
+    body: body,
+    token: token,
+  );
+
+  Future<Map<String, dynamic>> _request(
+    String address,
+    String path, {
+    required String method,
+    Map<String, Object?>? body,
+    String? token,
+    Set<int> acceptedStatuses = const {200},
   }) async {
     final base = normalizeAddress(address);
     final client = HttpClient()
@@ -201,10 +307,7 @@ class LocalServerClient {
       ..findProxy = (_) => 'DIRECT';
     try {
       return await (() async {
-        final request = await client.openUrl(
-          body == null ? 'GET' : 'POST',
-          Uri.parse('$base$path'),
-        );
+        final request = await client.openUrl(method, Uri.parse('$base$path'));
         request.followRedirects = false;
         request.headers.contentType = ContentType.json;
         if (token != null) {
@@ -219,13 +322,17 @@ class LocalServerClient {
           }
           bytes.addAll(chunk);
         }
-        if (response.statusCode != 200) {
-          throw ServerConnectionException(switch (response.statusCode) {
-            401 => 'authorization_required',
-            403 => 'external_transfer_denied',
-            429 => 'pairing_in_progress',
-            _ => 'server_rejected',
-          });
+        if (!acceptedStatuses.contains(response.statusCode)) {
+          final serverCode = _responseErrorCode(bytes);
+          throw ServerConnectionException(
+            serverCode ??
+                switch (response.statusCode) {
+                  401 => 'authorization_required',
+                  403 => 'external_transfer_denied',
+                  429 => 'pairing_in_progress',
+                  _ => 'server_rejected',
+                },
+          );
         }
         return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       })().timeout(const Duration(seconds: 8));
@@ -235,6 +342,124 @@ class LocalServerClient {
       throw const ServerConnectionException('server_unavailable');
     } finally {
       client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> startPairing(String address) => request(
+    address,
+    '/pair/start',
+    body: {'person_id': personId, 'device_id': deviceId},
+  );
+
+  Future<ServerConnectorCatalog> connectorCatalog(
+    ServerConnection connection,
+  ) async {
+    final value = await _request(
+      connection.address,
+      '/v1/connectors',
+      method: 'GET',
+      token: connection.token,
+    );
+    try {
+      if (value['schema_version'] != 1 || value['connectors'] is! List) {
+        throw const FormatException();
+      }
+      final connectors = (value['connectors'] as List)
+          .map(_serverConnector)
+          .toList(growable: false);
+      if (connectors.length > 64 ||
+          connectors.map((item) => item.id).toSet().length !=
+              connectors.length) {
+        throw const FormatException();
+      }
+      return ServerConnectorCatalog(
+        personId: value['person_id'] as String,
+        deviceId: value['device_id'] as String,
+        legacyUnscoped: value['legacy_unscoped'] as bool,
+        connectors: List.unmodifiable(connectors),
+      );
+    } on Object {
+      throw const ServerConnectionException('invalid_response');
+    }
+  }
+
+  Future<ServerConnectorAttempt> connectConnector({
+    required ServerConnection connection,
+    required String connectorId,
+    required Map<String, Object?> scope,
+    String? secret,
+  }) async {
+    final value = await _request(
+      connection.address,
+      '/v1/connectors/${Uri.encodeComponent(connectorId)}/connect',
+      method: 'POST',
+      token: connection.token,
+      acceptedStatuses: const {201},
+      body: {'schema_version': 1, 'scope': scope, 'secret': ?secret},
+    );
+    return _connectorAttempt(value);
+  }
+
+  Future<ServerConnectorAttempt> connectorAttempt({
+    required ServerConnection connection,
+    required String connectorId,
+    required String attemptId,
+  }) async => _connectorAttempt(
+    await _request(
+      connection.address,
+      '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}',
+      method: 'GET',
+      token: connection.token,
+    ),
+  );
+
+  Future<ServerConnectorAttempt> cancelConnectorAttempt({
+    required ServerConnection connection,
+    required String connectorId,
+    required String attemptId,
+  }) async => _connectorAttempt(
+    await _request(
+      connection.address,
+      '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}/cancel',
+      method: 'POST',
+      token: connection.token,
+      body: const {},
+    ),
+  );
+
+  Future<Map<String, Object?>> updateConnectorScope({
+    required ServerConnection connection,
+    required String connectorId,
+    required Map<String, Object?> scope,
+  }) async {
+    final value = await _request(
+      connection.address,
+      '/v1/connectors/${Uri.encodeComponent(connectorId)}/scope',
+      method: 'PATCH',
+      token: connection.token,
+      body: {'schema_version': 1, 'scope': scope},
+    );
+    try {
+      return Map<String, Object?>.unmodifiable(
+        Map<String, Object?>.from(value['scope'] as Map),
+      );
+    } on Object {
+      throw const ServerConnectionException('invalid_response');
+    }
+  }
+
+  Future<void> disconnectConnector({
+    required ServerConnection connection,
+    required String connectorId,
+  }) async {
+    final value = await _request(
+      connection.address,
+      '/v1/connectors/${Uri.encodeComponent(connectorId)}',
+      method: 'DELETE',
+      token: connection.token,
+    );
+    if (value['schema_version'] != 1 || value['disconnected'] != true) {
+      throw const ServerConnectionException('invalid_response');
     }
   }
 
@@ -395,6 +620,90 @@ class LocalServerClient {
       .channel
       .invokeMethod('open', '${normalizeAddress(address)}/manage/');
 }
+
+String? _responseErrorCode(List<int> bytes) {
+  try {
+    final value = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    final error = Map<String, dynamic>.from(value['error'] as Map);
+    final code = error['code'];
+    if (code is String && RegExp(r'^[a-z][a-z0-9_]{1,63}$').hasMatch(code)) {
+      return code;
+    }
+  } on Object {
+    return null;
+  }
+  return null;
+}
+
+ServerConnector _serverConnector(Object? raw) {
+  final value = Map<String, dynamic>.from(raw as Map);
+  final capabilities = Map<String, dynamic>.from(value['capabilities'] as Map);
+  final id = value['id'] as String;
+  final name = value['name'] as String;
+  final authKind = value['auth_kind'] as String;
+  final status = _connectorStatus(value['status'] as String);
+  final requiredScopes = List<String>.from(value['required_scopes'] as List);
+  final scopeFields = List<String>.from(value['scope_fields'] as List);
+  final scope = value['scope'] == null
+      ? const <String, Object?>{}
+      : Map<String, Object?>.from(value['scope'] as Map);
+  if (id.isEmpty ||
+      name.isEmpty ||
+      !const {'oauth_pkce', 'secret'}.contains(authKind) ||
+      value['available'] is! bool ||
+      requiredScopes.length > 32 ||
+      scopeFields.length > 16 ||
+      capabilities.values.any((item) => item is! bool)) {
+    throw const FormatException();
+  }
+  return ServerConnector(
+    id: id,
+    name: name,
+    authKind: authKind,
+    available: value['available'] as bool,
+    status: status,
+    requiredScopes: List.unmodifiable(requiredScopes),
+    scopeFields: List.unmodifiable(scopeFields),
+    capabilities: ServerConnectorCapabilities(
+      connect: capabilities['connect'] as bool,
+      cancel: capabilities['cancel'] as bool,
+      disconnect: capabilities['disconnect'] as bool,
+      scopeUpdate: capabilities['scope_update'] as bool,
+    ),
+    scope: Map.unmodifiable(scope),
+    connectionId: value['connection_id'] as String?,
+  );
+}
+
+ServerConnectorAttempt _connectorAttempt(Map<String, dynamic> value) {
+  try {
+    if (value['schema_version'] != 1) throw const FormatException();
+    final error = value['error'] == null
+        ? null
+        : Map<String, dynamic>.from(value['error'] as Map)['code'] as String;
+    return ServerConnectorAttempt(
+      id: value['attempt_id'] as String,
+      connectorId: value['connector_id'] as String,
+      connectionId: value['connection_id'] as String,
+      status: _connectorStatus(value['status'] as String),
+      createdAt: DateTime.parse(value['created_at'] as String),
+      authorizationUrl: value['authorization_url'] as String?,
+      errorCode: error,
+    );
+  } on Object {
+    throw const ServerConnectionException('invalid_response');
+  }
+}
+
+ServerConnectorStatus _connectorStatus(String value) => switch (value) {
+  'disconnected' => ServerConnectorStatus.available,
+  'pending' || 'connecting' => ServerConnectorStatus.connecting,
+  'connected' => ServerConnectorStatus.connected,
+  'failed' || 'error' => ServerConnectorStatus.error,
+  'cancelled' => ServerConnectorStatus.available,
+  'unavailable' => ServerConnectorStatus.unavailable,
+  _ => throw const FormatException(),
+};
 
 InferencePurposeAvailability _purposeAvailability(Object? raw) {
   final value = Map<String, dynamic>.from(raw as Map);
