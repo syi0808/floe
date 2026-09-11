@@ -146,10 +146,15 @@ final class CalendarChannel {
     dayFormatter.locale = Locale(identifier: "en_US_POSIX")
     dayFormatter.timeZone = event.timeZone ?? TimeZone.current
     dayFormatter.dateFormat = "yyyy-MM-dd"
+    let allDayEnd = normalizedAllDayEndExclusive(
+      start: event.startDate,
+      end: event.endDate,
+      calendar: dayFormatter.calendar
+    )
     let schedule: [String: Any] = event.isAllDay ? [
       "kind": "all_day",
       "start_date": dayFormatter.string(from: event.startDate),
-      "end_date_exclusive": dayFormatter.string(from: event.endDate),
+      "end_date_exclusive": dayFormatter.string(from: allDayEnd),
     ] : [
       "kind": "timed",
       "starts_at": formatter.string(from: event.startDate),
@@ -228,4 +233,15 @@ final class CalendarChannel {
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return formatter.date(from: value)
   }
+}
+
+func normalizedAllDayEndExclusive(start: Date, end: Date, calendar: Calendar) -> Date {
+  let startDay = calendar.startOfDay(for: start)
+  let endDay = calendar.startOfDay(for: end)
+  let candidate = end > endDay
+    ? calendar.date(byAdding: .day, value: 1, to: endDay)!
+    : endDay
+  return candidate > startDay
+    ? candidate
+    : calendar.date(byAdding: .day, value: 1, to: startDay)!
 }

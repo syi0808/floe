@@ -5,6 +5,30 @@ import XCTest
 
 class RunnerTests: XCTestCase {
 
+  func testAllDayEndAtLastSecondBecomesExclusiveNextDay() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+    let start = calendar.date(from: DateComponents(year: 2026, month: 9, day: 11))!
+    let end = calendar.date(
+      from: DateComponents(year: 2026, month: 9, day: 11, hour: 23, minute: 59, second: 59)
+    )!
+
+    let normalized = normalizedAllDayEndExclusive(start: start, end: end, calendar: calendar)
+
+    XCTAssertEqual(normalized, calendar.date(byAdding: .day, value: 1, to: start))
+  }
+
+  func testAllDayEndAtMidnightRemainsExclusive() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+    let start = calendar.date(from: DateComponents(year: 2026, month: 9, day: 11))!
+    let end = calendar.date(byAdding: .day, value: 2, to: start)!
+
+    let normalized = normalizedAllDayEndExclusive(start: start, end: end, calendar: calendar)
+
+    XCTAssertEqual(normalized, end)
+  }
+
   func testAttentionReducerUsesOnlyCoarseActivationCounts() {
     let start = Date(timeIntervalSince1970: 1_000)
     let reducer = MacOSAttentionReducer(startedAt: start)

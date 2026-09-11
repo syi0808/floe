@@ -195,9 +195,14 @@ final class CalendarBridge {
     dateFormatter.locale = Locale(identifier: "en_US_POSIX")
     dateFormatter.timeZone = event.timeZone ?? TimeZone.current
     dateFormatter.dateFormat = "yyyy-MM-dd"
+    let allDayEnd = normalizedAllDayEndExclusive(
+      start: event.startDate,
+      end: event.endDate,
+      calendar: dateFormatter.calendar
+    )
     let schedule: [String: Any] = event.isAllDay ? [
       "kind": "all_day", "start_date": dateFormatter.string(from: event.startDate),
-      "end_date_exclusive": dateFormatter.string(from: event.endDate)
+      "end_date_exclusive": dateFormatter.string(from: allDayEnd)
     ] : [
       "kind": "timed", "starts_at": formatter.string(from: event.startDate),
       "ends_at": formatter.string(from: event.endDate),
@@ -224,4 +229,15 @@ final class CalendarBridge {
   private func failure(_ code: String) -> FlutterError {
     FlutterError(code: code, message: "Check your Calendar connection and try again.", details: nil)
   }
+}
+
+func normalizedAllDayEndExclusive(start: Date, end: Date, calendar: Calendar) -> Date {
+  let startDay = calendar.startOfDay(for: start)
+  let endDay = calendar.startOfDay(for: end)
+  let candidate = end > endDay
+    ? calendar.date(byAdding: .day, value: 1, to: endDay)!
+    : endDay
+  return candidate > startDay
+    ? candidate
+    : calendar.date(byAdding: .day, value: 1, to: startDay)!
 }

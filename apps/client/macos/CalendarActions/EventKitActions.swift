@@ -185,9 +185,14 @@ private func observationRecord(_ event: EKEvent, calendarID: String) -> [String:
   date.locale = Locale(identifier: "en_US_POSIX")
   date.timeZone = event.timeZone ?? TimeZone.current
   date.dateFormat = "yyyy-MM-dd"
+  let allDayEnd = normalizedObservationAllDayEnd(
+    start: event.startDate,
+    end: event.endDate,
+    calendar: date.calendar
+  )
   let schedule: [String: Any] = event.isAllDay ? ["AllDay": [
     "start_date": date.string(from: event.startDate),
-    "end_date_exclusive": date.string(from: event.endDate)
+    "end_date_exclusive": date.string(from: allDayEnd)
   ]] : ["Timed": [
     "starts_at": timestamp.string(from: event.startDate),
     "ends_at": timestamp.string(from: event.endDate),
@@ -210,6 +215,17 @@ private func observationRecord(_ event: EKEvent, calendarID: String) -> [String:
     "title": normalizedTitle,
     "schedule": schedule
   ]
+}
+
+private func normalizedObservationAllDayEnd(start: Date, end: Date, calendar: Calendar) -> Date {
+  let startDay = calendar.startOfDay(for: start)
+  let endDay = calendar.startOfDay(for: end)
+  let candidate = end > endDay
+    ? calendar.date(byAdding: .day, value: 1, to: endDay)!
+    : endDay
+  return candidate > startDay
+    ? candidate
+    : calendar.date(byAdding: .day, value: 1, to: startDay)!
 }
 
 private func calendarObservation(_ request: [String: Any]) throws -> [String: Any] {
