@@ -118,6 +118,89 @@ void main() {
     },
   );
 
+  test(
+    'changing the active provider replaces the Rust calendar binding',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      if (!library.existsSync()) {
+        markTestSkipped('cargo build -p floe-ffi가 필요합니다.');
+        return;
+      }
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'floe-calendar-provider-switch-test-',
+      );
+      final now = DateTime.utc(2026, 9, 3, 9);
+      final query = DayQuery(
+        personId: localPersonId,
+        date: now,
+        now: now,
+        timezoneOffsetSeconds: 0,
+      );
+      var gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${temporaryDirectory.path}/floe.db',
+        clock: () => now,
+        deviceId: 'paired-device',
+      );
+      await gateway.bindCalendarConnection(
+        connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+        connectionRevision: 7,
+        deviceId: 'paired-device',
+        provider: 'google_calendar',
+        calendars: const [
+          CalendarChoice(
+            'primary@example.test',
+            'Google Calendar',
+            provider: 'google_calendar',
+          ),
+        ],
+        query: query,
+      );
+      final switched = await gateway.bindCalendarConnection(
+        connectionId: '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
+        connectionRevision: 11,
+        deviceId: 'paired-device',
+        provider: 'microsoft_calendar',
+        calendars: const [
+          CalendarChoice(
+            'calendar@microsoft.test',
+            'Microsoft Calendar',
+            provider: 'microsoft_calendar',
+          ),
+        ],
+        query: query,
+      );
+      expect(
+        switched.calendar!.connectionId,
+        '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
+      );
+      expect(switched.calendar!.revision, 11);
+      expect(switched.calendar!.provider, 'microsoft_calendar');
+      expect(switched.calendar!.selectedCalendarIds, [
+        'calendar@microsoft.test',
+      ]);
+      await gateway.close();
+
+      gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${temporaryDirectory.path}/floe.db',
+        clock: () => now,
+        deviceId: 'paired-device',
+      );
+      final restored = await gateway.loadDay(query);
+      expect(
+        restored.calendar!.connectionId,
+        '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
+      );
+      expect(restored.calendar!.provider, 'microsoft_calendar');
+      expect(restored.calendar!.selectedCalendarIds, [
+        'calendar@microsoft.test',
+      ]);
+      await gateway.close();
+      await temporaryDirectory.delete(recursive: true);
+    },
+  );
+
   test('Rust/Turso gateway persists the complete task lifecycle', () async {
     final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
     if (!library.existsSync()) {

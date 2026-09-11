@@ -286,6 +286,196 @@ void main() {
     expect(gateway.boundCalendars.single.id, 'primary@example.test');
     expect(changed, 1);
   });
+
+  testWidgets('requires an explicit choice when two server calendars connect', (
+    tester,
+  ) async {
+    final gateway = _RecordingCalendarGateway();
+    var changed = 0;
+    final date = DateTime.utc(2026, 9, 4);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ConnectorScreen(
+              gateway: gateway,
+              query: DayQuery(
+                personId: '00000000-0000-4000-8000-000000000001',
+                date: date,
+                now: date,
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: null,
+              onChanged: () async => changed++,
+              serverClient: _CalendarCatalogClient(
+                connectors: const [
+                  _googleCalendarConnector,
+                  _microsoftCalendarConnector,
+                ],
+              ),
+              platform: TargetPlatform.macOS,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.connectionId, isNull);
+    expect(changed, 0);
+    expect(
+      find.text(
+        'Choose which connected calendar Floe and Schedule should use.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Use for Floe & Schedule'), findsNWidgets(2));
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('calendar-provider-calendar.microsoft')),
+        matching: find.text('Use for Floe & Schedule'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.connectionId, _microsoftCalendarConnector.connectionId);
+    expect(gateway.connectionRevision, 11);
+    expect(gateway.provider, 'microsoft_calendar');
+    expect(gateway.boundCalendars.single.id, 'calendar@microsoft.test');
+    expect(changed, 1);
+  });
+
+  testWidgets(
+    'keeps device calendar active until server is explicitly chosen',
+    (tester) async {
+      final gateway = _RecordingCalendarGateway();
+      var changed = 0;
+      final date = DateTime.utc(2026, 9, 4);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ConnectorScreen(
+                gateway: gateway,
+                query: DayQuery(
+                  personId: '00000000-0000-4000-8000-000000000001',
+                  date: date,
+                  now: date,
+                  timezoneOffsetSeconds: 0,
+                ),
+                connection: const CalendarConnection(
+                  connectionId: '00000000-0000-4000-8000-000000000020',
+                  deviceId: 'local-test-device',
+                  provider: 'event_kit',
+                  revision: 4,
+                  calendars: [
+                    ConnectedCalendar(id: 'device-calendar', name: 'Personal'),
+                  ],
+                ),
+                onChanged: () async => changed++,
+                serverClient: _CalendarCatalogClient(),
+                platform: TargetPlatform.macOS,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(gateway.connectionId, isNull);
+      expect(changed, 0);
+      expect(
+        find.text(
+          'macOS Calendar supplies calendar context to Floe and Schedule.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('calendar-provider-device')),
+          matching: find.text('Active'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('calendar-provider-calendar.google')),
+          matching: find.text('Use for Floe & Schedule'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(gateway.provider, 'google_calendar');
+      expect(changed, 1);
+    },
+  );
+
+  testWidgets(
+    'offers device calendar selection while a server calendar is active',
+    (tester) async {
+      final date = DateTime.utc(2026, 9, 4);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ConnectorScreen(
+                gateway: _DeviceCalendarGateway(),
+                query: DayQuery(
+                  personId: '00000000-0000-4000-8000-000000000001',
+                  date: date,
+                  now: date,
+                  timezoneOffsetSeconds: 0,
+                ),
+                connection: const CalendarConnection(
+                  connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+                  deviceId: 'local-test-device',
+                  provider: 'google_calendar',
+                  revision: 7,
+                  calendars: [
+                    ConnectedCalendar(
+                      id: 'primary@example.test',
+                      name: 'Google Calendar',
+                    ),
+                  ],
+                ),
+                onChanged: () async {},
+                serverClient: _CalendarCatalogClient(),
+                platform: TargetPlatform.macOS,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'Google Calendar supplies calendar context to Floe and Schedule.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('calendar-provider-device')),
+          matching: find.text('Choose calendars'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Back to connections'), findsOneWidget);
+      expect(find.text('Connect'), findsOneWidget);
+    },
+  );
 }
 
 final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
@@ -407,8 +597,10 @@ final class _CatalogClient extends LocalServerClient {
 }
 
 final class _CalendarCatalogClient extends LocalServerClient {
-  _CalendarCatalogClient()
+  _CalendarCatalogClient({this.connectors = const [_googleCalendarConnector]})
     : super(store: MemoryServerCredentials(), deviceId: 'local-test-device');
+
+  final List<ServerConnector> connectors;
 
   @override
   Future<ServerConnection?> connection() async => ServerConnection(
@@ -422,28 +614,47 @@ final class _CalendarCatalogClient extends LocalServerClient {
   @override
   Future<ServerConnectorCatalog> connectorCatalog(
     ServerConnection connection,
-  ) async => const ServerConnectorCatalog(
+  ) async => ServerConnectorCatalog(
     personId: '00000000-0000-4000-8000-000000000001',
     deviceId: 'local-test-device',
-    connectors: [
-      ServerConnector(
-        id: 'calendar.google',
-        name: 'Google Calendar',
-        authKind: 'oauth_pkce',
-        available: true,
-        status: ServerConnectorStatus.connected,
-        requiredScopes: ['calendar.readonly'],
-        scopeFields: ['calendar_id'],
-        capabilities: ServerConnectorCapabilities(
-          connect: true,
-          cancel: true,
-          disconnect: true,
-          scopeUpdate: true,
-        ),
-        scope: {'calendar_id': 'primary@example.test'},
-        connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
-        connectionRevision: 7,
-      ),
-    ],
+    connectors: connectors,
   );
 }
+
+const _googleCalendarConnector = ServerConnector(
+  id: 'calendar.google',
+  name: 'Google Calendar',
+  authKind: 'oauth_pkce',
+  available: true,
+  status: ServerConnectorStatus.connected,
+  requiredScopes: ['calendar.readonly'],
+  scopeFields: ['calendar_id'],
+  capabilities: ServerConnectorCapabilities(
+    connect: true,
+    cancel: true,
+    disconnect: true,
+    scopeUpdate: true,
+  ),
+  scope: {'calendar_id': 'primary@example.test'},
+  connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+  connectionRevision: 7,
+);
+
+const _microsoftCalendarConnector = ServerConnector(
+  id: 'calendar.microsoft',
+  name: 'Microsoft Calendar',
+  authKind: 'oauth_pkce',
+  available: true,
+  status: ServerConnectorStatus.connected,
+  requiredScopes: ['calendar.readonly'],
+  scopeFields: ['calendar_id'],
+  capabilities: ServerConnectorCapabilities(
+    connect: true,
+    cancel: true,
+    disconnect: true,
+    scopeUpdate: true,
+  ),
+  scope: {'calendar_id': 'calendar@microsoft.test'},
+  connectionId: '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
+  connectionRevision: 11,
+);

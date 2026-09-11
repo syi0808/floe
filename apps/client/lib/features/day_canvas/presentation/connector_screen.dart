@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
 import '../../../app/floe_badge.dart';
+import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
 import '../../../app/floe_primitives.dart';
 import '../../../app/floe_squircle.dart';
@@ -48,6 +49,8 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   ServerConnectorCatalog? catalog;
   String? catalogError;
   bool loadingCatalog = false;
+  String? activatingCalendarConnectorId;
+  String? calendarSelectionError;
 
   bool get supportsDeviceCalendar =>
       effectivePlatform == TargetPlatform.iOS ||
@@ -149,25 +152,38 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         )
         .toList(growable: false);
     ServerConnector? selected;
-    final currentProvider = widget.connection?.provider;
+    final current = widget.connection;
+    final currentProvider = current?.provider;
     for (final connector in connected) {
-      if (_calendarProvider(connector.id) == currentProvider) {
+      if (_calendarProvider(connector.id) == currentProvider &&
+          connector.connectionId == current?.connectionId) {
         selected = connector;
         break;
       }
     }
-    if (selected == null && connected.length == 1) selected = connected.single;
+    if (selected == null && current == null && connected.length == 1) {
+      selected = connected.single;
+    }
     if (selected == null) {
-      if (connected.isEmpty &&
-          const {
-            'google_calendar',
-            'microsoft_calendar',
-          }.contains(currentProvider)) {
+      if (const {
+        'google_calendar',
+        'microsoft_calendar',
+      }.contains(currentProvider)) {
         await gateway.disconnectCalendar(widget.query);
         await widget.onChanged();
       }
       return;
     }
+    if (await _bindServerCalendar(gateway, server, selected)) {
+      await widget.onChanged();
+    }
+  }
+
+  Future<bool> _bindServerCalendar(
+    CalendarGateway gateway,
+    ServerConnection server,
+    ServerConnector selected,
+  ) async {
     final calendarId = selected.scope['calendar_id'];
     final connectionId = selected.connectionId;
     final revision = selected.connectionRevision;
@@ -185,7 +201,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         current?.provider == provider &&
         current?.selectedCalendarIds.length == 1 &&
         current?.selectedCalendarIds.single == calendarId) {
-      return;
+      return false;
     }
     await gateway.bindCalendarConnection(
       connectionId: connectionId,
@@ -197,7 +213,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       ],
       query: widget.query,
     );
-    await widget.onChanged();
+    return true;
   }
 
   ServerConnector? get selectedServerConnector {
@@ -207,6 +223,52 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       if (connector.id == selected) return connector;
     }
     return null;
+  }
+
+  List<ServerConnector> get connectedServerCalendars =>
+      (catalog?.connectors ?? const <ServerConnector>[])
+          .where(
+            (connector) =>
+                connector.status == ServerConnectorStatus.connected &&
+                const {
+                  'calendar.google',
+                  'calendar.microsoft',
+                }.contains(connector.id),
+          )
+          .toList(growable: false);
+
+  bool _isActiveServerCalendar(ServerConnector connector) {
+    final current = widget.connection;
+    return current != null &&
+        current.provider == _calendarProvider(connector.id) &&
+        current.connectionId == connector.connectionId;
+  }
+
+  Future<void> _activateServerCalendar(ServerConnector connector) async {
+    final gateway = widget.gateway;
+    final server = serverConnection;
+    if (gateway == null ||
+        server == null ||
+        activatingCalendarConnectorId != null) {
+      return;
+    }
+    setState(() {
+      activatingCalendarConnectorId = connector.id;
+      calendarSelectionError = null;
+    });
+    try {
+      if (await _bindServerCalendar(gateway, server, connector)) {
+        await widget.onChanged();
+      }
+    } on Object {
+      if (mounted) {
+        setState(() {
+          calendarSelectionError = 'This calendar could not be selected. Refresh Connections and try again.';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => activatingCalendarConnectorId = null);
+    }
   }
 
   @override
@@ -289,6 +351,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 : 'Server services could not be loaded. Check the server connection in Settings.',
           ),
         ],
+        if (connectedServerCalendars.isNotEmpty) ...[
+          SizedBox(height: FloeSpace.lg),
+          _calendarProviderSelection(context),
+        ],
         SizedBox(height: FloeSpace.base),
         if (cards.isEmpty && !loadingCatalog)
           const FloeSquircle(
@@ -317,6 +383,85 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           const LinearProgressIndicator(key: Key('connector-catalog-loading')),
         ],
       ],
+    );
+  }
+
+  Widget _calendarProviderSelection(BuildContext context) {
+    final serverCalendars = connectedServerCalendars;
+    final activeServer = serverCalendars
+        .where(_isActiveServerCalendar)
+        .firstOrNull;
+    final activeDevice = deviceCalendarConnection != null;
+    final needsChoice =
+        serverCalendars.length > 1 && activeServer == null && !activeDevice;
+    final activeName =
+        activeServer?.name ??
+        (activeDevice
+            ? _deviceCalendarName(
+                AppLocalizations.of(context),
+                effectivePlatform,
+              )
+            : null);
+    return FloeSquircle(
+      key: const Key('calendar-provider-selection'),
+      fill: FloePalette.neutral0,
+      borderColor: needsChoice
+          ? FloePalette.warning600
+          : FloePalette.neutral200,
+      borderWidth: 1,
+      padding: const EdgeInsets.all(FloeSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Calendar used by Floe', style: FloeType.title),
+          SizedBox(height: FloeSpace.sm),
+          Text(
+            activeName == null
+                ? 'Choose which connected calendar Floe and Schedule should use.'
+                : '$activeName supplies calendar context to Floe and Schedule.',
+            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+          ),
+          SizedBox(height: FloeSpace.base),
+          if (activeDevice)
+            _CalendarProviderOption(
+              key: const Key('calendar-provider-device'),
+              name: _deviceCalendarName(
+                AppLocalizations.of(context),
+                effectivePlatform,
+              ),
+              active: true,
+              onPressed: null,
+            )
+          else if (supportsDeviceCalendar && widget.gateway != null)
+            _CalendarProviderOption(
+              key: const Key('calendar-provider-device'),
+              name: _deviceCalendarName(
+                AppLocalizations.of(context),
+                effectivePlatform,
+              ),
+              active: false,
+              actionLabel: 'Choose calendars',
+              onPressed: () => setState(() => deviceCalendarDetail = true),
+            ),
+          for (final connector in serverCalendars) ...[
+            if (activeDevice || serverCalendars.indexOf(connector) > 0)
+              SizedBox(height: FloeSpace.sm),
+            _CalendarProviderOption(
+              key: Key('calendar-provider-${connector.id}'),
+              name: connector.name,
+              active: _isActiveServerCalendar(connector),
+              loading: activatingCalendarConnectorId == connector.id,
+              onPressed: _isActiveServerCalendar(connector)
+                  ? null
+                  : () => _activateServerCalendar(connector),
+            ),
+          ],
+          if (calendarSelectionError != null) ...[
+            SizedBox(height: FloeSpace.base),
+            FloeInfoNote(text: calendarSelectionError!),
+          ],
+        ],
+      ),
     );
   }
 
@@ -366,6 +511,49 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             ? AppLocalizations.of(context).androidCalendarDeviceBoundary
             : AppLocalizations.of(context).appleCalendarDeviceBoundary,
       ),
+    ],
+  );
+}
+
+class _CalendarProviderOption extends StatelessWidget {
+  const _CalendarProviderOption({
+    super.key,
+    required this.name,
+    required this.active,
+    required this.onPressed,
+    this.actionLabel = 'Use for Floe & Schedule',
+    this.loading = false,
+  });
+
+  final String name;
+  final bool active;
+  final VoidCallback? onPressed;
+  final String actionLabel;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(
+        active ? LucideIcons.circleCheck : LucideIcons.circle,
+        size: 20,
+        color: active ? FloePalette.primary600 : FloePalette.neutral400,
+      ),
+      SizedBox(width: FloeSpace.sm),
+      Expanded(child: Text(name, style: FloeType.body)),
+      if (active)
+        const FloeBadge(
+          label: 'Active',
+          tone: FloeBadgeTone.success,
+          compact: true,
+        )
+      else
+        FloeButton.outlined(
+          size: FloeButtonSize.compact,
+          loading: loading,
+          onPressed: onPressed,
+          child: Text(actionLabel),
+        ),
     ],
   );
 }
