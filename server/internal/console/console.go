@@ -18,6 +18,35 @@ import (
 	"floe/server/internal/inference"
 )
 
+var personIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+var connectionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
+func validPersonID(value string) bool { return personIDPattern.MatchString(value) }
+func validDeviceID(value string) bool { return deviceIDPattern.MatchString(value) }
+
+func bindConnectionOwner(snapshot any, scope clientScope) any {
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return snapshot
+	}
+	var value map[string]any
+	if json.Unmarshal(encoded, &value) != nil {
+		return snapshot
+	}
+	connection, ok := value["connection"].(map[string]any)
+	if !ok {
+		return snapshot
+	}
+	connectorID, ok := connection["connector_id"].(string)
+	if !ok || connectorID == "" {
+		return snapshot
+	}
+	connection["person_id"] = scope.PersonID
+	connection["connection_id"] = connectorID + "." + digest(scope.PersonID + "\x00" + connectorID)[:16]
+	return value
+}
+
 //go:embed web/*
 var assets embed.FS
 
@@ -71,11 +100,19 @@ type session struct {
 	expires time.Time
 }
 type pairing struct {
-	ID      string    `json:"id"`
-	Code    string    `json:"code"`
-	Expires time.Time `json:"expires"`
-	proof   string
-	token   string
+	ID       string    `json:"id"`
+	Code     string    `json:"code"`
+	Expires  time.Time `json:"expires"`
+	PersonID string    `json:"person_id"`
+	DeviceID string    `json:"device_id"`
+	proof    string
+	token    string
+}
+
+type clientScope struct {
+	PersonID string
+	DeviceID string
+	Legacy   bool
 }
 
 type Console struct {
@@ -355,12 +392,12 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	}
 	auth := request.Header.Get("Authorization")
 	console.mu.Lock()
-	allowed := false
+	var scope clientScope
 	if strings.HasPrefix(auth, "Bearer ") {
 		hash := digest(strings.TrimPrefix(auth, "Bearer "))
 		for _, value := range console.state.Clients {
-			if hash == value {
-				allowed = true
+			if hash == value.TokenHash {
+				scope = clientScope{PersonID: value.PersonID, DeviceID: value.DeviceID, Legacy: value.Legacy}
 			}
 		}
 	}
@@ -371,8 +408,12 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	logistics := append([]LogisticsRuntime(nil), console.logistics...)
 	calendars := append([]CalendarRuntime(nil), console.calendars...)
 	console.mu.Unlock()
-	if !allowed {
+	if scope.PersonID == "" && !scope.Legacy {
 		failure(writer, 401, "unauthorized")
+		return
+	}
+	if scope.Legacy && request.Method != http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/connectors/") {
+		failure(writer, 403, "person_scope_required")
 		return
 	}
 	if request.URL.Path == "/v1/connections" {
@@ -420,7 +461,12 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			}
 			connections = append(connections, snapshot)
 		}
-		reply(writer, 200, map[string]any{"schema_version": 1, "connections": connections})
+		if !scope.Legacy {
+			for index, snapshot := range connections {
+				connections[index] = bindConnectionOwner(snapshot, scope)
+			}
+		}
+		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "legacy_unscoped": scope.Legacy, "connections": connections})
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
@@ -572,7 +618,9 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	var input struct {
-		Proof string `json:"proof"`
+		Proof    string `json:"proof"`
+		PersonID string `json:"person_id"`
+		DeviceID string `json:"device_id"`
 	}
 	if !decode(writer, request, &input) {
 		failure(writer, 400, "validation")
@@ -582,6 +630,10 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 	defer console.mu.Unlock()
 	now := time.Now()
 	if request.URL.Path == "/pair/start" {
+		if !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) {
+			failure(writer, 400, "identity_required")
+			return
+		}
 		if now.Sub(console.lastPair) < 10*time.Second || (console.pair != nil && console.pair.Expires.After(now)) {
 			failure(writer, 429, "pairing_in_progress")
 			return
@@ -590,8 +642,14 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 			failure(writer, 409, "too_many_clients")
 			return
 		}
+		for _, client := range console.state.Clients {
+			if !client.Legacy && client.PersonID != input.PersonID {
+				failure(writer, 409, "person_mismatch")
+				return
+			}
+		}
 		console.lastPair = now
-		console.pair = &pairing{ID: randomToken(), Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute), proof: randomToken()}
+		console.pair = &pairing{ID: randomToken(), Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute), PersonID: input.PersonID, DeviceID: input.DeviceID, proof: randomToken()}
 		reply(writer, 200, map[string]any{"id": console.pair.ID, "code": console.pair.Code, "proof": console.pair.proof, "expires": console.pair.Expires})
 		return
 	}
@@ -609,7 +667,7 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 			reply(writer, 200, map[string]string{"status": "pending"})
 			return
 		}
-		reply(writer, 200, map[string]string{"status": "approved", "token": console.pair.token, "client_id": console.pair.ID})
+		reply(writer, 200, map[string]string{"status": "approved", "token": console.pair.token, "client_id": console.pair.ID, "person_id": console.pair.PersonID, "device_id": console.pair.DeviceID})
 		return
 	}
 	failure(writer, 404, "not_found")
@@ -833,7 +891,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		token := randomToken()
-		next.Clients[input.ID] = digest(token)
+		next.Clients[input.ID] = pairedClient{TokenHash: digest(token), PersonID: console.pair.PersonID, DeviceID: console.pair.DeviceID}
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
 			return
@@ -886,8 +944,11 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		unavailable[identifier] = value
 	}
 	clients := make([]string, 0, len(state.Clients))
+	clientScopes := make(map[string]any, len(state.Clients))
 	for identifier := range state.Clients {
 		clients = append(clients, identifier)
+		client := state.Clients[identifier]
+		clientScopes[identifier] = map[string]any{"person_id": client.PersonID, "device_id": client.DeviceID, "legacy_unscoped": client.Legacy}
 	}
 	var pending *pairing
 	if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
@@ -919,7 +980,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		"microsoft_teams":    map[string]any{"configured": state.Connectors.MicrosoftTeams != nil},
 		"home_assistant":     map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
-	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
+	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "client_scopes": clientScopes, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }
 
 func (console *Console) updateRoute(writer http.ResponseWriter, request *http.Request) {

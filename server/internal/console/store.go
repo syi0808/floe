@@ -19,11 +19,45 @@ type Vault interface {
 }
 
 type diskState struct {
-	Targets    map[string]inference.Target `json:"targets"`
-	Routes     map[string]inference.Route  `json:"routes"`
-	Providers  map[string]providerProfile  `json:"providers,omitempty"`
-	Connectors connectorConfigState        `json:"connectors,omitempty"`
-	Clients    map[string]string           `json:"clients"`
+	Targets     map[string]inference.Target `json:"targets"`
+	Routes      map[string]inference.Route  `json:"routes"`
+	Providers   map[string]providerProfile  `json:"providers,omitempty"`
+	Connectors  connectorConfigState        `json:"connectors,omitempty"`
+	Connections map[string]connectionRecord `json:"connections,omitempty"`
+	Clients     map[string]pairedClient     `json:"clients"`
+}
+
+type connectionRecord struct {
+	ConnectionID string         `json:"connection_id"`
+	ConnectorID  string         `json:"connector_id"`
+	PersonID     string         `json:"person_id"`
+	Device       *deviceBinding `json:"device_binding,omitempty"`
+}
+
+type deviceBinding struct {
+	DeviceID string `json:"device_id"`
+}
+
+type pairedClient struct {
+	TokenHash string `json:"token_hash"`
+	PersonID  string `json:"person_id,omitempty"`
+	DeviceID  string `json:"device_id,omitempty"`
+	Legacy    bool   `json:"legacy_unscoped,omitempty"`
+}
+
+func (client *pairedClient) UnmarshalJSON(data []byte) error {
+	var legacy string
+	if json.Unmarshal(data, &legacy) == nil {
+		*client = pairedClient{TokenHash: legacy, Legacy: true}
+		return nil
+	}
+	type wire pairedClient
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*client = pairedClient(value)
+	return nil
 }
 
 type connectorConfigState struct {
@@ -109,7 +143,7 @@ func writePrivate(path string, value []byte) error {
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return state, "", err
 	}
@@ -128,6 +162,9 @@ func readState(directory string) (diskState, string, error) {
 		if state.Providers == nil {
 			state.Providers = map[string]providerProfile{}
 		}
+		if state.Connections == nil {
+			state.Connections = map[string]connectionRecord{}
+		}
 		configuredTargets := len(state.Targets)
 		for _, profile := range state.Providers {
 			if profile.Classes == nil || len(profile.Classes) > 3 {
@@ -137,6 +174,16 @@ func readState(directory string) (diskState, string, error) {
 		}
 		if configuredTargets > 32 {
 			return state, "", errors.New("invalid server state")
+		}
+		for _, client := range state.Clients {
+			if len(client.TokenHash) != sha256.Size*2 || (!client.Legacy && (!validPersonID(client.PersonID) || !validDeviceID(client.DeviceID))) {
+				return state, "", errors.New("invalid server state")
+			}
+		}
+		for key, connection := range state.Connections {
+			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
+				return state, "", errors.New("invalid server state")
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return state, "", err
@@ -162,7 +209,7 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Clients: map[string]string{}, Connectors: state.Connectors}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Connectors: state.Connectors}
 	if state.Connectors.GitHub != nil {
 		configured := *state.Connectors.GitHub
 		copy.Connectors.GitHub = &configured
@@ -208,6 +255,13 @@ func cloneState(state diskState) diskState {
 	}
 	for key, value := range state.Clients {
 		copy.Clients[key] = value
+	}
+	for key, value := range state.Connections {
+		if value.Device != nil {
+			binding := *value.Device
+			value.Device = &binding
+		}
+		copy.Connections[key] = value
 	}
 	return copy
 }

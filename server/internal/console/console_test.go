@@ -18,6 +18,9 @@ import (
 	"floe/server/internal/connectors/common"
 )
 
+const fixturePersonID = "00000000-0000-4000-8000-000000000001"
+const fixtureDeviceID = "fixture-device"
+
 type memoryVault struct {
 	values map[string]string
 	fail   bool
@@ -233,7 +236,7 @@ func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testin
 	}
 	management.mu.Lock()
 	management.state.Providers["codex_oauth"] = providerProfile{BaseURL: codexEndpoint, Classes: map[string]classProfile{"balanced": {Model: "fixture"}}}
-	management.state.Clients["fixture"] = digest("app-token")
+	management.state.Clients["fixture"] = pairedClient{TokenHash: digest("app-token"), PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
 	management.mu.Unlock()
 	stateDone := make(chan struct{})
 	go func() {
@@ -298,7 +301,7 @@ func (fixture *fixture) value(response *httptest.ResponseRecorder) map[string]an
 }
 
 func (fixture *fixture) pair() (string, string) {
-	started := fixture.value(fixture.call("POST", "/pair/start", map[string]string{}, ""))
+	started := fixture.value(fixture.call("POST", "/pair/start", map[string]string{"person_id": fixturePersonID, "device_id": fixtureDeviceID}, ""))
 	proof := started["proof"].(string)
 	pending := fixture.value(fixture.call("POST", "/pair/poll", map[string]string{"proof": proof}, ""))
 	if pending["status"] != "pending" || pending["token"] != nil {
@@ -306,6 +309,9 @@ func (fixture *fixture) pair() (string, string) {
 	}
 	fixture.value(fixture.call("POST", "/manage/api/pair/approve", map[string]any{"id": started["id"]}, ""))
 	approved := fixture.value(fixture.call("POST", "/pair/poll", map[string]string{"proof": proof}, ""))
+	if approved["person_id"] != fixturePersonID || approved["device_id"] != fixtureDeviceID {
+		fixture.test.Fatalf("pairing lost identity scope: %#v", approved)
+	}
 	return approved["client_id"].(string), approved["token"].(string)
 }
 
@@ -331,6 +337,74 @@ func TestPairingRestartAndRevocation(test *testing.T) {
 	fixture.value(fixture.call("POST", "/manage/api/client/delete", map[string]string{"id": identifier}, ""))
 	if fixture.call("GET", "/v1/inference-purposes", nil, token).Code != 401 {
 		test.Fatal("revoked token accepted")
+	}
+}
+
+func TestLegacyPairedCredentialMigratesAsUnscopedReadOnly(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	token := "legacy-token"
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"legacy":%q}}`, digest(token))
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	management, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8431/v1/connections", nil)
+	request.Host = "127.0.0.1:8431"
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	management.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"legacy_unscoped":true`) {
+		test.Fatalf("legacy read compatibility lost: %d %s", response.Code, response.Body.String())
+	}
+	mutation := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8431/v1/connectors/calendar.google/connect", strings.NewReader(`{}`))
+	mutation.Host = "127.0.0.1:8431"
+	mutation.Header.Set("Authorization", "Bearer "+token)
+	mutationResponse := httptest.NewRecorder()
+	management.ServeHTTP(mutationResponse, mutation)
+	if mutationResponse.Code != http.StatusForbidden || !strings.Contains(mutationResponse.Body.String(), "person_scope_required") {
+		test.Fatalf("legacy mutation was not gated: %d %s", mutationResponse.Code, mutationResponse.Body.String())
+	}
+	stored, err := json.Marshal(management.state.Clients["legacy"])
+	if err != nil || !strings.Contains(string(stored), `"legacy_unscoped":true`) || strings.Contains(string(stored), token) {
+		test.Fatalf("unsafe legacy migration: %s %v", stored, err)
+	}
+}
+
+func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
+	fixture := setup(test)
+	fixture.console.mu.Lock()
+	next := cloneState(fixture.console.state)
+	next.Connections["calendar.apple.primary"] = connectionRecord{
+		ConnectionID: "calendar.apple.primary",
+		ConnectorID:  "calendar.apple",
+		PersonID:     fixturePersonID,
+		Device:       &deviceBinding{DeviceID: fixtureDeviceID},
+	}
+	err := fixture.console.save(next)
+	fixture.console.mu.Unlock()
+	if err != nil {
+		test.Fatal(err)
+	}
+	state, _, err := readState(fixture.console.directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	connection := state.Connections["calendar.apple.primary"]
+	if connection.PersonID != fixturePersonID || connection.Device == nil || connection.Device.DeviceID != fixtureDeviceID {
+		test.Fatalf("connection ownership lost: %#v", connection)
+	}
+
+	encoded, _ := json.Marshal(state)
+	var raw map[string]any
+	_ = json.Unmarshal(encoded, &raw)
+	if strings.Contains(string(encoded), "credential") || raw["connections"] == nil {
+		test.Fatalf("invalid connection persistence boundary: %s", encoded)
 	}
 }
 
@@ -407,7 +481,7 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 	_, token := fixture.pair()
 	snapshot := map[string]any{
 		"descriptor": map[string]any{"id": "gmail.fixture", "provider": "gmail"},
-		"connection": map[string]any{"state": "ready"},
+		"connection": map[string]any{"connector_id": "gmail.fixture", "state": "ready"},
 		"views":      []any{},
 	}
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{snapshot: snapshot})
@@ -420,11 +494,35 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 	if len(connections) != 1 || connections[0].(map[string]any)["descriptor"].(map[string]any)["provider"] != "gmail" {
 		test.Fatalf("connections: %#v", connections)
 	}
+	connection := connections[0].(map[string]any)["connection"].(map[string]any)
+	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || !strings.HasPrefix(connection["connection_id"].(string), "gmail.fixture.") {
+		test.Fatalf("unbound connection: %#v", value)
+	}
 	if response := fixture.call(http.MethodPost, "/v1/connections", map[string]any{}, token); response.Code != http.StatusNotFound {
 		test.Fatalf("write endpoint accepted: %d", response.Code)
 	}
 	if response := fixture.call(http.MethodGet, "/v1/connections", nil, ""); response.Code != http.StatusUnauthorized {
 		test.Fatalf("unpaired read accepted: %d", response.Code)
+	}
+}
+
+func TestPairingRejectsMissingAndDifferentPersonIdentity(test *testing.T) {
+	fixture := setup(test)
+	if response := fixture.call("POST", "/pair/start", map[string]string{}, ""); response.Code != http.StatusBadRequest {
+		test.Fatalf("missing identity accepted: %d", response.Code)
+	}
+	fixture.pair()
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	fixture.console = restarted
+	response := fixture.call("POST", "/pair/start", map[string]string{
+		"person_id": "00000000-0000-4000-8000-000000000002",
+		"device_id": "other-device",
+	}, "")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "person_mismatch") {
+		test.Fatalf("different person accepted: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -879,8 +977,8 @@ func TestCredentialFailureIsAtomicAndRedacted(test *testing.T) {
 
 func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 	fixture := setup(test)
-	started := fixture.value(fixture.call("POST", "/pair/start", map[string]string{}, ""))
-	if fixture.call("POST", "/pair/start", map[string]string{}, "").Code != 429 {
+	started := fixture.value(fixture.call("POST", "/pair/start", map[string]string{"person_id": fixturePersonID, "device_id": fixtureDeviceID}, ""))
+	if fixture.call("POST", "/pair/start", map[string]string{"person_id": fixturePersonID, "device_id": fixtureDeviceID}, "").Code != 429 {
 		test.Fatal("pending pairing overwritten")
 	}
 	if fixture.call("POST", "/pair/poll", map[string]string{"proof": "wrong"}, "").Code != 401 {

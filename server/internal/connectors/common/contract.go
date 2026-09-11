@@ -37,13 +37,20 @@ type Failure struct {
 }
 
 type Connection struct {
-	SchemaVersion       int      `json:"schema_version"`
-	ConnectorID         string   `json:"connector_id"`
-	State               string   `json:"state"`
-	GrantedScopes       []string `json:"granted_scopes"`
-	ObservedAtUnixMS    int64    `json:"observed_at_unix_ms"`
-	LastSuccessAtUnixMS *int64   `json:"last_success_at_unix_ms,omitempty"`
-	LastFailure         *Failure `json:"last_failure,omitempty"`
+	SchemaVersion       int            `json:"schema_version"`
+	ConnectorID         string         `json:"connector_id"`
+	ConnectionID        string         `json:"connection_id,omitempty"`
+	PersonID            string         `json:"person_id,omitempty"`
+	DeviceBinding       *DeviceBinding `json:"device_binding,omitempty"`
+	State               string         `json:"state"`
+	GrantedScopes       []string       `json:"granted_scopes"`
+	ObservedAtUnixMS    int64          `json:"observed_at_unix_ms"`
+	LastSuccessAtUnixMS *int64         `json:"last_success_at_unix_ms,omitempty"`
+	LastFailure         *Failure       `json:"last_failure,omitempty"`
+}
+
+type DeviceBinding struct {
+	DeviceID string `json:"device_id"`
 }
 
 type ViewSnapshot struct {
