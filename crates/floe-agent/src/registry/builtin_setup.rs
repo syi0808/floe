@@ -164,6 +164,41 @@ pub struct BuiltinExpertSetupResult {
 }
 
 impl AgentRegistry {
+    pub fn install_builtin_experts_enabled(
+        &mut self,
+        person_id: PersonId,
+        request: &BuiltinExpertSetup,
+    ) -> Result<BuiltinExpertSetupReceipt, AgentFailure> {
+        let already_installed = self
+            .snapshot
+            .builtin_setups
+            .iter()
+            .any(|setup| setup.setup_id == request.setup_id);
+        let receipt = self.install_builtin_experts(person_id, request)?;
+        if already_installed {
+            return Ok(receipt);
+        }
+        for expert in &receipt.assignments {
+            for installation_id in [expert.tool_installation_id, expert.expert_installation_id] {
+                self.snapshot
+                    .installations
+                    .iter_mut()
+                    .find(|installation| installation.id == installation_id)
+                    .ok_or(AgentFailure::NotFound)?
+                    .enabled = true;
+            }
+            for assignment_id in [expert.tool_assignment_id, expert.expert_assignment_id] {
+                self.snapshot
+                    .assignments
+                    .iter_mut()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .ok_or(AgentFailure::NotFound)?
+                    .enabled = true;
+            }
+        }
+        Ok(receipt)
+    }
+
     pub fn install_builtin_experts(
         &mut self,
         person_id: PersonId,
@@ -276,6 +311,60 @@ impl AgentRegistry {
         Ok(receipt)
     }
 
+    pub fn refresh_builtin_expert_sources(
+        &mut self,
+        person_id: PersonId,
+        expected_revision: u64,
+        sources: Vec<BuiltinSourceBinding>,
+    ) -> Result<BuiltinExpertSetupReceipt, AgentFailure> {
+        self.check_revision(expected_revision)?;
+        validate_sources(&sources)?;
+        let index = self
+            .snapshot
+            .builtin_setups
+            .iter()
+            .position(|setup| setup.person_id == person_id)
+            .ok_or(AgentFailure::NotFound)?;
+        if self.snapshot.builtin_setups[index].sources == sources {
+            return Ok(self.snapshot.builtin_setups[index].clone());
+        }
+        let assignments = self.snapshot.builtin_setups[index].assignments.clone();
+        let grants = assignments
+            .iter()
+            .map(|receipt| {
+                required_sources(receipt.expert)
+                    .iter()
+                    .filter_map(|source| {
+                        sources.iter().find(|binding| {
+                            binding.source == *source
+                                && binding.state == BuiltinSourceState::Available
+                        })
+                    })
+                    .map(|binding| binding.view_handle)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        self.advance()?;
+        for (receipt, granted_view_handles) in assignments.iter().zip(grants) {
+            for assignment_id in [receipt.tool_assignment_id, receipt.expert_assignment_id] {
+                self.snapshot
+                    .assignments
+                    .iter_mut()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .ok_or(AgentFailure::NotFound)?
+                    .granted_view_handles = granted_view_handles.clone();
+            }
+            self.snapshot.builtin_setups[index]
+                .assignments
+                .iter_mut()
+                .find(|assignment| assignment.expert == receipt.expert)
+                .ok_or(AgentFailure::NotFound)?
+                .granted_view_handles = granted_view_handles;
+        }
+        self.snapshot.builtin_setups[index].sources = sources;
+        Ok(self.snapshot.builtin_setups[index].clone())
+    }
+
     pub fn enabled_expert_cards(&self, person_id: PersonId) -> Vec<crate::AgentCard> {
         self.snapshot
             .assignments
@@ -290,6 +379,11 @@ impl AgentRegistry {
                 if package.reference.kind != PackageKind::Expert
                     || assignment.granted_view_handles.is_empty()
                     || self.validate_grants(assignment).is_err()
+                {
+                    return None;
+                }
+                if let PackageImplementation::Builtin { expert } = &package.implementation
+                    && !self.assignment_has_source(assignment.id, mandatory_source(*expert))
                 {
                     return None;
                 }
@@ -318,6 +412,19 @@ impl AgentRegistry {
                 card.validate().ok().map(|_| card)
             })
             .collect()
+    }
+
+    fn assignment_has_source(&self, assignment_id: Uuid, source: BuiltinContextSource) -> bool {
+        self.snapshot.builtin_setups.iter().any(|setup| {
+            setup.assignments.iter().any(|receipt| {
+                receipt.expert_assignment_id == assignment_id
+                    && setup.sources.iter().any(|binding| {
+                        binding.source == source
+                            && binding.state == BuiltinSourceState::Available
+                            && receipt.granted_view_handles.contains(&binding.view_handle)
+                    })
+            })
+        })
     }
 
     pub(super) fn validate_builtin_setups(&self) -> Result<(), AgentFailure> {
@@ -414,6 +521,19 @@ fn required_sources(expert: BuiltinExpertKind) -> &'static [BuiltinContextSource
         BuiltinExpertKind::Wellbeing => &[Wellbeing, Calendar],
         BuiltinExpertKind::WorkContext => &[WorkContext],
         BuiltinExpertKind::LifeLogistics => &[Logistics],
+    }
+}
+
+fn mandatory_source(expert: BuiltinExpertKind) -> BuiltinContextSource {
+    match expert {
+        BuiltinExpertKind::Commitments | BuiltinExpertKind::Communication => {
+            BuiltinContextSource::Mail
+        }
+        BuiltinExpertKind::Relationships => BuiltinContextSource::Contacts,
+        BuiltinExpertKind::FocusAttention => BuiltinContextSource::Attention,
+        BuiltinExpertKind::Wellbeing => BuiltinContextSource::Wellbeing,
+        BuiltinExpertKind::WorkContext => BuiltinContextSource::WorkContext,
+        BuiltinExpertKind::LifeLogistics => BuiltinContextSource::Logistics,
     }
 }
 

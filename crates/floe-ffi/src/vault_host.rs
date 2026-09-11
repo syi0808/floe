@@ -13,8 +13,9 @@ use std::{
 };
 
 use floe_agent::{
-    AgentEvent, AgentFailure, AgentSession, Cancellation, KnowledgeActor, KnowledgeDecisionKind,
-    KnowledgeKind, SessionStore,
+    AgentEvent, AgentFailure, AgentSession, BuiltinContextSource, BuiltinExpertKind,
+    BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState, Cancellation, ConnectionState,
+    KnowledgeActor, KnowledgeDecisionKind, KnowledgeKind, SessionStore,
 };
 use floe_core::{
     AgentFixtureTurn, CalendarActionState, EncryptedAgentVault, ExpertCalendarInspection,
@@ -571,6 +572,15 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         }
         AgentVaultActionDto::ConversationSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            ensure_builtin_experts(
+                vault,
+                core,
+                local_context,
+                job.person,
+                None,
+                job.cancellation.clone(),
+            )
+            .await?;
             let session = match operation {
                 AgentConversationSessionOperationDto::Start {} => vault.create_session().await?,
                 AgentConversationSessionOperationDto::Resume {} => vault.resume_session().await?,
@@ -603,6 +613,15 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         }
         AgentVaultActionDto::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            ensure_builtin_experts(
+                vault,
+                core,
+                local_context,
+                job.person,
+                request.remote_route.as_ref(),
+                job.cancellation.clone(),
+            )
+            .await?;
             let session = conversation_turn::run(
                 core,
                 vault,
@@ -812,6 +831,133 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             ))
         }
     }
+}
+
+async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    core: &FloeCore,
+    local_context: &LocalContextStore,
+    person_id: PersonId,
+    remote_route: Option<&AgentRemoteRouteDto>,
+    cancellation: Cancellation,
+) -> Result<(), AgentFailure> {
+    let remote_available =
+        remote_route.is_some_and(|route| !route.external || route.allow_external);
+    let calendar = core
+        .calendar_connector_snapshot(
+            person_id,
+            &format!("local-{}", std::env::consts::OS),
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+    let calendar_state = match calendar.as_ref().map(|snapshot| snapshot.connection.state) {
+        Some(ConnectionState::Ready | ConnectionState::Degraded) => BuiltinSourceState::Available,
+        _ if remote_available => BuiltinSourceState::Available,
+        Some(ConnectionState::Disconnected | ConnectionState::Revoked) => {
+            BuiltinSourceState::Disabled
+        }
+        _ => BuiltinSourceState::Unavailable,
+    };
+    let local_state = |view_id| {
+        if local_context.is_available(person_id, view_id) {
+            BuiltinSourceState::Available
+        } else if remote_available {
+            BuiltinSourceState::Available
+        } else {
+            BuiltinSourceState::Unavailable
+        }
+    };
+    let state = |source| match source {
+        BuiltinContextSource::Calendar => calendar_state,
+        BuiltinContextSource::Tasks | BuiltinContextSource::ConfirmedMemory => {
+            BuiltinSourceState::Available
+        }
+        BuiltinContextSource::Contacts => local_state("people.identity"),
+        BuiltinContextSource::Attention => local_state("attention.coarse"),
+        BuiltinContextSource::Wellbeing => local_state("wellbeing.derived"),
+        BuiltinContextSource::Mail
+        | BuiltinContextSource::ConfirmedInteractions
+        | BuiltinContextSource::WorkContext
+        | BuiltinContextSource::Logistics => {
+            if remote_available {
+                BuiltinSourceState::Available
+            } else {
+                BuiltinSourceState::Unavailable
+            }
+        }
+    };
+    let sources = [
+        BuiltinContextSource::Calendar,
+        BuiltinContextSource::Mail,
+        BuiltinContextSource::Tasks,
+        BuiltinContextSource::ConfirmedMemory,
+        BuiltinContextSource::Contacts,
+        BuiltinContextSource::ConfirmedInteractions,
+        BuiltinContextSource::Attention,
+        BuiltinContextSource::WorkContext,
+        BuiltinContextSource::Wellbeing,
+        BuiltinContextSource::Logistics,
+    ]
+    .into_iter()
+    .map(|source| BuiltinSourceBinding {
+        source,
+        view_handle: builtin_source_handle(person_id, source),
+        state: state(source),
+    })
+    .collect::<Vec<_>>();
+    let existing = vault.builtin_expert_overview().await?;
+    let result = if let Some(existing) = existing {
+        vault
+            .refresh_builtin_expert_sources(
+                existing.registry.revision,
+                sources,
+                cancellation.clone(),
+            )
+            .await?
+    } else {
+        let revision = vault
+            .registry_overview()
+            .await?
+            .map_or(0, |registry| registry.revision);
+        vault
+            .install_builtin_experts_enabled(
+                BuiltinExpertSetup {
+                    instance_id: vault.registry_instance_id(),
+                    expected_revision: revision,
+                    setup_id: Uuid::new_v5(
+                        &vault.registry_instance_id(),
+                        b"floe.builtin.experts.v1",
+                    ),
+                    sources,
+                },
+                cancellation.clone(),
+            )
+            .await?
+    };
+    if result.setup.assignments.len() != BuiltinExpertKind::ALL.len() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(())
+}
+
+fn builtin_source_handle(person_id: PersonId, source: BuiltinContextSource) -> Uuid {
+    let name = match source {
+        BuiltinContextSource::Calendar => "calendar",
+        BuiltinContextSource::Mail => "mail",
+        BuiltinContextSource::Tasks => "tasks",
+        BuiltinContextSource::ConfirmedMemory => "confirmed-memory",
+        BuiltinContextSource::Contacts => "contacts",
+        BuiltinContextSource::ConfirmedInteractions => "confirmed-interactions",
+        BuiltinContextSource::Attention => "attention",
+        BuiltinContextSource::WorkContext => "work-context",
+        BuiltinContextSource::Wellbeing => "wellbeing",
+        BuiltinContextSource::Logistics => "logistics",
+    };
+    Uuid::new_v5(
+        &person_id.0,
+        format!("floe.builtin.source.v1:{name}").as_bytes(),
+    )
 }
 
 fn stored_vault_state(root: &std::path::Path, person: PersonId) -> AgentVaultStateDto {

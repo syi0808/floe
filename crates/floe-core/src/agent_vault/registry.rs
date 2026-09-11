@@ -71,6 +71,81 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
+    pub async fn install_builtin_experts_enabled(
+        &self,
+        request: floe_agent::BuiltinExpertSetup,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::BuiltinExpertSetupResult, AgentFailure> {
+        let check = || {
+            cancellation
+                .is_cancelled()
+                .then_some(AgentFailure::Cancelled)
+                .map_or(Ok(()), Err)
+        };
+        check()?;
+        if request.instance_id != self.vault_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let previous = self.expert_registry().await?;
+        let mut registry = match &previous {
+            Some(snapshot) => AgentRegistry::restore(snapshot.clone(), self.vault_id)?,
+            None => AgentRegistry::new(self.vault_id),
+        };
+        let revision = registry.revision();
+        let setup = registry.install_builtin_experts_enabled(self.person_id, &request)?;
+        if registry.revision() != revision {
+            match previous {
+                Some(_) => {
+                    self.save_expert_registry_checked(revision, &registry.snapshot(), &check)
+                        .await?
+                }
+                None => {
+                    self.initialize_expert_registry_checked(&registry.snapshot(), &check)
+                        .await?
+                }
+            }
+        }
+        self.check_access()?;
+        check()?;
+        Ok(floe_agent::BuiltinExpertSetupResult {
+            setup,
+            registry: registry.overview(self.person_id),
+        })
+    }
+
+    pub async fn refresh_builtin_expert_sources(
+        &self,
+        expected_revision: u64,
+        sources: Vec<floe_agent::BuiltinSourceBinding>,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::BuiltinExpertSetupResult, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let snapshot = self
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+        let setup =
+            registry.refresh_builtin_expert_sources(self.person_id, expected_revision, sources)?;
+        if registry.revision() != expected_revision {
+            self.save_expert_registry_checked(expected_revision, &registry.snapshot(), || {
+                if cancellation.is_cancelled() {
+                    Err(AgentFailure::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .await?;
+        }
+        self.check_access()?;
+        Ok(floe_agent::BuiltinExpertSetupResult {
+            setup,
+            registry: registry.overview(self.person_id),
+        })
+    }
+
     pub async fn enabled_expert_cards(&self) -> Result<Vec<floe_agent::AgentCard>, AgentFailure> {
         let cards = match self.expert_registry().await? {
             Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?

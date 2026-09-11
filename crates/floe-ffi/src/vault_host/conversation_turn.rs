@@ -1,15 +1,15 @@
 use floe_agent::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
     AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent, AgentFailure,
-    AgentRuntime, AttentionView, CalendarContextView, CapabilityDescriptor, CapabilityHost,
-    CapabilityInvocation, CommitmentsContextViews, CommitmentsExpertResult,
-    CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE, FeasibilityView,
-    FocusContextViews, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
-    InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
-    ModelRequest, ModelResponse, ModelRunner, NativeContextView, PeopleView,
-    PersonalExpertInvocation, PortfolioExpertInvocation, RelationshipsContextViews,
-    RelationshipsExpertResult, SessionStore, TransferConsent, WellbeingContextViews,
-    WellbeingExpertResult, WellbeingView, WorkContextExpertResult,
+    AgentRuntime, AttentionView, BuiltinContextSource, BuiltinExpertSetupReceipt,
+    CalendarContextView, CapabilityDescriptor, CapabilityHost, CapabilityInvocation,
+    CommitmentsContextViews, CommitmentsExpertResult, CommunicationExpertResult, DataClass,
+    EXPERT_RESULT_MEDIA_TYPE, FeasibilityView, FocusContextViews, FocusExpertResult,
+    InProcessA2ATransport, InProcessAgent, InferencePolicyDecision, LifeLogisticsExpertResult,
+    MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse, ModelRunner,
+    NativeContextView, PeopleView, PersonalExpertInvocation, PortfolioExpertInvocation,
+    RelationshipsContextViews, RelationshipsExpertResult, SessionStore, TransferConsent,
+    WellbeingContextViews, WellbeingExpertResult, WellbeingView, WorkContextExpertResult,
     run_commitments_expert_with_views, run_communication_expert, run_focus_expert_with_views,
     run_life_logistics_expert, run_relationships_expert_with_views,
     run_wellbeing_expert_with_views, run_work_context_expert,
@@ -68,6 +68,11 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     let policy = policy(&model, request.remote_route.as_ref());
     let task_views = optional_task_views(core, person_id).await?;
     let expert_cards = vault.enabled_expert_cards().await?;
+    let builtin_setup = vault
+        .builtin_expert_overview()
+        .await?
+        .ok_or(AgentFailure::VaultUnavailable)?
+        .setup;
     let capabilities = ConversationCapabilities {
         model: &model,
         policy: &policy,
@@ -80,6 +85,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         local_context,
         task_views: &task_views,
         cards: expert_cards,
+        builtin_setup: Some(builtin_setup),
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
@@ -522,6 +528,34 @@ struct ConversationExperts<'model> {
     local_context: &'model LocalContextStore,
     task_views: &'model [NativeContextView],
     cards: Vec<AgentCard>,
+    builtin_setup: Option<BuiltinExpertSetupReceipt>,
+}
+
+impl ConversationExperts<'_> {
+    fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
+        let Some(setup) = &self.builtin_setup else {
+            return true;
+        };
+        setup.assignments.iter().any(|assignment| {
+            assignment.expert.package_id() == agent_id
+                && setup.sources.iter().any(|binding| {
+                    binding.source == source
+                        && assignment
+                            .granted_view_handles
+                            .contains(&binding.view_handle)
+                })
+        })
+    }
+
+    fn require_source(
+        &self,
+        agent_id: &str,
+        source: BuiltinContextSource,
+    ) -> Result<(), AgentFailure> {
+        self.source_granted(agent_id, source)
+            .then_some(())
+            .ok_or(AgentFailure::CapabilityDenied)
+    }
 }
 
 impl InProcessAgent for ConversationExperts<'_> {
@@ -560,13 +594,17 @@ impl InProcessAgent for ConversationExperts<'_> {
         let current_time_unix_ms =
             i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
         let invocation_id = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
+        let mut expert_context = self.context.clone();
+        if !self.source_granted(&request.agent_id, BuiltinContextSource::ConfirmedMemory) {
+            expert_context.memories.clear();
+        }
         let mail_invocation = |view| MailExpertInvocation {
             usage: request.usage.clone(),
             person_id: request.person_id,
             invocation_id,
             assignment: assignment.clone(),
             current_time_unix_ms,
-            context: self.context.clone(),
+            context: expert_context.clone(),
             view,
             max_output_bytes: request.max_output_bytes,
             max_model_tokens: 40_960,
@@ -580,7 +618,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             invocation_id,
             assignment: assignment.clone(),
             current_time_unix_ms,
-            context: self.context.clone(),
+            context: expert_context.clone(),
             max_output_bytes: request.max_output_bytes,
             max_model_tokens: 40_960,
             max_model_cost_micros: 50_000,
@@ -593,7 +631,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             invocation_id,
             assignment: assignment.clone(),
             current_time_unix_ms,
-            context: self.context.clone(),
+            context: expert_context.clone(),
             max_output_bytes: request.max_output_bytes,
             max_model_tokens: 40_960,
             max_model_cost_micros: 50_000,
@@ -608,6 +646,7 @@ impl InProcessAgent for ConversationExperts<'_> {
         };
         let (summary, data, name) = match request.agent_id.as_str() {
             COMMITMENTS_AGENT_ID => {
+                self.require_source(COMMITMENTS_AGENT_ID, BuiltinContextSource::Mail)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -620,16 +659,27 @@ impl InProcessAgent for ConversationExperts<'_> {
                         &request.cancellation,
                     )
                     .await?;
-                let calendars = personal_views
-                    .calendar_views(request.deadline, &request.cancellation)
-                    .await?;
+                let calendars =
+                    if self.source_granted(COMMITMENTS_AGENT_ID, BuiltinContextSource::Calendar) {
+                        personal_views
+                            .calendar_views(request.deadline, &request.cancellation)
+                            .await?
+                    } else {
+                        vec![]
+                    };
                 let result: CommitmentsExpertResult = run_commitments_expert_with_views(
                     model,
                     self.policy,
                     mail_invocation(view),
                     CommitmentsContextViews {
                         calendars,
-                        tasks: self.task_views.to_vec(),
+                        tasks: if self
+                            .source_granted(COMMITMENTS_AGENT_ID, BuiltinContextSource::Tasks)
+                        {
+                            self.task_views.to_vec()
+                        } else {
+                            vec![]
+                        },
                     },
                 )
                 .await?;
@@ -640,6 +690,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             COMMUNICATION_AGENT_ID => {
+                self.require_source(COMMUNICATION_AGENT_ID, BuiltinContextSource::Mail)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -661,6 +712,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             WORK_CONTEXT_AGENT_ID => {
+                self.require_source(WORK_CONTEXT_AGENT_ID, BuiltinContextSource::WorkContext)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -677,6 +729,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             LIFE_LOGISTICS_AGENT_ID => {
+                self.require_source(LIFE_LOGISTICS_AGENT_ID, BuiltinContextSource::Logistics)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
@@ -693,12 +746,24 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             RELATIONSHIPS_AGENT_ID => {
+                self.require_source(RELATIONSHIPS_AGENT_ID, BuiltinContextSource::Contacts)?;
                 let people = personal_views
                     .people_view(request.deadline, &request.cancellation)
                     .await?;
-                let confirmed_interactions = personal_views
-                    .confirmed_interaction_views(&people, request.deadline, &request.cancellation)
-                    .await?;
+                let confirmed_interactions = if self.source_granted(
+                    RELATIONSHIPS_AGENT_ID,
+                    BuiltinContextSource::ConfirmedInteractions,
+                ) {
+                    personal_views
+                        .confirmed_interaction_views(
+                            &people,
+                            request.deadline,
+                            &request.cancellation,
+                        )
+                        .await?
+                } else {
+                    vec![]
+                };
                 let result: RelationshipsExpertResult = run_relationships_expert_with_views(
                     self.model,
                     self.policy,
@@ -716,15 +781,26 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             FOCUS_AGENT_ID => {
+                self.require_source(FOCUS_AGENT_ID, BuiltinContextSource::Attention)?;
                 let attention = personal_views
                     .attention_view(request.deadline, &request.cancellation)
                     .await?;
-                let calendars = personal_views
-                    .calendar_views(request.deadline, &request.cancellation)
-                    .await?;
-                let active_work = personal_views
-                    .work_context_views(request.deadline, &request.cancellation)
-                    .await?;
+                let calendars =
+                    if self.source_granted(FOCUS_AGENT_ID, BuiltinContextSource::Calendar) {
+                        personal_views
+                            .calendar_views(request.deadline, &request.cancellation)
+                            .await?
+                    } else {
+                        vec![]
+                    };
+                let active_work =
+                    if self.source_granted(FOCUS_AGENT_ID, BuiltinContextSource::WorkContext) {
+                        personal_views
+                            .work_context_views(request.deadline, &request.cancellation)
+                            .await?
+                    } else {
+                        vec![]
+                    };
                 let result: FocusExpertResult = run_focus_expert_with_views(
                     self.model,
                     self.policy,
@@ -743,12 +819,18 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             WELLBEING_AGENT_ID => {
+                self.require_source(WELLBEING_AGENT_ID, BuiltinContextSource::Wellbeing)?;
                 let wellbeing = personal_views
                     .wellbeing_view(request.deadline, &request.cancellation)
                     .await?;
-                let calendars = personal_views
-                    .calendar_views(request.deadline, &request.cancellation)
-                    .await?;
+                let calendars =
+                    if self.source_granted(WELLBEING_AGENT_ID, BuiltinContextSource::Calendar) {
+                        personal_views
+                            .calendar_views(request.deadline, &request.cancellation)
+                            .await?
+                    } else {
+                        vec![]
+                    };
                 let result: WellbeingExpertResult = run_wellbeing_expert_with_views(
                     self.model,
                     self.policy,
@@ -817,6 +899,29 @@ mod tests {
             skills: vec!["Read bounded context".into()],
         })
         .collect()
+    }
+
+    fn test_builtin_setup(
+        person_id: PersonId,
+        source: BuiltinContextSource,
+    ) -> BuiltinExpertSetupReceipt {
+        let instance_id = uuid::Uuid::new_v4();
+        let mut registry = floe_agent::AgentRegistry::new(instance_id);
+        registry
+            .install_builtin_experts(
+                person_id,
+                &floe_agent::BuiltinExpertSetup {
+                    instance_id,
+                    expected_revision: 0,
+                    setup_id: uuid::Uuid::new_v4(),
+                    sources: vec![floe_agent::BuiltinSourceBinding {
+                        source,
+                        view_handle: uuid::Uuid::new_v4(),
+                        state: floe_agent::BuiltinSourceState::Available,
+                    }],
+                },
+            )
+            .unwrap()
     }
 
     async fn request(mut socket: tokio::net::TcpStream) -> (String, tokio::net::TcpStream) {
@@ -898,6 +1003,59 @@ mod tests {
         )
         .await;
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
+    }
+
+    #[tokio::test]
+    async fn expert_cannot_read_a_source_missing_from_its_durable_grant() {
+        let model = Model::new(Some(AgentRemoteRouteDto {
+            base_url: "http://127.0.0.1:1".into(),
+            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        }))
+        .unwrap();
+        let policy = policy(&model, None);
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            evidence: vec![],
+        };
+        let local_context = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+            local_context: &local_context,
+            task_views: &[],
+            cards: test_expert_cards(),
+            builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Tasks)),
+        };
+        let result = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id,
+                session_id: uuid::Uuid::new_v4(),
+                parent_turn_id: uuid::Uuid::new_v4(),
+                agent_id: COMMITMENTS_AGENT_ID.into(),
+                message: floe_agent::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(uuid::Uuid::new_v4()),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "review commitments".into(),
+                    }],
+                },
+                max_output_bytes: 16 * 1024,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await;
+        assert_eq!(result, Err(AgentFailure::CapabilityDenied));
     }
 
     #[tokio::test]
@@ -1008,6 +1166,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -1039,6 +1198,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: vec![],
+            builtin_setup: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -1206,6 +1366,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -1406,6 +1567,7 @@ mod tests {
             local_context: &local_context,
             task_views: &tasks,
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -1583,6 +1745,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         let mut results = vec![];
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -1835,6 +1998,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let task = experts
@@ -1926,6 +2090,7 @@ mod tests {
             local_context: &local_context,
             task_views: &[],
             cards: test_expert_cards(),
+            builtin_setup: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

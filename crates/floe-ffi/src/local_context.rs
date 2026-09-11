@@ -37,6 +37,10 @@ pub(crate) struct LocalContextStore {
 }
 
 impl LocalContextStore {
+    pub(crate) fn is_available(&self, person_id: PersonId, view_id: &str) -> bool {
+        self.read_entry(person_id, view_id, None).is_ok()
+    }
+
     pub(crate) fn request(
         &self,
         person_id: PersonId,
