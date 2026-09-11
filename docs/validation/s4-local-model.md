@@ -15,10 +15,12 @@ No API credential, Go service, cloud model, download or remote fallback is used.
 The Swift adapter creates a fresh `LanguageModelSession(model: .default, tools: [],
 instructions: ...)` per call. Host instructions remain separate from JSON-rendered
 scoped policy, retrieved untrusted evidence, recent messages, advertised capabilities
-and ephemeral output limits. `@Generable` constrains the response shape; both native
-and Rust validation reject invalid answer/call combinations. Rust additionally
-checks that a requested capability was advertised. Swift never invokes tools or
-Calendar APIs and never returns a reasoning field or framework debug descriptions.
+and ephemeral output limits. `@Generable` uses an answer-only schema when no action is
+advertised and an answer/call enum otherwise, so mutually exclusive result fields are
+represented by the generated type instead of nullable properties. Both native and
+Rust validation reject invalid answer/call combinations. Rust additionally checks
+that a requested capability was advertised. Swift never invokes tools or Calendar
+APIs and never returns a reasoning field or framework debug descriptions.
 
 The runner defaults to a synthetic-only construction. The trusted encrypted Calendar
 vault host now uses a separate encrypted construction that may admit Personal-class
@@ -64,10 +66,11 @@ No exact token count or live generation performance has been measured here.
 
 ## Evidence
 
-On this macOS 26.2 machine, the actual bundled Rust → C ABI → Swift availability
-probe returns **AppleIntelligenceNotEnabled**. No generation was attempted and
-Apple Intelligence settings were not changed. This distinguishes a correctly
-loaded adapter from a usable live model; it does not pass the local model gate.
+On this macOS 26.5.2 machine, the actual bundled Rust → C ABI → Swift availability
+probe returns **Available**. Three consecutive fixed synthetic generation exercises
+returned validated answers after replacing the nullable tagged structure with the
+answer-only/enum schemas. Before that change, all three identical exercises failed
+with `local_model_invalid_output`, reproducing the chat failure without personal data.
 
 - Swift 6 strict-concurrency compilation with warnings as errors passes at a
   macOS 12 deployment target. FoundationModels is weak-linked; older-OS runtime
@@ -79,7 +82,8 @@ loaded adapter from a usable live model; it does not pass the local model gate.
   separated input layers, pre-dispatch privacy/budget/stale/cancel rejection,
   unadvertised call rejection, malformed/oversized/wrong-request responses, and
   native lease release on deadline or dropped future. These are transport fixtures,
-  not a live-model prompt-injection or usefulness evaluation.
+  not a live-model prompt-injection or usefulness evaluation. The live synthetic
+  smoke covers one answer path only; it does not exercise a capability call.
 - All 101 workspace Rust tests pass. The separate keyring example's three
   cleanup-confinement tests pass. Formatting and Clippy with the existing two
   Calendar exclusions pass. The macOS Debug app builds with the new native library.
@@ -101,7 +105,7 @@ The helper uses ad-hoc signing and does not launch the normal app or access Cale
 
 ## Still required
 
-Live synthetic generation, multi-call Agent scenarios and interruption/error tests;
-real-model streaming and panel selection; encrypted personal-chat integration after
-the key/lifecycle gate; supported remote adapter/authentication and outbound-capture
-tests; Expert/connector integration and end-to-end acceptance. S4 remains **0/14**.
+Multi-call Agent scenarios and interruption/error tests; real-model streaming and
+panel selection; encrypted personal-chat integration after the key/lifecycle gate;
+supported remote adapter/authentication and outbound-capture tests; Expert/connector
+integration and end-to-end acceptance. S4 remains **0/14**.

@@ -182,15 +182,16 @@ final class LocalModelHost: @unchecked Sendable {
 
 @available(macOS 26.0, *)
 @Generable
-private struct GeneratedStep {
-  @Guide(description: "Choose answer to respond, or call to request exactly one advertised read capability.", .anyOf(["answer", "call"]))
-  var kind: String
-  @Guide(description: "User-visible response when kind is answer. Never hidden reasoning.")
-  var text: String?
-  @Guide(description: "An advertised capability ID only when kind is call.")
-  var capabilityID: String?
-  @Guide(description: "A bounded JSON input string only when kind is call.")
-  var input: String?
+private struct GeneratedAnswer {
+  @Guide(description: "A complete user-visible response. Never hidden reasoning.")
+  var text: String
+}
+
+@available(macOS 26.0, *)
+@Generable
+private enum GeneratedStep {
+  case answer(text: String)
+  case call(capabilityID: String, input: String)
 }
 
 func foundationModelAvailability() -> String {
@@ -213,15 +214,26 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
   }
   let session = LanguageModelSession(model: .default, tools: [], instructions: input.instructions)
   do {
+    let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: input.maxResponseTokens)
+    if !hasAvailableActions(input.prompt) {
+      let response = try await session.respond(to: input.prompt, generating: GeneratedAnswer.self,
+        options: options)
+      let text = response.content.text
+      guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw LocalModelFailure("invalid_model_output")
+      }
+      return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
+    }
     let response = try await session.respond(to: input.prompt, generating: GeneratedStep.self,
-      options: GenerationOptions(sampling: .greedy, maximumResponseTokens: input.maxResponseTokens))
+      options: options)
     let content = response.content
-    switch content.kind {
-    case "answer" where !(content.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-      return LocalModelStep(kind: "answer", text: content.text, capabilityID: nil, input: nil)
-    case "call" where !(content.capabilityID ?? "").isEmpty && content.input != nil:
-      return LocalModelStep(kind: "call", text: nil, capabilityID: content.capabilityID, input: content.input)
-    default: throw LocalModelFailure("invalid_model_output")
+    switch content {
+    case .answer(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+      return LocalModelStep(kind: "answer", text: text, capabilityID: nil, input: nil)
+    case .call(let capabilityID, let callInput) where !capabilityID.isEmpty:
+      return LocalModelStep(kind: "call", text: nil, capabilityID: capabilityID, input: callInput)
+    default:
+      throw LocalModelFailure("invalid_model_output")
     }
   } catch let error as LanguageModelSession.GenerationError {
     switch error {
@@ -232,6 +244,15 @@ private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalM
     default: throw LocalModelFailure("model_unavailable")
     }
   }
+}
+
+func hasAvailableActions(_ prompt: String) -> Bool {
+  guard let data = prompt.data(using: .utf8),
+        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let scoped = root["scoped_instructions"] as? [String: Any] else { return false }
+  let capabilities = scoped["available_capabilities"] as? [Any] ?? []
+  let agents = scoped["active_agents"] as? [Any] ?? []
+  return !capabilities.isEmpty || !agents.isEmpty
 }
 
 private let foundationHost = LocalModelHost(availability: foundationModelAvailability,

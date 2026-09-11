@@ -128,6 +128,9 @@ struct LocalModelHostTests {
 
     precondition(decodeLocalCommand(Data(#"{"schemaVersion":1,"operation":"availability","secret":"must not echo"}"#.utf8)) == nil)
     precondition(decodeLocalCommand(Data(#"{"schemaVersion":1,"operation":"availability"}"#.utf8)) != nil)
+    precondition(!hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[],"active_agents":[]}}"#))
+    precondition(hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[{"id":"fixture.read"}],"active_agents":[]}}"#))
+    precondition(hasAvailableActions(#"{"scoped_instructions":{"available_capabilities":[],"active_agents":[{"id":"fixture"}]}}"#))
     let malformed = floeLocalModel(nil, 0)!
     precondition(String(cString: malformed).contains("invalid_input"))
     floeLocalModelFree(malformed)
