@@ -19,6 +19,21 @@ type memoryStore struct {
 	values map[string]string
 }
 
+func TestBindCredentialChangesVaultScopeAndRejectsArbitraryNames(t *testing.T) {
+	store := &memoryStore{values: map[string]string{}}
+	runtime, err := New(store, Config{ClientID: "fixture-client"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := credentialName + ":" + strings.Repeat("b", 64)
+	if err := runtime.BindCredential(name); err != nil || runtime.credentialKey() != name {
+		t.Fatalf("credential scope not bound: %q %v", runtime.credentialKey(), err)
+	}
+	if err := runtime.BindCredential("other:" + strings.Repeat("b", 64)); err == nil {
+		t.Fatal("foreign credential namespace accepted")
+	}
+}
+
 func (store *memoryStore) Get(name string) (string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

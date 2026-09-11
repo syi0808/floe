@@ -50,6 +50,11 @@ The node stores it under a vault name derived from `person_id` and `connection_i
 not written to `state.json`, returned by any response, or included in application logging. GitHub,
 Slack, and Home Assistant source selection is stored separately as non-secret scope metadata.
 
+OAuth runtimes bind to the same derived Person-and-connection vault namespace before starting the
+provider flow. On restart, the persisted connection record rebinds the runtime before it reads or
+refreshes a token. A successful client-driven OAuth flow removes any credential left under the old
+unscoped compatibility name.
+
 ## Connector identifiers and selectable scope
 
 | Connector | Authentication | Selectable scope |

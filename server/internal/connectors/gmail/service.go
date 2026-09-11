@@ -16,6 +16,14 @@ type AuthRuntime interface {
 	Action(context.Context, string) (any, error)
 }
 
+func (service *Service) BindCredential(name string) error {
+	binder, ok := service.auth.(interface{ BindCredential(string) error })
+	if !ok {
+		return ErrInvalidInput
+	}
+	return binder.BindCredential(name)
+}
+
 type Service struct {
 	operation sync.Mutex
 	auth      AuthRuntime

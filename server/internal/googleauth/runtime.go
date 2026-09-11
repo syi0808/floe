@@ -70,6 +70,7 @@ type Runtime struct {
 	authURL, tokenURL, revokeURL string
 	callbackAddress              string
 	credentialName               string
+	credentialNamespace          string
 	scopes                       []string
 }
 
@@ -85,7 +86,7 @@ func New(store Store, config Config) (*Runtime, error) {
 		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, callbackAddress: "127.0.0.1:0", credentialName: name, scopes: scopes}, nil
+	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, callbackAddress: "127.0.0.1:0", credentialName: name, credentialNamespace: name, scopes: scopes}, nil
 }
 
 func NewDrive(store Store, config Config) (*Runtime, error) {
@@ -102,6 +103,26 @@ func NewCalendar(store Store, config Config) (*Runtime, error) {
 
 func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
 
+func (runtime *Runtime) BindCredential(name string) error {
+	if !validBoundCredential(runtime.credentialNamespace, name) {
+		return ErrUnavailable
+	}
+	runtime.operation.Lock()
+	defer runtime.operation.Unlock()
+	runtime.cancelLogin()
+	runtime.mu.Lock()
+	runtime.credentialName = name
+	runtime.tokens = nil
+	runtime.mu.Unlock()
+	return nil
+}
+
+func (runtime *Runtime) credentialKey() string {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.credentialName
+}
+
 func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
@@ -114,7 +135,7 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	}
 	refreshed, err := runtime.tokenRequest(ctx, url.Values{"grant_type": {"refresh_token"}, "client_id": {runtime.config.ClientID}, "refresh_token": {current.RefreshToken}, "client_secret": {runtime.config.ClientSecret}}, current)
 	if errors.Is(err, ErrCredentialExpired) {
-		_ = runtime.store.Delete(runtime.credentialName)
+		_ = runtime.store.Delete(runtime.credentialKey())
 		runtime.mu.Lock()
 		runtime.tokens = nil
 		runtime.mu.Unlock()
@@ -310,7 +331,7 @@ func (runtime *Runtime) logout(ctx context.Context) error {
 			return ErrUnavailable
 		}
 	}
-	if runtime.store.Delete(runtime.credentialName) != nil {
+	if runtime.store.Delete(runtime.credentialKey()) != nil {
 		return ErrUnavailable
 	}
 	runtime.mu.Lock()
@@ -327,7 +348,7 @@ func (runtime *Runtime) load() *tokenBundle {
 		copy := *current
 		return &copy
 	}
-	encoded, err := runtime.store.Get(runtime.credentialName)
+	encoded, err := runtime.store.Get(runtime.credentialKey())
 	if err != nil || encoded == "" || len(encoded) > 32768 {
 		return nil
 	}
@@ -343,7 +364,7 @@ func (runtime *Runtime) load() *tokenBundle {
 
 func (runtime *Runtime) save(value *tokenBundle) error {
 	encoded, err := json.Marshal(value)
-	if err != nil || runtime.store.Put(runtime.credentialName, string(encoded)) != nil {
+	if err != nil || runtime.store.Put(runtime.credentialKey(), string(encoded)) != nil {
 		return ErrUnavailable
 	}
 	copy := *value
@@ -406,6 +427,22 @@ func validGoogleCredentialProfile(name string, scopes []string) bool {
 	return name == credentialName && len(scopes) == 1 && scopes[0] == readonlyScope ||
 		name == "FLOE_DRIVE_OAUTH" && len(scopes) == 1 && scopes[0] == driveReadonlyScope ||
 		name == "FLOE_GOOGLE_CALENDAR_OAUTH" && len(scopes) == 1 && scopes[0] == calendarReadonlyScope
+}
+
+func validBoundCredential(namespace, name string) bool {
+	if name == namespace {
+		return true
+	}
+	prefix := namespace + ":"
+	if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+64 {
+		return false
+	}
+	for _, character := range strings.TrimPrefix(name, prefix) {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return false
+		}
+	}
+	return true
 }
 func callbackPage(title, message string) string {
 	return "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>" + html.EscapeString(title) + "</title><body style='font:16px system-ui;padding:48px'><h1>" + html.EscapeString(title) + "</h1><p>" + html.EscapeString(message) + "</p></body>"

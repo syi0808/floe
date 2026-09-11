@@ -61,18 +61,19 @@ type loginFlow struct {
 }
 
 type Runtime struct {
-	operation       sync.Mutex
-	mu              sync.RWMutex
-	store           Store
-	config          Config
-	client          *http.Client
-	tokens          *tokenBundle
-	flow            *loginFlow
-	authURL         string
-	tokenURL        string
-	callbackAddress string
-	credentialName  string
-	scope           string
+	operation           sync.Mutex
+	mu                  sync.RWMutex
+	store               Store
+	config              Config
+	client              *http.Client
+	tokens              *tokenBundle
+	flow                *loginFlow
+	authURL             string
+	tokenURL            string
+	callbackAddress     string
+	credentialName      string
+	credentialNamespace string
+	scope               string
 }
 
 func New(store Store, config Config) (*Runtime, error) {
@@ -90,7 +91,7 @@ func New(store Store, config Config) (*Runtime, error) {
 		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, callbackAddress: "127.0.0.1:0", credentialName: name, scope: scope}, nil
+	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, callbackAddress: "127.0.0.1:0", credentialName: name, credentialNamespace: name, scope: scope}, nil
 }
 
 func NewCalendar(store Store, config Config) (*Runtime, error) {
@@ -106,6 +107,26 @@ func NewTeams(store Store, config Config) (*Runtime, error) {
 }
 
 func (runtime *Runtime) Ready() bool { return runtime.load() != nil }
+
+func (runtime *Runtime) BindCredential(name string) error {
+	if !validBoundCredential(runtime.credentialNamespace, name) {
+		return ErrUnavailable
+	}
+	runtime.operation.Lock()
+	defer runtime.operation.Unlock()
+	runtime.cancelLogin()
+	runtime.mu.Lock()
+	runtime.credentialName = name
+	runtime.tokens = nil
+	runtime.mu.Unlock()
+	return nil
+}
+
+func (runtime *Runtime) credentialKey() string {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.credentialName
+}
 
 func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 	runtime.operation.Lock()
@@ -144,7 +165,7 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	}
 	if action == "logout" {
 		runtime.cancelLogin()
-		if runtime.store.Delete(runtime.credentialName) != nil {
+		if runtime.store.Delete(runtime.credentialKey()) != nil {
 			return nil, ErrUnavailable
 		}
 		runtime.mu.Lock()
@@ -316,7 +337,7 @@ func (runtime *Runtime) load() *tokenBundle {
 		copy := *current
 		return &copy
 	}
-	encoded, err := runtime.store.Get(runtime.credentialName)
+	encoded, err := runtime.store.Get(runtime.credentialKey())
 	if err != nil || encoded == "" || len(encoded) > 32768 {
 		return nil
 	}
@@ -335,7 +356,7 @@ func (runtime *Runtime) save(value *tokenBundle) error {
 		return ErrUnavailable
 	}
 	encoded, err := json.Marshal(value)
-	if err != nil || runtime.store.Put(runtime.credentialName, string(encoded)) != nil {
+	if err != nil || runtime.store.Put(runtime.credentialKey(), string(encoded)) != nil {
 		return ErrUnavailable
 	}
 	copy := *value
@@ -346,7 +367,7 @@ func (runtime *Runtime) save(value *tokenBundle) error {
 }
 
 func (runtime *Runtime) clear() {
-	_ = runtime.store.Delete(runtime.credentialName)
+	_ = runtime.store.Delete(runtime.credentialKey())
 	runtime.mu.Lock()
 	runtime.tokens = nil
 	runtime.mu.Unlock()
@@ -396,6 +417,22 @@ func hasScope(value, required string) bool {
 		}
 	}
 	return false
+}
+
+func validBoundCredential(namespace, name string) bool {
+	if name == namespace {
+		return true
+	}
+	prefix := namespace + ":"
+	if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+64 {
+		return false
+	}
+	for _, character := range strings.TrimPrefix(name, prefix) {
+		if character < '0' || character > '9' && character < 'a' || character > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 func callbackPage(title, message string) string {

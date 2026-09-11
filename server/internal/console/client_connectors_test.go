@@ -9,8 +9,14 @@ import (
 )
 
 type clientOAuthRuntime struct {
-	status  string
-	actions []string
+	status     string
+	actions    []string
+	credential string
+}
+
+func (runtime *clientOAuthRuntime) BindCredential(name string) error {
+	runtime.credential = name
+	return nil
 }
 
 func createdValue(test *testing.T, responseBody *strings.Reader) map[string]any {
@@ -89,6 +95,9 @@ func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *
 	}
 	if strings.Join(runtime.actions, ",") != "login,status" {
 		test.Fatalf("unexpected OAuth lifecycle: %#v", runtime.actions)
+	}
+	if !strings.HasPrefix(runtime.credential, "FLOE_MICROSOFT_MAIL_OAUTH:") || len(runtime.credential) != len("FLOE_MICROSOFT_MAIL_OAUTH:")+64 {
+		test.Fatalf("OAuth credential was not Person scoped: %q", runtime.credential)
 	}
 }
 
@@ -201,5 +210,25 @@ func TestConnectorScopeCapabilityIsExplicit(test *testing.T) {
 	response := fixture.call(http.MethodPatch, "/v1/connectors/gmail/scope", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "capability_not_supported") {
 		test.Fatalf("unsupported scope mutation was not explicit: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) {
+	fixture := setup(test)
+	connectionID := "microsoft.mail.persisted"
+	fixture.console.mu.Lock()
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "microsoft.mail", PersonID: fixturePersonID}
+	if err := fixture.console.save(fixture.console.state); err != nil {
+		test.Fatal(err)
+	}
+	fixture.console.mu.Unlock()
+	reopened, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	runtime := &clientOAuthRuntime{status: "disconnected"}
+	reopened.SetMicrosoftMail(runtime, nil)
+	if !strings.HasPrefix(runtime.credential, "FLOE_MICROSOFT_MAIL_OAUTH:") {
+		test.Fatalf("persisted OAuth owner was not rebound: %q", runtime.credential)
 	}
 }

@@ -23,25 +23,26 @@ type connectorAttempt struct {
 }
 
 type clientConnectorDefinition struct {
-	ID             string
-	Name           string
-	AuthKind       string
-	CredentialName string
-	RequiredScopes []string
-	ScopeFields    []string
-	OAuthRuntime   func(*Console) ConnectorOAuthRuntime
-	Available      func(*Console) bool
+	ID              string
+	Name            string
+	AuthKind        string
+	CredentialName  string
+	OAuthCredential string
+	RequiredScopes  []string
+	ScopeFields     []string
+	OAuthRuntime    func(*Console) ConnectorOAuthRuntime
+	Available       func(*Console) bool
 }
 
 var clientConnectorDefinitions = []clientConnectorDefinition{
-	{ID: "gmail", Name: "Gmail", AuthKind: "oauth_pkce", RequiredScopes: []string{"https://www.googleapis.com/auth/gmail.readonly"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.gmail }, Available: func(console *Console) bool { return console.gmail != nil }},
-	{ID: "microsoft.mail", Name: "Microsoft Mail", AuthKind: "oauth_pkce", RequiredScopes: []string{"Mail.Read"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftAuth }, Available: func(console *Console) bool { return console.microsoftAuth != nil }},
+	{ID: "gmail", Name: "Gmail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GMAIL_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/gmail.readonly"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.gmail }, Available: func(console *Console) bool { return console.gmail != nil }},
+	{ID: "microsoft.mail", Name: "Microsoft Mail", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_MAIL_OAUTH", RequiredScopes: []string{"Mail.Read"}, ScopeFields: []string{}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftAuth }, Available: func(console *Console) bool { return console.microsoftAuth != nil }},
 	{ID: "github.issues", Name: "GitHub Issues", AuthKind: "secret", CredentialName: githubTokenKey, RequiredScopes: []string{"github.issues.read"}, ScopeFields: []string{"owner", "repository"}, Available: func(*Console) bool { return true }},
 	{ID: "slack.conversations", Name: "Slack", AuthKind: "secret", CredentialName: slackTokenKey, RequiredScopes: []string{"slack.selected_conversation.read"}, ScopeFields: []string{"channel", "thread"}, Available: func(*Console) bool { return true }},
-	{ID: "google_drive.files", Name: "Google Drive", AuthKind: "oauth_pkce", RequiredScopes: []string{"https://www.googleapis.com/auth/drive.readonly"}, ScopeFields: []string{"folder_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.driveAuth }, Available: func(console *Console) bool { return console.driveAuth != nil }},
-	{ID: "calendar.google", Name: "Google Calendar", AuthKind: "oauth_pkce", RequiredScopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ScopeFields: []string{"calendar_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.calendarAuth }, Available: func(console *Console) bool { return console.calendarAuth != nil }},
-	{ID: "calendar.microsoft", Name: "Microsoft Calendar", AuthKind: "oauth_pkce", RequiredScopes: []string{"Calendars.Read"}, ScopeFields: []string{"calendar_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftCalendarAuth }, Available: func(console *Console) bool { return console.microsoftCalendarAuth != nil }},
-	{ID: "microsoft.teams", Name: "Microsoft Teams", AuthKind: "oauth_pkce", RequiredScopes: []string{"ChannelMessage.Read.All"}, ScopeFields: []string{"team_id", "channel_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftTeamsAuth }, Available: func(console *Console) bool { return console.microsoftTeamsAuth != nil }},
+	{ID: "google_drive.files", Name: "Google Drive", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_DRIVE_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/drive.readonly"}, ScopeFields: []string{"folder_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.driveAuth }, Available: func(console *Console) bool { return console.driveAuth != nil }},
+	{ID: "calendar.google", Name: "Google Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_GOOGLE_CALENDAR_OAUTH", RequiredScopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ScopeFields: []string{"calendar_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.calendarAuth }, Available: func(console *Console) bool { return console.calendarAuth != nil }},
+	{ID: "calendar.microsoft", Name: "Microsoft Calendar", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_CALENDAR_OAUTH", RequiredScopes: []string{"Calendars.Read"}, ScopeFields: []string{"calendar_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftCalendarAuth }, Available: func(console *Console) bool { return console.microsoftCalendarAuth != nil }},
+	{ID: "microsoft.teams", Name: "Microsoft Teams", AuthKind: "oauth_pkce", OAuthCredential: "FLOE_MICROSOFT_TEAMS_OAUTH", RequiredScopes: []string{"ChannelMessage.Read.All"}, ScopeFields: []string{"team_id", "channel_id"}, OAuthRuntime: func(console *Console) ConnectorOAuthRuntime { return console.microsoftTeamsAuth }, Available: func(console *Console) bool { return console.microsoftTeamsAuth != nil }},
 	{ID: "home_assistant.states", Name: "Home Assistant", AuthKind: "secret", CredentialName: homeTokenKey, RequiredScopes: []string{"home.states.read"}, ScopeFields: []string{"base_url", "entities"}, Available: func(*Console) bool { return true }},
 }
 
@@ -207,6 +208,10 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 	runtime := definition.OAuthRuntime(console)
 	console.state = previous
 	console.mu.Unlock()
+	if err := bindClientOAuthCredential(runtime, definition, record); err != nil {
+		failure(writer, http.StatusServiceUnavailable, "credential_scope_unavailable")
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
 	value, err := runtime.Action(ctx, "login")
@@ -264,6 +269,9 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 			copy.Status, copy.ErrorCode = "failed", "connector_authorization_unavailable"
 		} else if status, authorizationURL, valid := oauthActionStatus(value); valid {
 			copy.Status, copy.AuthorizationURL = status, authorizationURL
+			if status == "connected" && definition.OAuthCredential != "" {
+				_ = console.vault.Delete(definition.OAuthCredential)
+			}
 		} else {
 			copy.Status, copy.ErrorCode = "failed", "invalid_connector_response"
 		}
@@ -425,6 +433,9 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		failure(writer, http.StatusInternalServerError, "credential_cleanup_failed")
 		return
 	}
+	if definition.OAuthCredential != "" {
+		_ = console.vault.Delete(definition.OAuthCredential)
+	}
 	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "disconnected": true})
 }
 
@@ -442,6 +453,21 @@ func oauthActionStatus(value any) (string, string, bool) {
 		return "", "", false
 	}
 	return status, authorizationURL, true
+}
+
+func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, definition clientConnectorDefinition, record connectionRecord) error {
+	if definition.OAuthCredential == "" {
+		return nil
+	}
+	binder, ok := runtime.(interface{ BindCredential(string) error })
+	if !ok {
+		return nil
+	}
+	name, err := credentials.ConnectionName(definition.OAuthCredential, record.ConnectionID, record.PersonID)
+	if err != nil {
+		return err
+	}
+	return binder.BindCredential(name)
 }
 
 func connectorAttemptResponse(attempt *connectorAttempt) map[string]any {

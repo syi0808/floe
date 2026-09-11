@@ -222,6 +222,9 @@ func (console *Console) SetLogistics(runtime LogisticsRuntime) {
 func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("google_drive.files", runtime); err != nil {
+		return err
+	}
 	console.driveAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
@@ -229,6 +232,9 @@ func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
 func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("calendar.google", runtime); err != nil {
+		return err
+	}
 	console.calendarAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
@@ -236,6 +242,9 @@ func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
 func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("calendar.microsoft", runtime); err != nil {
+		return err
+	}
 	console.microsoftCalendarAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
@@ -243,6 +252,9 @@ func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error
 func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if err := console.bindConfiguredOAuthRuntime("microsoft.teams", runtime); err != nil {
+		return err
+	}
 	console.microsoftTeamsAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
@@ -250,14 +262,35 @@ func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
 func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if console.bindConfiguredOAuthRuntime("gmail", runtime) != nil {
+		console.gmail = nil
+		return
+	}
 	console.gmail = runtime
 }
 
 func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if console.bindConfiguredOAuthRuntime("microsoft.mail", auth) != nil {
+		console.microsoftAuth, console.microsoftMail = nil, nil
+		return
+	}
 	console.microsoftAuth = auth
 	console.microsoftMail = runtime
+}
+
+func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime ConnectorOAuthRuntime) error {
+	definition, exists := clientConnectorDefinitionFor(connectorID)
+	if !exists || runtime == nil {
+		return nil
+	}
+	for _, record := range console.state.Connections {
+		if record.ConnectorID == connectorID {
+			return bindClientOAuthCredential(runtime, definition, record)
+		}
+	}
+	return nil
 }
 
 func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console, error) {
