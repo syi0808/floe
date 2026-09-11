@@ -218,6 +218,10 @@ impl CalendarViewBinding {
                 .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
             || self.calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
             || self.connection_revision == 0
+            || (matches!(
+                self.provider,
+                floe_domain::CalendarProvider::EventKit | floe_domain::CalendarProvider::Android
+            ) && self.source_authority.is_none())
             || self
                 .source_authority
                 .is_some_and(|authority| !authority.is_valid())
@@ -681,6 +685,7 @@ impl AgentRegistry {
         mut calendar_ids: Vec<String>,
         connection_scope: floe_domain::CalendarScope,
         connection_revision: u64,
+        source_authority: Option<floe_domain::SourceAuthority>,
     ) -> Result<Uuid, AgentFailure> {
         self.check_revision(expected_revision)?;
         if self.snapshot.calendar_views.len() >= 256 {
@@ -695,7 +700,7 @@ impl AgentRegistry {
             calendar_ids,
             connection_scope,
             connection_revision,
-            source_authority: None,
+            source_authority,
             enabled: false,
         };
         binding.validate()?;

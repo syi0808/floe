@@ -1,6 +1,52 @@
 use super::*;
 
 #[tokio::test]
+async fn enabled_builtin_install_after_existing_registry_requires_the_scoped_entry_point() {
+    let fixture = Fixture::new().await;
+    fixture.sample().await;
+    let before = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let request = BuiltinExpertSetup {
+        instance_id: fixture.vault.registry_instance_id(),
+        expected_revision: before.revision,
+        setup_id: Uuid::new_v4(),
+        sources: vec![],
+    };
+    let mut staged =
+        AgentRegistry::restore(before.clone(), fixture.vault.registry_instance_id()).unwrap();
+    staged
+        .install_builtin_experts_enabled(fixture.person, &request)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .save_expert_registry(before.revision, &staged.snapshot())
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(
+        fixture.vault.expert_registry().await.unwrap().unwrap(),
+        before
+    );
+    let installed = fixture
+        .vault
+        .install_builtin_experts_enabled(request.clone(), Cancellation::default())
+        .await
+        .unwrap();
+    let after = fixture.vault.expert_registry().await.unwrap().unwrap();
+    assert_eq!(after.calendar_views, before.calendar_views);
+    assert_eq!(after.calendar_setups, before.calendar_setups);
+    assert_eq!(after.revision, before.revision + 1);
+    assert_eq!(
+        fixture
+            .vault
+            .install_builtin_experts_enabled(request, Cancellation::default())
+            .await
+            .unwrap(),
+        installed
+    );
+}
+
+#[tokio::test]
 async fn builtin_assignments_and_card_visibility_survive_vault_reopen() {
     let mut fixture = Fixture::new().await;
     let request = BuiltinExpertSetup {

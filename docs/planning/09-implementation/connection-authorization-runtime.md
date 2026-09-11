@@ -1,6 +1,6 @@
 # Connection Authorization Runtime
 
-> Status: Incremental implementation; native Calendar authority slice implemented — 2026-09-12
+> Status: Incremental implementation; native Calendar authority and lazy access validation implemented — 2026-09-12
 >
 > 아래 전체 runtime은 목표 설계다. 실제 구현 범위와 남은 경계는 §0을 따른다.
 
@@ -13,12 +13,15 @@
 - `floe-domain::SourceAuthority`는 random incarnation과 checked positive epoch를 가진 공통 primitive다.
   Calendar mirror의 `revision`은 기존 CAS/write counter로 유지한다. 정상 sync·일시 장애·표시명 변경은
   authority를 유지하고, scope/resource identity 변경·disconnect·새 permission denial은 이를 바꾼다.
-- native Calendar setup/receipt/view에 optional `source_authority`를 저장한다. FFI는 사용자 setup/scope
+- Calendar connection의 `source_authority`는 필수다. native setup/receipt/view도 유효한 stamp가 없으면
+  registry restore/설치를 거부한다. grant 필드의 optional 형태는 별도 server/fixture 계약을 위한 것이며
+  native legacy 허용이 아니다. FFI는 사용자 setup/scope
   요청의 exact Person/connection/device/provider/revision과 허용 subset을 확인한 뒤 Core stamp를 기록한다.
   caller가 보낸 stamp는 신뢰하지 않는다. setup retry는 저장된 stamp를 유지한다.
-- 누락된 legacy grant stamp는 자동 승인하지 않는다. source mirror에 새 incarnation을 초기화해도
-  기존 grant는 `access_review_required`로 차단된다. Calendar access 설정에서 scope를 명시적으로
-  저장하고 대화를 reload해야 한다. 연결 설정 변경이 AI grant를 자동 생성·갱신·확장하던 UI 경로는 제거한다.
+- 하위호환 migration/fallback은 지원하지 않는다. 누락된 source stamp를 sync에서 새로 채우던 경로는
+  제거했다. 지원하지 않는 저장 형식은 실패로 반환하며 사용자 DB/vault를 삭제하거나 재생성하지 않는다.
+  유효한 현재 grant의 실제 authority 변경은 `access_review_required`로 차단한다. 연결 설정 변경이
+  AI grant를 자동 생성·갱신·확장하던 UI 경로도 제거되어 있다.
 - native observation publication은 이제 `connection_id`를 필수로 보낸다. FFI가 현재 source와 device,
   provider, CAS revision, 전체 resource ID를 대조해 stamp를 붙인다. Flutter와 native bridge는 함께
   배포해야 하며 구 wire 요청을 권한 검증 없이 fallback하지 않는다.
@@ -26,8 +29,8 @@
   read adapter는 허용된 subset만 projection하고, 같은 turn에서는 첫 observation을 pin한다. 매 check에서
   현재 source authority·철회·permission failure·observation 유효성을 다시 확인하며 부분 실패를 빈 성공으로 바꾸지 않는다.
 - 이 단계는 기존 encrypted registry를 grant 저장소로 사용한다. 별도 `DataAccessGrant` store, policy epochs,
-  tool-time acquisition, source-local generic-chat recovery, cross-device owner verification, lineage cleanup,
-  action/rollback migration은 아직 구현하지 않았다. before-invocation refresh도 남아 있다. OS revoke는
+  headless native acquisition/refresh, cross-device owner verification, durable lineage cleanup,
+  action lifecycle 통합은 아직 구현하지 않았다. OS revoke는
   native sync 결과가 Core에 반영된 이후 검증하며 즉시 OS notification/fence를 구현했다고 주장하지 않는다.
 - Google/Microsoft와 다른 server connector는 기존 계약을 유지한다. local mirror counter와 server revision의
   의미를 합치거나 서버 grant 검증 완료로 간주하지 않는다. 아래 A–F acceptance를 완료 처리하지 않는다.
@@ -37,6 +40,32 @@ C ABI identity test를 실행한다. Flutter Calendar access/observation/recover
 확장 agent UI suite의 registry dialog 3건과 proposal card golden 1건 실패는 변경 전 HEAD에서도
 동일하게 재현되어 이 작업에서 수정하지 않는다. Dart/C ABI fixture의 기본 30초 timeout은 별도 실행의
 2분 제한에서 통과했다. 실행 중인 사용자 앱이나 실제 OS 계정의 권한은 테스트에서 변경하지 않는다.
+
+### 후속 increment: 대화 시작과 source 사용 분리
+
+- Flutter의 `beforeInvocation` Calendar refresh hook을 제거했다. 주기적/resume refresh는 producer 역할로
+  남지만 일반 메시지 전송의 성공 조건이 아니다. 아직 tool 호출이 OS refresh를 직접 시작하지는 않는다.
+- FFI는 활성 grant metadata로 실행 경로만 준비한다. 현재 connection 조회, authority/revision/identity
+  비교, scope 검증은 `BoundAccess`의 실제 Calendar View 접근 시 수행한다. device 후보가 없거나 여러 개면
+  임의 source로 우회하지 않고 해당 호출에만 review failure를 반환한다.
+- source를 사용하지 않은 turn은 Calendar 권한이 없어도 답변을 완료할 수 있다. 실제 읽기가 실패하면
+  typed delegation failure를 Manager에 전달한다. 읽은 이후에는 기존 source/registry 재검증 및 commit
+  hook을 유지하므로 철회된 결과를 성공 답변으로 commit하지 않는다.
+- durable dependency lineage 이전의 보수적 model projection을 추가했다. 이전 Calendar 결과 이후의
+  생성 메시지 및 출처 정보 없는 compaction 요약은 다음 turn 모델 입력에서 제외하고 provider replay도
+  비운다. 사용자 입력과 source 사용 전 일반 대화는 유지하며 저장된 원문을 삭제하지 않는다. 따라서 과거
+  일정에 대한 후속 질문은 재조회가 필요하다. 이 projection은 활성 Calendar grant가 없는 일반 경로에도 적용된다.
+- Calendar evidence 또는 출처 불명 요약을 포함한 soft-stop continuation은 새 lease 없이 재개하지 않는다.
+  새로운 요청에서 다시 읽어야 한다. 이는 durable resume lease/정밀 lineage 구현 완료가 아니다.
+- Calendar setup이 먼저 존재할 때 builtin 초기화가 default-off 저장 규칙과 충돌하던 경로를 수정했다.
+  scoped `install_builtin_experts_enabled`만 해당 신규 receipt의 enabled 설치를 허용한다. 일반 registry
+  저장으로 enabled receipt를 주입하는 동작은 계속 거부하며 기존 Calendar grant는 변경하지 않는다.
+
+후속 검증에는 권한 거부 상태의 일반 답변과 Calendar 호출 실패를 실제 FFI worker 및 loopback model
+server로 확인하는 테스트, 이전 결과/요약 projection, 엄격한 저장 계약 및 scoped install tests를 포함한다.
+`cargo test --workspace`, `cargo fmt --all -- --check`, `cargo build -p floe-ffi`가 통과했다.
+Flutter analyze, 관련 UI/observation 42개 테스트와 재빌드한 bridge의 Dart/C ABI 8개 테스트도 통과했다.
+native 테스트 서버의 accepted socket은 명시적으로 blocking mode로 전환하며 FFI suite를 반복 검증했다.
 
 ## 1. 최초 분석 시점의 코드와 설계 간 차이
 
@@ -297,6 +326,9 @@ diagnostic에도 raw IDs나 source content를 포함하지 않는다.
    deny/tombstone을 이해하는 bridge build 또는 explicit offline recovery로 제한한다.
 
 ## 10. 구현 순서와 인수 기준
+
+하위호환 요구는 철회되었다. §9의 legacy migration 및 이전 binary 지원은 구현 범위에서 제외한다.
+기존 데이터 삭제는 별도 사용자 동의 없이 수행하지 않는다. 그 외 권한/철회/검증 요구는 유지한다.
 
 설계 단계에서 runtime behavior나 acceptance count를 올리지 않는다. 각 단계는 독립적인 테스트와
 coherent commit으로 진행한다.

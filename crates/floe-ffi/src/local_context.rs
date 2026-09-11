@@ -40,8 +40,8 @@ pub(crate) struct LocalContextStore {
 
 #[derive(Clone)]
 pub(crate) struct PublishedCalendarObservation {
-    pub(crate) connection_id: Option<String>,
-    pub(crate) source_authority: Option<floe_domain::SourceAuthority>,
+    pub(crate) connection_id: String,
+    pub(crate) source_authority: floe_domain::SourceAuthority,
     pub(crate) device_id: String,
     pub(crate) connection_revision: u64,
     pub(crate) provider: CalendarProvider,
@@ -109,6 +109,14 @@ impl LocalContextStore {
             } => {
                 validate_handle(&device_id, "operation.device_id")?;
                 validate_handle(&connection_id, "operation.connection_id")?;
+                if !matches!(
+                    provider,
+                    CalendarProvider::EventKit | CalendarProvider::Android
+                ) {
+                    return Err(agent_failure(AgentFailure::InvalidInput));
+                }
+                let connection =
+                    connection.ok_or_else(|| agent_failure(AgentFailure::CapabilityUnavailable))?;
                 let batches = batches
                     .into_iter()
                     .map(|batch| {
@@ -135,8 +143,8 @@ impl LocalContextStore {
                     .collect::<Result<Vec<_>, AgentFailure>>()
                     .map_err(agent_failure)?;
                 let observation = PublishedCalendarObservation {
-                    connection_id: Some(connection_id.clone()),
-                    source_authority: connection.and_then(|connection| connection.source_authority),
+                    connection_id: connection_id.clone(),
+                    source_authority: connection.source_authority,
                     device_id: device_id.clone(),
                     connection_revision,
                     provider,
@@ -149,7 +157,7 @@ impl LocalContextStore {
                 };
                 validate_calendar_observation(&observation, now_unix_ms()?)
                     .map_err(agent_failure)?;
-                if let Some(connection) = connection {
+                {
                     let mut expected_ids: Vec<_> = connection
                         .calendars
                         .iter()
@@ -257,10 +265,10 @@ impl LocalContextStore {
         connection: &floe_domain::CalendarConnection,
         calendar_ids: &[String],
     ) -> Result<PublishedCalendarObservation, AgentFailure> {
-        let authority = connection
-            .source_authority
-            .filter(|authority| authority.is_valid())
-            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let authority = connection.source_authority;
+        if !authority.is_valid() {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         let observations = self
             .calendar_observations
             .lock()
@@ -268,8 +276,8 @@ impl LocalContextStore {
         let observation = observations
             .get(&(person_id, connection.device_id.clone()))
             .filter(|observation| {
-                observation.connection_id.as_deref() == Some(connection.connection_id.as_str())
-                    && observation.source_authority == Some(authority)
+                observation.connection_id == connection.connection_id
+                    && observation.source_authority == authority
                     && observation.provider == connection.provider
                     && calendar_ids
                         .iter()
@@ -524,6 +532,22 @@ mod tests {
     }
 
     #[test]
+    fn native_calendar_publication_requires_a_bound_connection() {
+        let store = LocalContextStore::default();
+        let error = store
+            .request(
+                person(),
+                calendar_publication(now_unix_ms().unwrap(), "mac", CalendarProvider::EventKit),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.metadata.get("agent_failure").map(String::as_str),
+            Some("capability_unavailable")
+        );
+        assert!(store.calendar_observations.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn calendar_publication_wire_contract_is_explicit_and_rejects_unknown_fields() {
         let operation =
             calendar_publication(now_unix_ms().unwrap(), "iphone", CalendarProvider::EventKit);
@@ -553,7 +577,7 @@ mod tests {
             scope: floe_domain::CalendarScope::All,
             provider: CalendarProvider::EventKit,
             revision: 7,
-            source_authority: Some(floe_domain::SourceAuthority::new()),
+            source_authority: floe_domain::SourceAuthority::new(),
             calendars: (0..11)
                 .map(|index| floe_domain::CalendarSelection {
                     calendar_id: format!("calendar-{index}"),
@@ -650,7 +674,7 @@ mod tests {
                 .authorized_calendar_observation(person_id, &connection, &allowed)
                 .is_ok()
         );
-        connection.source_authority = connection.source_authority.unwrap().advance();
+        connection.source_authority = connection.source_authority.advance().unwrap();
         assert!(
             store
                 .authorized_calendar_observation(person_id, &connection, &allowed)

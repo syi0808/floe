@@ -13,40 +13,14 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/agent_vault_gateway.dart';
 
 void main() {
-  test('refreshes device context before starting an expert turn', () async {
-    var refreshed = false;
-    final gateway = _ConversationGateway()
-      ..beforeBegin = () => expect(refreshed, isTrue);
-    final controller = AgentController(
-      gateway: gateway,
-      personId: 'person',
-      beforeInvocation: () async => refreshed = true,
-    );
-    addTearDown(controller.dispose);
-
-    await controller.load();
-    await controller.sendText('Check my schedule');
-
-    expect(gateway.turns, hasLength(1));
-  });
-
-  test('does not start a turn when device context refresh fails', () async {
+  test('starts a conversation without a Calendar refresh prerequisite', () async {
     final gateway = _ConversationGateway();
-    final controller = AgentController(
-      gateway: gateway,
-      personId: 'person',
-      beforeInvocation: () async {
-        throw StateError('calendar unavailable');
-      },
-    );
+    final controller = AgentController(gateway: gateway, personId: 'person');
     addTearDown(controller.dispose);
-
     await controller.load();
-    await controller.sendText('Check my schedule');
-
-    expect(gateway.turns, isEmpty);
-    expect(controller.failure, 'transport_unavailable');
-    expect(controller.needsReload, isTrue);
+    await controller.sendText('Hello Floe');
+    expect(gateway.turns, hasLength(1));
+    expect(controller.needsReload, isFalse);
   });
 
   testWidgets('general conversation accepts free-form messages', (
@@ -110,7 +84,6 @@ final class _ConversationGateway extends TestVaultGateway
   }
 
   final turns = <AgentConversationTurnRequest>[];
-  void Function()? beforeBegin;
   AgentConversationTurnRequest? active;
   bool done = false;
 
@@ -157,7 +130,6 @@ final class _ConversationGateway extends TestVaultGateway
   Future<AgentRunUpdate> beginConversationTurn(
     AgentConversationTurnRequest request,
   ) async {
-    beforeBegin?.call();
     active = request;
     turns.add(request);
     done = false;

@@ -248,6 +248,7 @@ async fn calendar_bindings_persist_encrypted_without_exposing_sources_in_the_ove
             vec!["private-calendar-canary".into()],
             floe_domain::CalendarScope::Selected,
             1,
+            Some(floe_domain::SourceAuthority::new()),
         )
         .unwrap();
     fixture
@@ -310,6 +311,7 @@ async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbou
             vec!["home".into()],
             floe_domain::CalendarScope::Selected,
             1,
+            Some(floe_domain::SourceAuthority::new()),
         )
         .unwrap();
     let initial = registry.snapshot();

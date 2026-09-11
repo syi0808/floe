@@ -1,4 +1,6 @@
-use floe_agent::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget};
+use floe_agent::{
+    AgentMessage, CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget,
+};
 
 use super::*;
 
@@ -57,7 +59,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .unwrap();
     let request = CalendarExpertSetup {
         instance_id: empty.registry.instance_id,
-        expected_revision: 0,
+        expected_revision: empty.registry.revision,
         setup_id,
         provider: CalendarProvider::EventKit,
         device_id: "iphone".into(),
@@ -85,8 +87,8 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     let installed = perform(&worker, person, action.clone())
         .calendar_experts
         .unwrap();
-    assert_eq!(installed.views[0].source_authority, authority);
-    assert_eq!(installed.setups[0].source_authority, authority);
+    assert_eq!(installed.views[0].source_authority, Some(authority));
+    assert_eq!(installed.setups[0].source_authority, Some(authority));
     runtime
         .block_on(core.record_calendar_failure(
             person,
@@ -116,17 +118,173 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     calendar_ids: vec!["home".into()],
                     connection_scope: CalendarScope::Selected,
                     connection_revision: connection.revision,
-                    source_authority: authority,
+                    source_authority: Some(authority),
                 },
             })
             .unwrap(),
         },
     );
     assert_eq!(changed.failure, None);
+    let reviewed = changed.calendar_experts.unwrap();
     assert_eq!(
-        changed.calendar_experts.unwrap().views[0].source_authority,
-        connection.source_authority
+        reviewed.views[0].source_authority,
+        Some(connection.source_authority)
     );
+    let enabled = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarAccess {
+            change: encode_contract(&CalendarAccessConfiguration {
+                instance_id: reviewed.registry.instance_id,
+                expected_revision: reviewed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetEnabled { enabled: true },
+            })
+            .unwrap(),
+        },
+    );
+    assert_eq!(enabled.failure, None);
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    );
+    assert_eq!(session.failure, None);
+    let session = session.session.unwrap();
+    let (route, server) = answer_server(vec![
+        floe_agent::ModelStep::Answer {
+            text: "Hello!".into(),
+        },
+        floe_agent::ModelStep::Delegate {
+            agent_id: floe_agent::BuiltinExpertKind::Schedule.package_id().into(),
+            message: "Read my calendar".into(),
+        },
+        floe_agent::ModelStep::Call {
+            capability_id: "calendar.read".into(),
+            input: serde_json::json!({
+                "range_start_unix_ms": chrono::Utc::now().timestamp_millis(),
+                "range_end_unix_ms": chrono::Utc::now().timestamp_millis() + 60_000,
+            })
+            .to_string(),
+        },
+        floe_agent::ModelStep::Answer {
+            text: "Calendar is unavailable; we can still chat.".into(),
+        },
+    ]);
+    let run = |session: &AgentSession, text: &str| {
+        perform(
+            &worker,
+            person,
+            AgentVaultActionDto::ConversationTurn {
+                request: floe_protocol::AgentConversationTurnRequestDto {
+                    session_id: session.id.to_string(),
+                    expected_revision: session.revision,
+                    text: text.into(),
+                    device_id: "iphone".into(),
+                    continuation: false,
+                    remote_route: Some(route.clone()),
+                },
+            },
+        )
+    };
+    let greeting = run(&session, "Hello");
+    assert_eq!(greeting.failure, None);
+    let greeting = greeting.session.unwrap();
+    assert_eq!(
+        greeting.last_outcome,
+        Some(floe_agent::AgentOutcome::Completed)
+    );
+    let calendar = run(&greeting, "Read my calendar");
+    assert_eq!(calendar.failure, None);
+    let calendar = calendar.session.unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(
+        calendar.last_outcome,
+        Some(floe_agent::AgentOutcome::Completed),
+        "session: {calendar:?}; requests: {requests:?}"
+    );
+    assert!(calendar.messages.iter().any(|message| matches!(message,
+        AgentMessage::Delegation { task, .. } if task.failure == Some(AgentFailure::CapabilityDenied))));
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("POST /v1/agent "))
+    );
+}
+
+fn answer_server(
+    steps: Vec<floe_agent::ModelStep>,
+) -> (
+    floe_protocol::AgentRemoteRouteDto,
+    std::thread::JoinHandle<Vec<String>>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut requests = vec![];
+        for step in steps {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            loop {
+                let mut chunk = [0; 4096];
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if body.len() >= length {
+                        requests.push(text.to_string());
+                        break;
+                    }
+                }
+            }
+            let response = serde_json::json!({
+                "schema_version": 1, "purpose": "everyday_assistance", "trace_id": "a".repeat(32),
+                "routing": { "placement": "server_local", "external_transfer": false, "replay_source": "a".repeat(64) },
+                "output": serde_json::json!({ "output": [step], "used_tokens": 10 }).to_string(),
+            }).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).unwrap();
+        }
+        requests
+    });
+    (
+        floe_protocol::AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "a".repeat(32),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+            calendar_connections: vec![],
+        },
+        server,
+    )
 }
 
 #[test]

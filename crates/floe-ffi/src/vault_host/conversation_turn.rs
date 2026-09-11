@@ -63,6 +63,9 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     {
         return Err(AgentFailure::Conflict);
     }
+    if request.continuation && floe_agent::has_calendar_history(&session.messages) {
+        return Err(AgentFailure::StaleContext);
+    }
     let context = AgentContext {
         projection_version: 1,
         persona: None,
@@ -232,7 +235,8 @@ impl ModelRunner for Model {
         }
     }
 
-    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+    async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        floe_agent::project_calendar_history(&mut request);
         let started = std::time::Instant::now();
         let placement = match self {
             Self::Foundation(_) => "device_local",

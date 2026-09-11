@@ -955,11 +955,10 @@ async fn calendar_grant_authority(
     {
         return Err(AgentFailure::Conflict);
     }
-    connection
-        .source_authority
-        .filter(|authority| authority.is_valid())
-        .map(Some)
-        .ok_or(AgentFailure::AccessReviewRequired)
+    if !connection.source_authority.is_valid() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(Some(connection.source_authority))
 }
 
 async fn ensure_builtin_experts<Keys: VaultKeyProvider>(

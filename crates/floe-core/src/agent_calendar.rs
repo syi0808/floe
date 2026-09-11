@@ -67,6 +67,9 @@ impl FloeCore {
             let saved = vault
                 .load(request.command.person_id, request.command.session_id)
                 .await?;
+            if request.continuation && has_calendar_history(&saved.messages) {
+                return Err(AgentFailure::StaleContext);
+            }
             let effective_budget = if request.continuation {
                 let level = saved
                     .continuation
@@ -637,6 +640,7 @@ impl<
 
     async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         self.turn.validate().await?;
+        project_calendar_history(&mut request);
         for message in &mut request.messages {
             if let AgentMessage::Capability {
                 turn_id, result, ..

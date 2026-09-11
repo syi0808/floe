@@ -32,10 +32,9 @@ final class AgentController extends ChangeNotifier {
   factory AgentController({
     required AgentFixtureStreamingGateway gateway,
     required String personId,
-    Future<void> Function()? beforeInvocation,
-  }) => AgentController._(gateway, personId, beforeInvocation);
+  }) => AgentController._(gateway, personId);
 
-  AgentController._(this.gateway, this.personId, this._beforeInvocation) {
+  AgentController._(this.gateway, this.personId) {
     registryController = AgentRegistryController(
       gateway: gateway is AgentRegistryGateway
           ? gateway as AgentRegistryGateway
@@ -104,7 +103,6 @@ final class AgentController extends ChangeNotifier {
 
   final AgentFixtureStreamingGateway gateway;
   final String personId;
-  final Future<void> Function()? _beforeInvocation;
   AgentSession? session;
   List<AgentMessage> messages = [];
   AgentProgress progress = AgentProgress.idle;
@@ -470,7 +468,6 @@ final class AgentController extends ChangeNotifier {
     var done = false;
     var started = false;
     try {
-      await _beforeInvocation?.call();
       var update = await (gateway as AgentConversationGateway)
           .beginConversationTurn(request);
       started = true;
@@ -559,7 +556,6 @@ final class AgentController extends ChangeNotifier {
     var done = false;
     var started = false;
     try {
-      await _beforeInvocation?.call();
       var update = await gateway.beginAgentFixtureRun(original, prompt);
       started = true;
       var sequence = 0;

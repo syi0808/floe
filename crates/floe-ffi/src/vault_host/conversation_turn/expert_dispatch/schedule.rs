@@ -75,24 +75,13 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     if active_setups.is_empty() {
         return Ok(None);
     }
-    let connection = core
-        .calendar_connection(person_id)
-        .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::StaleContext)?;
-    let connection_id =
-        Uuid::parse_str(&connection.connection_id).map_err(|_| AgentFailure::StaleContext)?;
-    let (setup, binding) = active_setups
-        .into_iter()
-        .find(|(setup, _)| setup.setup_id == connection_id)
-        .ok_or(AgentFailure::StaleContext)?;
-    validate_active_connection(
-        setup,
-        binding,
-        &connection,
-        &request.device_id,
-        request.remote_route.as_ref(),
-    )?;
+    let candidates: Vec<_> = active_setups
+        .iter()
+        .copied()
+        .filter(|(_, binding)| binding.device_id == request.device_id)
+        .collect();
+    let ambiguous = candidates.len() != 1;
+    let (setup, binding) = candidates.first().copied().unwrap_or(active_setups[0]);
     let local = chrono::Local::now();
     let offset = local.offset().local_minus_utc();
     let range = floe_domain::CalendarRange {
@@ -117,17 +106,25 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     let result = core
         .run_calendar_agent_turn(
             vault,
-            &Access::new(
-                binding.provider,
-                binding.device_id.clone(),
-                binding.calendar_ids.clone(),
-                connection.connection_id.clone(),
-                connection.revision,
-                &model,
-                local_context,
+            &BoundAccess {
                 core,
-                connection.source_authority,
-            ),
+                setup,
+                binding,
+                request_device_id: &request.device_id,
+                remote_route: request.remote_route.as_ref(),
+                ambiguous,
+                access: Access::new(
+                    binding.provider,
+                    binding.device_id.clone(),
+                    binding.calendar_ids.clone(),
+                    setup.setup_id.to_string(),
+                    binding.connection_revision,
+                    &model,
+                    local_context,
+                    core,
+                    binding.source_authority,
+                ),
+            },
             &model,
             CalendarAgentTurnRequest {
                 command: floe_agent::AgentCommand {
@@ -154,7 +151,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     provider: binding.provider,
                     device_id: binding.device_id.clone(),
                     calendar_ids: binding.calendar_ids.clone(),
-                    connection_revision: connection.revision,
+                    connection_revision: binding.connection_revision,
                     day: range,
                     starts_at,
                     ends_at,
@@ -173,6 +170,66 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         )
         .await?;
     Ok(Some(result.session))
+}
+
+struct BoundAccess<'host> {
+    core: &'host floe_core::FloeCore,
+    setup: &'host floe_agent::CalendarExpertSetupReceipt,
+    binding: &'host floe_agent::CalendarViewBinding,
+    request_device_id: &'host str,
+    remote_route: Option<&'host floe_protocol::AgentRemoteRouteDto>,
+    ambiguous: bool,
+    access: Access<'host>,
+}
+
+impl BoundAccess<'_> {
+    async fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
+        if person_id != self.setup.person_id || person_id != self.binding.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        if self.ambiguous {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        let connection = self
+            .core
+            .calendar_connection(person_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        validate_active_connection(
+            self.setup,
+            self.binding,
+            &connection,
+            self.request_device_id,
+            self.remote_route,
+        )
+    }
+}
+
+impl CalendarReadAccess for BoundAccess<'_> {
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        self.validate(request.person_id).await?;
+        self.access.check(request).await
+    }
+
+    async fn observe(
+        &self,
+        request: floe_core::CalendarObserveRequest,
+    ) -> Result<Option<floe_core::CalendarObservation>, AgentFailure> {
+        self.validate(request.person_id).await?;
+        self.access.observe(request).await
+    }
+
+    async fn observe_projected(
+        &self,
+        request: floe_core::CalendarObserveRequest,
+    ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
+        self.validate(request.person_id).await?;
+        self.access.observe_projected(request).await
+    }
 }
 
 fn validate_active_connection(
@@ -194,10 +251,10 @@ fn validate_active_connection(
         CalendarProvider::EventKit | CalendarProvider::Android
     );
     if native {
-        let authority = connection
-            .source_authority
-            .filter(|authority| authority.is_valid())
-            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let authority = connection.source_authority;
+        if !authority.is_valid() {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         if setup.source_authority != Some(authority) || binding.source_authority != Some(authority)
         {
             return Err(AgentFailure::AccessReviewRequired);
@@ -409,7 +466,9 @@ impl DeviceCalendarAccess<'_> {
             .await
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .ok_or(AgentFailure::CapabilityUnavailable)?;
-        if self.source_authority.is_none() || connection.source_authority != self.source_authority {
+        if self.source_authority.is_none()
+            || Some(connection.source_authority) != self.source_authority
+        {
             return Err(AgentFailure::AccessReviewRequired);
         }
         if connection.disconnected
@@ -757,7 +816,7 @@ mod tests {
                 calendar_name: "Primary".into(),
             }],
             revision: 7,
-            source_authority,
+            source_authority: source_authority.unwrap(),
             last_success_at: None,
             last_range: None,
             error: None,
@@ -814,12 +873,12 @@ mod tests {
             validate_active_connection(&setup, &legacy, &connection, "device-a", None),
             Err(AgentFailure::AccessReviewRequired)
         );
-        connection.source_authority = connection.source_authority.unwrap().advance();
+        connection.source_authority = connection.source_authority.advance().unwrap();
         assert_eq!(
             validate_active_connection(&setup, &binding, &connection, "device-a", None),
             Err(AgentFailure::AccessReviewRequired)
         );
-        connection.source_authority = Some(floe_domain::SourceAuthority::new());
+        connection.source_authority = floe_domain::SourceAuthority::new();
         assert_eq!(
             validate_active_connection(&setup, &binding, &connection, "device-a", None),
             Err(AgentFailure::AccessReviewRequired)
@@ -922,8 +981,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            setup.source_authority = connection.source_authority;
-            binding.source_authority = connection.source_authority;
+            setup.source_authority = Some(connection.source_authority);
+            binding.source_authority = Some(connection.source_authority);
             let mut route = remote_route("calendar.google", &connection);
             route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
             route
@@ -972,7 +1031,7 @@ mod tests {
                 &model,
                 &store,
                 &core,
-                connection.source_authority,
+                Some(connection.source_authority),
             );
             let stamp = access
                 .check(CalendarReadAccessRequest {
@@ -1142,7 +1201,7 @@ mod tests {
         let access = DeviceCalendarAccess {
             core: &core,
             connection_id: connection.connection_id.clone(),
-            source_authority: connection.source_authority,
+            source_authority: Some(connection.source_authority),
             pinned: std::sync::Mutex::new(None),
             local_context: &store,
             provider: CalendarProvider::EventKit,

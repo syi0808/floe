@@ -384,6 +384,7 @@ impl Fixture {
                     vec!["private-calendar-id".into()],
                     floe_domain::CalendarScope::Selected,
                     1,
+                    Some(floe_domain::SourceAuthority::new()),
                 )
                 .unwrap();
             registry
@@ -630,7 +631,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             calendar_ids: fixture.grant.calendar_ids.clone(),
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: fixture.grant.connection_revision,
-            source_authority: None,
+            source_authority: Some(floe_domain::SourceAuthority::new()),
         };
         let installed = fixture
             .vault
@@ -1020,6 +1021,106 @@ async fn permission_failure_is_a_typed_missing_source_not_a_fake_empty_calendar(
     assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
     assert!(result.proposals.is_empty());
     assert_eq!(fixture.state().await.revision, fixture.revision);
+}
+
+#[tokio::test]
+async fn ordinary_chat_does_not_acquire_calendar_even_when_permission_is_denied() {
+    let fixture = Fixture::new().await;
+    let access = Access::default();
+    access.deny_at.store(1, Ordering::Release);
+    let model = Model::default();
+    *model.steps.lock().unwrap() = VecDeque::from([ModelStep::Answer {
+        text: "Hello!".into(),
+    }]);
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &access,
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(access.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn new_turn_without_calendar_reads_does_not_reuse_previous_calendar_evidence() {
+    let mut fixture = Fixture::new().await;
+    let first = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    fixture.session = first.session;
+    let access = Access::default();
+    access.deny_at.store(1, Ordering::Release);
+    let model = Model::default();
+    *model.steps.lock().unwrap() = VecDeque::from([ModelStep::Answer {
+        text: "Hello again!".into(),
+    }]);
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &access,
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
+    assert_eq!(access.calls.load(Ordering::Acquire), 0);
+    let requests = model.requests.lock().unwrap();
+    assert!(!has_calendar_history(&requests[0].messages));
+    assert!(requests[0].replay.is_empty());
+    assert!(has_calendar_history(&result.session.messages));
+}
+
+#[tokio::test]
+async fn calendar_history_cannot_resume_without_a_new_lease() {
+    let mut fixture = Fixture::new().await;
+    let mut first_request = fixture.request();
+    first_request.budget.max_iterations = 1;
+    let first = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            first_request,
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert!(first.session.continuation.is_some());
+    assert!(has_calendar_history(&first.session.messages));
+    fixture.session = first.session;
+    let mut request = fixture.request();
+    request.continuation = true;
+    let access = Access::default();
+    let model = Model::default();
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(&fixture.vault, &access, &model, request, now, |_| {})
+        .await;
+    assert!(matches!(result, Err(AgentFailure::StaleContext)));
+    assert_eq!(access.calls.load(Ordering::Acquire), 0);
+    assert!(model.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

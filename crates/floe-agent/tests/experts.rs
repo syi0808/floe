@@ -167,6 +167,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
             vec!["work".into(), "home".into()],
             floe_domain::CalendarScope::Selected,
             1,
+            Some(floe_domain::SourceAuthority::new()),
         )
         .unwrap();
     assert_eq!(
@@ -212,6 +213,7 @@ fn calendar_binding_is_canonical_bounded_default_off_and_scoped_to_one_person() 
                 calendars,
                 floe_domain::CalendarScope::Selected,
                 1,
+                Some(floe_domain::SourceAuthority::new()),
             ),
             Err(AgentFailure::InvalidInput)
         );
@@ -243,7 +245,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
             calendar_ids: vec!["home".into()],
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: 1,
-            source_authority: None,
+            source_authority: Some(floe_domain::SourceAuthority::new()),
             enabled: true,
         };
         match mode {

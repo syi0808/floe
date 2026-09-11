@@ -1,5 +1,6 @@
 mod a2a;
 mod calendar_context;
+mod calendar_history;
 mod capability_execution;
 mod communication_context;
 mod connected_context;
@@ -33,6 +34,7 @@ pub use calendar_context::{
     CALENDAR_CONTEXT_VIEW_ID, CalendarContextItem, CalendarContextView, MAX_CALENDAR_CONTEXT_BYTES,
     MAX_CALENDAR_CONTEXT_ITEMS, calendar_context_evidence, validate_calendar_context_view,
 };
+pub use calendar_history::{has_calendar_history, project_calendar_history};
 pub use communication_context::{
     COMMUNICATION_VIEW_ID, CommunicationItem, CommunicationView, MAX_COMMUNICATION_BYTES,
     MAX_COMMUNICATION_FRESHNESS_MS, MAX_COMMUNICATION_ITEMS, communication_context_evidence,

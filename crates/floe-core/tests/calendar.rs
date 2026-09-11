@@ -52,7 +52,10 @@ async fn fixture() -> (FloeCore, PersonId, std::path::PathBuf) {
 async fn authority_survives_sync_but_not_permission_or_scope_changes() {
     let (core, person, path) = fixture().await;
     let initial = core.calendar_connection(person).await.unwrap().unwrap();
-    assert!(initial.source_authority.unwrap().is_valid());
+    assert!(initial.source_authority.is_valid());
+    let mut obsolete = serde_json::to_value(&initial).unwrap();
+    obsolete.as_object_mut().unwrap().remove("source_authority");
+    assert!(serde_json::from_value::<CalendarConnection>(obsolete).is_err());
     core.import_calendar(person, initial.revision, range(0), vec![], now())
         .await
         .unwrap();

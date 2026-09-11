@@ -96,8 +96,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if registry.revision() != revision {
             match previous {
                 Some(_) => {
-                    self.save_expert_registry_checked(revision, &registry.snapshot(), &check)
-                        .await?
+                    self.save_expert_registry_change_checked(
+                        revision,
+                        &registry.snapshot(),
+                        None,
+                        Some(setup.setup_id),
+                        &check,
+                    )
+                    .await?
                 }
                 None => {
                     self.initialize_expert_registry_checked(&registry.snapshot(), &check)
@@ -502,10 +508,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             [created.tool_installation_id, created.expert_installation_id]
                                 .contains(&entry.id)
                                 && entry.enabled
+                                && mutable_builtin_setup != Some(receipt.setup_id)
                         }) || snapshot.assignments.iter().any(|entry| {
                             [created.tool_assignment_id, created.expert_assignment_id]
                                 .contains(&entry.id)
                                 && entry.enabled
+                                && mutable_builtin_setup != Some(receipt.setup_id)
                         })
                     })
                 {

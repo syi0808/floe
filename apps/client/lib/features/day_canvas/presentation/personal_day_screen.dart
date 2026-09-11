@@ -122,7 +122,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       agentController = AgentController(
         gateway: agentGateway,
         personId: widget.query.personId,
-        beforeInvocation: calendarObservationRefresh?.ensureFresh,
       );
     }
   }

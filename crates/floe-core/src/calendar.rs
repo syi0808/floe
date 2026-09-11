@@ -138,7 +138,7 @@ impl FloeCore {
                         .map(|calendar| &calendar.calendar_id)
                         .eq(calendars.iter().map(|calendar| &calendar.calendar_id))
                 {
-                    previous.connection.source_authority.unwrap_or_default()
+                    previous.connection.source_authority
                 } else {
                     next_authority(previous.connection.source_authority)?
                 }
@@ -157,7 +157,7 @@ impl FloeCore {
                         provider,
                         calendars,
                         revision: connection_revision,
-                        source_authority: Some(source_authority),
+                        source_authority,
                         last_success_at: None,
                         last_range: None,
                         error: None,
@@ -195,8 +195,7 @@ impl FloeCore {
         let previous = mirror.clone();
         mirror.events.clear();
         mirror.connection.disconnected = true;
-        mirror.connection.source_authority =
-            Some(next_authority(mirror.connection.source_authority)?);
+        mirror.connection.source_authority = next_authority(mirror.connection.source_authority)?;
         mirror.connection.revision += 1;
         mirror.connection.calendars.clear();
         mirror.connection.source_statuses.clear();
@@ -270,7 +269,7 @@ impl FloeCore {
             .collect();
         if previous_ids != current_ids {
             mirror.connection.source_authority =
-                Some(next_authority(mirror.connection.source_authority)?);
+                next_authority(mirror.connection.source_authority)?;
         }
         mirror.connection.revision += 1;
         self.store
@@ -301,7 +300,7 @@ impl FloeCore {
             })
         {
             mirror.connection.source_authority =
-                Some(next_authority(mirror.connection.source_authority)?);
+                next_authority(mirror.connection.source_authority)?;
         }
         for calendar in &mirror.connection.calendars {
             let status = mirror
@@ -339,7 +338,6 @@ impl FloeCore {
             .await?;
         let previous = mirror.clone();
         mirror.events = reconcile_records(person_id, &mirror, &range, records, now)?;
-        initialize_authority(&mut mirror.connection);
         mirror.connection.last_success_at = Some(now);
         mirror.connection.last_range = Some(range.clone());
         mirror.connection.error = None;
@@ -383,7 +381,6 @@ impl FloeCore {
             .await?;
         let previous = mirror.clone();
         let calendars = mirror.connection.calendars.clone();
-        initialize_authority(&mut mirror.connection);
         let expected: HashSet<_> = calendars
             .iter()
             .map(|calendar| calendar.calendar_id.as_str())
@@ -411,7 +408,7 @@ impl FloeCore {
                     .is_some_and(|status| status.error == Some(CalendarFailure::PermissionDenied))
         }) {
             mirror.connection.source_authority =
-                Some(next_authority(mirror.connection.source_authority)?);
+                next_authority(mirror.connection.source_authority)?;
         }
         for batch in batches {
             let calendar = calendars
@@ -495,20 +492,13 @@ impl FloeCore {
     }
 }
 
-fn initialize_authority(connection: &mut CalendarConnection) {
-    connection
-        .source_authority
-        .get_or_insert_with(SourceAuthority::new);
-}
-
-fn next_authority(current: Option<SourceAuthority>) -> Result<SourceAuthority, CoreError> {
-    match current {
-        Some(current) if current.is_valid() => current
-            .advance()
-            .ok_or_else(|| validation("source authority exhausted")),
-        Some(_) => Err(validation("invalid source authority")),
-        None => Ok(SourceAuthority::new()),
+fn next_authority(current: SourceAuthority) -> Result<SourceAuthority, CoreError> {
+    if !current.is_valid() {
+        return Err(validation("invalid source authority"));
     }
+    current
+        .advance()
+        .ok_or_else(|| validation("source authority exhausted"))
 }
 
 fn provider_identifier(provider: CalendarProvider) -> &'static str {

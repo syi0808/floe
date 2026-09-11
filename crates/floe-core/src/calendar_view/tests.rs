@@ -974,7 +974,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         calendar_ids: fixture.grant().calendar_ids,
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: fixture.grant().connection_revision,
-        source_authority: None,
+        source_authority: Some(floe_domain::SourceAuthority::new()),
         enabled: true,
     });
     vault.initialize_expert_registry(&snapshot).await.unwrap();
