@@ -1254,6 +1254,207 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commitments_artifact_preserves_mail_calendar_task_and_memory_provenance() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let person_id = PersonId::new();
+        let task_id = uuid::Uuid::new_v4();
+        let memory_id = uuid::Uuid::new_v4();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (mail_request, socket) = request(socket).await;
+            assert!(mail_request.starts_with("POST /v1/views/mail.communication "));
+            respond(
+                socket,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view": {
+                        "schema_version": 1,
+                        "view_id": "mail.communication",
+                        "source_handle": "mail:selected",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 299_999,
+                        "coverage_complete": true,
+                        "items": [{
+                            "evidence_handle": "mail:request",
+                            "thread_handle": "mail:thread",
+                            "received_unix_ms": now - 2,
+                            "from": "alex@example.com",
+                            "to": "person@example.com",
+                            "subject": "Delivery review",
+                            "snippet": "Please confirm the review.",
+                            "labels": ["INBOX"]
+                        }]
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let (calendar_request, socket) = request(socket).await;
+            assert!(calendar_request.starts_with("POST /v1/views/calendar.timeline "));
+            respond(
+                socket,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "view": {
+                        "schema_version": 1,
+                        "view_id": "calendar.timeline",
+                        "source_handle": "calendar:selected",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 240_000,
+                        "range_start_unix_ms": now - 86_400_000,
+                        "range_end_unix_ms": now + 86_400_000,
+                        "coverage_complete": true,
+                        "items": [{
+                            "evidence_handle": "calendar:review",
+                            "untrusted_title": "Delivery review",
+                            "starts_at_unix_ms": now + 10_000,
+                            "ends_at_unix_ms": now + 20_000,
+                            "all_day": false
+                        }]
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+
+            let (socket, _) = listener.accept().await.unwrap();
+            let (model_request, socket) = request(socket).await;
+            assert!(model_request.starts_with("POST /v1/agent "));
+            assert!(model_request.contains("mail:request"));
+            assert!(model_request.contains("calendar:review"));
+            assert!(model_request.contains(&task_id.to_string()));
+            assert!(model_request.contains(&memory_id.to_string()));
+            let answer = serde_json::json!({
+                "summary": "Four bounded sources support the delivery commitment.",
+                "findings": [
+                    {"evidence_handle":"mail:request","kind":"request_to_user","statement":"A reply was requested.","epistemic_status":"observed","confidence_millis":1000},
+                    {"evidence_handle":"calendar:review","kind":"user_commitment","statement":"A review is scheduled.","epistemic_status":"observed","confidence_millis":1000},
+                    {"evidence_handle":task_id.to_string(),"kind":"user_commitment","statement":"A task remains open.","epistemic_status":"observed","confidence_millis":1000},
+                    {"evidence_handle":memory_id.to_string(),"kind":"user_commitment","statement":"The delivery was confirmed.","epistemic_status":"observed","confidence_millis":1000}
+                ]
+            });
+            let output = serde_json::json!({
+                "output": [{"kind": "answer", "text": answer.to_string()}],
+                "used_tokens": 64,
+                "call_ids": []
+            })
+            .to_string();
+            respond(
+                socket,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "purpose": "everyday_assistance",
+                    "output": output,
+                    "trace_id": "0123456789abcdef0123456789abcdef",
+                    "routing": {
+                        "placement": "server_local",
+                        "external_transfer": false,
+                        "replay_source": "a".repeat(64)
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+        });
+        let route = AgentRemoteRouteDto {
+            base_url: format!("http://{address}"),
+            bearer_token: "daily_route_token_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+        };
+        let model = Model::new(Some(route.clone())).unwrap();
+        let policy = policy(&model, Some(&route));
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![floe_agent::ContextMemory {
+                target_id: memory_id,
+                revision: 2,
+                kind: floe_agent::PersonalMemoryKind::Commitment,
+                statement: "The user confirmed the delivery.".into(),
+                epistemic_status: floe_agent::EpistemicStatus::Fact,
+                confidence_millis: 1000,
+                observed_at_unix_ms: now - 5_000,
+                valid_from_unix_ms: None,
+                valid_until_unix_ms: Some(now + 180_000),
+                source_refs: vec![floe_agent::LearningEvidenceRef {
+                    session_id: uuid::Uuid::new_v4(),
+                    turn_id: uuid::Uuid::new_v4(),
+                }],
+            }],
+            evidence: vec![],
+        };
+        let local_context = LocalContextStore::default();
+        let task_handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
+        let tasks = [NativeContextView {
+            schema_version: AGENT_VERSION,
+            handle: task_handle,
+            person_id,
+            view_id: "floe.tasks".into(),
+            data_class: DataClass::Personal,
+            source_handle: format!("floe.tasks:{task_handle}"),
+            observed_at_unix_ms: now as u64,
+            expires_at_unix_ms: (now + 220_000) as u64,
+            coverage_complete: true,
+            next_cursor: None,
+            items: vec![floe_agent::NativeContextItem::Task {
+                evidence_handle: task_id,
+                untrusted_title: "Prepare delivery".into(),
+                deadline_unix_ms: Some((now + 30_000) as u64),
+                priority: floe_agent::TaskContextPriority::High,
+            }],
+        }];
+        let experts = ConversationExperts {
+            model: &model,
+            policy: &policy,
+            context: &context,
+            local_context: &local_context,
+            task_views: &tasks,
+        };
+        let task = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id,
+                session_id: uuid::Uuid::new_v4(),
+                parent_turn_id: uuid::Uuid::new_v4(),
+                agent_id: COMMITMENTS_AGENT_ID.into(),
+                message: floe_agent::A2AMessage {
+                    message_id: uuid::Uuid::new_v4(),
+                    context_id: uuid::Uuid::new_v4(),
+                    task_id: Some(uuid::Uuid::new_v4()),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Assess all commitment sources.".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await
+            .unwrap();
+        let result: CommitmentsExpertResult =
+            serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
+        assert_eq!(result.source_handle, floe_agent::COMMITMENTS_AGGREGATE_SOURCE_HANDLE);
+        assert_eq!(result.findings.len(), 4);
+        assert_eq!(result.expires_at_unix_ms, now + 180_000);
+        assert!(result.source_handles.contains(&"mail:selected".into()));
+        assert!(result.source_handles.contains(&"calendar:selected".into()));
+        assert!(result.source_handles.contains(&format!("floe.tasks:{task_handle}")));
+        assert!(result.source_handles.contains(&format!("memory:{memory_id}:2")));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn portfolio_delegations_read_fresh_views_and_return_typed_artifacts() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1468,10 +1669,10 @@ mod tests {
                     "evidence_handles": ["attention:aggregate"]
                 }),
                 serde_json::json!({
-                    "summary": "Protect the current focus period.",
+                    "summary": "Protect the current focus period before the review.",
                     "recommendation": "protect_focus",
-                    "rationale": "The coarse state reports focused work.",
-                    "evidence_handles": ["attention:aggregate"]
+                    "rationale": "Attention, the upcoming review, and active release work support focus protection.",
+                    "evidence_handles": ["attention:aggregate", "calendar:review", "work:release"]
                 }),
                 "attention:mac-local",
             ),
@@ -1526,7 +1727,63 @@ mod tests {
                     let (socket, _) = listener.accept().await.unwrap();
                     let (optional_request, socket) = request(socket).await;
                     assert!(optional_request.starts_with(&format!("POST {path} ")));
-                    respond_not_found(socket).await;
+                    match (agent_id, *path) {
+                        (FOCUS_AGENT_ID, "/v1/views/calendar.timeline") => {
+                            respond(
+                                socket,
+                                serde_json::json!({
+                                    "schema_version": 1,
+                                    "view": {
+                                        "schema_version": 1,
+                                        "view_id": "calendar.timeline",
+                                        "source_handle": "calendar:selected",
+                                        "observed_at_unix_ms": now - 1,
+                                        "expires_at_unix_ms": now + 240_000,
+                                        "range_start_unix_ms": now - 86_400_000,
+                                        "range_end_unix_ms": now + 86_400_000,
+                                        "coverage_complete": true,
+                                        "items": [{
+                                            "evidence_handle": "calendar:review",
+                                            "untrusted_title": "Release review",
+                                            "starts_at_unix_ms": now + 10_000,
+                                            "ends_at_unix_ms": now + 20_000,
+                                            "all_day": false
+                                        }]
+                                    }
+                                })
+                                .to_string(),
+                            )
+                            .await;
+                        }
+                        (FOCUS_AGENT_ID, "/v1/views/work.context") => {
+                            respond(
+                                socket,
+                                serde_json::json!({
+                                    "schema_version": 1,
+                                    "view": {
+                                        "schema_version": 1,
+                                        "view_id": "work.context",
+                                        "source_handle": "work:selected",
+                                        "observed_at_unix_ms": now - 1,
+                                        "expires_at_unix_ms": now + 220_000,
+                                        "coverage_complete": true,
+                                        "scope_handle": "workspace:selected",
+                                        "items": [{
+                                            "evidence_handle": "work:release",
+                                            "kind": "project",
+                                            "title": "Release readiness",
+                                            "status": "active",
+                                            "blocker": null,
+                                            "observed_at_unix_ms": now - 2
+                                        }]
+                                    }
+                                })
+                                .to_string(),
+                            )
+                            .await;
+                        }
+                        _ => respond_not_found(socket).await,
+                    }
                 }
 
                 let (socket, _) = listener.accept().await.unwrap();
@@ -1609,6 +1866,28 @@ mod tests {
             let data: serde_json::Value =
                 serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
             assert_eq!(data["source_handle"], source_handle);
+            if agent_id == RELATIONSHIPS_AGENT_ID {
+                assert_eq!(data["source_handles"], serde_json::json!(["contacts:local"]));
+                assert_eq!(data["follow_ups"], serde_json::json!([]));
+            }
+            if agent_id == FOCUS_AGENT_ID {
+                assert_eq!(
+                    data["source_handles"],
+                    serde_json::json!([
+                        "attention:mac-local",
+                        "calendar:selected",
+                        "work:selected"
+                    ])
+                );
+                assert_eq!(
+                    data["evidence_handles"],
+                    serde_json::json!([
+                        "attention:aggregate",
+                        "calendar:review",
+                        "work:release"
+                    ])
+                );
+            }
         }
         server.await.unwrap();
     }
