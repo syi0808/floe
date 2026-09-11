@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "view_id": "schedule.feasibility",
+  "source_handle": "apple:feasibility:local",
+  "observed_at_unix_ms": 2000000000000,
+  "expires_at_unix_ms": 2000000300000,
+  "items": [
+    {
+      "event_handle": "event:next",
+      "evidence_handles": ["calendar:event:next", "weather:event:next"],
+      "travel_duration_seconds": 1201,
+      "leave_by_unix_ms": 2000002399000,
+      "weather_impact": "significant",
+      "confidence_millis": 998
+    }
+  ]
+}

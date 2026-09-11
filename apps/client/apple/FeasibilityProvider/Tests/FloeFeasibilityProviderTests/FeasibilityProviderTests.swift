@@ -37,6 +37,17 @@ private struct WeatherStub: EventWeatherProviding {
   }
 }
 
+private struct SlowLocationStub: CurrentLocationProviding {
+  func currentLocation(deadline: Date) async throws -> LocationReading {
+    try await Task.sleep(for: .seconds(5))
+    return LocationReading(
+      coordinate: Coordinate(latitude: 37.4, longitude: 127.1),
+      observedAt: Date(),
+      horizontalAccuracyMeters: 25
+    )
+  }
+}
+
 private let now = Date(timeIntervalSince1970: 2_000_000_000)
 
 private func request(deadline: Date = now.addingTimeInterval(20)) -> FeasibilityRequest {
@@ -84,6 +95,14 @@ private func request(deadline: Date = now.addingTimeInterval(20)) -> Feasibility
   #expect(!json.contains("longitude"))
   #expect(!json.contains("location"))
   #expect(json.contains("\"view_id\":\"schedule.feasibility\""))
+
+  let fixtureURL = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appending(path: "../Fixtures/schedule_feasibility.json")
+    .standardizedFileURL
+  let fixtureObject = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
+  let encodedObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.view))
+  #expect((fixtureObject as? NSDictionary) == (encodedObject as? NSDictionary))
 }
 
 @Test func rejectsStaleLocation() async {
@@ -137,6 +156,83 @@ private func request(deadline: Date = now.addingTimeInterval(20)) -> Feasibility
   await #expect(throws: FeasibilityFailure(code: .invalidInput, provider: "apple_feasibility")) {
     try await provider.feasibility(for: request(deadline: now))
   }
+}
+
+@Test func enforcesRustHandleByteBoundary() async throws {
+  let provider = AppleFeasibilityProvider(
+    location: LocationStub(
+      reading: LocationReading(
+        coordinate: Coordinate(latitude: 37.4, longitude: 127.1),
+        observedAt: now,
+        horizontalAccuracyMeters: 25
+      )
+    ),
+    directions: DirectionsStub(duration: 900),
+    weather: WeatherStub(
+      reading: WeatherReading(
+        precipitationChance: 0,
+        windKilometersPerHour: 0,
+        severeCondition: false
+      )
+    ),
+    now: { now }
+  )
+  let accepted = FeasibilityRequest(
+    eventHandle: String(repeating: "a", count: 128),
+    evidenceHandles: ["evidence:one"],
+    destination: Coordinate(latitude: 37.5665, longitude: 126.9780),
+    eventStart: now.addingTimeInterval(3_600),
+    eventEnd: now.addingTimeInterval(7_200),
+    travelMode: .transit,
+    sourceHandle: "apple:feasibility:local",
+    deadline: now.addingTimeInterval(20)
+  )
+  _ = try await provider.feasibility(for: accepted)
+
+  let rejected = FeasibilityRequest(
+    eventHandle: String(repeating: "a", count: 129),
+    evidenceHandles: ["evidence:one"],
+    destination: Coordinate(latitude: 37.5665, longitude: 126.9780),
+    eventStart: now.addingTimeInterval(3_600),
+    eventEnd: now.addingTimeInterval(7_200),
+    travelMode: .transit,
+    sourceHandle: "apple:feasibility:local",
+    deadline: now.addingTimeInterval(20)
+  )
+  await #expect(throws: FeasibilityFailure(code: .invalidInput, provider: "apple_feasibility")) {
+    try await provider.feasibility(for: rejected)
+  }
+}
+
+@Test func cancelsCooperativeProviderAtDeadline() async {
+  let wallClockNow = Date()
+  let provider = AppleFeasibilityProvider(
+    location: SlowLocationStub(),
+    directions: DirectionsStub(duration: 900),
+    weather: WeatherStub(
+      reading: WeatherReading(
+        precipitationChance: 0,
+        windKilometersPerHour: 0,
+        severeCondition: false
+      )
+    ),
+    now: Date.init
+  )
+  let boundedRequest = FeasibilityRequest(
+    eventHandle: "event:next",
+    evidenceHandles: ["evidence:one"],
+    destination: Coordinate(latitude: 37.5665, longitude: 126.9780),
+    eventStart: wallClockNow.addingTimeInterval(3_600),
+    eventEnd: wallClockNow.addingTimeInterval(7_200),
+    travelMode: .transit,
+    sourceHandle: "apple:feasibility:local",
+    deadline: wallClockNow.addingTimeInterval(0.1)
+  )
+  let started = ContinuousClock.now
+  await #expect(throws: FeasibilityFailure(code: .timeout, provider: "core_location")) {
+    try await provider.feasibility(for: boundedRequest)
+  }
+  #expect(started.duration(to: .now) < .seconds(1))
 }
 
 private extension Date {

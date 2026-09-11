@@ -248,7 +248,9 @@ public struct AppleFeasibilityProvider: Sendable {
     let queryStartedAt = now()
     try validate(request, at: queryStartedAt)
 
-    let origin = try await location.currentLocation(deadline: request.deadline)
+    let origin = try await withDeadline(request.deadline, provider: "core_location") {
+      try await location.currentLocation(deadline: request.deadline)
+    }
     let locationAge = now().timeIntervalSince(origin.observedAt)
     guard locationAge >= 0, locationAge <= policy.locationMaximumAge else {
       throw FeasibilityFailure(code: .staleLocation, provider: "core_location")
@@ -259,19 +261,25 @@ public struct AppleFeasibilityProvider: Sendable {
       throw FeasibilityFailure(code: .locationUnavailable, provider: "core_location")
     }
 
-    async let route = directions.route(
-      from: origin.coordinate,
-      to: request.destination,
-      mode: request.travelMode,
-      deadline: request.deadline
-    )
-    async let eventWeather = weather.weather(
-      at: request.destination,
-      from: request.eventStart,
-      through: request.eventEnd,
-      deadline: request.deadline
-    )
-    async let attribution = weather.attribution(deadline: request.deadline)
+    async let route = withDeadline(request.deadline, provider: "map_kit") {
+      try await directions.route(
+        from: origin.coordinate,
+        to: request.destination,
+        mode: request.travelMode,
+        deadline: request.deadline
+      )
+    }
+    async let eventWeather = withDeadline(request.deadline, provider: "weather_kit") {
+      try await weather.weather(
+        at: request.destination,
+        from: request.eventStart,
+        through: request.eventEnd,
+        deadline: request.deadline
+      )
+    }
+    async let attribution = withDeadline(request.deadline, provider: "weather_kit") {
+      try await weather.attribution(deadline: request.deadline)
+    }
     let (routeReading, weatherReading, attributionLinks) = try await (
       route, eventWeather, attribution
     )
@@ -337,12 +345,37 @@ public struct AppleFeasibilityProvider: Sendable {
   }
 
   private static func validHandle(_ value: String) -> Bool {
-    !value.isEmpty && value.utf8.count <= 512 && !value.contains(where: { $0.isWhitespace })
+    !value.isEmpty && value.utf8.count <= 128 && !value.contains(where: { $0.isWhitespace })
   }
 
   private func confidence(for reading: LocationReading) -> UInt16 {
     let accuracyRatio = min(1, reading.horizontalAccuracyMeters / policy.maximumLocationAccuracyMeters)
     return UInt16(max(500, (1_000 - accuracyRatio * 400).rounded()))
+  }
+}
+
+private func withDeadline<Value: Sendable>(
+  _ deadline: Date,
+  provider: String,
+  operation: @escaping @Sendable () async throws -> Value
+) async throws -> Value {
+  let remaining = deadline.timeIntervalSinceNow
+  guard remaining > 0 else {
+    throw FeasibilityFailure(code: .timeout, provider: provider)
+  }
+
+  return try await withThrowingTaskGroup(of: Value.self) { group in
+    group.addTask { try await operation() }
+    group.addTask {
+      try await Task.sleep(for: .seconds(remaining))
+      try Task.checkCancellation()
+      throw FeasibilityFailure(code: .timeout, provider: provider)
+    }
+    guard let first = try await group.next() else {
+      throw FeasibilityFailure(code: .providerFailure, provider: provider)
+    }
+    group.cancelAll()
+    return first
   }
 }
 
@@ -392,8 +425,13 @@ public actor MapKitDirectionsProvider: DirectionsProviding {
     )
     request.transportType = mode.mapKitTransportType
 
+    let directions = CancellableDirections(request: request)
     do {
-      let eta = try await MKDirections(request: request).calculateETA()
+      let eta = try await withTaskCancellationHandler {
+        try await directions.value.calculateETA()
+      } onCancel: {
+        directions.value.cancel()
+      }
       guard Date() < deadline else {
         throw FeasibilityFailure(code: .timeout, provider: "map_kit")
       }
@@ -405,6 +443,14 @@ public actor MapKitDirectionsProvider: DirectionsProviding {
     } catch {
       throw FeasibilityFailure(code: .providerFailure, provider: "map_kit")
     }
+  }
+}
+
+private final class CancellableDirections: @unchecked Sendable {
+  let value: MKDirections
+
+  init(request: MKDirections.Request) {
+    value = MKDirections(request: request)
   }
 }
 
