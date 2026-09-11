@@ -130,7 +130,7 @@ func readState(directory string) (diskState, string, error) {
 		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || state.Cleanups == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 || len(state.Cleanups) > 16 {
 			return state, "", errors.New("invalid server state")
 		}
-		if len(state.Cleanups) > 1 || len(state.Cleanups) != 0 && (len(state.Clients) != 0 || len(state.Connections) != 0) {
+		if len(state.Cleanups) > 1 {
 			return state, "", errors.New("invalid server state")
 		}
 		if state.Routes == nil {

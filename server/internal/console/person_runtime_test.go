@@ -259,7 +259,7 @@ func TestGmailIndexResetFailureRetriesAfterCredentialWasDeleted(test *testing.T)
 	firstErr := fixture.console.retryPersonCleanupLocked(fixturePersonID)
 	cleanup := fixture.console.state.Cleanups[fixturePersonID]
 	fixture.console.mu.Unlock()
-	if firstErr == nil || runtime.logouts != 1 || len(cleanup.Connections) != 1 || cleanup.Connections[0].RuntimeComplete || !cleanup.Connections[0].VaultComplete {
+	if firstErr == nil || runtime.logouts != 1 || len(cleanup.Connections) != 1 || cleanup.Connections[0].RuntimeComplete || cleanup.Connections[0].VaultComplete {
 		test.Fatalf("partial Gmail cleanup was not retryable: %#v %v", cleanup, firstErr)
 	}
 	if _, retained := fixture.vault.values[credential]; retained {
@@ -272,6 +272,66 @@ func TestGmailIndexResetFailureRetriesAfterCredentialWasDeleted(test *testing.T)
 	fixture.console.mu.Unlock()
 	if secondErr != nil || pending || runtime.logouts != 2 || runtime.credential != credential {
 		test.Fatalf("Gmail cleanup retry failed: pending=%v logouts=%d credential=%q err=%v", pending, runtime.logouts, runtime.credential, secondErr)
+	}
+}
+
+func TestExplicitDisconnectPersistsOAuthRuntimeAndVaultProgress(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	connectionID := "00000000-0000-4000-8000-000000000021"
+	credential, err := credentials.ConnectionName("FLOE_GMAIL_OAUTH", connectionID, fixturePersonID)
+	if err != nil {
+		test.Fatal(err)
+	}
+	fixture.vault.values[credential] = `{"refresh_token":"private"}`
+	runtime := &partialGmailCleanupRuntime{vault: fixture.vault}
+	if err := runtime.BindCredential(credential); err != nil {
+		test.Fatal(err)
+	}
+	fixture.console.mu.Lock()
+	fixture.console.gmail = runtime
+	fixture.console.state.Connections[connectionID] = connectionRecord{
+		ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID,
+		Scope: map[string]any{}, Credential: credential,
+	}
+	if err := fixture.console.save(fixture.console.state); err != nil {
+		fixture.console.mu.Unlock()
+		test.Fatal(err)
+	}
+	fixture.console.mu.Unlock()
+
+	response := fixture.call(http.MethodDelete, "/v1/connectors/gmail", map[string]any{
+		"schema_version": 1, "connection_id": connectionID, "connection_revision": 1,
+	}, token)
+	if response.Code != http.StatusInternalServerError || runtime.logouts != 1 {
+		test.Fatalf("partial OAuth cleanup was hidden: %d %s logouts=%d", response.Code, response.Body.String(), runtime.logouts)
+	}
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	cleanup := persisted.Cleanups[fixturePersonID]
+	if len(cleanup.Connections) != 1 || cleanup.Connections[0].RuntimeComplete || cleanup.Connections[0].VaultComplete {
+		test.Fatalf("OAuth cleanup progress was not durable: %#v", cleanup)
+	}
+
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	runtime.credential = "wrong-credential"
+	restarted.SetGmailAuth(runtime)
+	if runtime.credential != credential || runtime.logouts != 2 {
+		test.Fatalf("restart did not rebind cleanup runtime: credential=%q logouts=%d", runtime.credential, runtime.logouts)
+	}
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if cleanupPending {
+		test.Fatal("successful runtime retry retained cleanup tombstone")
+	}
+	if _, _, err := readState(fixture.console.directory); err != nil {
+		test.Fatalf("completed OAuth cleanup was not durable: %v", err)
 	}
 }
 
@@ -290,9 +350,9 @@ func TestPersistedConnectionRequiresLivePersonOwner(test *testing.T) {
 	}
 }
 
-func TestPersistedCleanupCannotOverlapLivePersonData(test *testing.T) {
+func TestPersistedCleanupWithLiveClientReloadsFailClosed(test *testing.T) {
 	fixture := setup(test)
-	fixture.pair()
+	_, token := fixture.pair()
 	connectionID := "00000000-0000-4000-8000-000000000012"
 	credential, err := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	if err != nil {
@@ -310,8 +370,14 @@ func TestPersistedCleanupCannotOverlapLivePersonData(test *testing.T) {
 		test.Fatal(err)
 	}
 	fixture.console.mu.Unlock()
-	if _, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil); err == nil {
-		test.Fatal("persisted cleanup overlapped live Person state")
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatalf("durable explicit-disconnect cleanup was rejected: %v", err)
+	}
+	restartedFixture := *fixture
+	restartedFixture.console = restarted
+	if response := restartedFixture.call(http.MethodGet, "/v1/connectors", nil, token); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("live client read through pending cleanup: %d %s", response.Code, response.Body.String())
 	}
 }
 

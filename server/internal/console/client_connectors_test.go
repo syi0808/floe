@@ -32,6 +32,24 @@ type blockingLogoutRuntime struct {
 	logoutBoundTo string
 }
 
+type logoutOnlyRuntime struct {
+	credential string
+}
+
+func (runtime *logoutOnlyRuntime) BindCredential(credential string) error {
+	runtime.credential = credential
+	return nil
+}
+
+func (*logoutOnlyRuntime) Ready() bool { return true }
+
+func (*logoutOnlyRuntime) Action(_ context.Context, action string) (any, error) {
+	if action != "logout" {
+		return nil, errors.New("unsupported")
+	}
+	return map[string]any{"status": "disconnected"}, nil
+}
+
 func (runtime *blockingLogoutRuntime) Action(ctx context.Context, action string) (any, error) {
 	if action == "logout" && runtime.logoutEntered != nil {
 		runtime.logoutBoundTo = runtime.credential
@@ -53,6 +71,42 @@ type blockingDeleteVault struct {
 	releaseDelete chan struct{}
 	putCalled     chan struct{}
 	failDelete    bool
+}
+
+type crashWindowVault struct {
+	mu           sync.Mutex
+	values       map[string]string
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+	deletes      int
+}
+
+func (vault *crashWindowVault) Get(key string) (string, error) {
+	vault.mu.Lock()
+	defer vault.mu.Unlock()
+	return vault.values[key], nil
+}
+
+func (vault *crashWindowVault) Put(key, value string) error {
+	vault.mu.Lock()
+	defer vault.mu.Unlock()
+	vault.values[key] = value
+	return nil
+}
+
+func (vault *crashWindowVault) Delete(key string) error {
+	vault.mu.Lock()
+	vault.deletes++
+	call := vault.deletes
+	vault.mu.Unlock()
+	if call == 1 {
+		close(vault.firstEntered)
+		<-vault.releaseFirst
+	}
+	vault.mu.Lock()
+	delete(vault.values, key)
+	vault.mu.Unlock()
+	return nil
 }
 
 func (vault *blockingDeleteVault) Get(key string) (string, error) {
@@ -180,6 +234,105 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 	}
 	if value, _ := vault.Get(credential); value != "" {
 		test.Fatalf("cleanup retry retained credential: %q", value)
+	}
+}
+
+func TestRestartRecoversDurableDisconnectBeforeVaultDelete(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	if response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1, "secret": "github-secret-token",
+		"scope": map[string]any{"owner": "floe", "repository": "server"},
+	}, token); response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	precondition := connectorMutationPrecondition(test, fixture, "github.issues")
+	connectionID := precondition["connection_id"].(string)
+	fixture.console.mu.Lock()
+	credential := fixture.console.state.Connections[connectionID].Credential
+	fixture.console.mu.Unlock()
+	vault := &crashWindowVault{
+		values:       fixture.vault.values,
+		firstEntered: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	fixture.console.vault = vault
+	disconnected := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		disconnected <- fixture.call(http.MethodDelete, "/v1/connectors/github.issues", precondition, token)
+	}()
+	<-vault.firstEntered
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	cleanup := persisted.Cleanups[fixturePersonID]
+	if _, connected := persisted.Connections[connectionID]; connected || len(cleanup.Connections) != 1 || cleanup.Connections[0].Credential != credential {
+		test.Fatalf("disconnect did not durably commit cleanup before vault deletion: %#v", persisted)
+	}
+	if response := fixture.call(http.MethodGet, "/v1/connectors", nil, token); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("read did not fail closed during cleanup: %d %s", response.Code, response.Body.String())
+	}
+	if response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1, "secret": "replacement-github-token",
+		"scope": map[string]any{"owner": "floe", "repository": "server"},
+	}, token); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("reconnect did not fail closed during cleanup: %d %s", response.Code, response.Body.String())
+	}
+
+	restarted, err := New(fixture.console.directory, fixture.console.address, vault, nil)
+	if err != nil {
+		test.Fatalf("restart could not recover disconnect cleanup: %v", err)
+	}
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if cleanupPending {
+		test.Fatal("restart retained completed secret cleanup")
+	}
+	if value, _ := vault.Get(credential); value != "" {
+		test.Fatalf("restart orphaned credential: %q", value)
+	}
+	close(vault.releaseFirst)
+	if response := <-disconnected; response.Code != http.StatusOK {
+		test.Fatalf("original disconnect did not converge after recovery: %d %s", response.Code, response.Body.String())
+	}
+	if _, _, err := readState(fixture.console.directory); err != nil {
+		test.Fatalf("converged disconnect state is invalid: %v", err)
+	}
+}
+
+func TestOAuthDisconnectPersistsLogoutBeforeVaultDelete(test *testing.T) {
+	fixture, token, _, credential := connectedOAuthFixture(test)
+	runtime := &logoutOnlyRuntime{}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	vault := &blockingDeleteVault{
+		values:        fixture.vault.values,
+		deleteEntered: make(chan struct{}),
+		releaseDelete: make(chan struct{}),
+		putCalled:     make(chan struct{}, 1),
+	}
+	fixture.console.vault = vault
+	precondition := connectorMutationPrecondition(test, fixture, "microsoft.mail")
+	disconnected := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		disconnected <- fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", precondition, token)
+	}()
+	<-vault.deleteEntered
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	cleanup := persisted.Cleanups[fixturePersonID]
+	if len(cleanup.Connections) != 1 || !cleanup.Connections[0].RuntimeComplete || cleanup.Connections[0].VaultComplete || cleanup.Connections[0].Credential != credential {
+		test.Fatalf("logout progress was not durable before vault deletion: %#v", cleanup)
+	}
+	close(vault.releaseDelete)
+	if response := <-disconnected; response.Code != http.StatusOK {
+		test.Fatalf("OAuth cleanup did not complete: %d %s", response.Code, response.Body.String())
+	}
+	if _, _, err := readState(fixture.console.directory); err != nil {
+		test.Fatalf("completed OAuth disconnect state is invalid: %v", err)
 	}
 }
 
@@ -741,7 +894,7 @@ func TestOAuthDisconnectSaveFailureDoesNotDestroyCredential(test *testing.T) {
 	}
 }
 
-func TestOAuthDisconnectDeleteFailureRollsBackConnection(test *testing.T) {
+func TestOAuthDisconnectDeleteFailurePersistsCleanupTombstone(test *testing.T) {
 	fixture, token, _, credential := connectedOAuthFixture(test)
 	fixture.vault.failDeletes = 2
 	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", connectorMutationPrecondition(test, fixture, "microsoft.mail"), token)
@@ -750,9 +903,10 @@ func TestOAuthDisconnectDeleteFailureRollsBackConnection(test *testing.T) {
 	}
 	fixture.console.mu.Lock()
 	_, retained := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
+	cleanup := fixture.console.state.Cleanups[fixturePersonID]
 	fixture.console.mu.Unlock()
-	if !retained || fixture.vault.values[credential] == "" {
-		test.Fatal("failed cleanup left connection and credential inconsistent")
+	if retained || fixture.vault.values[credential] == "" || len(cleanup.Connections) != 1 {
+		test.Fatal("failed cleanup did not retain disconnected cleanup intent")
 	}
 }
 
@@ -800,21 +954,22 @@ func TestOAuthCancelRuntimeFailureLeavesRetryableAttempt(test *testing.T) {
 	}
 }
 
-func TestOAuthDisconnectCompensatesLogoutFailureWithVaultDelete(test *testing.T) {
+func TestOAuthDisconnectPersistsLogoutFailureAfterVaultDelete(test *testing.T) {
 	fixture, token, runtime, credential := connectedOAuthFixture(test)
 	runtime.failures = map[string]error{"logout": errors.New("logout failed")}
 	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", connectorMutationPrecondition(test, fixture, "microsoft.mail"), token)
-	if response.Code != http.StatusOK {
-		test.Fatalf("local disconnect did not compensate logout failure: %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		test.Fatalf("runtime cleanup failure was hidden: %d %s", response.Code, response.Body.String())
 	}
-	if _, exists := fixture.vault.values[credential]; exists {
-		test.Fatal("logout failure retained local credential")
+	if _, exists := fixture.vault.values[credential]; !exists {
+		test.Fatal("logout failure deleted credential before runtime cleanup completed")
 	}
 	fixture.console.mu.Lock()
 	_, retained := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
+	cleanup := fixture.console.state.Cleanups[fixturePersonID]
 	fixture.console.mu.Unlock()
-	if retained {
-		test.Fatal("logout failure retained disconnected state record")
+	if retained || len(cleanup.Connections) != 1 || cleanup.Connections[0].RuntimeComplete || cleanup.Connections[0].VaultComplete {
+		test.Fatalf("logout failure lost cleanup progress: %#v", cleanup)
 	}
 }
 
@@ -844,10 +999,9 @@ func TestOAuthReconnectWaitsForPriorLogoutLifecycle(test *testing.T) {
 	go func() {
 		reconnected <- fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
 	}()
-	select {
-	case response := <-reconnected:
-		test.Fatalf("reconnect completed during prior logout: %d %s", response.Code, response.Body.String())
-	case <-time.After(50 * time.Millisecond):
+	response := <-reconnected
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "person_cleanup_pending") {
+		test.Fatalf("reconnect did not fail closed during prior logout: %d %s", response.Code, response.Body.String())
 	}
 	if runtime.credential != oldCredential || runtime.logoutBoundTo != oldCredential {
 		test.Fatalf("singleton runtime rebound during old logout: bound=%q logout=%q old=%q", runtime.credential, runtime.logoutBoundTo, oldCredential)
@@ -857,7 +1011,7 @@ func TestOAuthReconnectWaitsForPriorLogoutLifecycle(test *testing.T) {
 	if response := <-disconnected; response.Code != http.StatusOK {
 		test.Fatalf("disconnect failed: %d %s", response.Code, response.Body.String())
 	}
-	response := <-reconnected
+	response = fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
 	if response.Code != http.StatusCreated {
 		test.Fatalf("reconnect failed after logout: %d %s", response.Code, response.Body.String())
 	}
@@ -867,7 +1021,7 @@ func TestOAuthReconnectWaitsForPriorLogoutLifecycle(test *testing.T) {
 	}
 }
 
-func TestSecretReconnectWaitsForFailedVaultCleanupRollback(test *testing.T) {
+func TestSecretReconnectFailsClosedForPendingVaultCleanup(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	connected := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
@@ -897,35 +1051,30 @@ func TestSecretReconnectWaitsForFailedVaultCleanupRollback(test *testing.T) {
 	}()
 	<-vault.deleteEntered
 
-	reconnected := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		reconnected <- fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
-			"schema_version": 1,
-			"secret":         "replacement-github-token",
-			"scope":          map[string]any{"owner": "floe", "repository": "server"},
+	reconnect := func() *httptest.ResponseRecorder {
+		return fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+			"schema_version": 1, "secret": "replacement-github-token",
+			"scope": map[string]any{"owner": "floe", "repository": "server"},
 		}, token)
-	}()
-	select {
-	case <-vault.putCalled:
-		test.Fatal("reconnect stored a new secret during old cleanup")
-	case response := <-reconnected:
-		test.Fatalf("reconnect completed during old cleanup: %d %s", response.Code, response.Body.String())
-	case <-time.After(50 * time.Millisecond):
+	}
+	if response := reconnect(); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "person_cleanup_pending") {
+		test.Fatalf("reconnect did not fail closed during cleanup: %d %s", response.Code, response.Body.String())
 	}
 
 	close(vault.releaseDelete)
 	if response := <-disconnected; response.Code != http.StatusInternalServerError {
 		test.Fatalf("vault cleanup failure was hidden: %d %s", response.Code, response.Body.String())
 	}
-	response := <-reconnected
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "already_connected") {
-		test.Fatalf("rollback did not remain authoritative: %d %s", response.Code, response.Body.String())
+	response := reconnect()
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "person_cleanup_pending") {
+		test.Fatalf("failed cleanup allowed reconnect: %d %s", response.Code, response.Body.String())
 	}
 	fixture.console.mu.Lock()
-	retained, exists := fixture.console.state.Connections[oldConnectionID]
+	_, exists := fixture.console.state.Connections[oldConnectionID]
+	cleanup := fixture.console.state.Cleanups[fixturePersonID]
 	fixture.console.mu.Unlock()
-	if !exists || retained.ConnectionID != oldRecord.ConnectionID || retained.Revision != oldRecord.Revision || retained.Credential != oldRecord.Credential {
-		test.Fatalf("failed cleanup rollback replaced optimistic identity: %#v", retained)
+	if exists || len(cleanup.Connections) != 1 || cleanup.Connections[0].ConnectionID != oldRecord.ConnectionID {
+		test.Fatalf("failed cleanup lost disconnected tombstone: %#v", cleanup)
 	}
 	if value, _ := vault.Get(oldRecord.Credential); value != "github-secret-token" {
 		test.Fatalf("failed cleanup replaced old secret: %q", value)

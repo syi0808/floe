@@ -223,6 +223,7 @@ func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
 		return err
 	}
 	console.driveAuth = runtime
+	console.retryPendingCleanupsLocked()
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -233,6 +234,7 @@ func (console *Console) SetCalendarAuth(runtime DriveAuthRuntime) error {
 		return err
 	}
 	console.calendarAuth = runtime
+	console.retryPendingCleanupsLocked()
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -243,6 +245,7 @@ func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error
 		return err
 	}
 	console.microsoftCalendarAuth = runtime
+	console.retryPendingCleanupsLocked()
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -253,6 +256,7 @@ func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
 		return err
 	}
 	console.microsoftTeamsAuth = runtime
+	console.retryPendingCleanupsLocked()
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -264,6 +268,7 @@ func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
 		return
 	}
 	console.gmail = runtime
+	console.retryPendingCleanupsLocked()
 }
 
 func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) {
@@ -275,6 +280,7 @@ func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime Com
 	}
 	console.microsoftAuth = auth
 	console.microsoftMail = runtime
+	console.retryPendingCleanupsLocked()
 }
 
 func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime ConnectorOAuthRuntime) error {
@@ -287,7 +293,20 @@ func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime C
 			return bindClientOAuthCredential(runtime, record)
 		}
 	}
+	for _, cleanup := range console.state.Cleanups {
+		for _, step := range cleanup.Connections {
+			if step.ConnectorID == connectorID && !step.RuntimeComplete {
+				return runtime.BindCredential(step.Credential)
+			}
+		}
+	}
 	return nil
+}
+
+func (console *Console) retryPendingCleanupsLocked() {
+	for personID := range console.state.Cleanups {
+		_ = console.retryPersonCleanupLocked(personID)
+	}
 }
 
 func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console, error) {
@@ -301,6 +320,7 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	}
 	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
 	console.rebuild()
+	console.retryPendingCleanupsLocked()
 	if err := console.rebuildConnectorRuntimes(); err != nil {
 		return nil, errors.New("invalid connector configuration")
 	}

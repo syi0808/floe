@@ -568,13 +568,27 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		runtime = definition.OAuthRuntime(console)
 	}
 	credentialName := record.Credential
-	previous := cloneState(console.state)
-	delete(console.state.Connections, record.ConnectionID)
-	if err := console.rebuildConnectorRuntimes(); err != nil || console.save(console.state) != nil {
-		console.state = previous
-		_ = console.rebuildConnectorRuntimes()
+	next := cloneState(console.state)
+	cleanup := next.Cleanups[record.PersonID]
+	cleanup.PersonID = record.PersonID
+	cleanup.Connections = append(cleanup.Connections, connectionCleanupStep{
+		ConnectionID:    record.ConnectionID,
+		ConnectorID:     record.ConnectorID,
+		Credential:      record.Credential,
+		RuntimeComplete: definition.AuthKind == "secret",
+		VaultComplete:   record.Credential == "",
+	})
+	next.Cleanups[record.PersonID] = cleanup
+	delete(next.Connections, record.ConnectionID)
+	if err := console.save(next); err != nil {
 		console.mu.Unlock()
 		failure(writer, http.StatusInternalServerError, "save_failed")
+		return
+	}
+	console.state = next
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		console.mu.Unlock()
+		failure(writer, http.StatusInternalServerError, "invalid_connector_configuration")
 		return
 	}
 	console.connectorReservations[record.ConnectionID] = record
@@ -591,40 +605,24 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		runtimeComplete = err == nil
 		cancel()
 	}
+	if runtimeComplete && credentialName != "" {
+		console.mu.Lock()
+		_ = console.completeReservedCleanupLocked(record, true, false)
+		console.mu.Unlock()
+	}
 	vaultComplete := credentialName == ""
-	if !vaultComplete {
+	if runtimeComplete && !vaultComplete {
 		vaultComplete = console.vault.Delete(credentialName) == nil
 	}
 	console.mu.Lock()
 	delete(console.connectorReservations, record.ConnectionID)
 	cleanupErr := console.completeReservedCleanupLocked(record, runtimeComplete, vaultComplete)
-	if !vaultComplete && cleanupErr == nil {
-		if _, cleanupPending := console.state.Cleanups[record.PersonID]; !cleanupPending && console.personHasClientLocked(record.PersonID) && console.connectionCredentialReady(record) {
-			if _, exists := console.state.Connections[record.ConnectionID]; !exists {
-				next := cloneState(console.state)
-				next.Connections[record.ConnectionID] = record
-				if console.save(next) == nil {
-					console.state = next
-					_ = console.rebuildConnectorRuntimes()
-				}
-			}
-		}
-	}
 	console.mu.Unlock()
-	if !vaultComplete || cleanupErr != nil {
-		failure(writer, http.StatusInternalServerError, "credential_cleanup_failed")
+	if !runtimeComplete || !vaultComplete || cleanupErr != nil {
+		failure(writer, http.StatusInternalServerError, "connection_cleanup_pending")
 		return
 	}
 	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "disconnected": true})
-}
-
-func (console *Console) personHasClientLocked(personID string) bool {
-	for _, client := range console.state.Clients {
-		if client.PersonID == personID {
-			return true
-		}
-	}
-	return false
 }
 
 func (console *Console) requireCurrentClientScopeLocked(writer http.ResponseWriter, scope clientScope) bool {

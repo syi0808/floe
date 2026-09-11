@@ -15,10 +15,18 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 			return nil
 		}
 	}
-	cleanup := personCleanup{PersonID: personID}
+	cleanup := state.Cleanups[personID]
+	cleanup.PersonID = personID
 	seenCredentials := map[string]bool{}
+	seenConnections := map[string]bool{}
+	for _, step := range cleanup.Connections {
+		seenConnections[step.ConnectionID] = true
+		if step.Credential != "" {
+			seenCredentials[step.Credential] = true
+		}
+	}
 	appendStep := func(connectionID, connectorID, credential string) {
-		if credential != "" && seenCredentials[credential] {
+		if seenConnections[connectionID] || credential != "" && seenCredentials[credential] {
 			return
 		}
 		definition, exists := clientConnectorDefinitionFor(connectorID)
@@ -29,6 +37,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 			ConnectionID: connectionID, ConnectorID: connectorID, Credential: credential,
 			RuntimeComplete: definition.AuthKind == "secret", VaultComplete: credential == "",
 		})
+		seenConnections[connectionID] = true
 		if credential != "" {
 			seenCredentials[credential] = true
 		}
@@ -97,13 +106,14 @@ func (console *Console) retryPersonCleanupLocked(personID string) error {
 					cleanupErrors = append(cleanupErrors, err)
 				} else {
 					cleanup.Connections[index].RuntimeComplete = true
+					step.RuntimeComplete = true
 					if err := console.persistPersonCleanupProgressLocked(cleanup); err != nil {
 						return err
 					}
 				}
 			}
 		}
-		if !step.VaultComplete {
+		if step.RuntimeComplete && !step.VaultComplete {
 			if err := console.vault.Delete(step.Credential); err != nil {
 				cleanupErrors = append(cleanupErrors, err)
 			} else {
