@@ -576,7 +576,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             && entry.device_id == binding.device_id
                             && entry.calendar_ids == binding.calendar_ids
                             && entry.connection_scope == binding.connection_scope
-                            && entry.connection_revision == binding.connection_revision => {}
+                            && entry.connection_revision == binding.connection_revision
+                            && entry.source_authority == binding.source_authority => {}
                     Some(entry)
                         if mutable_calendar_view == Some(binding.handle)
                             && entry.person_id == binding.person_id => {}

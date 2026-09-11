@@ -48,6 +48,8 @@ pub struct CalendarExpertSetupDto {
     pub calendar_ids: Vec<String>,
     pub connection_scope: floe_domain::CalendarScope,
     pub connection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authority: Option<floe_domain::SourceAuthority>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +73,8 @@ pub enum CalendarAccessChangeDto {
         calendar_ids: Vec<String>,
         connection_scope: floe_domain::CalendarScope,
         connection_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_authority: Option<floe_domain::SourceAuthority>,
     },
     Remove {},
 }

@@ -331,8 +331,14 @@ abstract class AppLocalizations {
   /// No description provided for @agentConnectedStale.
   ///
   /// In en, this message translates to:
-  /// **'Calendar access changed. Reload the conversation before continuing.'**
+  /// **'Calendar context is no longer current. Reload and try again.'**
   String get agentConnectedStale;
+
+  /// No description provided for @agentAccessReviewRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.'**
+  String get agentAccessReviewRequired;
 
   /// No description provided for @agentConnectedCommitment.
   ///

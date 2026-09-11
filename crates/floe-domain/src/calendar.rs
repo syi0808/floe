@@ -106,6 +106,8 @@ pub struct CalendarConnection {
     pub provider: CalendarProvider,
     pub calendars: Vec<CalendarSelection>,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authority: Option<crate::SourceAuthority>,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,

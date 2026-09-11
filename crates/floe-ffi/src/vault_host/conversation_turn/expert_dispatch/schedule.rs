@@ -125,6 +125,8 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                 connection.revision,
                 &model,
                 local_context,
+                core,
+                connection.source_authority,
             ),
             &model,
             CalendarAgentTurnRequest {
@@ -187,18 +189,40 @@ fn validate_active_connection(
         .iter()
         .map(|calendar| calendar.calendar_id.clone())
         .collect();
+    let native = matches!(
+        connection.provider,
+        CalendarProvider::EventKit | CalendarProvider::Android
+    );
+    if native {
+        let authority = connection
+            .source_authority
+            .filter(|authority| authority.is_valid())
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        if setup.source_authority != Some(authority) || binding.source_authority != Some(authority)
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+    }
     if connection.disconnected
         || connection.revision == 0
         || setup.setup_id != connection_id
         || setup.view_handle != binding.handle
         || setup.connection_scope != connection.scope
-        || setup.connection_revision != connection.revision
         || connection.device_id != binding.device_id
         || binding.device_id != request_device_id
         || connection.provider != binding.provider
-        || calendar_ids != binding.calendar_ids
+        || !binding
+            .calendar_ids
+            .iter()
+            .all(|identifier| calendar_ids.contains(identifier))
         || binding.connection_scope != connection.scope
-        || binding.connection_revision != connection.revision
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    if !native
+        && (setup.connection_revision != connection.revision
+            || binding.connection_revision != connection.revision
+            || calendar_ids != binding.calendar_ids)
     {
         return Err(AgentFailure::StaleContext);
     }
@@ -279,6 +303,8 @@ impl<'model> Access<'model> {
         connection_revision: u64,
         model: &'model Model,
         local_context: &'model LocalContextStore,
+        core: &'model floe_core::FloeCore,
+        source_authority: Option<floe_domain::SourceAuthority>,
     ) -> Self {
         match provider {
             CalendarProvider::Fixture => Self::Fixture(FixtureAccess {
@@ -286,11 +312,14 @@ impl<'model> Access<'model> {
                 calendar_ids,
             }),
             CalendarProvider::EventKit => Self::Device(DeviceCalendarAccess {
+                core,
+                connection_id,
+                source_authority,
+                pinned: std::sync::Mutex::new(None),
                 local_context,
                 provider,
                 device_id,
                 calendar_ids,
-                connection_revision,
             }),
             CalendarProvider::Google | CalendarProvider::Microsoft => match model {
                 Model::Server(model) => Self::Remote(RemoteCalendarAccess {
@@ -311,11 +340,14 @@ impl<'model> Access<'model> {
                 }),
             },
             CalendarProvider::Android => Self::Device(DeviceCalendarAccess {
+                core,
+                connection_id,
+                source_authority,
+                pinned: std::sync::Mutex::new(None),
                 local_context,
                 provider,
                 device_id,
                 calendar_ids,
-                connection_revision,
             }),
         }
     }
@@ -356,11 +388,65 @@ impl CalendarReadAccess for Access<'_> {
 }
 
 struct DeviceCalendarAccess<'store> {
+    core: &'store floe_core::FloeCore,
+    connection_id: String,
+    source_authority: Option<floe_domain::SourceAuthority>,
+    pinned: std::sync::Mutex<Option<crate::local_context::PublishedCalendarObservation>>,
     local_context: &'store LocalContextStore,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
-    connection_revision: u64,
+}
+
+impl DeviceCalendarAccess<'_> {
+    async fn observation(
+        &self,
+        person_id: PersonId,
+    ) -> Result<crate::local_context::PublishedCalendarObservation, AgentFailure> {
+        let connection = self
+            .core
+            .calendar_connection(person_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        if self.source_authority.is_none() || connection.source_authority != self.source_authority {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        if connection.disconnected
+            || connection.connection_id != self.connection_id
+            || connection.device_id != self.device_id
+            || connection.provider != self.provider
+            || !self.calendar_ids.iter().all(|identifier| {
+                connection
+                    .calendars
+                    .iter()
+                    .any(|calendar| &calendar.calendar_id == identifier)
+            })
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        if self.calendar_ids.iter().any(|identifier| {
+            connection
+                .source_statuses
+                .get(identifier)
+                .is_some_and(|status| {
+                    status.error == Some(floe_domain::CalendarFailure::PermissionDenied)
+                })
+        }) {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let current = self.local_context.authorized_calendar_observation(
+            person_id,
+            &connection,
+            &self.calendar_ids,
+        )?;
+        let mut pinned = self.pinned.lock().map_err(|_| AgentFailure::Interrupted)?;
+        let observation = pinned.get_or_insert(current);
+        if observation.expires_at_unix_ms <= chrono::Utc::now().timestamp_millis() {
+            return Err(AgentFailure::StaleContext);
+        }
+        Ok(observation.clone())
+    }
 }
 
 impl CalendarReadAccess for DeviceCalendarAccess<'_> {
@@ -380,13 +466,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        match self.local_context.calendar_observation(
-            request.person_id,
-            &self.device_id,
-            request.provider,
-            &request.calendar_ids,
-            self.connection_revision,
-        ) {
+        match self.observation(request.person_id).await {
             Ok(observation) => Ok(CalendarReadAccessStamp {
                 schema_version: PROTOCOL_VERSION,
                 person_id: request.person_id,
@@ -414,13 +494,7 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        match self.local_context.calendar_observation(
-            request.person_id,
-            &self.device_id,
-            request.provider,
-            &request.calendar_ids,
-            self.connection_revision,
-        ) {
+        match self.observation(request.person_id).await {
             Ok(observation) => {
                 if request.starts_at.timestamp_millis() < observation.range_start_unix_ms
                     || request.ends_at.timestamp_millis() > observation.range_end_unix_ms
@@ -632,6 +706,7 @@ impl ModelRunner for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use floe_core::FloeCore;
     use floe_domain::{CalendarScope, CalendarSelection, CalendarSyncStatus};
     use floe_protocol::{CalendarBatchDto, LocalContextOperationDto};
     use std::collections::BTreeMap;
@@ -646,12 +721,14 @@ mod tests {
     ) {
         let setup_id = Uuid::new_v4();
         let view_handle = Uuid::new_v4();
+        let source_authority = Some(floe_domain::SourceAuthority::new());
         let setup = floe_agent::CalendarExpertSetupReceipt {
             setup_id,
             person_id: PersonId::new(),
             expected_revision: 0,
             connection_scope: CalendarScope::Selected,
             connection_revision: 7,
+            source_authority,
             view_handle,
             tool_installation_id: Uuid::new_v4(),
             expert_installation_id: Uuid::new_v4(),
@@ -666,6 +743,7 @@ mod tests {
             calendar_ids: vec!["primary".into()],
             connection_scope: CalendarScope::Selected,
             connection_revision: 7,
+            source_authority,
             enabled: true,
         };
         let connection = CalendarConnection {
@@ -679,6 +757,7 @@ mod tests {
                 calendar_name: "Primary".into(),
             }],
             revision: 7,
+            source_authority,
             last_success_at: None,
             last_range: None,
             error: None,
@@ -704,6 +783,47 @@ mod tests {
                 connection_revision: connection.revision,
             }],
         }
+    }
+
+    #[test]
+    fn device_schedule_refresh_does_not_change_authority() {
+        let (setup, binding, mut connection) = active_identity(CalendarProvider::EventKit);
+        connection.revision += 1;
+        assert_eq!(
+            validate_active_connection(&setup, &binding, &connection, "device-a", None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn device_schedule_accepts_only_explicit_current_authority_and_subset() {
+        let (setup, binding, mut connection) = active_identity(CalendarProvider::EventKit);
+        connection
+            .calendars
+            .extend((1..11).map(|index| CalendarSelection {
+                calendar_id: format!("calendar-{index}"),
+                calendar_name: format!("Calendar {index}"),
+            }));
+        assert_eq!(
+            validate_active_connection(&setup, &binding, &connection, "device-a", None),
+            Ok(())
+        );
+        let mut legacy = binding.clone();
+        legacy.source_authority = None;
+        assert_eq!(
+            validate_active_connection(&setup, &legacy, &connection, "device-a", None),
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        connection.source_authority = connection.source_authority.unwrap().advance();
+        assert_eq!(
+            validate_active_connection(&setup, &binding, &connection, "device-a", None),
+            Err(AgentFailure::AccessReviewRequired)
+        );
+        connection.source_authority = Some(floe_domain::SourceAuthority::new());
+        assert_eq!(
+            validate_active_connection(&setup, &binding, &connection, "device-a", None),
+            Err(AgentFailure::AccessReviewRequired)
+        );
     }
 
     #[test]
@@ -781,7 +901,29 @@ mod tests {
     #[tokio::test]
     async fn device_active_schedule_ignores_connected_server_calendar_routes() {
         for provider in [CalendarProvider::EventKit, CalendarProvider::Android] {
-            let (setup, binding, connection) = active_identity(provider);
+            let (mut setup, mut binding, connection) = active_identity(provider);
+            let directory = tempfile::tempdir().unwrap();
+            let core = FloeCore::open(directory.path().join("calendar.db"))
+                .await
+                .unwrap();
+            core.set_calendar_scope(
+                setup.person_id,
+                connection.connection_id.clone(),
+                7,
+                connection.device_id.clone(),
+                provider,
+                connection.calendars.clone(),
+                connection.scope,
+            )
+            .await
+            .unwrap();
+            let connection = core
+                .calendar_connection(setup.person_id)
+                .await
+                .unwrap()
+                .unwrap();
+            setup.source_authority = connection.source_authority;
+            binding.source_authority = connection.source_authority;
             let mut route = remote_route("calendar.google", &connection);
             route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
             route
@@ -799,10 +941,11 @@ mod tests {
             let store = LocalContextStore::default();
             let now = chrono::Utc::now().timestamp_millis();
             store
-                .request(
+                .request_bound(
                     setup.person_id,
                     LocalContextOperationDto::PublishCalendarObservation {
                         device_id: "device-a".into(),
+                        connection_id: connection.connection_id.clone(),
                         connection_revision: connection.revision,
                         provider,
                         calendar_ids: vec!["primary".into()],
@@ -816,6 +959,7 @@ mod tests {
                             failure: None,
                         }],
                     },
+                    Some(&connection),
                 )
                 .unwrap();
             let model = Model::conversation(Some(route)).unwrap();
@@ -827,6 +971,8 @@ mod tests {
                 connection.revision,
                 &model,
                 &store,
+                &core,
+                connection.source_authority,
             );
             let stamp = access
                 .check(CalendarReadAccessRequest {
@@ -938,15 +1084,16 @@ mod tests {
     fn publish_device_calendar(
         store: &LocalContextStore,
         person_id: PersonId,
-        device_id: &str,
+        connection: &CalendarConnection,
         observed_at_unix_ms: i64,
     ) {
         store
-            .request(
+            .request_bound(
                 person_id,
                 LocalContextOperationDto::PublishCalendarObservation {
-                    device_id: device_id.into(),
-                    connection_revision: 7,
+                    device_id: connection.device_id.clone(),
+                    connection_id: connection.connection_id.clone(),
+                    connection_revision: connection.revision,
                     provider: CalendarProvider::EventKit,
                     calendar_ids: vec!["primary".into()],
                     observed_at_unix_ms,
@@ -959,6 +1106,7 @@ mod tests {
                         failure: None,
                     }],
                 },
+                Some(connection),
             )
             .unwrap();
     }
@@ -968,14 +1116,38 @@ mod tests {
         let store = LocalContextStore::default();
         let person_id = PersonId::new();
         let now = chrono::Utc::now().timestamp_millis();
-        publish_device_calendar(&store, person_id, "iphone", now - 2);
-        publish_device_calendar(&store, person_id, "ipad", now - 1);
+        let directory = tempfile::tempdir().unwrap();
+        let core = FloeCore::open(directory.path().join("calendar.db"))
+            .await
+            .unwrap();
+        core.set_calendar_scope(
+            person_id,
+            Uuid::new_v4().to_string(),
+            7,
+            "iphone".into(),
+            CalendarProvider::EventKit,
+            vec![CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+        let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
+        publish_device_calendar(&store, person_id, &connection, now - 2);
+        let mut other_device = connection.clone();
+        other_device.device_id = "ipad".into();
+        publish_device_calendar(&store, person_id, &other_device, now - 1);
         let access = DeviceCalendarAccess {
+            core: &core,
+            connection_id: connection.connection_id.clone(),
+            source_authority: connection.source_authority,
+            pinned: std::sync::Mutex::new(None),
             local_context: &store,
             provider: CalendarProvider::EventKit,
             device_id: "iphone".into(),
             calendar_ids: vec!["primary".into()],
-            connection_revision: 7,
         };
         let request = |device_id: &str| CalendarReadAccessRequest {
             person_id,
@@ -992,6 +1164,31 @@ mod tests {
         assert_eq!(
             access.check(request("ipad")).await,
             Err(AgentFailure::CapabilityDenied)
+        );
+        let range = floe_domain::CalendarRange {
+            start_date: chrono::Utc::now().date_naive(),
+            end_date_exclusive: chrono::Utc::now().date_naive().succ_opt().unwrap(),
+            timezone_offset_seconds: 0,
+            end_timezone_offset_seconds: None,
+        };
+        core.import_calendar(person_id, 7, range, vec![], chrono::Utc::now())
+            .await
+            .unwrap();
+        let refreshed = core.calendar_connection(person_id).await.unwrap().unwrap();
+        assert_eq!(refreshed.source_authority, connection.source_authority);
+        publish_device_calendar(&store, person_id, &refreshed, now);
+        assert_eq!(access.check(request("iphone")).await.unwrap(), stamp);
+        core.record_calendar_failure(
+            person_id,
+            refreshed.revision,
+            floe_domain::CalendarFailure::PermissionDenied,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            access.check(request("iphone")).await,
+            Err(AgentFailure::AccessReviewRequired)
         );
     }
 

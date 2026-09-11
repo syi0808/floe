@@ -61,6 +61,7 @@ abstract interface class LocalContextTransport {
   Future<void> publishCalendarObservation({
     required String personId,
     required String deviceId,
+    required String connectionId,
     required int connectionRevision,
     required String provider,
     required List<String> calendarIds,
@@ -167,6 +168,7 @@ final class NativeTransport implements LocalContextTransport {
   Future<void> publishCalendarObservation({
     required String personId,
     required String deviceId,
+    required String connectionId,
     required int connectionRevision,
     required String provider,
     required List<String> calendarIds,
@@ -182,6 +184,7 @@ final class NativeTransport implements LocalContextTransport {
       'operation': {
         'kind': 'publish_calendar_observation',
         'device_id': deviceId,
+        'connection_id': connectionId,
         'connection_revision': connectionRevision,
         'provider': provider,
         'calendar_ids': calendarIds,

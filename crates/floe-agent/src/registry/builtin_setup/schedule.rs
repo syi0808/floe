@@ -13,6 +13,8 @@ pub struct CalendarExpertSetup {
     pub calendar_ids: Vec<String>,
     pub connection_scope: CalendarScope,
     pub connection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authority: Option<floe_domain::SourceAuthority>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -23,6 +25,8 @@ pub struct CalendarExpertSetupReceipt {
     pub expected_revision: u64,
     pub connection_scope: CalendarScope,
     pub connection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authority: Option<floe_domain::SourceAuthority>,
     pub view_handle: Uuid,
     pub tool_installation_id: Uuid,
     pub expert_installation_id: Uuid,
@@ -58,6 +62,8 @@ pub enum CalendarAccessChange {
         calendar_ids: Vec<String>,
         connection_scope: CalendarScope,
         connection_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_authority: Option<floe_domain::SourceAuthority>,
     },
     Remove {},
 }
@@ -158,8 +164,10 @@ impl AgentRegistry {
             || original.calendar_ids != binding.calendar_ids
             || original.connection_scope != binding.connection_scope
             || original.connection_revision != binding.connection_revision
+            || original.source_authority != binding.source_authority
             || receipt.connection_scope != binding.connection_scope
             || receipt.connection_revision != binding.connection_revision
+            || receipt.source_authority != binding.source_authority
         {
             return Err(AgentFailure::Conflict);
         }
@@ -183,6 +191,7 @@ impl AgentRegistry {
             expected_revision: request.expected_revision,
             connection_scope: request.connection_scope,
             connection_revision: request.connection_revision,
+            source_authority: request.source_authority,
             view_handle: binding.handle,
             tool_installation_id: Uuid::new_v4(),
             expert_installation_id: Uuid::new_v4(),
@@ -302,6 +311,7 @@ impl AgentRegistry {
                 calendar_ids,
                 connection_scope,
                 connection_revision,
+                source_authority,
             } => {
                 let binding = next
                     .calendar_views
@@ -316,6 +326,7 @@ impl AgentRegistry {
                 binding.calendar_ids.sort();
                 binding.connection_scope = *connection_scope;
                 binding.connection_revision = *connection_revision;
+                binding.source_authority = *source_authority;
                 binding.validate()?;
                 let setup = next
                     .calendar_setups
@@ -324,6 +335,7 @@ impl AgentRegistry {
                     .ok_or(AgentFailure::NotFound)?;
                 setup.connection_scope = *connection_scope;
                 setup.connection_revision = *connection_revision;
+                setup.source_authority = *source_authority;
             }
             CalendarAccessChange::Remove {} => {
                 disable_setup(&mut next, &receipt, person_id)?;
@@ -364,6 +376,7 @@ impl AgentRegistry {
             if binding.person_id != receipt.person_id
                 || binding.connection_scope != receipt.connection_scope
                 || binding.connection_revision != receipt.connection_revision
+                || binding.source_authority != receipt.source_authority
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
@@ -444,6 +457,7 @@ fn setup_binding(
         calendar_ids,
         connection_scope: request.connection_scope,
         connection_revision: request.connection_revision,
+        source_authority: request.source_authority,
         enabled: false,
     };
     binding.validate()?;

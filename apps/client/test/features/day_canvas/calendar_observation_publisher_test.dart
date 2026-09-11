@@ -4,6 +4,45 @@ import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/infrastructure/native/native_transport.dart';
 
 void main() {
+  test(
+    'publishes eleven sources independently of the four-source grant limit',
+    () async {
+      final transport = _RecordingTransport();
+      final publisher = CalendarObservationPublisher(
+        transport: transport,
+        deviceId: 'device-1',
+      );
+      final calendars = List.generate(
+        11,
+        (index) =>
+            ConnectedCalendar(id: 'calendar-$index', name: 'Calendar $index'),
+      );
+      await publisher.publish(
+        personId: 'person-1',
+        connection: CalendarConnection(
+          connectionId: '00000000-0000-4000-8000-000000000010',
+          deviceId: 'device-1',
+          provider: 'event_kit',
+          revision: 8,
+          calendars: calendars,
+        ),
+        observedAt: DateTime.utc(2026, 9, 11),
+        rangeStart: DateTime.utc(2026, 9, 10),
+        rangeEnd: DateTime.utc(2026, 9, 12),
+        batches: [
+          for (final calendar in calendars)
+            {
+              'calendar_id': calendar.id,
+              'records': <Object>[],
+              'failure': null,
+            },
+        ],
+      );
+      expect(transport.calendarPublications.single.calendarIds, hasLength(11));
+      expect(transport.revocations, isEmpty);
+    },
+  );
+
   test('publishes connection and device bound calendar batches', () async {
     final transport = _RecordingTransport();
     final publisher = CalendarObservationPublisher(
@@ -162,6 +201,7 @@ final class _RecordingTransport implements LocalContextTransport {
   Future<void> publishCalendarObservation({
     required String personId,
     required String deviceId,
+    required String connectionId,
     required int connectionRevision,
     required String provider,
     required List<String> calendarIds,

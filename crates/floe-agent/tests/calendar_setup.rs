@@ -12,7 +12,32 @@ fn setup_request(registry: &AgentRegistry, provider: CalendarProvider) -> Calend
         calendar_ids: vec!["work".into(), "home".into()],
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
+        source_authority: None,
     }
+}
+
+#[test]
+fn legacy_calendar_grants_restore_without_gaining_authority() {
+    let person = PersonId::new();
+    let mut registry = AgentRegistry::new(Uuid::new_v4());
+    let request = setup_request(&registry, CalendarProvider::EventKit);
+    registry.install_calendar_expert(person, &request).unwrap();
+    let encoded = serde_json::to_value(registry.snapshot()).unwrap();
+    assert!(
+        encoded["calendar_views"][0]
+            .get("source_authority")
+            .is_none()
+    );
+    assert!(
+        encoded["calendar_setups"][0]
+            .get("source_authority")
+            .is_none()
+    );
+    let snapshot = serde_json::from_value(encoded).unwrap();
+    let restored = AgentRegistry::restore(snapshot, registry.instance_id()).unwrap();
+    let overview = restored.calendar_expert_overview(person);
+    assert!(overview.views[0].source_authority.is_none());
+    assert!(overview.setups[0].source_authority.is_none());
 }
 
 #[test]
@@ -122,6 +147,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
                     calendar_ids: vec!["shared".into(), "home".into()],
                     connection_scope: floe_domain::CalendarScope::All,
                     connection_revision: 2,
+                    source_authority: None,
                 },
             ),
         )
@@ -146,6 +172,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
             calendar_ids: vec![],
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: 2,
+            source_authority: None,
         },
     );
     assert_eq!(

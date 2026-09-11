@@ -410,6 +410,7 @@ final class _RecordingTransport implements LocalContextTransport {
   Future<void> publishCalendarObservation({
     required String personId,
     required String deviceId,
+    required String connectionId,
     required int connectionRevision,
     required String provider,
     required List<String> calendarIds,

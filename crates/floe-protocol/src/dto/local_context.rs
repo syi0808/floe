@@ -20,6 +20,7 @@ pub enum LocalContextOperationDto {
     },
     PublishCalendarObservation {
         device_id: String,
+        connection_id: String,
         connection_revision: u64,
         provider: CalendarProvider,
         calendar_ids: Vec<String>,

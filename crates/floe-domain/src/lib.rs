@@ -1,5 +1,6 @@
 mod calendar;
 mod capture;
+mod connection_authority;
 mod entity;
 mod id;
 mod projection;
@@ -10,6 +11,7 @@ pub use calendar::{
     CalendarSyncStatus,
 };
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
+pub use connection_authority::SourceAuthority;
 pub use entity::{
     AllDaySchedule, DomainError, Event, EventSchedule, Note, Priority, SourceRef, Task,
     TimedSchedule,

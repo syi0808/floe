@@ -24,6 +24,7 @@ pub enum AgentFailure {
     CapabilityDenied,
     CapabilityUnavailable,
     StaleContext,
+    AccessReviewRequired,
     BudgetExceeded,
     Stalled,
     Cancelled,

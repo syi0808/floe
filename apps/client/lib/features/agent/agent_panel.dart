@@ -439,6 +439,7 @@ class _AgentPanelState extends State<AgentPanel> {
       'transport_unavailable' => strings.agentTransportUnavailable,
       'stalled' => strings.agentConnectedStalled,
       'stale_context' => strings.agentConnectedStale,
+      'access_review_required' => strings.agentAccessReviewRequired,
       'budget_exceeded' ||
       'deadline_exceeded' => strings.agentConversationBudget,
       _ => strings.agentFailure,

@@ -127,6 +127,7 @@ async fn seed(
                 calendar_ids: vec!["test-calendar".into()],
                 connection_scope: floe_domain::CalendarScope::Selected,
                 connection_revision: 1,
+                source_authority: None,
             },
             Cancellation::default(),
         )

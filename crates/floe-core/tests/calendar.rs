@@ -48,6 +48,95 @@ async fn fixture() -> (FloeCore, PersonId, std::path::PathBuf) {
     (core, person, path)
 }
 
+#[tokio::test]
+async fn authority_survives_sync_but_not_permission_or_scope_changes() {
+    let (core, person, path) = fixture().await;
+    let initial = core.calendar_connection(person).await.unwrap().unwrap();
+    assert!(initial.source_authority.unwrap().is_valid());
+    core.import_calendar(person, initial.revision, range(0), vec![], now())
+        .await
+        .unwrap();
+    let synced = core.calendar_connection(person).await.unwrap().unwrap();
+    assert!(synced.revision > initial.revision);
+    assert_eq!(synced.source_authority, initial.source_authority);
+    core.record_calendar_failure(
+        person,
+        synced.revision,
+        CalendarFailure::ProviderUnavailable,
+        now(),
+    )
+    .await
+    .unwrap();
+    let unavailable = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(unavailable.source_authority, initial.source_authority);
+    core.record_calendar_failure(
+        person,
+        unavailable.revision,
+        CalendarFailure::PermissionDenied,
+        now(),
+    )
+    .await
+    .unwrap();
+    let revoked = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_ne!(revoked.source_authority, initial.source_authority);
+    core.record_calendar_failure(
+        person,
+        revoked.revision,
+        CalendarFailure::PermissionDenied,
+        now(),
+    )
+    .await
+    .unwrap();
+    let still_revoked = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(still_revoked.source_authority, revoked.source_authority);
+    core.import_calendar(person, still_revoked.revision, range(0), vec![], now())
+        .await
+        .unwrap();
+    let restored = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(restored.source_authority, revoked.source_authority);
+    core.set_calendar_scope(
+        person,
+        restored.connection_id.clone(),
+        restored.revision + 1,
+        restored.device_id.clone(),
+        restored.provider,
+        vec![CalendarSelection {
+            calendar_id: "calendar-1".into(),
+            calendar_name: "Renamed".into(),
+        }],
+        restored.scope,
+    )
+    .await
+    .unwrap();
+    let renamed = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(renamed.source_authority, restored.source_authority);
+    core.set_calendar_scope(
+        person,
+        renamed.connection_id.clone(),
+        renamed.revision + 1,
+        renamed.device_id.clone(),
+        renamed.provider,
+        selection("calendar-2"),
+        renamed.scope,
+    )
+    .await
+    .unwrap();
+    let changed = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_ne!(changed.source_authority, renamed.source_authority);
+    drop(core);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn authority_rejects_zero_epoch() {
+    assert!(
+        serde_json::from_value::<SourceAuthority>(serde_json::json!({
+            "incarnation": uuid::Uuid::new_v4(), "epoch": 0
+        }))
+        .is_err()
+    );
+}
+
 fn selection(identifier: &str) -> Vec<CalendarSelection> {
     vec![CalendarSelection {
         calendar_id: identifier.into(),

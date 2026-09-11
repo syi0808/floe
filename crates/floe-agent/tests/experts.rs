@@ -243,6 +243,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
             calendar_ids: vec!["home".into()],
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: 1,
+            source_authority: None,
             enabled: true,
         };
         match mode {

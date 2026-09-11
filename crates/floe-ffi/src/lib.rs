@@ -40,7 +40,23 @@ pub fn local_context(
 ) -> BridgeResult<LocalContextResultDto> {
     check_version(request.schema_version)?;
     let person_id = parse_person(&request.person_id)?;
-    handle.local_context.request(person_id, request.operation)
+    let connection = if matches!(
+        &request.operation,
+        LocalContextOperationDto::PublishCalendarObservation { .. }
+    ) {
+        Some(
+            handle
+                .runtime
+                .block_on(handle.core.calendar_connection(person_id))
+                .map_err(core_error)?
+                .ok_or_else(|| agent_failure(floe_agent::AgentFailure::CapabilityUnavailable))?,
+        )
+    } else {
+        None
+    };
+    handle
+        .local_context
+        .request_bound(person_id, request.operation, connection.as_ref())
 }
 
 impl Drop for FloeHandle {

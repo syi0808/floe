@@ -190,6 +190,8 @@ pub struct CalendarViewBinding {
     pub calendar_ids: Vec<String>,
     pub connection_scope: floe_domain::CalendarScope,
     pub connection_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_authority: Option<floe_domain::SourceAuthority>,
     pub enabled: bool,
 }
 
@@ -216,6 +218,9 @@ impl CalendarViewBinding {
                 .any(|identifier| identifier.trim().is_empty() || identifier.len() > 512)
             || self.calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
             || self.connection_revision == 0
+            || self
+                .source_authority
+                .is_some_and(|authority| !authority.is_valid())
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -690,6 +695,7 @@ impl AgentRegistry {
             calendar_ids,
             connection_scope,
             connection_revision,
+            source_authority: None,
             enabled: false,
         };
         binding.validate()?;

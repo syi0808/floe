@@ -1,14 +1,44 @@
 # Connection Authorization Runtime
 
-> Status: Proposed implementation design — 2026-09-12
+> Status: Incremental implementation; native Calendar authority slice implemented — 2026-09-12
 >
-> Not implemented: 아래 type/operation/error 이름은 목표 계약이며 기존 wire API가 아니다.
+> 아래 전체 runtime은 목표 설계다. 실제 구현 범위와 남은 경계는 §0을 따른다.
 
 공통 의미와 사용자 동의 규칙은
 [Connection, Access & Observation](../05-integrations/connection-access-and-observation.md),
 설계 결정은 [ADR 0027](../../decisions/0027-connection-authority-and-observation.md)을 따른다.
 
-## 1. 현재 코드와 설계 간 차이
+## 0. 첫 구현 범위
+
+- `floe-domain::SourceAuthority`는 random incarnation과 checked positive epoch를 가진 공통 primitive다.
+  Calendar mirror의 `revision`은 기존 CAS/write counter로 유지한다. 정상 sync·일시 장애·표시명 변경은
+  authority를 유지하고, scope/resource identity 변경·disconnect·새 permission denial은 이를 바꾼다.
+- native Calendar setup/receipt/view에 optional `source_authority`를 저장한다. FFI는 사용자 setup/scope
+  요청의 exact Person/connection/device/provider/revision과 허용 subset을 확인한 뒤 Core stamp를 기록한다.
+  caller가 보낸 stamp는 신뢰하지 않는다. setup retry는 저장된 stamp를 유지한다.
+- 누락된 legacy grant stamp는 자동 승인하지 않는다. source mirror에 새 incarnation을 초기화해도
+  기존 grant는 `access_review_required`로 차단된다. Calendar access 설정에서 scope를 명시적으로
+  저장하고 대화를 reload해야 한다. 연결 설정 변경이 AI grant를 자동 생성·갱신·확장하던 UI 경로는 제거한다.
+- native observation publication은 이제 `connection_id`를 필수로 보낸다. FFI가 현재 source와 device,
+  provider, CAS revision, 전체 resource ID를 대조해 stamp를 붙인다. Flutter와 native bridge는 함께
+  배포해야 하며 구 wire 요청을 권한 검증 없이 fallback하지 않는다.
+- connection observation은 최대 128개 source와 총 10,000개 record를 받되 AI grant의 4개 제한은 유지한다.
+  read adapter는 허용된 subset만 projection하고, 같은 turn에서는 첫 observation을 pin한다. 매 check에서
+  현재 source authority·철회·permission failure·observation 유효성을 다시 확인하며 부분 실패를 빈 성공으로 바꾸지 않는다.
+- 이 단계는 기존 encrypted registry를 grant 저장소로 사용한다. 별도 `DataAccessGrant` store, policy epochs,
+  tool-time acquisition, source-local generic-chat recovery, cross-device owner verification, lineage cleanup,
+  action/rollback migration은 아직 구현하지 않았다. before-invocation refresh도 남아 있다. OS revoke는
+  native sync 결과가 Core에 반영된 이후 검증하며 즉시 OS notification/fence를 구현했다고 주장하지 않는다.
+- Google/Microsoft와 다른 server connector는 기존 계약을 유지한다. local mirror counter와 server revision의
+  의미를 합치거나 서버 grant 검증 완료로 간주하지 않는다. 아래 A–F acceptance를 완료 처리하지 않는다.
+
+첫 increment 검증: domain/agent/core/protocol/ffi Rust suite, native bridge build와 Calendar publication
+C ABI identity test를 실행한다. Flutter Calendar access/observation/recovery tests와 analyze도 검증한다.
+확장 agent UI suite의 registry dialog 3건과 proposal card golden 1건 실패는 변경 전 HEAD에서도
+동일하게 재현되어 이 작업에서 수정하지 않는다. Dart/C ABI fixture의 기본 30초 timeout은 별도 실행의
+2분 제한에서 통과했다. 실행 중인 사용자 앱이나 실제 OS 계정의 권한은 테스트에서 변경하지 않는다.
+
+## 1. 최초 분석 시점의 코드와 설계 간 차이
 
 | 현재 경로 | 관찰한 동작 | 바꿀 경계 |
 | --- | --- | --- |

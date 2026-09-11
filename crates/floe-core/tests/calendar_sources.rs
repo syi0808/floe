@@ -113,6 +113,51 @@ async fn disconnect_removes_imports_and_reconnect_never_reuses_a_revision() {
 }
 
 #[tokio::test]
+async fn permission_epoch_tracks_new_denials_even_when_another_source_was_already_denied() {
+    let (_directory, core, person) = setup().await;
+    let initial = core.calendar_connection(person).await.unwrap().unwrap();
+    core.import_calendar_sources(
+        person,
+        initial.revision,
+        range(),
+        vec![
+            CalendarBatch {
+                calendar_id: "home".into(),
+                records: vec![],
+                failure: Some(CalendarFailure::PermissionDenied),
+            },
+            batch("work", "Work"),
+        ],
+        now(),
+    )
+    .await
+    .unwrap();
+    let partial = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_ne!(initial.source_authority, partial.source_authority);
+    core.record_calendar_failure(
+        person,
+        partial.revision,
+        CalendarFailure::PermissionDenied,
+        now(),
+    )
+    .await
+    .unwrap();
+    let all_denied = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_ne!(partial.source_authority, all_denied.source_authority);
+    core.import_calendar_sources(
+        person,
+        all_denied.revision,
+        range(),
+        vec![batch("home", "Home"), batch("work", "Work")],
+        now(),
+    )
+    .await
+    .unwrap();
+    let recovered = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(recovered.source_authority, all_denied.source_authority);
+}
+
+#[tokio::test]
 async fn partial_success_commits_only_healthy_source_and_survives_restart() {
     let (directory, core, person) = setup().await;
     let baseline = core

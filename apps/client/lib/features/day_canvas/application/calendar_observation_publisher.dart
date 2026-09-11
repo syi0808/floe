@@ -10,7 +10,7 @@ final class CalendarObservationPublisher {
   const CalendarObservationPublisher._(this._transport, this._deviceId);
 
   static const freshness = Duration(minutes: 4);
-  static const maxCalendarCount = 4;
+  static const maxCalendarCount = 128;
   static const _supportedProviders = {'event_kit', 'android'};
 
   final LocalContextTransport _transport;
@@ -37,6 +37,7 @@ final class CalendarObservationPublisher {
     await _transport.publishCalendarObservation(
       personId: personId,
       deviceId: _deviceId,
+      connectionId: connection.connectionId,
       connectionRevision: connection.revision,
       provider: connection.provider,
       calendarIds: connection.selectedCalendarIds,

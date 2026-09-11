@@ -123,6 +123,28 @@ impl FloeCore {
                 matches!(&event.source, SourceRef::Calendar(source) if source.provider == provider && identifiers.contains(&source.calendar_id))
             }).cloned().collect()
         });
+        let source_authority = match previous.as_ref() {
+            Some(previous)
+                if previous.connection.connection_id == connection_id
+                    && previous.connection.device_id == device_id
+                    && previous.connection.provider == provider =>
+            {
+                if !previous.connection.disconnected
+                    && previous.connection.scope == scope
+                    && previous
+                        .connection
+                        .calendars
+                        .iter()
+                        .map(|calendar| &calendar.calendar_id)
+                        .eq(calendars.iter().map(|calendar| &calendar.calendar_id))
+                {
+                    previous.connection.source_authority.unwrap_or_default()
+                } else {
+                    next_authority(previous.connection.source_authority)?
+                }
+            }
+            _ => SourceAuthority::new(),
+        };
         self.store
             .put_calendar_mirror(
                 person_id,
@@ -135,6 +157,7 @@ impl FloeCore {
                         provider,
                         calendars,
                         revision: connection_revision,
+                        source_authority: Some(source_authority),
                         last_success_at: None,
                         last_range: None,
                         error: None,
@@ -172,6 +195,8 @@ impl FloeCore {
         let previous = mirror.clone();
         mirror.events.clear();
         mirror.connection.disconnected = true;
+        mirror.connection.source_authority =
+            Some(next_authority(mirror.connection.source_authority)?);
         mirror.connection.revision += 1;
         mirror.connection.calendars.clear();
         mirror.connection.source_statuses.clear();
@@ -231,6 +256,22 @@ impl FloeCore {
         if mirror.connection.calendars == previous.connection.calendars {
             return Ok(());
         }
+        let previous_ids: HashSet<_> = previous
+            .connection
+            .calendars
+            .iter()
+            .map(|calendar| &calendar.calendar_id)
+            .collect();
+        let current_ids: HashSet<_> = mirror
+            .connection
+            .calendars
+            .iter()
+            .map(|calendar| &calendar.calendar_id)
+            .collect();
+        if previous_ids != current_ids {
+            mirror.connection.source_authority =
+                Some(next_authority(mirror.connection.source_authority)?);
+        }
         mirror.connection.revision += 1;
         self.store
             .put_calendar_mirror(person_id, &mirror, Some(&previous))
@@ -250,6 +291,18 @@ impl FloeCore {
         let previous = mirror.clone();
         mirror.connection.error = Some(failure);
         mirror.connection.error_at = Some(now);
+        if failure == CalendarFailure::PermissionDenied
+            && previous.connection.calendars.iter().any(|calendar| {
+                !previous
+                    .connection
+                    .source_statuses
+                    .get(&calendar.calendar_id)
+                    .is_some_and(|status| status.error == Some(CalendarFailure::PermissionDenied))
+            })
+        {
+            mirror.connection.source_authority =
+                Some(next_authority(mirror.connection.source_authority)?);
+        }
         for calendar in &mirror.connection.calendars {
             let status = mirror
                 .connection
@@ -286,6 +339,7 @@ impl FloeCore {
             .await?;
         let previous = mirror.clone();
         mirror.events = reconcile_records(person_id, &mirror, &range, records, now)?;
+        initialize_authority(&mut mirror.connection);
         mirror.connection.last_success_at = Some(now);
         mirror.connection.last_range = Some(range.clone());
         mirror.connection.error = None;
@@ -329,6 +383,7 @@ impl FloeCore {
             .await?;
         let previous = mirror.clone();
         let calendars = mirror.connection.calendars.clone();
+        initialize_authority(&mut mirror.connection);
         let expected: HashSet<_> = calendars
             .iter()
             .map(|calendar| calendar.calendar_id.as_str())
@@ -346,6 +401,17 @@ impl FloeCore {
             return Err(validation(
                 "exactly one complete result per selected source is required",
             ));
+        }
+        if batches.iter().any(|batch| {
+            batch.failure == Some(CalendarFailure::PermissionDenied)
+                && !previous
+                    .connection
+                    .source_statuses
+                    .get(&batch.calendar_id)
+                    .is_some_and(|status| status.error == Some(CalendarFailure::PermissionDenied))
+        }) {
+            mirror.connection.source_authority =
+                Some(next_authority(mirror.connection.source_authority)?);
         }
         for batch in batches {
             let calendar = calendars
@@ -426,6 +492,22 @@ impl FloeCore {
             ));
         }
         Ok(mirror)
+    }
+}
+
+fn initialize_authority(connection: &mut CalendarConnection) {
+    connection
+        .source_authority
+        .get_or_insert_with(SourceAuthority::new);
+}
+
+fn next_authority(current: Option<SourceAuthority>) -> Result<SourceAuthority, CoreError> {
+    match current {
+        Some(current) if current.is_valid() => current
+            .advance()
+            .ok_or_else(|| validation("source authority exhausted")),
+        Some(_) => Err(validation("invalid source authority")),
+        None => Ok(SourceAuthority::new()),
     }
 }
 

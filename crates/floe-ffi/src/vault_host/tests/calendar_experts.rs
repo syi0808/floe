@@ -3,6 +3,133 @@ use floe_agent::{CalendarExpertSetup, RegistryConfiguration, RegistryConfigurati
 use super::*;
 
 #[test]
+fn native_grants_capture_authority_only_on_explicit_review() {
+    use floe_agent::{CalendarAccessChange, CalendarAccessConfiguration};
+    use floe_domain::{
+        CalendarFailure, CalendarProvider, CalendarScope, CalendarSelection, SourceAuthority,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let core = Arc::new(
+        runtime
+            .block_on(FloeCore::open(directory.path().join("core.db")))
+            .unwrap(),
+    );
+    let setup_id = Uuid::new_v4();
+    runtime
+        .block_on(core.set_calendar_scope(
+            person,
+            setup_id.to_string(),
+            1,
+            "iphone".into(),
+            CalendarProvider::EventKit,
+            vec![CalendarSelection {
+                calendar_id: "home".into(),
+                calendar_name: "Home".into(),
+            }],
+            CalendarScope::Selected,
+        ))
+        .unwrap();
+    let authority = runtime
+        .block_on(core.calendar_connection(person))
+        .unwrap()
+        .unwrap()
+        .source_authority;
+    let worker = Worker::with_core(
+        directory.path().join("vaults"),
+        Keys::default(),
+        core.clone(),
+        Arc::new(LocalContextStore::default()),
+    )
+    .unwrap();
+    assert!(
+        perform(&worker, person, AgentVaultActionDto::Create {})
+            .failure
+            .is_none()
+    );
+    let inspect = AgentVaultActionDto::CalendarExperts { setup: None };
+    let empty = perform(&worker, person, inspect.clone())
+        .calendar_experts
+        .unwrap();
+    let request = CalendarExpertSetup {
+        instance_id: empty.registry.instance_id,
+        expected_revision: 0,
+        setup_id,
+        provider: CalendarProvider::EventKit,
+        device_id: "iphone".into(),
+        calendar_ids: vec!["home".into()],
+        connection_scope: CalendarScope::Selected,
+        connection_revision: 1,
+        source_authority: Some(SourceAuthority::new()),
+    };
+    let mut invalid = request.clone();
+    invalid.calendar_ids = vec!["ungranted".into()];
+    assert_eq!(
+        perform(
+            &worker,
+            person,
+            AgentVaultActionDto::CalendarExperts {
+                setup: Some(encode_contract(&invalid).unwrap())
+            }
+        )
+        .failure,
+        Some(AgentFailure::Conflict)
+    );
+    let action = AgentVaultActionDto::CalendarExperts {
+        setup: Some(encode_contract(&request).unwrap()),
+    };
+    let installed = perform(&worker, person, action.clone())
+        .calendar_experts
+        .unwrap();
+    assert_eq!(installed.views[0].source_authority, authority);
+    assert_eq!(installed.setups[0].source_authority, authority);
+    runtime
+        .block_on(core.record_calendar_failure(
+            person,
+            1,
+            CalendarFailure::PermissionDenied,
+            chrono::Utc::now(),
+        ))
+        .unwrap();
+    let connection = runtime
+        .block_on(core.calendar_connection(person))
+        .unwrap()
+        .unwrap();
+    assert_ne!(connection.source_authority, authority);
+    let retry = perform(&worker, person, action).calendar_experts.unwrap();
+    assert_eq!(retry, installed);
+    let changed = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarAccess {
+            change: encode_contract(&CalendarAccessConfiguration {
+                instance_id: installed.registry.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetScope {
+                    provider: CalendarProvider::EventKit,
+                    device_id: "iphone".into(),
+                    calendar_ids: vec!["home".into()],
+                    connection_scope: CalendarScope::Selected,
+                    connection_revision: connection.revision,
+                    source_authority: authority,
+                },
+            })
+            .unwrap(),
+        },
+    );
+    assert_eq!(changed.failure, None);
+    assert_eq!(
+        changed.calendar_experts.unwrap().views[0].source_authority,
+        connection.source_authority
+    );
+}
+
+#[test]
 fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_after_restart() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
@@ -34,11 +161,12 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         instance_id: empty.registry.instance_id,
         expected_revision: 0,
         setup_id: Uuid::new_v4(),
-        provider: floe_domain::CalendarProvider::EventKit,
+        provider: floe_domain::CalendarProvider::Fixture,
         device_id: "mac-local".into(),
         calendar_ids: vec!["explicit-native-setup-canary".into()],
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
+        source_authority: None,
     };
     let action = AgentVaultActionDto::CalendarExperts {
         setup: Some(encode_contract(&setup).unwrap()),
@@ -178,6 +306,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         calendar_ids: vec!["bounded-scope".into()],
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
+        source_authority: None,
     };
     *keys.0.paused.lock().unwrap() = true;
     keys.0.entered.store(false, Ordering::Release);

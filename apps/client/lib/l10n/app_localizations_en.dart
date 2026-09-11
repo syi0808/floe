@@ -150,7 +150,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentConnectedStale =>
-      'Calendar access changed. Reload the conversation before continuing.';
+      'Calendar context is no longer current. Reload and try again.';
+
+  @override
+  String get agentAccessReviewRequired =>
+      'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.';
 
   @override
   String agentConnectedCommitment(String title, String start, String end) {

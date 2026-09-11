@@ -119,6 +119,47 @@ fn local_context_abi_is_ephemeral_person_and_device_bound() {
     );
 }
 
+#[test]
+fn native_calendar_publication_requires_the_current_exact_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("floe.db").to_str().unwrap());
+    let person = Uuid::new_v4().to_string();
+    let connection_id = Uuid::new_v4().to_string();
+    data(&core.execute(command(&person, json!({
+        "type": "set_calendar_scope", "connection_id": connection_id,
+        "connection_revision": 1, "device_id": "iphone", "provider": "event_kit", "scope": "selected",
+        "calendars": [{"calendar_id": "home", "calendar_name": "Home"}]
+    }))));
+    let now = chrono::Utc::now().timestamp_millis();
+    let publication = json!({
+        "kind": "publish_calendar_observation", "device_id": "iphone", "connection_id": connection_id,
+        "connection_revision": 1, "provider": "event_kit", "calendar_ids": ["home"],
+        "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 60_000,
+        "range_start_unix_ms": now - 60_000, "range_end_unix_ms": now + 60_000,
+        "batches": [{"calendar_id": "home", "records": [], "failure": null}]
+    });
+    assert_eq!(
+        core.local_context(&person, publication.clone())["status"],
+        "ok"
+    );
+    let mut relabelled = publication.clone();
+    relabelled["connection_id"] = json!(Uuid::new_v4().to_string());
+    assert_eq!(
+        core.local_context(&person, relabelled)["error"]["metadata"]["agent_failure"],
+        "stale_context"
+    );
+    let mut stale = publication.clone();
+    stale["connection_revision"] = json!(2);
+    assert_eq!(
+        core.local_context(&person, stale)["error"]["metadata"]["agent_failure"],
+        "stale_context"
+    );
+    assert_eq!(
+        core.local_context(&Uuid::new_v4().to_string(), publication)["error"]["metadata"]["agent_failure"],
+        "capability_unavailable"
+    );
+}
+
 impl Drop for Core {
     fn drop(&mut self) {
         unsafe { floe_core_free(self.0) };
