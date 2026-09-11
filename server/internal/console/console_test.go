@@ -39,6 +39,15 @@ type fakeMicrosoftCalendarAuth struct{ token string }
 func (runtime *fakeMicrosoftCalendarAuth) Token(context.Context) (string, error) {
 	return runtime.token, nil
 }
+
+type fakeMicrosoftTeamsAuth struct{ token string }
+
+func (runtime *fakeMicrosoftTeamsAuth) Token(context.Context) (string, error) {
+	return runtime.token, nil
+}
+func (*fakeMicrosoftTeamsAuth) Action(context.Context, string) (any, error) {
+	return map[string]any{"status": "connected", "scope": "ChannelMessage.Read.All"}, nil
+}
 func (*fakeMicrosoftCalendarAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "Calendars.Read"}, nil
 }
@@ -716,6 +725,33 @@ func TestMicrosoftCalendarSelectionRequiresDedicatedAuthRuntime(test *testing.T)
 	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/microsoft-calendar/status", map[string]any{}, ""))
 	if status["scope"] != "Calendars.Read" {
 		test.Fatalf("status: %#v", status)
+	}
+}
+
+func TestMicrosoftTeamsSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
+	fixture := setup(test)
+	input := map[string]any{"enabled": true, "team_id": "2f5d86d0-2527-4c94-8f03-33423b9db904", "channel_id": "19:launch@thread.tacv2"}
+	if response := fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", input, ""); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("missing Microsoft Teams auth accepted: %d", response.Code)
+	}
+	if err := fixture.console.SetMicrosoftTeamsAuth(&fakeMicrosoftTeamsAuth{token: "private-teams-token"}); err != nil {
+		test.Fatal(err)
+	}
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", input, ""))
+	if len(fixture.console.work) != 1 || fixture.console.state.Connectors.MicrosoftTeams.TeamID != input["team_id"] || fixture.console.state.Connectors.MicrosoftTeams.ChannelID != input["channel_id"] {
+		test.Fatal("Microsoft Teams selection was not installed")
+	}
+	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
+	if strings.Contains(string(state), "private-teams-token") {
+		test.Fatal("Microsoft Teams credential entered server state")
+	}
+	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/microsoft-teams/status", map[string]any{}, ""))
+	if status["scope"] != "ChannelMessage.Read.All" {
+		test.Fatalf("status: %#v", status)
+	}
+	response := fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", map[string]any{"enabled": true, "team_id": "../all", "channel_id": "*"}, "")
+	if response.Code != http.StatusBadRequest || fixture.console.state.Connectors.MicrosoftTeams.TeamID != input["team_id"] {
+		test.Fatal("invalid Microsoft Teams scope changed selection")
 	}
 }
 

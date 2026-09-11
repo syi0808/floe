@@ -91,6 +91,7 @@ type Console struct {
 	driveAuth                                    DriveAuthRuntime
 	calendarAuth                                 DriveAuthRuntime
 	microsoftCalendarAuth                        DriveAuthRuntime
+	microsoftTeamsAuth                           DriveAuthRuntime
 	calendars                                    []CalendarRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
@@ -141,6 +142,13 @@ func (console *Console) SetMicrosoftCalendarAuth(runtime DriveAuthRuntime) error
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	console.microsoftCalendarAuth = runtime
+	return console.rebuildConnectorRuntimes()
+}
+
+func (console *Console) SetMicrosoftTeamsAuth(runtime DriveAuthRuntime) error {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	console.microsoftTeamsAuth = runtime
 	return console.rebuildConnectorRuntimes()
 }
 
@@ -608,6 +616,24 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-teams/") && request.Method == "POST" {
+		console.mu.Lock()
+		runtime := console.microsoftTeamsAuth
+		console.mu.Unlock()
+		if runtime == nil {
+			failure(writer, 503, "microsoft_teams_unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer cancel()
+		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-teams/"))
+		if err != nil {
+			failure(writer, 502, "microsoft_teams_unavailable")
+			return
+		}
+		reply(writer, 200, value)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-calendar/") && request.Method == "POST" {
 		console.mu.Lock()
 		runtime := console.microsoftCalendarAuth
@@ -769,6 +795,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		console.updateMicrosoftCalendarConnector(writer, request)
 		return
 	}
+	if request.URL.Path == "/manage/api/connector/microsoft-teams" && request.Method == "POST" {
+		console.mu.Lock()
+		defer console.mu.Unlock()
+		console.updateMicrosoftTeamsConnector(writer, request)
+		return
+	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	if request.Method != "POST" {
@@ -884,6 +916,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		"google_drive":       map[string]any{"configured": state.Connectors.GoogleDrive != nil},
 		"google_calendar":    map[string]any{"configured": state.Connectors.GoogleCalendar != nil},
 		"microsoft_calendar": map[string]any{"configured": state.Connectors.MicrosoftCalendar != nil},
+		"microsoft_teams":    map[string]any{"configured": state.Connectors.MicrosoftTeams != nil},
 		"home_assistant":     map[string]any{"configured": state.Connectors.HomeAssistant != nil},
 	}
 	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})

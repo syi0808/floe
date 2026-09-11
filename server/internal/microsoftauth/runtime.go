@@ -25,6 +25,8 @@ const (
 	mailReadScope          = "Mail.Read"
 	calendarCredentialName = "FLOE_MICROSOFT_CALENDAR_OAUTH"
 	calendarReadScope      = "Calendars.Read"
+	teamsCredentialName    = "FLOE_MICROSOFT_TEAMS_OAUTH"
+	teamsReadScope         = "ChannelMessage.Read.All"
 )
 
 var ErrUnavailable = errors.New("Microsoft authentication unavailable")
@@ -81,10 +83,11 @@ func New(store Store, config Config) (*Runtime, error) {
 	if name == "" && scope == "" {
 		name, scope = credentialName, mailReadScope
 	}
-	if name != credentialName || scope != mailReadScope {
-		if name != calendarCredentialName || scope != calendarReadScope {
-			return nil, ErrUnavailable
-		}
+	validProfile := name == credentialName && scope == mailReadScope ||
+		name == calendarCredentialName && scope == calendarReadScope ||
+		name == teamsCredentialName && scope == teamsReadScope
+	if !validProfile {
+		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
 	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, callbackAddress: "127.0.0.1:0", credentialName: name, scope: scope}, nil
@@ -93,6 +96,12 @@ func New(store Store, config Config) (*Runtime, error) {
 func NewCalendar(store Store, config Config) (*Runtime, error) {
 	config.CredentialName = calendarCredentialName
 	config.Scope = calendarReadScope
+	return New(store, config)
+}
+
+func NewTeams(store Store, config Config) (*Runtime, error) {
+	config.CredentialName = teamsCredentialName
+	config.Scope = teamsReadScope
 	return New(store, config)
 }
 

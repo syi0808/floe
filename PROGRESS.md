@@ -4,6 +4,17 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 Microsoft Teams product route — 2026-09-11
+
+- Added an isolated Microsoft PKCE OAuth profile and Keychain credential requesting exactly
+  `ChannelMessage.Read.All` plus offline access; Mail, Calendar and Teams grants cannot cross-load.
+- Wired Teams into server startup, private selected team/channel persistence and dashboard
+  login/configuration controls. A configured Teams source joins the deterministic provider-neutral
+  Work Context merge without accepting provider selection in Agent requests.
+- Focused Go race tests/vet and dashboard JavaScript validation pass. A live tenant/admin-consent
+  run and dedicated live travel/delivery evidence remain, so S5.5-C4/C5 and the slice stay **0/14**.
+  [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 bounded Microsoft Teams adapter foundation — 2026-09-11
 
 - Added a selected-team/channel, GET-only Microsoft Graph adapter using the least-privilege
@@ -12,9 +23,9 @@
 - HTML bodies are reduced to plain untrusted text while user identity, attachments, provider IDs,
   URLs and all send authority remain excluded. Unsafe selections/endpoints and unknown body types
   fail closed; credential, permission, rate-limit and partial failures are typed.
-- Focused Go race tests/vet and Rust View/connector conformance tests pass. OAuth, startup,
-  management-console and Work Context route wiring remain before this adapter is product-usable;
-  S5.5-C4/E7 and the slice remain **0/14**.
+- Focused Go race tests/vet and Rust View/connector conformance tests pass. The subsequent product
+  route adds OAuth, startup, management-console and Work Context merge wiring; live tenant evidence
+  still remains, so S5.5-C4/E7 and the slice remain **0/14**.
 
 ### S5.5 Android Calendar settings route — 2026-09-11
 

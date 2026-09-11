@@ -11,6 +11,7 @@ import (
 	driveconnector "floe/server/internal/connectors/googledrive"
 	homeconnector "floe/server/internal/connectors/homeassistant"
 	microsoftcalendarconnector "floe/server/internal/connectors/microsoftcalendar"
+	microsoftteamsconnector "floe/server/internal/connectors/microsoftteams"
 	slackconnector "floe/server/internal/connectors/slack"
 )
 
@@ -91,6 +92,17 @@ func (console *Console) rebuildConnectorRuntimes() error {
 			return err
 		}
 		console.calendars = append(console.calendars, service)
+	}
+	if configured := console.state.Connectors.MicrosoftTeams; configured != nil && console.microsoftTeamsAuth != nil {
+		client, err := microsoftteamsconnector.New(console.microsoftTeamsAuth)
+		if err != nil {
+			return err
+		}
+		service, err := microsoftteamsconnector.NewService(client, configured.TeamID, configured.ChannelID)
+		if err != nil {
+			return err
+		}
+		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.HomeAssistant; configured != nil {
 		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: homeTokenKey}, configured.BaseURL, "primary")
@@ -307,6 +319,47 @@ func (console *Console) updateMicrosoftCalendarConnector(writer http.ResponseWri
 			return
 		}
 		next.Connectors.MicrosoftCalendar = &microsoftCalendarConnectorConfig{CalendarID: input.CalendarID}
+	}
+	if console.save(next) != nil {
+		failure(writer, 500, "save_failed")
+		return
+	}
+	console.state = next
+	if err := console.rebuildConnectorRuntimes(); err != nil {
+		failure(writer, 500, "invalid_connector_configuration")
+		return
+	}
+	reply(writer, 200, map[string]bool{"ok": true})
+}
+
+func (console *Console) updateMicrosoftTeamsConnector(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Enabled   bool   `json:"enabled"`
+		TeamID    string `json:"team_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if !decode(writer, request, &input) {
+		failure(writer, 400, "validation")
+		return
+	}
+	next := cloneState(console.state)
+	if !input.Enabled {
+		next.Connectors.MicrosoftTeams = nil
+	} else {
+		if console.microsoftTeamsAuth == nil {
+			failure(writer, 503, "microsoft_teams_unavailable")
+			return
+		}
+		client, err := microsoftteamsconnector.New(console.microsoftTeamsAuth)
+		if err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		if _, err := microsoftteamsconnector.NewService(client, input.TeamID, input.ChannelID); err != nil {
+			failure(writer, 400, "validation")
+			return
+		}
+		next.Connectors.MicrosoftTeams = &microsoftTeamsConnectorConfig{TeamID: input.TeamID, ChannelID: input.ChannelID}
 	}
 	if console.save(next) != nil {
 		failure(writer, 500, "save_failed")

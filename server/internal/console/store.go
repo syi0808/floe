@@ -32,6 +32,7 @@ type connectorConfigState struct {
 	GoogleDrive       *googleDriveConnectorConfig       `json:"google_drive,omitempty"`
 	GoogleCalendar    *googleCalendarConnectorConfig    `json:"google_calendar,omitempty"`
 	MicrosoftCalendar *microsoftCalendarConnectorConfig `json:"microsoft_calendar,omitempty"`
+	MicrosoftTeams    *microsoftTeamsConnectorConfig    `json:"microsoft_teams,omitempty"`
 	HomeAssistant     *homeAssistantConnectorConfig     `json:"home_assistant,omitempty"`
 }
 
@@ -55,6 +56,11 @@ type googleCalendarConnectorConfig struct {
 
 type microsoftCalendarConnectorConfig struct {
 	CalendarID string `json:"calendar_id"`
+}
+
+type microsoftTeamsConnectorConfig struct {
+	TeamID    string `json:"team_id"`
+	ChannelID string `json:"channel_id"`
 }
 
 type homeAssistantConnectorConfig struct {
@@ -181,6 +187,10 @@ func cloneState(state diskState) diskState {
 	if state.Connectors.MicrosoftCalendar != nil {
 		configured := *state.Connectors.MicrosoftCalendar
 		copy.Connectors.MicrosoftCalendar = &configured
+	}
+	if state.Connectors.MicrosoftTeams != nil {
+		configured := *state.Connectors.MicrosoftTeams
+		copy.Connectors.MicrosoftTeams = &configured
 	}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
