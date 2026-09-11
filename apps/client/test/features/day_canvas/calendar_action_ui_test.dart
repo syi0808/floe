@@ -62,6 +62,8 @@ CalendarAction action({
 
 CalendarConnection connection({int revision = 3, String? error}) =>
     CalendarConnection(
+      connectionId: '00000000-0000-4000-8000-000000000010',
+      deviceId: 'test-device',
       provider: 'fixture',
       revision: revision,
       calendars: const [

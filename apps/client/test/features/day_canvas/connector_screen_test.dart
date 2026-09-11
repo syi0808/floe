@@ -169,6 +169,8 @@ void main() {
                     timezoneOffsetSeconds: 0,
                   ),
                   connection: CalendarConnection(
+                    connectionId: '00000000-0000-4000-8000-000000000010',
+                    deviceId: 'test-device',
                     provider: testCase.provider,
                     revision: 1,
                     calendars: const [
@@ -225,6 +227,8 @@ void main() {
                 timezoneOffsetSeconds: 0,
               ),
               connection: const CalendarConnection(
+                connectionId: '00000000-0000-4000-8000-000000000010',
+                deviceId: 'test-device',
                 provider: 'event_kit',
                 revision: 1,
                 calendars: [],
@@ -245,9 +249,81 @@ void main() {
     expect(find.text('Available'), findsOneWidget);
     expect(find.textContaining('connected service'), findsNothing);
   });
+
+  testWidgets('binds the exact server Calendar selector into Rust state', (
+    tester,
+  ) async {
+    final gateway = _RecordingCalendarGateway();
+    var changed = 0;
+    final date = DateTime.utc(2026, 9, 4);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: ConnectorScreen(
+            gateway: gateway,
+            query: DayQuery(
+              personId: '00000000-0000-4000-8000-000000000001',
+              date: date,
+              now: date,
+              timezoneOffsetSeconds: 0,
+            ),
+            connection: null,
+            onChanged: () async => changed++,
+            serverClient: _CalendarCatalogClient(),
+            platform: TargetPlatform.macOS,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(gateway.connectionId, '8a1d7fb0-435d-5d1e-aab4-53ed2894da61');
+    expect(gateway.connectionRevision, 7);
+    expect(gateway.deviceId, 'local-test-device');
+    expect(gateway.provider, 'google_calendar');
+    expect(gateway.boundCalendars.single.id, 'primary@example.test');
+    expect(changed, 1);
+  });
 }
 
-final class _DeviceCalendarGateway implements CalendarGateway {
+final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
+  String? connectionId;
+  int? connectionRevision;
+  String? deviceId;
+  String? provider;
+  List<CalendarChoice> boundCalendars = const [];
+
+  @override
+  Future<DaySnapshot> bindCalendarConnection({
+    required String connectionId,
+    required int connectionRevision,
+    required String deviceId,
+    required String provider,
+    required List<CalendarChoice> calendars,
+    required DayQuery query,
+  }) {
+    this.connectionId = connectionId;
+    this.connectionRevision = connectionRevision;
+    this.deviceId = deviceId;
+    this.provider = provider;
+    boundCalendars = calendars;
+    return FakeDayGateway().loadDay(query);
+  }
+}
+
+class _DeviceCalendarGateway implements CalendarGateway {
+  @override
+  Future<DaySnapshot> bindCalendarConnection({
+    required String connectionId,
+    required int connectionRevision,
+    required String deviceId,
+    required String provider,
+    required List<CalendarChoice> calendars,
+    required DayQuery query,
+  }) => FakeDayGateway().loadDay(query);
+
   @override
   Future<List<CalendarChoice>> calendars() async => const [];
 
@@ -325,6 +401,48 @@ final class _CatalogClient extends LocalServerClient {
           scopeUpdate: false,
         ),
         scope: {},
+      ),
+    ],
+  );
+}
+
+final class _CalendarCatalogClient extends LocalServerClient {
+  _CalendarCatalogClient()
+    : super(store: MemoryServerCredentials(), deviceId: 'local-test-device');
+
+  @override
+  Future<ServerConnection?> connection() async => ServerConnection(
+    address: 'http://127.0.0.1:8431',
+    token: 'a' * 32,
+    clientId: 'fixture',
+    personId: '00000000-0000-4000-8000-000000000001',
+    deviceId: 'local-test-device',
+  );
+
+  @override
+  Future<ServerConnectorCatalog> connectorCatalog(
+    ServerConnection connection,
+  ) async => const ServerConnectorCatalog(
+    personId: '00000000-0000-4000-8000-000000000001',
+    deviceId: 'local-test-device',
+    connectors: [
+      ServerConnector(
+        id: 'calendar.google',
+        name: 'Google Calendar',
+        authKind: 'oauth_pkce',
+        available: true,
+        status: ServerConnectorStatus.connected,
+        requiredScopes: ['calendar.readonly'],
+        scopeFields: ['calendar_id'],
+        capabilities: ServerConnectorCapabilities(
+          connect: true,
+          cancel: true,
+          disconnect: true,
+          scopeUpdate: true,
+        ),
+        scope: {'calendar_id': 'primary@example.test'},
+        connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+        connectionRevision: 7,
       ),
     ],
   );

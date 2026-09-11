@@ -24,6 +24,8 @@ AgentCalendarSources sources({
 }) => AgentCalendarSources(
   personId: person,
   connection: CalendarConnection(
+    connectionId: '00000000-0000-4000-8000-000000000010',
+    deviceId: 'test-device',
     provider: 'event_kit',
     revision: revision,
     includeAll: true,
@@ -96,6 +98,8 @@ void main() {
     final projected = AgentCalendarSources(
       personId: registryPerson,
       connection: const CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        deviceId: 'test-device',
         provider: 'event_kit',
         revision: 2,
         calendars: [

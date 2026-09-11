@@ -13,6 +13,16 @@ class PanelCalendarGateway implements CalendarGateway {
   int syncCount = 0;
 
   @override
+  Future<DaySnapshot> bindCalendarConnection({
+    required String connectionId,
+    required int connectionRevision,
+    required String deviceId,
+    required String provider,
+    required List<CalendarChoice> calendars,
+    required DayQuery query,
+  }) => FakeDayGateway().loadDay(query);
+
+  @override
   Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
       FakeDayGateway().loadDay(query);
 
@@ -70,6 +80,8 @@ void main() {
                   timezoneOffsetSeconds: 0,
                 ),
                 connection: const CalendarConnection(
+                  connectionId: '00000000-0000-4000-8000-000000000010',
+                  deviceId: 'test-device',
                   provider: 'event_kit',
                   revision: 1,
                   calendars: [
@@ -128,6 +140,8 @@ void main() {
                   timezoneOffsetSeconds: 0,
                 ),
                 connection: const CalendarConnection(
+                  connectionId: '00000000-0000-4000-8000-000000000010',
+                  deviceId: 'test-device',
                   provider: 'event_kit',
                   revision: 1,
                   calendars: [ConnectedCalendar(id: 'home', name: 'Home')],

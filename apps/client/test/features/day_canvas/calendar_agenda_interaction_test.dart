@@ -69,6 +69,8 @@ void main() {
         generatedAt: DateTime(2026, 9, 8, 10),
         timezoneOffsetSeconds: date.timeZoneOffset.inSeconds,
         calendar: CalendarConnection(
+          connectionId: '00000000-0000-4000-8000-000000000010',
+          deviceId: 'test-device',
           provider: 'fixture',
           revision: 1,
           calendars: const [

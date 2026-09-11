@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'dart:async';
 
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -154,9 +155,50 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Future<void> _reloadCalendarConnection() async {
     await controller.load();
     if (!mounted) return;
+    await _reconcileCalendarExpertConnection();
+    if (!mounted) return;
     calendarObservationRefresh?.reconcile(controller.snapshot);
     if (calendarObservationRefresh?.active ?? false) {
       await calendarObservationRefresh!.ensureFresh();
+    }
+  }
+
+  Future<void> _reconcileCalendarExpertConnection() async {
+    final agent = agentController;
+    if (agent == null || !agent.hasCalendarExpertManagement) return;
+    await agent.loadCalendarExperts();
+    final experts = agent.calendarExperts;
+    if (experts == null || !agent.canManageCalendarExperts) return;
+    final connection = controller.snapshot?.calendar;
+    for (final setup in [...experts.setups]) {
+      if (connection == null || setup.setupId != connection.connectionId) {
+        await agent.removeCalendarAccess(setup.setupId);
+      }
+    }
+    if (connection == null || !agent.canManageCalendarExperts) return;
+    final current = agent.calendarExperts;
+    final setup = current?.setups
+        .where((entry) => entry.setupId == connection.connectionId)
+        .singleOrNull;
+    if (setup == null) {
+      await agent.installCalendarExpert(
+        setupId: connection.connectionId,
+        provider: connection.provider,
+        calendarIds: connection.selectedCalendarIds,
+      );
+      return;
+    }
+    final view = current!.views.singleWhere(
+      (entry) => entry.handle == setup.viewHandle,
+    );
+    final expected = [...connection.selectedCalendarIds]..sort();
+    if (view.provider != connection.provider ||
+        !listEquals(view.calendarIds, expected)) {
+      await agent.changeCalendarAccessScope(
+        setupId: setup.setupId,
+        provider: connection.provider,
+        calendarIds: expected,
+      );
     }
   }
 

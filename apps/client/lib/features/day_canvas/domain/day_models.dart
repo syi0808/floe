@@ -173,6 +173,8 @@ final class ConnectedCalendar {
 
 final class CalendarConnection {
   const CalendarConnection({
+    required this.connectionId,
+    required this.deviceId,
     required this.provider,
     required this.revision,
     required this.calendars,
@@ -182,6 +184,8 @@ final class CalendarConnection {
     this.rangeEnd,
     this.includeAll = false,
   });
+  final String connectionId;
+  final String deviceId;
   final String provider;
   final int revision;
   final DateTime? lastSuccessAt;

@@ -170,8 +170,6 @@ final class CalendarExpertTransport {
               assignment['enabled'] = change['enabled'];
             }
           case 'set_scope':
-            ((snapshot['setups'] as List).single as Map)['setup_id'] =
-                change['replacement_setup_id'];
             ((snapshot['views'] as List).single as Map)['calendar_ids'] = [
               ...change['calendar_ids'] as List,
             ]..sort();

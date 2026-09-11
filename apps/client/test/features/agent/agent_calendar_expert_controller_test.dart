@@ -8,6 +8,7 @@ import '../../support/agent_calendar_experts.dart';
 import '../../support/agent_registry.dart';
 
 void main() {
+  const connectionId = '00000000-0000-4000-8000-000000000010';
   test('controller serializes setup with chat and waits for confirmed installation', () async {
     final gateway = TestCalendarExpertGateway();
     final controller = AgentController(
@@ -19,6 +20,7 @@ void main() {
     await controller.loadCalendarExperts();
     gateway.gate = Completer<void>();
     final operation = controller.installCalendarExpert(
+      setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['work', 'home'],
     );
@@ -27,6 +29,7 @@ void main() {
     expect(controller.calendarExperts!.setups, isEmpty);
     expect(controller.pendingCalendarSetup, isNotNull);
     await controller.installCalendarExpert(
+      setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['different'],
     );
@@ -59,6 +62,7 @@ void main() {
       final session = controller.session;
       gateway.transport.loss = 'submit';
       await controller.installCalendarExpert(
+        setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['home', 'work'],
       );
@@ -68,6 +72,7 @@ void main() {
       expect(controller.calendarExpertFailure, 'storage_unavailable');
       expect(controller.session, same(session));
       await controller.installCalendarExpert(
+        setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['different'],
       );
@@ -100,6 +105,7 @@ void main() {
     await controller.loadCalendarExperts();
     gateway.error = 'conflict';
     await controller.installCalendarExpert(
+      setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['home', 'work'],
     );
@@ -125,6 +131,7 @@ void main() {
       await controller.load();
       await controller.loadCalendarExperts();
       await controller.installCalendarExpert(
+        setupId: connectionId,
         provider: 'event_kit',
         calendarIds: ['home', 'work'],
       );
@@ -162,6 +169,7 @@ void main() {
       await controller.loadCalendarExperts();
       if (operationKind == 'configure') {
         await controller.installCalendarExpert(
+          setupId: connectionId,
           provider: 'event_kit',
           calendarIds: ['home', 'work'],
         );
@@ -173,6 +181,7 @@ void main() {
       final operation = switch (operationKind) {
         'read' => controller.loadCalendarExperts(),
         'install' => controller.installCalendarExpert(
+          setupId: connectionId,
           provider: 'event_kit',
           calendarIds: ['home', 'work'],
         ),
@@ -204,6 +213,7 @@ void main() {
     await controller.loadCalendarExperts();
     gateway.error = 'vault_unavailable';
     await controller.installCalendarExpert(
+      setupId: connectionId,
       provider: 'event_kit',
       calendarIds: ['home', 'work'],
     );

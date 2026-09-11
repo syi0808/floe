@@ -1,10 +1,77 @@
 import 'dart:io';
 
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
+import 'package:floe_client/features/day_canvas/application/calendar_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'server Calendar identity and selector survive a Rust restart',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      if (!library.existsSync()) {
+        markTestSkipped('cargo build -p floe-ffi가 필요합니다.');
+        return;
+      }
+      final temporaryDirectory = await Directory.systemTemp.createTemp(
+        'floe-calendar-binding-test-',
+      );
+      final now = DateTime.utc(2026, 9, 3, 9);
+      final query = DayQuery(
+        personId: localPersonId,
+        date: now,
+        now: now,
+        timezoneOffsetSeconds: 0,
+      );
+      var gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${temporaryDirectory.path}/floe.db',
+        clock: () => now,
+        deviceId: 'paired-device',
+      );
+      var snapshot = await gateway.bindCalendarConnection(
+        connectionId: '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+        connectionRevision: 7,
+        deviceId: 'paired-device',
+        provider: 'google_calendar',
+        calendars: const [
+          CalendarChoice(
+            'primary@example.test',
+            'Google Calendar',
+            provider: 'google_calendar',
+          ),
+        ],
+        query: query,
+      );
+      expect(
+        snapshot.calendar!.connectionId,
+        '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+      );
+      expect(snapshot.calendar!.revision, 7);
+      expect(snapshot.calendar!.deviceId, 'paired-device');
+      expect(snapshot.calendar!.provider, 'google_calendar');
+      expect(snapshot.calendar!.selectedCalendarIds, ['primary@example.test']);
+      await gateway.close();
+
+      gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${temporaryDirectory.path}/floe.db',
+        clock: () => now,
+        deviceId: 'paired-device',
+      );
+      snapshot = await gateway.loadDay(query);
+      expect(
+        snapshot.calendar!.connectionId,
+        '8a1d7fb0-435d-5d1e-aab4-53ed2894da61',
+      );
+      expect(snapshot.calendar!.revision, 7);
+      expect(snapshot.calendar!.provider, 'google_calendar');
+      await gateway.close();
+      await temporaryDirectory.delete(recursive: true);
+    },
+  );
+
   test('Rust/Turso gateway persists the complete task lifecycle', () async {
     final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
     if (!library.existsSync()) {

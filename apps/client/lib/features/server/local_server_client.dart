@@ -174,6 +174,7 @@ final class ServerConnector {
     required this.capabilities,
     required this.scope,
     this.connectionId,
+    this.connectionRevision,
   });
 
   final String id;
@@ -186,6 +187,7 @@ final class ServerConnector {
   final ServerConnectorCapabilities capabilities;
   final Map<String, Object?> scope;
   final String? connectionId;
+  final int? connectionRevision;
 
   bool get isSecret => authKind == 'secret';
 }
@@ -709,6 +711,12 @@ ServerConnector _serverConnector(Object? raw) {
       capabilities.values.any((item) => item is! bool)) {
     throw const FormatException();
   }
+  final connectionId = value['connection_id'] as String?;
+  final connectionRevision = value['connection_revision'] as int?;
+  if ((connectionId == null) != (connectionRevision == null) ||
+      connectionRevision != null && connectionRevision <= 0) {
+    throw const FormatException();
+  }
   return ServerConnector(
     id: id,
     name: name,
@@ -724,7 +732,8 @@ ServerConnector _serverConnector(Object? raw) {
       scopeUpdate: capabilities['scope_update'] as bool,
     ),
     scope: Map.unmodifiable(scope),
-    connectionId: value['connection_id'] as String?,
+    connectionId: connectionId,
+    connectionRevision: connectionRevision,
   );
 }
 

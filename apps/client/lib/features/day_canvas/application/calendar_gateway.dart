@@ -10,6 +10,14 @@ abstract interface class CalendarGateway {
     DayQuery query, {
     bool includeAll = false,
   });
+  Future<DaySnapshot> bindCalendarConnection({
+    required String connectionId,
+    required int connectionRevision,
+    required String deviceId,
+    required String provider,
+    required List<CalendarChoice> calendars,
+    required DayQuery query,
+  });
   Future<DaySnapshot> syncCalendar(DayQuery query);
   Future<DaySnapshot> disconnectCalendar(DayQuery query);
   Future<void> openCalendarSettings();
@@ -29,7 +37,7 @@ abstract interface class CalendarAdapter {
 }
 
 final class EventKitCalendarAdapter implements CalendarAdapter {
-  const EventKitCalendarAdapter({String? deviceId}) : _deviceId = deviceId;
+  const EventKitCalendarAdapter({this._deviceId});
   static const _channel = MethodChannel('floe/calendar');
   final String? _deviceId;
 

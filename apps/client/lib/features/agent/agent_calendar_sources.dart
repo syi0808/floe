@@ -7,6 +7,8 @@ final class AgentCalendarSources {
     required this.personId,
     required CalendarConnection connection,
   }) : provider = connection.provider,
+       connectionId = connection.connectionId,
+       deviceId = connection.deviceId,
        revision = connection.revision,
        calendars = List.unmodifiable(
          connection.calendars.map((calendar) {
@@ -20,11 +22,19 @@ final class AgentCalendarSources {
 
   final String personId;
   final String provider;
+  final String connectionId;
+  final String deviceId;
   final int revision;
   final List<AgentCalendarSource> calendars;
 
   bool get usable =>
-      (provider == 'event_kit' || provider == 'fixture') &&
+      const {
+        'event_kit',
+        'google_calendar',
+        'microsoft_calendar',
+        'android',
+        'fixture',
+      }.contains(provider) &&
       calendars.isNotEmpty &&
       calendars.length <= 128 &&
       calendars.map((entry) => entry.id).toSet().length == calendars.length &&
@@ -35,6 +45,8 @@ final class AgentCalendarSources {
 
   String get fingerprint => jsonEncode([
     personId,
+    connectionId,
+    deviceId,
     provider,
     revision,
     for (final calendar in calendars)

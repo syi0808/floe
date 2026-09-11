@@ -96,6 +96,8 @@ DaySnapshot _snapshot({bool connected = true, String? error}) => DaySnapshot(
   overdueTaskCount: 0,
   calendar: connected
       ? CalendarConnection(
+          connectionId: '00000000-0000-4000-8000-000000000010',
+          deviceId: 'test-device',
           provider: 'event_kit',
           revision: 1,
           error: error,

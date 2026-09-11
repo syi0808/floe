@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import '../agent_calendar_experts.dart';
 import '../agent_registry.dart';
-import '../agent_request_id.dart';
 import '../agent_vault_gateway.dart';
 import 'agent_registry_controller.dart';
 
@@ -37,6 +36,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       _operation(() => gateway!.readCalendarExperts(personId));
 
   Future<void> install({
+    required String setupId,
     required String provider,
     required List<String> calendarIds,
   }) async {
@@ -49,7 +49,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
         personId: personId,
         instanceId: current.registry.instanceId,
         expectedRevision: current.registry.revision,
-        setupId: newAgentRequestId(),
+        setupId: setupId,
         provider: provider,
         calendarIds: calendarIds,
       );
@@ -131,18 +131,12 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     required String provider,
     required List<String> calendarIds,
   }) async {
-    final replacementSetupId = newAgentRequestId();
     await _configureCalendarAccess(
       setupId,
       operation: AgentCalendarAccessOperation.setScope,
       provider: provider,
-      replacementSetupId: replacementSetupId,
       calendarIds: calendarIds,
     );
-    if (experts?.setups.any((entry) => entry.setupId == replacementSetupId) ??
-        false) {
-      await setCalendarAccessEnabled(replacementSetupId, true);
-    }
   }
 
   Future<void> removeCalendarAccess(String setupId) => _configureCalendarAccess(
@@ -155,7 +149,6 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     required AgentCalendarAccessOperation operation,
     bool? enabled,
     String? provider,
-    String? replacementSetupId,
     List<String>? calendarIds,
   }) async {
     final current = experts;
@@ -172,7 +165,6 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       operation: operation,
       enabled: enabled,
       provider: provider,
-      replacementSetupId: replacementSetupId,
       calendarIds: calendarIds,
     );
     await _operation(() async {
@@ -190,16 +182,12 @@ final class AgentCalendarExpertController extends ChangeNotifier {
             throw const FormatException('Calendar access state mismatch');
           }
         case AgentCalendarAccessOperation.setScope:
-          final replacement = next.setups
-              .where((entry) => entry.setupId == replacementSetupId)
-              .singleOrNull;
-          final view = replacement == null
+          final view = setup == null
               ? null
               : next.views
-                    .where((entry) => entry.handle == replacement.viewHandle)
+                    .where((entry) => entry.handle == setup.viewHandle)
                     .singleOrNull;
-          if (setup != null ||
-              view == null ||
+          if (view == null ||
               view.provider != provider ||
               !listEquals(view.calendarIds, [...calendarIds!]..sort())) {
             throw const FormatException('Calendar access scope mismatch');

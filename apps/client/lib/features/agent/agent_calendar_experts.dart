@@ -23,24 +23,18 @@ final class AgentCalendarAccessRequest {
     required this.operation,
     this.enabled,
     this.provider,
-    String? replacementSetupId,
     List<String>? calendarIds,
   }) : personId = _identifier(personId),
        instanceId = _identifier(instanceId),
        expectedRevision = _counter(expectedRevision),
        setupId = _identifier(setupId),
-       replacementSetupId = replacementSetupId == null
-           ? null
-           : _identifier(replacementSetupId),
        calendarIds = calendarIds == null
            ? null
            : _scope(calendarIds, canonical: false) {
     if ((operation == AgentCalendarAccessOperation.setEnabled &&
             enabled == null) ||
         (operation == AgentCalendarAccessOperation.setScope &&
-            (provider == null ||
-                this.calendarIds == null ||
-                this.replacementSetupId == null)) ||
+            (provider == null || this.calendarIds == null)) ||
         (operation == AgentCalendarAccessOperation.remove &&
             (enabled != null || provider != null || calendarIds != null))) {
       throw const FormatException('Invalid Calendar access change');
@@ -55,7 +49,6 @@ final class AgentCalendarAccessRequest {
   final AgentCalendarAccessOperation operation;
   final bool? enabled;
   final String? provider;
-  final String? replacementSetupId;
   final List<String>? calendarIds;
 
   Map<String, Object> toJson() => {
@@ -69,7 +62,6 @@ final class AgentCalendarAccessRequest {
       },
       AgentCalendarAccessOperation.setScope => {
         'kind': 'set_scope',
-        'replacement_setup_id': replacementSetupId!,
         'provider': provider!,
         'calendar_ids': calendarIds!,
       },
@@ -283,8 +275,8 @@ int _counter(Object? value) {
 String _provider(Object? value) {
   if (!const {
     'event_kit',
-    'google',
-    'microsoft',
+    'google_calendar',
+    'microsoft_calendar',
     'android',
     'fixture',
   }.contains(value)) {

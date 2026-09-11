@@ -237,9 +237,11 @@ final class AgentController extends ChangeNotifier {
   Future<void> loadCalendarExperts() => calendarExpertController.load();
 
   Future<void> installCalendarExpert({
+    required String setupId,
     required String provider,
     required List<String> calendarIds,
   }) => calendarExpertController.install(
+    setupId: setupId,
     provider: provider,
     calendarIds: calendarIds,
   );

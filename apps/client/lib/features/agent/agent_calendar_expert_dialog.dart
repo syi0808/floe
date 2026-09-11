@@ -115,6 +115,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
             }
             setDialogState(() => saving = true);
             await controller.installCalendarExpert(
+              setupId: sources.connectionId,
               provider: sources.provider,
               calendarIds: selected.toList(),
             );
@@ -222,6 +223,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     final setupId = _editingSetupId;
     if (setupId == null) {
       await controller.installCalendarExpert(
+        setupId: sources.connectionId,
         provider: sources.provider,
         calendarIds: _selected.toList(),
       );
@@ -369,7 +371,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         Text(
           sources == null
               ? 'Connect and choose calendars in Connections first.'
-              : '${sources.provider == 'event_kit' ? 'Apple Calendar' : 'Demo Calendar'} is connected. Let Floe read selected event details and prepare scheduling suggestions.',
+              : '${_calendarProviderName(sources.provider)} is connected. Let Floe read selected event details and prepare scheduling suggestions.',
           style: FloeType.body.copyWith(
             color: FloePalette.neutral600,
             height: 1.4,
@@ -617,3 +619,12 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
           : 'Unavailable calendar',
   ];
 }
+
+String _calendarProviderName(String provider) => switch (provider) {
+  'event_kit' => 'Apple Calendar',
+  'google_calendar' => 'Google Calendar',
+  'microsoft_calendar' => 'Microsoft Calendar',
+  'android' => 'Android Calendar',
+  'fixture' => 'Demo Calendar',
+  _ => throw ArgumentError.value(provider, 'provider'),
+};

@@ -112,6 +112,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
       final nextCatalog = connection == null
           ? null
           : await client.connectorCatalog(connection);
+      if (connection != null && nextCatalog != null) {
+        await _synchronizeServerCalendar(connection, nextCatalog);
+      }
       if (!mounted) return;
       setState(() {
         serverConnection = connection;
@@ -127,6 +130,74 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     } finally {
       if (mounted) setState(() => loadingCatalog = false);
     }
+  }
+
+  Future<void> _synchronizeServerCalendar(
+    ServerConnection server,
+    ServerConnectorCatalog nextCatalog,
+  ) async {
+    final gateway = widget.gateway;
+    if (gateway == null) return;
+    final connected = nextCatalog.connectors
+        .where(
+          (connector) =>
+              connector.status == ServerConnectorStatus.connected &&
+              const {
+                'calendar.google',
+                'calendar.microsoft',
+              }.contains(connector.id),
+        )
+        .toList(growable: false);
+    ServerConnector? selected;
+    final currentProvider = widget.connection?.provider;
+    for (final connector in connected) {
+      if (_calendarProvider(connector.id) == currentProvider) {
+        selected = connector;
+        break;
+      }
+    }
+    if (selected == null && connected.length == 1) selected = connected.single;
+    if (selected == null) {
+      if (connected.isEmpty &&
+          const {
+            'google_calendar',
+            'microsoft_calendar',
+          }.contains(currentProvider)) {
+        await gateway.disconnectCalendar(widget.query);
+        await widget.onChanged();
+      }
+      return;
+    }
+    final calendarId = selected.scope['calendar_id'];
+    final connectionId = selected.connectionId;
+    final revision = selected.connectionRevision;
+    if (calendarId is! String ||
+        calendarId.isEmpty ||
+        connectionId == null ||
+        revision == null) {
+      throw const ServerConnectionException('invalid_response');
+    }
+    final provider = _calendarProvider(selected.id);
+    final current = widget.connection;
+    if (current?.connectionId == connectionId &&
+        current?.revision == revision &&
+        current?.deviceId == server.deviceId &&
+        current?.provider == provider &&
+        current?.selectedCalendarIds.length == 1 &&
+        current?.selectedCalendarIds.single == calendarId) {
+      return;
+    }
+    await gateway.bindCalendarConnection(
+      connectionId: connectionId,
+      connectionRevision: revision,
+      deviceId: server.deviceId,
+      provider: provider,
+      calendars: [
+        CalendarChoice(calendarId, selected.name, provider: provider),
+      ],
+      query: widget.query,
+    );
+    await widget.onChanged();
   }
 
   ServerConnector? get selectedServerConnector {
@@ -398,6 +469,12 @@ String _connectorDescription(ServerConnector connector) =>
       'home_assistant.states' => 'Read selected Home Assistant entity states.',
       _ => 'Bring bounded context into Floe through your server.',
     };
+
+String _calendarProvider(String connectorId) => switch (connectorId) {
+  'calendar.google' => 'google_calendar',
+  'calendar.microsoft' => 'microsoft_calendar',
+  _ => throw ArgumentError.value(connectorId, 'connectorId'),
+};
 
 String _deviceCalendarName(AppLocalizations strings, TargetPlatform platform) =>
     switch (platform) {

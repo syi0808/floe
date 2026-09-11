@@ -375,12 +375,53 @@ final class FfiDayGateway
         )) {
       throw ArgumentError('Select calendars from one provider');
     }
+    final current = await loadDay(query);
+    final connectionId = _deviceId.startsWith('local-')
+        ? _deviceId.substring('local-'.length)
+        : _deviceId;
     final data = await _request(
       'execute',
       _commandRequest(query, {
         'type': 'set_calendar_scope',
+        'connection_id': connectionId,
+        'connection_revision': (current.calendar?.revision ?? 0) + 1,
+        'device_id': _deviceId,
         'scope': includeAll ? 'all' : 'selected',
         'provider': calendars.first.provider,
+        'calendars': [
+          for (final calendar in calendars)
+            {'calendar_id': calendar.id, 'calendar_name': calendar.name},
+        ],
+      }),
+    );
+    return _decodeSnapshot(_asMap(data['snapshot']));
+  }
+
+  @override
+  Future<DaySnapshot> bindCalendarConnection({
+    required String connectionId,
+    required int connectionRevision,
+    required String deviceId,
+    required String provider,
+    required List<CalendarChoice> calendars,
+    required DayQuery query,
+  }) async {
+    if (connectionId.isEmpty ||
+        connectionRevision <= 0 ||
+        deviceId.isEmpty ||
+        calendars.isEmpty ||
+        calendars.any((calendar) => calendar.provider != provider)) {
+      throw ArgumentError('Invalid Calendar connection binding');
+    }
+    final data = await _request(
+      'execute',
+      _commandRequest(query, {
+        'type': 'set_calendar_scope',
+        'connection_id': connectionId,
+        'connection_revision': connectionRevision,
+        'device_id': deviceId,
+        'scope': 'selected',
+        'provider': provider,
         'calendars': [
           for (final calendar in calendars)
             {'calendar_id': calendar.id, 'calendar_name': calendar.name},
@@ -696,6 +737,8 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
 
 CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
     CalendarConnection(
+      connectionId: json['connection_id']! as String,
+      deviceId: json['device_id']! as String,
       calendars: (json['calendars']! as List)
           .map(
             (calendar) => ConnectedCalendar(

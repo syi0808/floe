@@ -20,6 +20,8 @@ void main() {
     await publisher.publish(
       personId: 'person-1',
       connection: const CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        deviceId: 'test-device',
         provider: 'event_kit',
         revision: 8,
         calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
@@ -65,6 +67,8 @@ void main() {
     await publisher.publish(
       personId: 'person-1',
       connection: const CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000011',
+        deviceId: 'android-device',
         provider: 'android',
         revision: 3,
         calendars: [
@@ -91,6 +95,8 @@ void main() {
     await publisher.publish(
       personId: 'person-1',
       connection: const CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000012',
+        deviceId: 'server-device',
         provider: 'google_calendar',
         revision: 2,
         calendars: [ConnectedCalendar(id: 'primary', name: 'Primary')],
