@@ -85,6 +85,43 @@ void main() {
     expect(transport.calendarPublications.single.batches, batches);
   });
 
+  test('revokes instead of publishing an unbounded calendar scope', () async {
+    final transport = _RecordingTransport();
+    final publisher = CalendarObservationPublisher(
+      transport: transport,
+      deviceId: 'device-1',
+    );
+    final calendars = List.generate(
+      CalendarObservationPublisher.maxCalendarCount + 1,
+      (index) => ConnectedCalendar(id: 'calendar-$index', name: 'Calendar'),
+    );
+
+    await publisher.publish(
+      personId: 'person-1',
+      connection: CalendarConnection(
+        connectionId: '00000000-0000-4000-8000-000000000013',
+        deviceId: 'device-1',
+        provider: 'event_kit',
+        revision: 1,
+        calendars: calendars,
+      ),
+      observedAt: DateTime.utc(2026, 9, 11),
+      rangeStart: DateTime.utc(2026, 9, 10),
+      rangeEnd: DateTime.utc(2026, 9, 12),
+      batches: [
+        for (final calendar in calendars)
+          {'calendar_id': calendar.id, 'records': <Object>[], 'failure': null},
+      ],
+    );
+
+    expect(transport.calendarPublications, isEmpty);
+    expect(transport.revocations.single, (
+      'person-1',
+      'device-1',
+      'calendar.timeline',
+    ));
+  });
+
   test('ignores server provider and revokes device observation', () async {
     final transport = _RecordingTransport();
     final publisher = CalendarObservationPublisher(

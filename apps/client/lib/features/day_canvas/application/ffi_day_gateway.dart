@@ -538,23 +538,17 @@ final class FfiDayGateway
         final permissionRevoked =
             batches.isNotEmpty &&
             batches.every((batch) => batch['failure'] == 'permission_denied');
-        if (permissionRevoked) {
-          await _calendarObservationPublisher.revoke(personId: query.personId);
-        } else {
-          await _calendarObservationPublisher.publish(
-            personId: query.personId,
-            connection: syncedConnection,
-            observedAt: _clock().toUtc(),
-            rangeStart: query.startsAt,
-            rangeEnd: query.endsAt,
-            batches: batches,
-          );
-        }
+        await _updateCalendarObservation(
+          query: query,
+          connection: syncedConnection,
+          batches: batches,
+          permissionRevoked: permissionRevoked,
+        );
       }
       return snapshot;
     } on Object catch (error) {
       if (_calendarObservationPublisher.supports(provider)) {
-        await _calendarObservationPublisher.revoke(personId: query.personId);
+        await _revokeCalendarObservation(query.personId);
       }
       if (error is FfiDayGatewayException && error.code != 'validation') {
         rethrow;
@@ -568,6 +562,38 @@ final class FfiDayGateway
         }),
       );
       return _decodeSnapshot(_asMap(data['snapshot']));
+    }
+  }
+
+  Future<void> _updateCalendarObservation({
+    required DayQuery query,
+    required CalendarConnection connection,
+    required List<Map<String, dynamic>> batches,
+    required bool permissionRevoked,
+  }) async {
+    try {
+      if (permissionRevoked) {
+        await _calendarObservationPublisher.revoke(personId: query.personId);
+      } else {
+        await _calendarObservationPublisher.publish(
+          personId: query.personId,
+          connection: connection,
+          observedAt: _clock().toUtc(),
+          rangeStart: query.startsAt,
+          rangeEnd: query.endsAt,
+          batches: batches,
+        );
+      }
+    } on Object {
+      return;
+    }
+  }
+
+  Future<void> _revokeCalendarObservation(String personId) async {
+    try {
+      await _calendarObservationPublisher.revoke(personId: personId);
+    } on Object {
+      return;
     }
   }
 

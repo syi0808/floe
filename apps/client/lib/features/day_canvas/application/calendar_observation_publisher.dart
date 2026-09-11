@@ -10,6 +10,7 @@ final class CalendarObservationPublisher {
   const CalendarObservationPublisher._(this._transport, this._deviceId);
 
   static const freshness = Duration(minutes: 4);
+  static const maxCalendarCount = 4;
   static const _supportedProviders = {'event_kit', 'android'};
 
   final LocalContextTransport _transport;
@@ -28,6 +29,10 @@ final class CalendarObservationPublisher {
     if (!supports(connection.provider)) return;
     if (connection.revision <= 0) {
       throw StateError('Calendar connection revision must be positive.');
+    }
+    if (connection.selectedCalendarIds.length > maxCalendarCount) {
+      await revoke(personId: personId);
+      return;
     }
     await _transport.publishCalendarObservation(
       personId: personId,

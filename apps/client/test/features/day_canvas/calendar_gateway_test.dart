@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_gateway.dart';
+import 'package:floe_client/features/day_canvas/application/calendar_observation_publisher.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 
@@ -122,6 +123,56 @@ void main() {
       await directory.delete(recursive: true);
     }
   });
+
+  test(
+    'wide calendar sync succeeds when Agent observation scope is bounded',
+    () async {
+      final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+      if (!library.existsSync()) {
+        markTestSkipped('cargo build -p floe-ffi required');
+        return;
+      }
+      final directory = await Directory.systemTemp.createTemp(
+        'floe-wide-calendar-observation-',
+      );
+      final adapter = FixtureCalendarAdapter()
+        ..inventory = List.generate(
+          CalendarObservationPublisher.maxCalendarCount + 1,
+          (index) => CalendarChoice(
+            'calendar-$index',
+            'Calendar $index',
+            provider: 'event_kit',
+          ),
+        );
+      final gateway = await FfiDayGateway.open(
+        libraryPath: library.path,
+        databasePath: '${directory.path}/calendar.db',
+        calendarAdapter: adapter,
+        clock: () => query.now,
+        deviceId: 'device-1',
+      );
+      try {
+        await gateway.selectCalendars(
+          adapter.inventory,
+          query,
+          includeAll: true,
+        );
+        final snapshot = await gateway.syncCalendar(query);
+
+        expect(snapshot.calendar!.error, isNull);
+        expect(
+          snapshot.calendar!.calendars.every(
+            (calendar) => calendar.error == null,
+          ),
+          isTrue,
+        );
+        expect(snapshot.items, hasLength(adapter.inventory.length * 2));
+      } finally {
+        await gateway.close();
+        await directory.delete(recursive: true);
+      }
+    },
+  );
 
   test(
     'refresh updates cached drag capability through the native JSON bridge',
