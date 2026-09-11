@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../app/design_tokens.dart';
 import '../app/floe_input.dart';
+import '../infrastructure/diagnostics/app_diagnostics.dart';
 
 class DesignFeedbackOverlay extends StatefulWidget {
   const DesignFeedbackOverlay({
@@ -66,6 +67,15 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
             event.physicalKey == PhysicalKeyboardKey.keyF) &&
         keyboard.isMetaPressed &&
         keyboard.isShiftPressed;
+    final isDiagnosticsShortcut =
+        (event.logicalKey == LogicalKeyboardKey.keyD ||
+            event.physicalKey == PhysicalKeyboardKey.keyD) &&
+        keyboard.isMetaPressed &&
+        keyboard.isShiftPressed;
+    if (isDiagnosticsShortcut) {
+      unawaited(_exportDiagnostics());
+      return true;
+    }
     if (isFeedbackShortcut) {
       _toggle();
       return true;
@@ -654,6 +664,22 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     });
   }
 
+  Future<void> _exportDiagnostics() async {
+    try {
+      final file = await AppDiagnostics.exportBundle();
+      await Clipboard.setData(ClipboardData(text: file.path));
+      if (mounted) _showStatus('Diagnostics path copied');
+    } on Object catch (error, stackTrace) {
+      AppDiagnostics.error(
+        component: 'diagnostics',
+        operation: 'export_bundle',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (mounted) _showStatus('Diagnostics export failed');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Stack(
     fit: StackFit.expand,
@@ -713,6 +739,11 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
             tooltip: 'Copy JSON',
             onPressed: _annotations.isEmpty ? null : _copyJson,
             icon: const Icon(Icons.data_object),
+          ),
+          IconButton(
+            tooltip: 'Export diagnostics (⌘⇧D)',
+            onPressed: _exportDiagnostics,
+            icon: const Icon(Icons.bug_report_outlined),
           ),
           IconButton(
             tooltip: 'Clear feedback',

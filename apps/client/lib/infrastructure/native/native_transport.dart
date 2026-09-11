@@ -11,10 +11,35 @@ import '../../features/day_canvas/infrastructure/floe_native_bindings.dart';
 const nativeProtocolVersion = 1;
 
 final class NativeTransportException implements Exception {
-  const NativeTransportException(this.code, this.message);
+  const NativeTransportException(
+    this.code,
+    this.message, {
+    this.field,
+    this.metadata = const {},
+  });
 
   final String code;
   final String message;
+  final String? field;
+  final Map<String, String> metadata;
+
+  factory NativeTransportException.fromEnvelope(Map<String, dynamic> envelope) {
+    final error = envelope['error'] is Map
+        ? _asMap(envelope['error'])
+        : envelope;
+    return NativeTransportException(
+      error['code']?.toString() ?? 'internal',
+      error['message']?.toString() ?? 'Could not open Rust core.',
+      field: error['field']?.toString(),
+      metadata: error['metadata'] is Map
+          ? Map<String, String>.unmodifiable(
+              (error['metadata'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : const {},
+    );
+  }
 
   @override
   String toString() => message;
@@ -230,11 +255,7 @@ Map<String, dynamic> _unwrapEnvelope(String source) {
 }
 
 NativeTransportException _exceptionFromEnvelope(Map<String, dynamic> envelope) {
-  final error = envelope['error'] is Map ? _asMap(envelope['error']) : envelope;
-  return NativeTransportException(
-    error['code']?.toString() ?? 'internal',
-    error['message']?.toString() ?? 'Could not open Rust core.',
-  );
+  return NativeTransportException.fromEnvelope(envelope);
 }
 
 Map<String, dynamic> _asMap(Object? value) =>

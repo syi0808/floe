@@ -131,6 +131,9 @@ flutter test
 flutter run -d macos
 ```
 
+For correlated Flutter/Rust Agent logs, privacy-filtered diagnostic bundles, and the
+debugging runbook, see [Agent debugging](docs/development/agent-debugging.md).
+
 ## Working rules
 
 Local model connections and app pairing: [server dashboard setup](server/README.md#local-dashboard-and-app-pairing).

@@ -82,6 +82,14 @@ impl InProcessAgent for ConversationExperts<'_> {
         }
         let expert = BuiltinExpertKind::from_package_id(&request.agent_id)
             .ok_or(AgentFailure::CapabilityDenied)?;
+        let expert_started = std::time::Instant::now();
+        let request_id = crate::diagnostics::request_id().unwrap_or_default();
+        tracing::info!(
+            request_id,
+            expert = request.agent_id,
+            invocation_id = %request.message.task_id.unwrap(),
+            "expert_invocation_started"
+        );
         self.require_source(&request.agent_id, expert.mandatory_source())?;
         let assignment = request.message.text()?.to_owned();
         let now = std::time::SystemTime::now()
@@ -331,7 +339,7 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
         };
-        Ok(A2ATask {
+        let task = A2ATask {
             id: request.message.task_id.ok_or(AgentFailure::InvalidInput)?,
             context_id: request.message.context_id,
             agent_id: request.agent_id,
@@ -349,6 +357,14 @@ impl InProcessAgent for ConversationExperts<'_> {
                 ],
             }],
             failure: None,
-        })
+        };
+        tracing::info!(
+            request_id,
+            expert = task.agent_id,
+            invocation_id = %task.id,
+            elapsed_ms = expert_started.elapsed().as_millis() as u64,
+            "expert_invocation_completed"
+        );
+        Ok(task)
     }
 }

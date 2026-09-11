@@ -19,10 +19,17 @@ import '../../../infrastructure/native/native_transport.dart';
 const localPersonId = defaultLocalPersonId;
 
 final class FfiDayGatewayException implements Exception {
-  const FfiDayGatewayException(this.code, this.message);
+  const FfiDayGatewayException(
+    this.code,
+    this.message, {
+    this.field,
+    this.metadata = const {},
+  });
 
   final String code;
   final String message;
+  final String? field;
+  final Map<String, String> metadata;
 
   @override
   String toString() => message;
@@ -112,7 +119,12 @@ final class FfiDayGateway
     try {
       return await _request('agent_vault', request);
     } on FfiDayGatewayException catch (error) {
-      throw AgentVaultException(error.code);
+      throw AgentVaultException(
+        error.metadata['agent_failure'] ?? error.code,
+        requestId: error.metadata['request_id'],
+        stage: error.metadata['stage'],
+        metadata: error.metadata,
+      );
     }
   }
 
@@ -164,7 +176,12 @@ final class FfiDayGateway
     try {
       return await pending;
     } on NativeTransportException catch (error) {
-      throw FfiDayGatewayException(error.code, error.message);
+      throw FfiDayGatewayException(
+        error.code,
+        error.message,
+        field: error.field,
+        metadata: error.metadata,
+      );
     }
   }
 
@@ -638,7 +655,12 @@ final class FfiDayGateway
     try {
       return await _transport.request(operation, request);
     } on NativeTransportException catch (error) {
-      throw FfiDayGatewayException(error.code, error.message);
+      throw FfiDayGatewayException(
+        error.code,
+        error.message,
+        field: error.field,
+        metadata: error.metadata,
+      );
     }
   }
 

@@ -24,6 +24,7 @@ pub unsafe extern "C" fn floe_core_open(
     path: *const c_char,
     error_json_out: *mut *mut c_char,
 ) -> *mut FloeHandle {
+    diagnostics::initialize();
     if !error_json_out.is_null() {
         unsafe { *error_json_out = ptr::null_mut() };
     }
@@ -52,8 +53,8 @@ pub unsafe extern "C" fn floe_core_open(
             }
             ptr::null_mut()
         }
-        Err(_) => {
-            let value = error(ErrorCodeDto::Internal, "Rust core panicked");
+        Err(payload) => {
+            let value = diagnostics::panic_error(payload);
             if !error_json_out.is_null() {
                 unsafe { *error_json_out = c_output(ResponseEnvelopeDto::<Value>::error(value)) };
             }

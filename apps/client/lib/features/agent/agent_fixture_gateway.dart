@@ -47,7 +47,8 @@ abstract interface class AgentFixtureStreamingGateway
 
 final class AgentRunUpdate {
   AgentRunUpdate.fromJson(Map<String, Object?> json)
-    : sessionId = json['session_id']! as String,
+    : requestId = json['request_id'] as String?,
+      sessionId = json['session_id']! as String,
       expectedRevision = json['expected_revision']! as int,
       nextSequence = json['next_sequence']! as int,
       done = json['done']! as bool,
@@ -67,6 +68,7 @@ final class AgentRunUpdate {
     }
   }
 
+  final String? requestId;
   final String sessionId;
   final int expectedRevision;
   final int nextSequence;

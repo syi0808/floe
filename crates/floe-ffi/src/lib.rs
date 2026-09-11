@@ -1,5 +1,6 @@
 mod abi;
 mod agent_run;
+mod diagnostics;
 
 pub use abi::*;
 mod local_context;
@@ -162,9 +163,10 @@ fn envelope<T: Serialize>(value: BridgeResult<T>) -> *mut c_char {
 }
 
 fn guarded<T: Serialize>(operation: impl FnOnce() -> BridgeResult<T>) -> *mut c_char {
+    diagnostics::initialize();
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(value) => envelope(value),
-        Err(_) => envelope::<T>(Err(error(ErrorCodeDto::Internal, "Rust core panicked"))),
+        Err(payload) => envelope::<T>(Err(diagnostics::panic_error(payload))),
     }
 }
 

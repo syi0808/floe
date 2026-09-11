@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../infrastructure/diagnostics/app_diagnostics.dart';
 import 'agent_calendar_experts.dart';
 import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
@@ -383,7 +384,8 @@ final class AgentController extends ChangeNotifier {
         _acceptSession(result.session);
       }
       needsReload = false;
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      _recordError('load', error, stackTrace);
       _fail(
         error is AgentVaultException ? error.failure : 'storage_unavailable',
       );
@@ -410,7 +412,8 @@ final class AgentController extends ChangeNotifier {
         _acceptSession(result.session);
       }
       needsReload = false;
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      _recordError('recover', error, stackTrace, sessionId: session?.id);
       _fail(
         error is AgentVaultException ? error.failure : 'storage_unavailable',
       );
@@ -485,6 +488,17 @@ final class AgentController extends ChangeNotifier {
             _acceptSession(saved);
             needsReload = false;
           } else {
+            final resultError = AgentVaultException(
+              update.failure ?? 'storage_unavailable',
+              requestId: update.requestId,
+              stage: 'conversation_turn',
+            );
+            _recordError(
+              'conversation_turn',
+              resultError,
+              StackTrace.current,
+              sessionId: original.id,
+            );
             _fail(update.failure ?? 'storage_unavailable');
           }
           break;
@@ -493,7 +507,13 @@ final class AgentController extends ChangeNotifier {
         update = await (gateway as AgentConversationGateway)
             .pollConversationTurn(request, sequence);
       }
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      _recordError(
+        'conversation_turn',
+        error,
+        stackTrace,
+        sessionId: original.id,
+      );
       _fail(
         error is AgentVaultException ? error.failure : 'transport_unavailable',
       );
@@ -563,7 +583,8 @@ final class AgentController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 80));
         update = await gateway.pollAgentFixtureRun(original, sequence);
       }
-    } on Object catch (error) {
+    } on Object catch (error, stackTrace) {
+      _recordError('fixture_turn', error, stackTrace, sessionId: original.id);
       _fail(
         error is AgentVaultException ? error.failure : 'transport_unavailable',
       );
@@ -784,5 +805,24 @@ final class AgentController extends ChangeNotifier {
     connectionController.removeListener(_notify);
     unawaited(stop());
     super.dispose();
+  }
+
+  void _recordError(
+    String operation,
+    Object error,
+    StackTrace stackTrace, {
+    String? sessionId,
+  }) {
+    final vaultError = error is AgentVaultException ? error : null;
+    AppDiagnostics.error(
+      component: 'agent',
+      operation: vaultError?.stage ?? operation,
+      error: error,
+      stackTrace: stackTrace,
+      failure: vaultError?.failure,
+      requestId: vaultError?.requestId,
+      sessionId: sessionId,
+      retryable: vaultError?.retryable,
+    );
   }
 }

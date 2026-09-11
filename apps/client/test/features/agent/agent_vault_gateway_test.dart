@@ -125,6 +125,36 @@ void main() {
     );
     await expectLater(gateway.vaultStatus('test'), throwsFormatException);
   });
+
+  test('completed failure retains request identity and stage', () async {
+    String? requestId;
+    final gateway = NativeAgentVaultGateway((request) async {
+      requestId = request['request_id']! as String;
+      return {
+        'request_id': requestId,
+        'done': true,
+        'events': <Object?>[],
+        'next_sequence': 0,
+        'state': 'ready',
+        'session': null,
+        'failure': 'model_unavailable',
+      };
+    }, deviceId: 'test-device');
+
+    await expectLater(
+      gateway.vaultStatus('test'),
+      throwsA(
+        isA<AgentVaultException>()
+            .having(
+              (error) => error.requestId == requestId,
+              'requestId matches transport request',
+              isTrue,
+            )
+            .having((error) => error.stage, 'stage', 'status')
+            .having((error) => error.retryable, 'retryable', isTrue),
+      ),
+    );
+  });
 }
 
 class _Transport {

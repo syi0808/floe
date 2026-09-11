@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use floe_agent::{
@@ -27,7 +27,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
-use crate::local_context::LocalContextStore;
+use crate::{diagnostics, local_context::LocalContextStore};
 
 mod conversation_turn;
 mod learner_worker;
@@ -35,6 +35,34 @@ mod learner_worker;
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
 const LEARNER_ERROR_DELAY: Duration = Duration::from_secs(5);
+
+fn operation_name(operation: &AgentVaultOperationDto) -> &'static str {
+    match operation {
+        AgentVaultOperationDto::Submit { action } => action_name(action),
+        AgentVaultOperationDto::Poll { .. } => "poll",
+        AgentVaultOperationDto::Stop {} => "stop",
+        AgentVaultOperationDto::Release {} => "release",
+    }
+}
+
+fn action_name(action: &AgentVaultActionDto) -> &'static str {
+    match action {
+        AgentVaultActionDto::Status {} => "status",
+        AgentVaultActionDto::Create {} => "create",
+        AgentVaultActionDto::Unlock {} => "unlock",
+        AgentVaultActionDto::Lock {} => "lock",
+        AgentVaultActionDto::Session { .. } => "session",
+        AgentVaultActionDto::Registry { .. } => "registry",
+        AgentVaultActionDto::CalendarExperts { .. } => "calendar_experts",
+        AgentVaultActionDto::CalendarAccess { .. } => "calendar_access",
+        AgentVaultActionDto::InspectProposal { .. } => "inspect_proposal",
+        AgentVaultActionDto::ConversationSession { .. } => "conversation_session",
+        AgentVaultActionDto::ConversationTurn { .. } => "conversation_turn",
+        AgentVaultActionDto::MemoryReview { .. } => "memory_review",
+        AgentVaultActionDto::Memory {} => "memory",
+        AgentVaultActionDto::Connections {} => "connections",
+    }
+}
 
 pub(crate) struct VaultBridge {
     root: PathBuf,
@@ -64,6 +92,7 @@ impl VaultBridge {
         check_version(request.schema_version)?;
         let person = parse_person(&request.person_id)?;
         let id = parse_id(&request.request_id, "request_id", |id| id)?;
+        let operation = operation_name(&request.operation);
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
             *worker = Some(
@@ -81,7 +110,12 @@ impl VaultBridge {
             .unwrap()
             .request(person, id, request.operation)
             .and_then(VaultJobResult::into_protocol)
-            .map_err(agent_failure)
+            .map_err(|failure| {
+                let mut error = agent_failure(failure);
+                error.metadata.insert("request_id".into(), id.to_string());
+                error.metadata.insert("stage".into(), operation.into());
+                error
+            })
     }
 }
 
@@ -187,7 +221,14 @@ impl Worker {
                             if worker_closing.load(Ordering::Acquire) {
                                 break;
                             }
-                            let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
+                            let operation = action_name(&job.action);
+                            let started = Instant::now();
+                            let request_id = job.id.to_string();
+                            let _request_guard = diagnostics::enter_request(request_id.clone());
+                            let span = tracing::info_span!("agent_job", request_id, operation,);
+                            let _guard = span.enter();
+                            tracing::info!(request_id, operation, "agent_job_started");
+                            let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
                                 Ok(runtime) => runtime.block_on(execute(
                                     &root,
                                     &keys,
@@ -197,8 +238,29 @@ impl Worker {
                                     &job,
                                 )),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
-                            }))
-                            .unwrap_or(Err(AgentFailure::Interrupted));
+                            })) {
+                                Ok(result) => result,
+                                Err(payload) => {
+                                    let _ = diagnostics::panic_error(payload);
+                                    Err(AgentFailure::Interrupted)
+                                }
+                            };
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            match &result {
+                                Ok(_) => tracing::info!(
+                                    request_id,
+                                    operation,
+                                    elapsed_ms,
+                                    "agent_job_completed"
+                                ),
+                                Err(failure) => tracing::error!(
+                                    request_id,
+                                    operation,
+                                    elapsed_ms,
+                                    failure = ?failure,
+                                    "agent_job_failed"
+                                ),
+                            }
                             if matches!(
                                 result,
                                 Err(AgentFailure::VaultUnavailable | AgentFailure::Interrupted)
@@ -612,7 +674,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         }
         AgentVaultActionDto::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            ensure_builtin_experts(
+            if let Err(failure) = ensure_builtin_experts(
                 vault,
                 core,
                 local_context,
@@ -620,8 +682,16 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 request.remote_route.as_ref(),
                 job.cancellation.clone(),
             )
-            .await?;
-            let session = conversation_turn::run(
+            .await
+            {
+                tracing::error!(
+                    failure = ?failure,
+                    stage = "ensure_builtin_experts",
+                    "conversation_turn_failed"
+                );
+                return Err(failure);
+            }
+            let session = match conversation_turn::run(
                 core,
                 vault,
                 local_context,
@@ -640,7 +710,18 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                     }
                 },
             )
-            .await?;
+            .await
+            {
+                Ok(session) => session,
+                Err(failure) => {
+                    tracing::error!(
+                        failure = ?failure,
+                        stage = "runtime",
+                        "conversation_turn_failed"
+                    );
+                    return Err(failure);
+                }
+            };
             Ok(VaultExecutionResult {
                 session: Some(session),
                 ..VaultExecutionResult::ready()

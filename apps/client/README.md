@@ -78,6 +78,20 @@ Screenshots are written under the system temporary `floe-design-feedback` direct
 from exports. There is no persistent review button, release builds do not mount the overlay,
 and feedback resets with the running process.
 
+Debug builds also keep a privacy-filtered ring buffer of recent application and Agent
+diagnostics. Press `Command-Shift-D`, or use the bug icon in the review overlay, to export a
+JSON bundle and copy its path. The bundle contains failure types, correlation IDs, timings,
+and stack traces, but does not record prompts, model responses, calendar content, or person IDs.
+
+To build the Rust bridge and capture combined Flutter/Rust structured logs in one terminal:
+
+```sh
+./scripts/run-agent-debug.sh
+```
+
+Run this command from the repository root. Logs are written under `.floe-debug/` and can be
+filtered with `FLOE_LOG`, for example `FLOE_LOG=debug ./scripts/run-agent-debug.sh`.
+
 The macOS build compiles `floe-ffi`, embeds `libfloe_ffi.dylib`, and starts a
 dedicated FFI isolate. `FfiDayGateway` exchanges versioned JSON envelopes with
 the Rust core, which owns all Turso reads and writes. Local data is stored under

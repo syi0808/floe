@@ -23,6 +23,7 @@ use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
 use crate::local_context::LocalContextStore;
 use crate::{
+    diagnostics,
     local_model::FoundationModelRunner,
     remote_model::{CalendarContextRequest, ServerModelRunner},
 };
@@ -232,10 +233,29 @@ impl ModelRunner for Model {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        match self {
+        let started = std::time::Instant::now();
+        let placement = match self {
+            Self::Foundation(_) => "device_local",
+            Self::Server(_) => "remote",
+        };
+        let request_id = diagnostics::request_id().unwrap_or_default();
+        tracing::info!(request_id, placement, "model_attempt_started");
+        let result = match self {
             Self::Foundation(model) => model.generate(request).await,
             Self::Server(model) => model.generate(request).await,
+        };
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match &result {
+            Ok(_) => tracing::info!(request_id, placement, elapsed_ms, "model_attempt_completed"),
+            Err(failure) => tracing::error!(
+                request_id,
+                placement,
+                elapsed_ms,
+                failure = ?failure,
+                "model_attempt_failed"
+            ),
         }
+        result
     }
 }
 

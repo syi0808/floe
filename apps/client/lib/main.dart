@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/foundation.dart';
@@ -17,10 +18,45 @@ import 'infrastructure/native/android_context_gateway.dart';
 import 'infrastructure/native/apple_context_gateway.dart';
 import 'infrastructure/native/local_context_publication.dart';
 import 'infrastructure/native/macos_context_gateway.dart';
+import 'infrastructure/diagnostics/app_diagnostics.dart';
 import 'preview/design_feedback_overlay.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+void main() {
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      FlutterError.onError = (details) {
+        FlutterError.presentError(details);
+        AppDiagnostics.error(
+          component: 'flutter',
+          operation: 'framework_error',
+          error: details.exception,
+          stackTrace: details.stack,
+        );
+      };
+      PlatformDispatcher.instance.onError = (error, stackTrace) {
+        AppDiagnostics.error(
+          component: 'flutter',
+          operation: 'platform_error',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        return true;
+      };
+      await _start();
+    },
+    (error, stackTrace) {
+      AppDiagnostics.error(
+        component: 'flutter',
+        operation: 'uncaught_async_error',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    },
+  );
+}
+
+Future<void> _start() async {
   try {
     final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
     final device = await LocalDeviceIdentity.openDefault();
@@ -61,13 +97,16 @@ Future<void> main() async {
       );
       try {
         await macOSContext.readAttention();
-      } on Object catch (error) {
-        _ignoreOptionalContextFailure(error);
+      } on Object catch (error, stackTrace) {
+        _recordOptionalContextFailure(error, stackTrace);
       }
       macOSContextRefresh = Timer.periodic(const Duration(seconds: 45), (_) {
         unawaited(
-          macOSContext.readAttention().catchError((Object error) {
-            _ignoreOptionalContextFailure(error);
+          macOSContext.readAttention().catchError((
+            Object error,
+            StackTrace stackTrace,
+          ) {
+            _recordOptionalContextFailure(error, stackTrace);
             return <String, dynamic>{};
           }),
         );
@@ -89,12 +128,28 @@ Future<void> main() async {
             : null,
       ),
     );
-  } on Object catch (error) {
-    runApp(_StartupErrorApp(message: error.toString()));
+  } on Object catch (error, stackTrace) {
+    final errorId = AppDiagnostics.error(
+      component: 'app',
+      operation: 'startup',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    runApp(
+      _StartupErrorApp(message: '${error.toString()}\nError ID: $errorId'),
+    );
   }
 }
 
-void _ignoreOptionalContextFailure(Object _) {}
+void _recordOptionalContextFailure(Object error, StackTrace stackTrace) {
+  AppDiagnostics.error(
+    component: 'context',
+    operation: 'macos_attention_refresh',
+    error: error,
+    stackTrace: stackTrace,
+    retryable: true,
+  );
+}
 
 class _StartupErrorApp extends StatelessWidget {
   const _StartupErrorApp({required this.message});

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../infrastructure/diagnostics/app_diagnostics.dart';
 import 'agent_calendar_experts.dart';
 import 'agent_connections.dart';
 import 'agent_conversation_gateway.dart';
@@ -13,8 +14,34 @@ import 'agent_request_id.dart';
 enum AgentVaultState { missing, locked, ready, unavailable }
 
 class AgentVaultException implements Exception {
-  const AgentVaultException(this.failure);
+  const AgentVaultException(
+    this.failure, {
+    this.requestId,
+    this.stage,
+    this.metadata = const {},
+  });
+
   final String failure;
+  final String? requestId;
+  final String? stage;
+  final Map<String, String> metadata;
+
+  bool get retryable => const {
+    'model_unavailable',
+    'local_model_unavailable',
+    'server_model_unavailable',
+    'server_model_timeout',
+    'quota_exceeded',
+    'stalled',
+    'deadline_exceeded',
+    'interrupted',
+    'transport_unavailable',
+  }.contains(failure);
+
+  @override
+  String toString() => requestId == null
+      ? 'AgentVaultException($failure)'
+      : 'AgentVaultException($failure, requestId: $requestId)';
 }
 
 abstract interface class AgentVaultGateway
@@ -156,7 +183,11 @@ final class NativeAgentVaultGateway
     }
     if (_conversationRun == null) {
       if (_pending != null) await _drain();
-      _pending = _VaultJob(turn.session.personId, newAgentRequestId());
+      _pending = _VaultJob(
+        turn.session.personId,
+        newAgentRequestId(),
+        'conversation_turn',
+      );
       _run = turn.session;
       _conversationRun = turn;
     }
@@ -419,14 +450,22 @@ final class NativeAgentVaultGateway
       throw const AgentVaultException('conflict');
     }
     if (_pending != null) await _drain();
-    final job = _VaultJob(personId, newAgentRequestId());
+    final job = _VaultJob(
+      personId,
+      newAgentRequestId(),
+      action['kind']?.toString() ?? 'unknown',
+    );
     _pending = job;
     final result = await _finish(
       await _call(job, {'kind': 'submit', 'action': action}),
     );
     await _release(job);
     if (result['failure'] case final String failure) {
-      throw AgentVaultException(failure);
+      throw AgentVaultException(
+        failure,
+        requestId: result['request_id']?.toString() ?? job.id,
+        stage: action['kind']?.toString(),
+      );
     }
     return result;
   }
@@ -470,7 +509,11 @@ final class NativeAgentVaultGateway
     }
     if (_run == null) {
       if (_pending != null) await _drain();
-      _pending = _VaultJob(session.personId, newAgentRequestId());
+      _pending = _VaultJob(
+        session.personId,
+        newAgentRequestId(),
+        'fixture_turn',
+      );
       _run = session;
     }
     return _update(
@@ -522,17 +565,56 @@ final class NativeAgentVaultGateway
     _VaultJob job,
     Map<String, Object?> operation,
   ) async {
-    final result = await request({
-      'schema_version': agentSchemaVersion,
-      'person_id': job.personId,
-      'request_id': job.id,
-      'operation': operation,
-    });
+    late final Map<String, dynamic> result;
+    try {
+      result = await request({
+        'schema_version': agentSchemaVersion,
+        'person_id': job.personId,
+        'request_id': job.id,
+        'operation': operation,
+      });
+    } on Object catch (error, stackTrace) {
+      final source = error is AgentVaultException ? error : null;
+      final enriched = AgentVaultException(
+        source?.failure ?? 'transport_unavailable',
+        requestId: source?.requestId ?? job.id,
+        stage: source?.stage ?? job.stage,
+        metadata: source?.metadata ?? const {},
+      );
+      AppDiagnostics.error(
+        component: 'agent_gateway',
+        operation: enriched.stage!,
+        error: error,
+        stackTrace: stackTrace,
+        failure: enriched.failure,
+        requestId: enriched.requestId,
+        retryable: enriched.retryable,
+      );
+      Error.throwWithStackTrace(source == null ? error : enriched, stackTrace);
+    }
     if (result['request_id'] != job.id ||
         result['done'] is! bool ||
         result['events'] is! List ||
         result['next_sequence'] is! int) {
       throw const FormatException('Invalid vault response');
+    }
+    if (operation['kind'] != 'release' && result['done'] == true) {
+      if (result['failure'] case final String failure) {
+        final completedError = AgentVaultException(
+          failure,
+          requestId: job.id,
+          stage: job.stage,
+        );
+        AppDiagnostics.error(
+          component: 'agent_gateway',
+          operation: job.stage,
+          error: completedError,
+          stackTrace: StackTrace.current,
+          failure: failure,
+          requestId: job.id,
+          retryable: completedError.retryable,
+        );
+      }
     }
     return result;
   }
@@ -554,7 +636,8 @@ final class NativeAgentVaultGateway
 }
 
 final class _VaultJob {
-  _VaultJob(this.personId, this.id);
+  _VaultJob(this.personId, this.id, this.stage);
   final String personId;
   final String id;
+  final String stage;
 }
