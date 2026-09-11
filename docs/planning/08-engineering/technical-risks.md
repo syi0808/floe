@@ -127,7 +127,9 @@ self-host 사용자가 provider별 OAuth app을 직접 만드는 경험은 어�
 
 ### 완화
 
-초기 BYO credentials, 장기 optional managed OAuth broker.
+Floe Cloud는 managed OAuth를 제공하고, self-host는 자체 callback URL에 맞는 BYO OAuth
+registration을 사용한다. 중앙 callback relay에 의존하지 않고 provider별 설정 절차와
+startup validation을 제공한다.
 
 ## R12 — Intervention Fatigue
 

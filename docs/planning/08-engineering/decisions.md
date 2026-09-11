@@ -104,11 +104,14 @@ Account/Person/Membership/connector 상태를 관리하는 dashboard를 장기�
 
 ---
 
-## D-013 — Managed OAuth는 optional
+## D-013 — Connector OAuth는 실행 서버가 소유
 
-**Status:** Accepted direction
+**Status:** Accepted
 
-장기적으로 Floe Cloud OAuth broker를 제공할 수 있으나 self-host의 필수 dependency가 되어서는 안 된다.
+Floe Cloud는 Floe가 등록한 confidential OAuth application과 고정 HTTPS callback을 사용하고,
+각 grant와 token을 Person별로 격리한다. Self-host server는 자신의 공개 URL에 맞는 OAuth
+application을 직접 등록하고 credentials를 제공한다. Floe-managed OAuth가 self-host의 필수
+dependency가 되거나 임의의 self-host callback을 중계하지 않는다.
 
 ---
 

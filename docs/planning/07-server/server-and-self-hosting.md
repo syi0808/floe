@@ -103,14 +103,17 @@ Codex OAuth 및 제한된 inference, 앱 페어링과 합성 데이터 연결 �
 
 ## OAuth
 
-초기 self-host는 BYO OAuth credentials로 시작할 수 있다.
+Floe Cloud는 Floe가 등록한 OAuth application, 고정 HTTPS callback과 server-side secret
+storage를 제공하며 grant/token을 Person별로 관리한다.
 
-장기적으로 선택적인 Floe-managed OAuth broker를 제공할 수 있다.
+Self-host는 자체 공개 URL에 맞는 OAuth application을 provider별로 등록하고 credentials를
+설정하는 BYO 방식으로 시작한다. 임의의 self-host callback URL은 Floe의 공용 provider
+registration으로 커버하거나 중앙 relay로 우회하지 않는다.
 
 ```text
-Self-host
-├─ Floe-managed OAuth
-└─ Bring Your Own Credentials
+Floe Cloud ── Floe-managed OAuth registration
+Self-host  ── Bring Your Own OAuth registration
 ```
 
-Managed OAuth가 self-host의 필수 dependency가 되어서는 안 된다.
+Client ID는 공개 식별자다. Client secret과 refresh token만 repository/client build에서
+제외하고 server secret store에 보관한다.

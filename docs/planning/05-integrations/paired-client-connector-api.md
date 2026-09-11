@@ -85,33 +85,20 @@ Flutter client starts, scopes, or disconnects a personal provider connection.
 
 ## OAuth redirect transport plan
 
-The current release keeps browser authorization callbacks on the local machine. Authorization-code
-providers use PKCE S256, an unguessable state value, the system browser, and a listener bound only
-to the loopback interface. Google and Microsoft use a random `127.0.0.1` port for each attempt.
-Providers that require an exactly registered desktop redirect retain a fixed loopback port: Slack
-uses `http://localhost:1456/oauth/slack/callback`, and Codex uses its separately documented
-`http://localhost:1455/auth/callback`. GitHub App authorization uses Device Flow and therefore has
-no redirect URI. A provider constraint must not be bypassed by treating a fixed callback as if it
-supported an arbitrary port.
+The local-node prototype keeps browser callbacks on loopback: Google and Microsoft use a random
+`127.0.0.1` port, Slack uses `http://localhost:1456/oauth/slack/callback`, and GitHub App Device
+Flow has no redirect URI. These transports validate the connector lifecycle but are not the hosted
+deployment contract.
 
-Floe does not currently register a `floe://...` custom URL scheme for OAuth. A custom scheme is a
-deep link, not an Apple Universal Link or Android App Link, and another installed application may
-claim the same scheme. PKCE limits authorization-code interception, but it does not establish
-ownership of the scheme.
+In production, the server that executes a connector owns its OAuth flow, credential and provider
+requests. Floe Cloud uses Floe's confidential provider registrations and exact fixed HTTPS callback
+URLs. Grants and tokens are partitioned by Person. A self-hosted server uses OAuth applications
+registered by its operator, with exact callback URLs derived from a trusted configured external
+base URL. Arbitrary self-host URLs are not added to Floe's provider registrations and are not
+routed through a central callback relay. The paired client starts the flow, opens the returned URL,
+and polls status, but never receives provider tokens.
 
-The planned replacement is a claimed HTTPS callback such as
-`https://auth.floe.app/oauth/{provider}/callback`, using an Apple Universal Link and Android App
-Link where the provider accepts that redirect for a public native client. Adoption is gated on:
-
-- a production domain serving Apple `apple-app-site-association` and Android `assetlinks.json`
-- stable signed Apple application identifiers and Android package/signing identities
-- exact, non-wildcard provider callback registration and continued PKCE/state validation
-- verified behavior when the app is absent, the link opens in a browser, or association lookup fails
-- provider confirmation that token exchange remains secretless for the registered native client
-
-Provider support is evaluated independently. Microsoft can use its documented iOS/macOS Universal
-Link path. Slack's HTTPS redirect behavior and token-rotation rules require an integration test.
-Google desktop clients retain random loopback callbacks unless Google documents claimed HTTPS for
-that client type or Floe introduces an OAuth broker. GitHub remains on Device Flow unless a
-confidential Floe OAuth broker owns the web callback and client secret. The broker remains optional
-for self-hosting and is not a prerequisite for the current loopback implementation.
+Client IDs are identifiers visible in authorization requests, not secrets. Hosted security relies
+on confidential client credentials held outside the repository, exact redirect matching, one-time
+state, PKCE where supported, and encrypted Person-scoped token storage. See
+[ADR 0026](../../decisions/0026-server-owned-provider-oauth.md).
