@@ -17,7 +17,9 @@ use floe_agent::{
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
-use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
+use floe_protocol::{
+    AgentConversationTurnRequestDto, AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto,
+};
 
 use crate::local_context::LocalContextStore;
 use crate::{
@@ -315,24 +317,30 @@ impl PersonalViewSource<'_> {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
         let now = i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
-        match model
-            .read_calendar_context_view(
-                CalendarContextRequest {
-                    connector_id: None,
-                    range_start_unix_ms: now.saturating_sub(86_400_000),
-                    range_end_unix_ms: now.saturating_add(86_400_000),
-                    cursor: "",
-                    limit: floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
-                },
-                deadline,
-                cancellation,
-            )
-            .await
-        {
-            Ok(view) => Ok(vec![view]),
-            Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
-            Err(error) => Err(error),
+        let mut views = Vec::new();
+        for connection in model.calendar_connections() {
+            match model
+                .read_calendar_context_view(
+                    CalendarContextRequest {
+                        connector_id: &connection.connector_id,
+                        connection_id: &connection.connection_id,
+                        connection_revision: connection.connection_revision,
+                        range_start_unix_ms: now.saturating_sub(86_400_000),
+                        range_end_unix_ms: now.saturating_add(86_400_000),
+                        cursor: "",
+                        limit: floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
+                    },
+                    deadline,
+                    cancellation,
+                )
+                .await
+            {
+                Ok(view) => views.push(view),
+                Err(AgentFailure::CapabilityUnavailable) => {}
+                Err(error) => return Err(error),
+            }
         }
+        Ok(views)
     }
 
     async fn confirmed_interaction_views(
@@ -645,6 +653,12 @@ mod tests {
             serde_json::from_str(request.split_once("\r\n\r\n").expect("HTTP request body").1)
                 .unwrap();
         assert_eq!(body["schema_version"], 1);
+        assert_eq!(body["connector_id"], "calendar.google");
+        assert_eq!(
+            body["connection_id"],
+            "00000000-0000-4000-8000-000000000010"
+        );
+        assert_eq!(body["connection_revision"], 7);
         assert!(body["range_start_unix_ms"].as_i64().unwrap() >= 0);
         assert!(
             body["range_end_unix_ms"].as_i64().unwrap()
@@ -652,7 +666,15 @@ mod tests {
         );
         assert_eq!(body["cursor"], "");
         assert_eq!(body["limit"], floe_agent::MAX_CALENDAR_CONTEXT_ITEMS);
-        assert_eq!(body.as_object().unwrap().len(), 5);
+        assert_eq!(body.as_object().unwrap().len(), 8);
+    }
+
+    fn test_calendar_connections() -> Vec<AgentRemoteCalendarConnectionDto> {
+        vec![AgentRemoteCalendarConnectionDto {
+            connector_id: "calendar.google".into(),
+            connection_id: "00000000-0000-4000-8000-000000000010".into(),
+            connection_revision: 7,
+        }]
     }
 
     async fn respond(mut socket: tokio::net::TcpStream, body: String) {
@@ -683,6 +705,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         }))
         .unwrap();
         assert!(matches!(model, Model::Server(_)));
@@ -720,6 +743,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -827,6 +851,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -940,6 +965,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -1056,6 +1082,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1223,6 +1250,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1430,6 +1458,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: vec![],
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1686,6 +1715,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1778,6 +1808,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
+            calendar_connections: test_calendar_connections(),
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
