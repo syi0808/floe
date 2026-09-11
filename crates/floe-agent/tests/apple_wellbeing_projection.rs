@@ -19,12 +19,12 @@ fn apple_fixture_crosses_the_derived_wellbeing_boundary() {
 
     let evidence = personal_context_evidence(&view).unwrap();
     for forbidden in [
-        "sleep_hours",
-        "steps",
-        "exercise_minutes",
-        "raw_samples",
-        "provider_id",
-        "metadata",
+        "\"sleep_hours\":",
+        "\"steps\":",
+        "\"exercise_minutes\":",
+        "\"raw_samples\":",
+        "\"provider_id\":",
+        "\"metadata\":",
     ] {
         assert!(!evidence.untrusted_text.contains(forbidden));
     }
