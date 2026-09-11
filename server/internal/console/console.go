@@ -169,7 +169,6 @@ type pairing struct {
 type clientScope struct {
 	PersonID string
 	DeviceID string
-	Legacy   bool
 }
 
 type Console struct {
@@ -488,7 +487,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		hash := digest(strings.TrimPrefix(auth, "Bearer "))
 		for _, value := range console.state.Clients {
 			if hash == value.TokenHash {
-				scope = clientScope{PersonID: value.PersonID, DeviceID: value.DeviceID, Legacy: value.Legacy}
+				scope = clientScope{PersonID: value.PersonID, DeviceID: value.DeviceID}
 			}
 		}
 	}
@@ -499,12 +498,8 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	logistics := append([]LogisticsRuntime(nil), console.logistics...)
 	calendars := append([]CalendarRuntime(nil), console.calendars...)
 	console.mu.Unlock()
-	if scope.PersonID == "" && !scope.Legacy {
+	if !validPersonID(scope.PersonID) || !validDeviceID(scope.DeviceID) {
 		failure(writer, 401, "unauthorized")
-		return
-	}
-	if scope.Legacy && request.Method != http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/connectors/") {
-		failure(writer, 403, "person_scope_required")
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
@@ -556,15 +551,13 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			}
 			connections = append(connections, snapshot)
 		}
-		if !scope.Legacy {
-			var err error
-			connections, err = console.bindConnectionOwners(connections, scope)
-			if err != nil {
-				failure(writer, 503, "connection_scope_unavailable")
-				return
-			}
+		var err error
+		connections, err = console.bindConnectionOwners(connections, scope)
+		if err != nil {
+			failure(writer, 503, "connection_scope_unavailable")
+			return
 		}
-		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "legacy_unscoped": scope.Legacy, "connections": connections})
+		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connections": connections})
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
@@ -635,11 +628,9 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
 			return
 		}
-		if !scope.Legacy {
-			if _, err := console.bindConnectionOwners([]any{selectedSnapshot}, scope); err != nil {
-				failure(writer, http.StatusForbidden, "connection_owner_mismatch")
-				return
-			}
+		if _, err := console.bindConnectionOwners([]any{selectedSnapshot}, scope); err != nil {
+			failure(writer, http.StatusForbidden, "connection_owner_mismatch")
+			return
 		}
 		view, err := selected.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
 		if err != nil {
@@ -762,7 +753,7 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		for _, client := range console.state.Clients {
-			if !client.Legacy && client.PersonID != input.PersonID {
+			if client.PersonID != input.PersonID {
 				failure(writer, 409, "person_mismatch")
 				return
 			}
@@ -1067,7 +1058,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 	for identifier := range state.Clients {
 		clients = append(clients, identifier)
 		client := state.Clients[identifier]
-		clientScopes[identifier] = map[string]any{"person_id": client.PersonID, "device_id": client.DeviceID, "legacy_unscoped": client.Legacy}
+		clientScopes[identifier] = map[string]any{"person_id": client.PersonID, "device_id": client.DeviceID}
 	}
 	var pending *pairing
 	if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {

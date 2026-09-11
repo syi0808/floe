@@ -351,39 +351,45 @@ func TestPairingRestartAndRevocation(test *testing.T) {
 	}
 }
 
-func TestLegacyPairedCredentialMigratesAsUnscopedReadOnly(test *testing.T) {
+func TestUnscopedPairedCredentialStateIsRejected(test *testing.T) {
 	directory := filepath.Join(test.TempDir(), "node")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	token := "legacy-token"
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"legacy":%q}}`, digest(token))
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"unscoped":%q}}`, digest("unscoped-token"))
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}
-	management, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil)
-	if err != nil {
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("unscoped pairing state accepted: %v", err)
+	}
+}
+
+func TestUnscopedConnectorCredentialStateIsRejected(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8431/v1/connections", nil)
-	request.Host = "127.0.0.1:8431"
-	request.Header.Set("Authorization", "Bearer "+token)
-	response := httptest.NewRecorder()
-	management.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"legacy_unscoped":true`) {
-		test.Fatalf("legacy read compatibility lost: %d %s", response.Code, response.Body.String())
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connectors":{"github":{"owner":"floe","repository":"server"}}}`, digest("token"), fixturePersonID, fixtureDeviceID)
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
 	}
-	mutation := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8431/v1/connectors/calendar.google/connect", strings.NewReader(`{}`))
-	mutation.Host = "127.0.0.1:8431"
-	mutation.Header.Set("Authorization", "Bearer "+token)
-	mutationResponse := httptest.NewRecorder()
-	management.ServeHTTP(mutationResponse, mutation)
-	if mutationResponse.Code != http.StatusForbidden || !strings.Contains(mutationResponse.Body.String(), "person_scope_required") {
-		test.Fatalf("legacy mutation was not gated: %d %s", mutationResponse.Code, mutationResponse.Body.String())
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("unscoped connector credential state accepted: %v", err)
 	}
-	stored, err := json.Marshal(management.state.Clients["legacy"])
-	if err != nil || !strings.Contains(string(stored), `"legacy_unscoped":true`) || strings.Contains(string(stored), token) {
-		test.Fatalf("unsafe legacy migration: %s %v", stored, err)
+}
+
+func TestUnscopedBearerCannotReadViews(test *testing.T) {
+	fixture := setup(test)
+	token := "unscoped-token"
+	fixture.console.mu.Lock()
+	fixture.console.state.Clients["unscoped"] = pairedClient{TokenHash: digest(token)}
+	fixture.console.logistics = []LogisticsRuntime{&fakeContextRuntime{}}
+	fixture.console.mu.Unlock()
+
+	response := fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token)
+	if response.Code != http.StatusUnauthorized {
+		test.Fatalf("unscoped bearer read view: %d %s", response.Code, response.Body.String())
 	}
 }
 

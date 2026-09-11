@@ -138,14 +138,10 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 		}
 		items = append(items, item)
 	}
-	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "legacy_unscoped": scope.Legacy, "connectors": items})
+	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connectors": items})
 }
 
 func (console *Console) startClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
-	if scope.Legacy {
-		failure(writer, http.StatusForbidden, "person_scope_required")
-		return
-	}
 	var input struct {
 		SchemaVersion int            `json:"schema_version"`
 		Secret        string         `json:"secret"`
@@ -269,9 +265,6 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 			copy.Status, copy.ErrorCode = "failed", "connector_authorization_unavailable"
 		} else if status, authorizationURL, valid := oauthActionStatus(value); valid {
 			copy.Status, copy.AuthorizationURL = status, authorizationURL
-			if status == "connected" && definition.OAuthCredential != "" {
-				_ = console.vault.Delete(definition.OAuthCredential)
-			}
 		} else {
 			copy.Status, copy.ErrorCode = "failed", "invalid_connector_response"
 		}
@@ -285,10 +278,6 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 }
 
 func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition, attemptID string) {
-	if scope.Legacy {
-		failure(writer, http.StatusForbidden, "person_scope_required")
-		return
-	}
 	console.mu.Lock()
 	attempt, exists := console.connectorAttempts[attemptID]
 	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
@@ -338,10 +327,6 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 }
 
 func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
-	if scope.Legacy {
-		failure(writer, http.StatusForbidden, "person_scope_required")
-		return
-	}
 	if len(definition.ScopeFields) == 0 {
 		failure(writer, http.StatusConflict, "capability_not_supported")
 		return
@@ -372,14 +357,10 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 		failure(writer, http.StatusBadRequest, "invalid_scope")
 		return
 	}
-	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "connection_id": record.ConnectionID, "connector_id": definition.ID, "scope": console.connectorScope(definition.ID)})
+	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "scope": console.connectorScope(definition.ID)})
 }
 
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
-	if scope.Legacy {
-		failure(writer, http.StatusForbidden, "person_scope_required")
-		return
-	}
 	console.mu.Lock()
 	record, exists := console.connectionForPerson(definition.ID, scope.PersonID)
 	if !exists {
@@ -433,10 +414,7 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		failure(writer, http.StatusInternalServerError, "credential_cleanup_failed")
 		return
 	}
-	if definition.OAuthCredential != "" {
-		_ = console.vault.Delete(definition.OAuthCredential)
-	}
-	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "disconnected": true})
+	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "disconnected": true})
 }
 
 func oauthActionStatus(value any) (string, string, bool) {
@@ -473,7 +451,8 @@ func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, definition clientC
 func connectorAttemptResponse(attempt *connectorAttempt) map[string]any {
 	value := map[string]any{
 		"schema_version": 1, "attempt_id": attempt.ID, "connector_id": attempt.ConnectorID,
-		"connection_id": attempt.ConnectionID, "status": attempt.Status,
+		"connection_id": attempt.ConnectionID, "person_id": attempt.PersonID,
+		"device_id": attempt.DeviceID, "status": attempt.Status,
 		"created_at": attempt.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if attempt.AuthorizationURL != "" {

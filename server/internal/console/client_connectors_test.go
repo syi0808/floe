@@ -81,7 +81,7 @@ func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *
 		test.Fatal(response.Body.String())
 	}
 	started := createdValue(test, strings.NewReader(response.Body.String()))
-	if started["status"] != "pending" || started["authorization_url"] == "" || started["attempt_id"] == "" {
+	if started["status"] != "pending" || started["authorization_url"] == "" || started["attempt_id"] == "" || started["person_id"] != fixturePersonID || started["device_id"] != fixtureDeviceID {
 		test.Fatalf("invalid OAuth start: %#v", started)
 	}
 	encoded, _ := json.Marshal(started)
@@ -90,7 +90,7 @@ func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *
 	}
 	attemptID := started["attempt_id"].(string)
 	status := fixture.value(fixture.call(http.MethodGet, "/v1/connectors/microsoft.mail/connection-attempts/"+attemptID, nil, token))
-	if status["status"] != "connected" || status["authorization_url"] != nil {
+	if status["status"] != "connected" || status["authorization_url"] != nil || status["person_id"] != fixturePersonID || status["device_id"] != fixtureDeviceID {
 		test.Fatalf("OAuth status did not settle: %#v", status)
 	}
 	if strings.Join(runtime.actions, ",") != "login,status" {
@@ -131,32 +131,28 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	}
 
 	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
-	if updated["connection_id"] != connection.ConnectionID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[configured.Credential] != secret {
+	if updated["connection_id"] != connection.ConnectionID || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[configured.Credential] != secret {
 		test.Fatalf("scope update changed ownership or secret: %#v", updated)
 	}
-	fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
+	disconnected := fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
+	if disconnected["connection_id"] != connection.ConnectionID || disconnected["person_id"] != fixturePersonID || disconnected["device_id"] != fixtureDeviceID {
+		test.Fatalf("disconnect ownership missing: %#v", disconnected)
+	}
 	if _, exists := fixture.vault.values[configured.Credential]; exists {
 		test.Fatal("disconnect retained scoped credential")
 	}
 }
 
-func TestConnectorMutationsRejectLegacyAndCrossPersonCredentials(test *testing.T) {
+func TestConnectorMutationsRejectCrossPersonCredentials(test *testing.T) {
 	fixture := setup(test)
-	legacyToken := "legacy-client-token"
 	otherToken := "other-device-token"
 	otherPersonID := "00000000-0000-4000-8000-000000000002"
 	fixture.console.mu.Lock()
-	fixture.console.state.Clients["legacy"] = pairedClient{TokenHash: digest(legacyToken), Legacy: true}
 	fixture.console.state.Clients["other"] = pairedClient{TokenHash: digest(otherToken), PersonID: otherPersonID, DeviceID: "other-device"}
 	connectionID := "github.issues.foreign"
 	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "github.issues", PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 
-	body := map[string]any{"schema_version": 1, "secret": "private-token", "scope": map[string]any{"owner": "floe", "repository": "product"}}
-	legacy := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", body, legacyToken)
-	if legacy.Code != http.StatusForbidden || !strings.Contains(legacy.Body.String(), "person_scope_required") {
-		test.Fatalf("legacy mutation accepted: %d %s", legacy.Code, legacy.Body.String())
-	}
 	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, otherToken)
 	if foreign.Code != http.StatusForbidden || !strings.Contains(foreign.Body.String(), "connection_owned_by_another_person") {
 		test.Fatalf("cross-person mutation not blocked: %d %s", foreign.Code, foreign.Body.String())

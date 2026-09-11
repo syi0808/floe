@@ -41,13 +41,12 @@ type deviceBinding struct {
 
 type pairedClient struct {
 	TokenHash string `json:"token_hash"`
-	PersonID  string `json:"person_id,omitempty"`
-	DeviceID  string `json:"device_id,omitempty"`
-	Legacy    bool   `json:"legacy_unscoped,omitempty"`
+	PersonID  string `json:"person_id"`
+	DeviceID  string `json:"device_id"`
 }
 
-func validScopedCredential(namespace, value string) bool {
-	if value == "" {
+func validCredentialName(namespace, value string) bool {
+	if value == namespace {
 		return true
 	}
 	prefix := namespace + ":"
@@ -56,21 +55,6 @@ func validScopedCredential(namespace, value string) bool {
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, prefix))
 	return err == nil
-}
-
-func (client *pairedClient) UnmarshalJSON(data []byte) error {
-	var legacy string
-	if json.Unmarshal(data, &legacy) == nil {
-		*client = pairedClient{TokenHash: legacy, Legacy: true}
-		return nil
-	}
-	type wire pairedClient
-	var value wire
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	*client = pairedClient(value)
-	return nil
 }
 
 type connectorConfigState struct {
@@ -192,7 +176,7 @@ func readState(directory string) (diskState, string, error) {
 			return state, "", errors.New("invalid server state")
 		}
 		for _, client := range state.Clients {
-			if len(client.TokenHash) != sha256.Size*2 || (!client.Legacy && (!validPersonID(client.PersonID) || !validDeviceID(client.DeviceID))) {
+			if len(client.TokenHash) != sha256.Size*2 || !validPersonID(client.PersonID) || !validDeviceID(client.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
 		}
@@ -201,9 +185,9 @@ func readState(directory string) (diskState, string, error) {
 				return state, "", errors.New("invalid server state")
 			}
 		}
-		if state.Connectors.GitHub != nil && !validScopedCredential(githubTokenKey, state.Connectors.GitHub.Credential) ||
-			state.Connectors.Slack != nil && !validScopedCredential(slackTokenKey, state.Connectors.Slack.Credential) ||
-			state.Connectors.HomeAssistant != nil && !validScopedCredential(homeTokenKey, state.Connectors.HomeAssistant.Credential) {
+		if state.Connectors.GitHub != nil && !validCredentialName(githubTokenKey, state.Connectors.GitHub.Credential) ||
+			state.Connectors.Slack != nil && !validCredentialName(slackTokenKey, state.Connectors.Slack.Credential) ||
+			state.Connectors.HomeAssistant != nil && !validCredentialName(homeTokenKey, state.Connectors.HomeAssistant.Credential) {
 			return state, "", errors.New("invalid server state")
 		}
 	} else if !os.IsNotExist(err) {

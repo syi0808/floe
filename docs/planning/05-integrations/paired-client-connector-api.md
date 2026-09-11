@@ -9,10 +9,10 @@ opens the returned authorization URL, polls the attempt, changes a selectable so
 requests cancellation or disconnection. The local Go node owns connection records, OAuth flow
 state, PKCE verifier and state values, token exchange and refresh, and credential storage.
 
-Every mutation derives `person_id` and `device_id` from the bearer credential issued by pairing.
-Neither value is accepted in a request body. Legacy unscoped credentials are read-only. Attempts
-are bound to both the paired Person and device; connections are owned by the Person. The current
-local node remains single-Person, as specified by ADR 0025.
+Every request derives `person_id` and `device_id` from the bearer credential issued by pairing.
+Neither value is accepted in a request body, and unscoped credentials are invalid. Attempts are
+bound to both the paired Person and device; connections are owned by the Person. The current local
+node remains single-Person, as specified by ADR 0025.
 
 ## Catalog
 
@@ -30,6 +30,8 @@ as server-executed providers by this endpoint.
 ## Lifecycle
 
 All request bodies use `schema_version: 1` and reject unknown fields.
+Every successful response includes the bearer-derived `person_id` and `device_id`; the client must
+reject a response whose ownership differs from its saved pairing.
 
 | Operation | Endpoint | Result |
 | --- | --- | --- |
@@ -52,8 +54,8 @@ Slack, and Home Assistant source selection is stored separately as non-secret sc
 
 OAuth runtimes bind to the same derived Person-and-connection vault namespace before starting the
 provider flow. On restart, the persisted connection record rebinds the runtime before it reads or
-refreshes a token. A successful client-driven OAuth flow removes any credential left under the old
-unscoped compatibility name.
+refreshes a token. Paired-client flows never read, write, migrate, or delete an unscoped credential
+name.
 
 ## Connector identifiers and selectable scope
 
@@ -70,5 +72,5 @@ unscoped compatibility name.
 | `home_assistant.states` | one-shot token | `base_url`, `entities` |
 
 The fixed `required_scopes` are least-privilege read grants and cannot be enlarged through this API.
-The existing `/manage/api` endpoints remain a dashboard compatibility surface and are not called or
-proxied by the paired-client handlers.
+The existing `/manage/api` endpoints serve the current dashboard and are not called or proxied by
+the paired-client handlers.

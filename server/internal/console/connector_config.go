@@ -39,7 +39,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 	console.logistics = nil
 	console.calendars = nil
 	if configured := console.state.Connectors.GitHub; configured != nil {
-		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, githubTokenKey)})
+		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential})
 		if err != nil {
 			return err
 		}
@@ -50,7 +50,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.Slack; configured != nil {
-		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, slackTokenKey)})
+		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential})
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.HomeAssistant; configured != nil {
-		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, homeTokenKey)}, configured.BaseURL, "primary")
+		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential}, configured.BaseURL, "primary")
 		if err != nil {
 			return err
 		}
@@ -116,13 +116,6 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.logistics = append(console.logistics, service)
 	}
 	return nil
-}
-
-func connectorCredential(configured, fallback string) string {
-	if configured != "" {
-		return configured
-	}
-	return fallback
 }
 
 func (console *Console) updateGitHubConnector(writer http.ResponseWriter, request *http.Request) {
@@ -153,7 +146,7 @@ func (console *Console) updateGitHubConnector(writer http.ResponseWriter, reques
 		failure(writer, 400, "validation")
 		return
 	}
-	next.Connectors.GitHub = &githubConnectorConfig{Owner: input.Owner, Repository: input.Repository}
+	next.Connectors.GitHub = &githubConnectorConfig{Owner: input.Owner, Repository: input.Repository, Credential: githubTokenKey}
 	console.saveConnectorState(writer, next, githubTokenKey, input.Token)
 }
 
@@ -185,7 +178,7 @@ func (console *Console) updateHomeAssistantConnector(writer http.ResponseWriter,
 		failure(writer, 400, "validation")
 		return
 	}
-	next.Connectors.HomeAssistant = &homeAssistantConnectorConfig{BaseURL: input.BaseURL, Entities: append([]string(nil), input.Entities...)}
+	next.Connectors.HomeAssistant = &homeAssistantConnectorConfig{BaseURL: input.BaseURL, Entities: append([]string(nil), input.Entities...), Credential: homeTokenKey}
 	console.saveConnectorState(writer, next, homeTokenKey, input.Token)
 }
 
@@ -215,7 +208,7 @@ func (console *Console) updateSlackConnector(writer http.ResponseWriter, request
 		failure(writer, 400, "validation")
 		return
 	}
-	next.Connectors.Slack = &slackConnectorConfig{Channel: input.Channel, Thread: input.Thread}
+	next.Connectors.Slack = &slackConnectorConfig{Channel: input.Channel, Thread: input.Thread, Credential: slackTokenKey}
 	console.saveConnectorState(writer, next, slackTokenKey, input.Token)
 }
 
