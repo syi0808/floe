@@ -5,6 +5,7 @@ import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_proposal.dart';
 import 'package:floe_client/features/day_canvas/application/ffi_day_gateway.dart';
+import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -127,6 +128,7 @@ void main() {
   });
 
   test('completed failure retains request identity and stage', () async {
+    AppDiagnostics.clear();
     String? requestId;
     final gateway = NativeAgentVaultGateway((request) async {
       requestId = request['request_id']! as String;
@@ -154,6 +156,10 @@ void main() {
             .having((error) => error.retryable, 'retryable', isTrue),
       ),
     );
+    final diagnostic = AppDiagnostics.records.single;
+    expect(diagnostic.requestId, requestId);
+    expect(diagnostic.operation, 'status');
+    expect(diagnostic.failure, 'model_unavailable');
   });
 }
 
