@@ -10,6 +10,7 @@ struct MacOSAttentionProjection {
 
 final class MacOSAttentionReducer {
   static let maximumWindow: TimeInterval = 15 * 60
+  static let minimumObservationWindow: TimeInterval = 45
 
   private let startedAt: Date
   private var activationTimes: [Date] = []
@@ -34,7 +35,7 @@ final class MacOSAttentionReducer {
     if !sessionIsActive || idleSeconds >= 300 {
       return MacOSAttentionProjection(state: "unknown", confidenceMillis: 0, evidenceHandles: [])
     }
-    guard date.timeIntervalSince(startedAt) >= 60 else {
+    guard date.timeIntervalSince(startedAt) >= Self.minimumObservationWindow else {
       return MacOSAttentionProjection(state: "unknown", confidenceMillis: 0, evidenceHandles: [])
     }
     let recentSwitches = activationTimes.filter { date.timeIntervalSince($0) <= 5 * 60 }.count

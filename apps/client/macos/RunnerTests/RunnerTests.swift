@@ -43,6 +43,18 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(projection.evidenceHandles.isEmpty)
   }
 
+  func testAttentionReducerProducesFirstPresentSampleAtPublisherCadence() {
+    let start = Date(timeIntervalSince1970: 1_000)
+    let reducer = MacOSAttentionReducer(startedAt: start)
+
+    let beforeRefresh = reducer.projection(at: start.addingTimeInterval(44), idleSeconds: 2)
+    let atRefresh = reducer.projection(at: start.addingTimeInterval(45), idleSeconds: 2)
+
+    XCTAssertEqual(beforeRefresh.state, "unknown")
+    XCTAssertEqual(atRefresh.state, "focused")
+    XCTAssertEqual(atRefresh.confidenceMillis, 750)
+  }
+
   func testAttentionReducerDoesNotTreatInactiveSessionAsInterruptible() {
     let start = Date(timeIntervalSince1970: 1_000)
     let reducer = MacOSAttentionReducer(startedAt: start)
