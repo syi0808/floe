@@ -10,6 +10,7 @@ import 'app/floe_primitives.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
 import 'infrastructure/native/android_context_gateway.dart';
+import 'infrastructure/native/apple_context_gateway.dart';
 import 'preview/design_feedback_overlay.dart';
 
 Future<void> main() async {
@@ -21,9 +22,8 @@ Future<void> main() async {
         gateway: gateway,
         agentGateway: gateway.secureAgent,
         serverClient: gateway.serverClient,
-        androidContext: Platform.isAndroid
-            ? AndroidContextGateway()
-            : null,
+        androidContext: Platform.isAndroid ? AndroidContextGateway() : null,
+        appleContext: Platform.isIOS ? AppleContextGateway() : null,
         onDisposeGateway: gateway.close,
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)

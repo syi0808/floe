@@ -21,6 +21,7 @@ import '../day_canvas/domain/calendar_action.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
 import '../../infrastructure/native/android_context_gateway.dart';
+import '../../infrastructure/native/apple_context_gateway.dart';
 
 part 'settings/data_privacy.dart';
 part 'settings/ai_processing.dart';
@@ -38,6 +39,7 @@ class SettingsScreen extends StatefulWidget {
     this.calendarSources,
     this.calendarSourceChanges,
     this.androidContext,
+    this.appleContext,
   });
 
   final LocalServerClient? client;
@@ -46,6 +48,7 @@ class SettingsScreen extends StatefulWidget {
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
   final AndroidContextApi? androidContext;
+  final AppleContextApi? appleContext;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -87,6 +90,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       controller: widget.agentController!,
       serverClient: widget.client,
       androidContext: widget.androidContext,
+      appleContext: widget.appleContext,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),

@@ -39,6 +39,7 @@ import '../../agent/agent_controller.dart';
 import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_panel.dart';
 import '../../../infrastructure/native/android_context_gateway.dart';
+import '../../../infrastructure/native/apple_context_gateway.dart';
 
 part 'personal_day/navigation.dart';
 part 'personal_day/tasks.dart';
@@ -64,12 +65,14 @@ class PersonalDayScreen extends StatefulWidget {
     this.agentGateway,
     this.serverClient,
     this.androidContext,
+    this.appleContext,
   });
   final DayGateway gateway;
   final DayQuery query;
   final AgentFixtureStreamingGateway? agentGateway;
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
+  final AppleContextApi? appleContext;
   @override
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
@@ -236,6 +239,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         actionController: actionController,
         agentController: agentController,
         androidContext: widget.androidContext,
+        appleContext: widget.appleContext,
         calendarSources: _agentCalendarSources,
         calendarSourceChanges: controller,
       );

@@ -6,6 +6,7 @@ class _DataPrivacy extends StatefulWidget {
     required this.serverClient,
     required this.onManageMemory,
     this.androidContext,
+    this.appleContext,
     this.calendarSources,
     this.calendarSourceChanges,
   });
@@ -14,6 +15,7 @@ class _DataPrivacy extends StatefulWidget {
   final LocalServerClient? serverClient;
   final VoidCallback onManageMemory;
   final AndroidContextApi? androidContext;
+  final AppleContextApi? appleContext;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
 
@@ -30,14 +32,19 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool connectionsRequested = false;
   bool serverConnectionsRequested = false;
   bool androidConnectionsRequested = false;
+  bool appleConnectionsRequested = false;
   bool androidHealthBusy = false;
+  bool appleContactsBusy = false;
+  bool appleHealthBusy = false;
   bool androidCalendarBusy = false;
   List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
+  List<AgentConnection>? appleConnections;
   List<AndroidCalendarOption>? androidCalendars;
   Set<String> androidSelectedCalendars = {};
   Object? serverConnectionFailure;
   Object? androidConnectionFailure;
+  Object? appleConnectionFailure;
   Object? androidCalendarFailure;
 
   AgentController get controller => widget.controller;
@@ -74,6 +81,11 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       androidSelectedCalendars = {};
       androidCalendarFailure = null;
     }
+    if (oldWidget.appleContext != widget.appleContext) {
+      appleConnectionsRequested = false;
+      appleConnections = null;
+      appleConnectionFailure = null;
+    }
     _load();
   }
 
@@ -88,7 +100,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             !controller.canReadMemory &&
             !controller.canReadConnections &&
             widget.serverClient == null &&
-            widget.androidContext == null) {
+            widget.androidContext == null &&
+            widget.appleContext == null) {
       return;
     }
     loading = true;
@@ -152,6 +165,20 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       }
       if (mounted) setState(() {});
     }
+    if (!appleConnectionsRequested && widget.appleContext != null) {
+      appleConnectionsRequested = true;
+      try {
+        final values = await widget.appleContext!.connections();
+        appleConnections = List.unmodifiable(
+          values.map(AgentConnection.fromJson),
+        );
+        appleConnectionFailure = null;
+      } on Object catch (error) {
+        appleConnections = const [];
+        appleConnectionFailure = error;
+      }
+      if (mounted) setState(() {});
+    }
     loading = false;
   }
 
@@ -161,9 +188,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     serverConnectionFailure = null;
     androidConnectionsRequested = false;
     androidConnectionFailure = null;
+    appleConnectionsRequested = false;
+    appleConnectionFailure = null;
     androidCalendarFailure = null;
     if (widget.serverClient != null) serverConnections = null;
     if (widget.androidContext != null) androidConnections = null;
+    if (widget.appleContext != null) appleConnections = null;
     await _load();
   }
 
@@ -285,6 +315,61 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
+  Future<void> _allowAppleContacts(AgentConnection connection) async {
+    final gateway = widget.appleContext;
+    if (gateway == null || appleContactsBusy) return;
+    setState(() {
+      appleContactsBusy = true;
+      appleConnectionFailure = null;
+    });
+    try {
+      if (connection.state == AgentConnectionState.revoked) {
+        final granted = await gateway.requestPermission(
+          AppleContextSource.contacts,
+        );
+        if (!granted)
+          throw StateError('Apple Contacts access was not granted.');
+      }
+      await gateway.readContacts();
+    } on Object catch (error) {
+      appleConnectionFailure = error;
+    } finally {
+      appleConnectionsRequested = false;
+      try {
+        await _load();
+      } finally {
+        if (mounted) setState(() => appleContactsBusy = false);
+      }
+    }
+  }
+
+  Future<void> _refreshAppleWellbeing(AgentConnection connection) async {
+    final gateway = widget.appleContext;
+    if (gateway == null || appleHealthBusy) return;
+    setState(() {
+      appleHealthBusy = true;
+      appleConnectionFailure = null;
+    });
+    try {
+      if (connection.state == AgentConnectionState.revoked) {
+        final granted = await gateway.requestPermission(
+          AppleContextSource.health,
+        );
+        if (!granted) throw StateError('Apple Health access was not granted.');
+      }
+      await gateway.readWellbeing();
+    } on Object catch (error) {
+      appleConnectionFailure = error;
+    } finally {
+      appleConnectionsRequested = false;
+      try {
+        await _load();
+      } finally {
+        if (mounted) setState(() => appleHealthBusy = false);
+      }
+    }
+  }
+
   @override
   void dispose() {
     controller.removeListener(_controllerChanged);
@@ -304,21 +389,35 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       final deviceConnections = widget.androidContext == null
           ? const <AgentConnection>[]
           : androidConnections;
+      final appleDeviceConnections = widget.appleContext == null
+          ? const <AgentConnection>[]
+          : appleConnections;
       final connections = [
         ...?localConnections,
         ...?deviceConnections,
+        ...?appleDeviceConnections,
         ...?remoteConnections,
       ];
       final connectionLoading =
           controller.hasConnections && localConnections == null ||
           widget.androidContext != null && deviceConnections == null ||
+          widget.appleContext != null && appleDeviceConnections == null ||
           widget.serverClient != null && remoteConnections == null;
       AgentConnection? healthConnection;
       AgentConnection? androidCalendarConnection;
+      AgentConnection? appleContactsConnection;
+      AgentConnection? appleHealthConnection;
       for (final connection in connections) {
         if (connection.descriptor.provider == 'health_connect') {
           healthConnection = connection;
           break;
+        }
+      }
+      for (final connection in connections) {
+        if (connection.descriptor.provider == 'apple_contacts') {
+          appleContactsConnection = connection;
+        } else if (connection.descriptor.provider == 'apple_health') {
+          appleHealthConnection = connection;
         }
       }
       for (final connection in connections) {
@@ -347,7 +446,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
               children: [
                 if (controller.hasConnections ||
                     widget.serverClient != null ||
-                    widget.androidContext != null)
+                    widget.androidContext != null ||
+                    widget.appleContext != null)
                   AgentConnectionSettings(
                     connections: connections,
                     loading: connectionLoading,
@@ -355,6 +455,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                         controller.connectionFailure != null ||
                         serverConnectionFailure != null ||
                         androidConnectionFailure != null ||
+                        appleConnectionFailure != null ||
                         androidCalendarFailure != null,
                     onRefresh: _refreshConnections,
                   ),
@@ -442,9 +543,67 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
+                if (appleContactsConnection != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Apple Contacts stay on this device. Floe exposes only bounded identity handles and selected aliases.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FloeButton.outlined(
+                      key: const ValueKey('apple-contacts-refresh'),
+                      onPressed:
+                          appleContactsConnection.state ==
+                              AgentConnectionState.unsupported
+                          ? null
+                          : () => _allowAppleContacts(appleContactsConnection!),
+                      loading: appleContactsBusy,
+                      child: Text(
+                        appleContactsConnection.state ==
+                                AgentConnectionState.revoked
+                            ? 'Allow Apple Contacts'
+                            : 'Refresh contacts',
+                      ),
+                    ),
+                  ),
+                ],
+                if (appleHealthConnection != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Apple Health records stay on this device. Floe receives only a short-lived capacity and recovery summary.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FloeButton.outlined(
+                      key: const ValueKey('apple-health-refresh'),
+                      onPressed:
+                          appleHealthConnection.state ==
+                              AgentConnectionState.unsupported
+                          ? null
+                          : () =>
+                                _refreshAppleWellbeing(appleHealthConnection!),
+                      loading: appleHealthBusy,
+                      child: Text(
+                        appleHealthConnection.state ==
+                                AgentConnectionState.revoked
+                            ? 'Allow Apple Health'
+                            : 'Refresh wellbeing',
+                      ),
+                    ),
+                  ),
+                ],
                 if ((controller.hasConnections ||
                         widget.serverClient != null ||
-                        widget.androidContext != null) &&
+                        widget.androidContext != null ||
+                        widget.appleContext != null) &&
                     controller.hasCalendarExpertManagement)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
@@ -459,6 +618,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                 if (!controller.hasConnections &&
                     widget.serverClient == null &&
                     widget.androidContext == null &&
+                    widget.appleContext == null &&
                     !controller.hasCalendarExpertManagement)
                   const Text('No connected data sources are available yet.'),
               ],
