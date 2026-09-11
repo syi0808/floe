@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -20,6 +21,7 @@ Future<void> main() async {
   try {
     final gateway = await FfiDayGateway.openDefault();
     final device = await LocalDeviceIdentity.openDefault();
+    Timer? macOSContextRefresh;
     final appleContext = Platform.isIOS
         ? PublishingAppleContextGateway(
             gateway: AppleContextGateway(),
@@ -40,6 +42,14 @@ Future<void> main() async {
       } on Object catch (error) {
         _ignoreOptionalContextFailure(error);
       }
+      macOSContextRefresh = Timer.periodic(const Duration(seconds: 45), (_) {
+        unawaited(
+          macOSContext.readAttention().catchError((Object error) {
+            _ignoreOptionalContextFailure(error);
+            return <String, dynamic>{};
+          }),
+        );
+      });
     }
     runApp(
       FloeApp(
@@ -48,7 +58,10 @@ Future<void> main() async {
         serverClient: gateway.serverClient,
         androidContext: Platform.isAndroid ? AndroidContextGateway() : null,
         appleContext: appleContext,
-        onDisposeGateway: gateway.close,
+        onDisposeGateway: () async {
+          macOSContextRefresh?.cancel();
+          await gateway.close();
+        },
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)
             : null,
