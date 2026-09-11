@@ -19,9 +19,13 @@ type clientOAuthRuntime struct {
 	credential string
 	vault      Vault
 	failures   map[string]error
+	bindError  error
 }
 
 func (runtime *clientOAuthRuntime) BindCredential(name string) error {
+	if runtime.bindError != nil {
+		return runtime.bindError
+	}
 	runtime.credential = name
 	return nil
 }
@@ -31,7 +35,7 @@ func (runtime *clientOAuthRuntime) Ready() bool {
 		return false
 	}
 	value, err := runtime.vault.Get(runtime.credential)
-	return err == nil && value != ""
+	return err == nil && value != "" && !strings.Contains(value, `"stale"`)
 }
 
 func createdValue(test *testing.T, responseBody *strings.Reader) map[string]any {
@@ -129,6 +133,27 @@ func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *
 	}
 }
 
+func TestOAuthConnectRequiresCredentialBinding(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault, bindError: errors.New("binding unavailable")}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+
+	response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "credential_scope_unavailable") {
+		test.Fatalf("credential binding failure was hidden: %d %s", response.Code, response.Body.String())
+	}
+	if len(runtime.actions) != 0 {
+		test.Fatalf("OAuth started without credential binding: %#v", runtime.actions)
+	}
+	fixture.console.mu.Lock()
+	attempts := len(fixture.console.connectorAttempts)
+	fixture.console.mu.Unlock()
+	if attempts != 0 {
+		test.Fatal("credential binding failure retained an attempt")
+	}
+}
+
 func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
@@ -161,7 +186,7 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 		test.Fatalf("plaintext credential persisted: %s", state)
 	}
 
-	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
+	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "connection_id": connection.ConnectionID, "connection_revision": connection.Revision, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
 	if updated["connection_id"] != connection.ConnectionID || updated["connection_revision"] != float64(2) || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] != secret {
 		test.Fatalf("scope update changed ownership or secret: %#v", updated)
 	}
@@ -170,7 +195,7 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	if item["connection_id"] != connection.ConnectionID || item["connection_revision"] != float64(2) {
 		test.Fatalf("catalog lost authoritative connection identity: %#v", item)
 	}
-	disconnected := fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
+	disconnected := fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", map[string]any{"schema_version": 1, "connection_id": connection.ConnectionID, "connection_revision": 2}, token))
 	if disconnected["connection_id"] != connection.ConnectionID || disconnected["person_id"] != fixturePersonID || disconnected["device_id"] != fixtureDeviceID {
 		test.Fatalf("disconnect ownership missing: %#v", disconnected)
 	}
@@ -189,9 +214,45 @@ func TestConnectorMutationsRejectCrossPersonCredentials(test *testing.T) {
 	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 
-	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, otherToken)
-	if foreign.Code != http.StatusForbidden || !strings.Contains(foreign.Body.String(), "connection_owned_by_another_person") {
+	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", map[string]any{"schema_version": 1, "connection_id": connectionID, "connection_revision": 1}, otherToken)
+	if foreign.Code != http.StatusConflict || !strings.Contains(foreign.Body.String(), "connection_changed") {
 		test.Fatalf("cross-person mutation not blocked: %d %s", foreign.Code, foreign.Body.String())
+	}
+}
+
+func TestConnectorMutationsRequireExactCurrentConnection(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1,
+		"secret":         "private-github-pat",
+		"scope":          map[string]any{"owner": "floe", "repository": "product"},
+	}, token)
+	started := createdValue(test, strings.NewReader(response.Body.String()))
+	connectionID := started["connection_id"].(string)
+
+	for _, body := range []map[string]any{
+		{"schema_version": 1},
+		{"schema_version": 1, "connection_id": connectionID, "connection_revision": 2},
+		{"schema_version": 1, "connection_id": "00000000-0000-4000-8000-000000000099", "connection_revision": 1},
+	} {
+		body["scope"] = map[string]any{"owner": "floe", "repository": "server"}
+		response := fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", body, token)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "connection_changed") {
+			test.Fatalf("stale PATCH accepted: %#v: %d %s", body, response.Code, response.Body.String())
+		}
+	}
+	response = fixture.call(http.MethodDelete, "/v1/connectors/github.issues", map[string]any{
+		"schema_version": 1, "connection_id": connectionID, "connection_revision": 2,
+	}, token)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "connection_changed") {
+		test.Fatalf("stale DELETE accepted: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.mu.Lock()
+	_, retained := fixture.console.connectionForPerson("github.issues", fixturePersonID)
+	fixture.console.mu.Unlock()
+	if !retained {
+		test.Fatal("stale mutation removed current connection")
 	}
 }
 
@@ -248,7 +309,7 @@ func TestConnectorScopeCapabilityIsExplicit(test *testing.T) {
 func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) {
 	fixture := setup(test)
 	fixture.pair()
-	connectionID := "microsoft.mail.persisted"
+	connectionID := "00000000-0000-4000-8000-000000000010"
 	credential, err := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	if err != nil {
 		test.Fatal(err)
@@ -359,6 +420,7 @@ func TestOAuthCatalogRequiresCredentialReadinessAndReconnectRepairsStaleRecord(t
 	fixture.console.SetMicrosoftMail(runtime, nil)
 	connectionID := "microsoft.mail.stale"
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
+	fixture.vault.values[credential] = `{"stale":"credential"}`
 	fixture.console.mu.Lock()
 	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
@@ -373,10 +435,50 @@ func TestOAuthCatalogRequiresCredentialReadinessAndReconnectRepairsStaleRecord(t
 	if response.Code != http.StatusCreated {
 		test.Fatalf("stale record blocked reconnect: %d %s", response.Code, response.Body.String())
 	}
+	if _, exists := fixture.vault.values[credential]; exists {
+		test.Fatal("stale OAuth credential survived reconnect")
+	}
+	if runtime.credential == credential {
+		test.Fatal("reconnect reused stale credential scope")
+	}
+}
+
+func TestOAuthReconnectRetriesStaleCredentialCleanup(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	connectionID := "microsoft.mail.stale"
+	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
+	fixture.vault.values[credential] = `{"stale":"credential"}`
+	fixture.console.mu.Lock()
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.mu.Unlock()
+	fixture.vault.failDeletes = 1
+
+	first := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if first.Code != http.StatusServiceUnavailable || !strings.Contains(first.Body.String(), "credential_cleanup_failed") {
+		test.Fatalf("cleanup failure was hidden: %d %s", first.Code, first.Body.String())
+	}
+	fixture.console.mu.Lock()
+	retained, exists := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
+	fixture.console.mu.Unlock()
+	if !exists || retained.ConnectionID != connectionID || fixture.vault.values[credential] == "" {
+		test.Fatal("cleanup failure did not preserve retry state")
+	}
+
+	second := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if second.Code != http.StatusCreated {
+		test.Fatalf("cleanup retry blocked reconnect: %d %s", second.Code, second.Body.String())
+	}
+	if _, exists := fixture.vault.values[credential]; exists {
+		test.Fatal("cleanup retry retained stale credential")
+	}
 }
 
 func TestOAuthDisconnectSaveFailureDoesNotDestroyCredential(test *testing.T) {
 	fixture, token, runtime, credential := connectedOAuthFixture(test)
+	precondition := connectorMutationPrecondition(test, fixture, "microsoft.mail")
 	statePath := filepath.Join(fixture.console.directory, "state.json")
 	backupPath := filepath.Join(fixture.console.directory, "state.backup")
 	if err := os.Rename(statePath, backupPath); err != nil {
@@ -385,7 +487,7 @@ func TestOAuthDisconnectSaveFailureDoesNotDestroyCredential(test *testing.T) {
 	if err := os.Mkdir(statePath, 0700); err != nil {
 		test.Fatal(err)
 	}
-	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", nil, token)
+	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", precondition, token)
 	if err := os.Remove(statePath); err != nil {
 		test.Fatal(err)
 	}
@@ -403,7 +505,7 @@ func TestOAuthDisconnectSaveFailureDoesNotDestroyCredential(test *testing.T) {
 func TestOAuthDisconnectDeleteFailureRollsBackConnection(test *testing.T) {
 	fixture, token, _, credential := connectedOAuthFixture(test)
 	fixture.vault.failDeletes = 2
-	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", nil, token)
+	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", connectorMutationPrecondition(test, fixture, "microsoft.mail"), token)
 	if response.Code != http.StatusInternalServerError {
 		test.Fatalf("credential cleanup failure was hidden: %d %s", response.Code, response.Body.String())
 	}
@@ -462,7 +564,7 @@ func TestOAuthCancelRuntimeFailureLeavesRetryableAttempt(test *testing.T) {
 func TestOAuthDisconnectCompensatesLogoutFailureWithVaultDelete(test *testing.T) {
 	fixture, token, runtime, credential := connectedOAuthFixture(test)
 	runtime.failures = map[string]error{"logout": errors.New("logout failed")}
-	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", nil, token)
+	response := fixture.call(http.MethodDelete, "/v1/connectors/microsoft.mail", connectorMutationPrecondition(test, fixture, "microsoft.mail"), token)
 	if response.Code != http.StatusOK {
 		test.Fatalf("local disconnect did not compensate logout failure: %d %s", response.Code, response.Body.String())
 	}
@@ -475,6 +577,17 @@ func TestOAuthDisconnectCompensatesLogoutFailureWithVaultDelete(test *testing.T)
 	if retained {
 		test.Fatal("logout failure retained disconnected state record")
 	}
+}
+
+func connectorMutationPrecondition(test *testing.T, fixture *fixture, connectorID string) map[string]any {
+	test.Helper()
+	fixture.console.mu.Lock()
+	record, exists := fixture.console.connectionForPerson(connectorID, fixturePersonID)
+	fixture.console.mu.Unlock()
+	if !exists {
+		test.Fatalf("missing %s connection", connectorID)
+	}
+	return map[string]any{"schema_version": 1, "connection_id": record.ConnectionID, "connection_revision": record.Revision}
 }
 
 func connectorCatalogItem(catalog map[string]any, connectorID string) map[string]any {

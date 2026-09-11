@@ -20,10 +20,12 @@ import (
 
 var personIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-var connectionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+var connectorIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+var connectionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
-func validPersonID(value string) bool { return personIDPattern.MatchString(value) }
-func validDeviceID(value string) bool { return deviceIDPattern.MatchString(value) }
+func validPersonID(value string) bool     { return personIDPattern.MatchString(value) }
+func validDeviceID(value string) bool     { return deviceIDPattern.MatchString(value) }
+func validConnectionID(value string) bool { return connectionIDPattern.MatchString(value) }
 
 func connectionSnapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
 	encoded, err := json.Marshal(snapshot)
@@ -87,8 +89,7 @@ type AuthRuntime interface {
 }
 
 type ConnectorAuthRuntime interface {
-	Action(context.Context, string) (any, error)
-	Ready() bool
+	ConnectorOAuthRuntime
 	ConnectionSnapshot() (any, error)
 	ReadCommunicationView(string, int, int) (any, error)
 	ReadLogisticsView(context.Context) (common.LogisticsView, error)
@@ -96,6 +97,7 @@ type ConnectorAuthRuntime interface {
 
 type ConnectorOAuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	BindCredential(string) error
 	Ready() bool
 }
 
@@ -124,8 +126,7 @@ type LogisticsRuntime interface {
 }
 
 type DriveAuthRuntime interface {
-	Action(context.Context, string) (any, error)
-	Ready() bool
+	ConnectorOAuthRuntime
 	Token(context.Context) (string, error)
 }
 
@@ -273,13 +274,13 @@ func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime Com
 }
 
 func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime ConnectorOAuthRuntime) error {
-	definition, exists := clientConnectorDefinitionFor(connectorID)
+	_, exists := clientConnectorDefinitionFor(connectorID)
 	if !exists || runtime == nil {
 		return nil
 	}
 	for _, record := range console.state.Connections {
 		if record.ConnectorID == connectorID {
-			return bindClientOAuthCredential(runtime, definition, record)
+			return bindClientOAuthCredential(runtime, record)
 		}
 	}
 	return nil
@@ -508,6 +509,13 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		failure(writer, 401, "unauthorized")
 		return
 	}
+	console.mu.Lock()
+	_, cleanupPending := console.state.Cleanups[scope.PersonID]
+	console.mu.Unlock()
+	if cleanupPending {
+		failure(writer, 503, "person_cleanup_pending")
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
 		console.serveClientConnectors(writer, request, scope)
 		return
@@ -616,42 +624,36 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			return
 		}
 		var input struct {
-			SchemaVersion    int    `json:"schema_version"`
-			ConnectorID      string `json:"connector_id"`
-			RangeStartUnixMS int64  `json:"range_start_unix_ms"`
-			RangeEndUnixMS   int64  `json:"range_end_unix_ms"`
-			Cursor           string `json:"cursor"`
-			Limit            int    `json:"limit"`
+			SchemaVersion      int    `json:"schema_version"`
+			ConnectorID        string `json:"connector_id"`
+			ConnectionID       string `json:"connection_id"`
+			ConnectionRevision uint64 `json:"connection_revision"`
+			RangeStartUnixMS   int64  `json:"range_start_unix_ms"`
+			RangeEndUnixMS     int64  `json:"range_end_unix_ms"`
+			Cursor             string `json:"cursor"`
+			Limit              int    `json:"limit"`
 		}
-		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.ConnectorID != "" && input.ConnectorID != "calendar.google" && input.ConnectorID != "calendar.microsoft" || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
+		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.ConnectorID != "calendar.google" && input.ConnectorID != "calendar.microsoft" || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
 			failure(writer, 400, "validation")
 			return
 		}
-		ownedCalendars := make(map[string]CalendarRuntime)
-		for connectionID, runtime := range calendars {
-			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
-				ownedCalendars[connectionID] = runtime
-			}
-		}
-		if input.ConnectorID == "" && len(ownedCalendars) != 1 {
-			failure(writer, http.StatusConflict, "calendar_selector_required")
+		record, exists := connectionRecords[input.ConnectionID]
+		if !exists || record.PersonID != scope.PersonID || record.Device != nil && record.Device.DeviceID != scope.DeviceID {
+			failure(writer, http.StatusConflict, "connection_changed")
 			return
 		}
-		var selected CalendarRuntime
-		var selectedSnapshot any
-		for _, runtime := range ownedCalendars {
-			snapshot, err := runtime.ConnectionSnapshot(request.Context())
-			if err != nil {
-				continue
-			}
-			_, connectorID, _, valid := connectionSnapshotMetadata(snapshot)
-			if valid && (input.ConnectorID == "" || connectorID == input.ConnectorID) {
-				selected, selectedSnapshot = runtime, snapshot
-				break
-			}
+		if record.Revision != input.ConnectionRevision || record.ConnectorID != input.ConnectorID {
+			failure(writer, http.StatusConflict, "connection_changed")
+			return
 		}
+		selected := calendars[input.ConnectionID]
 		if selected == nil {
 			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
+			return
+		}
+		selectedSnapshot, err := selected.ConnectionSnapshot(request.Context())
+		if err != nil {
+			failure(writer, http.StatusServiceUnavailable, "view_unavailable")
 			return
 		}
 		owned, err := console.ownedConnectionSnapshots([]any{selectedSnapshot}, scope)
@@ -806,6 +808,12 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 			failure(writer, 400, "identity_required")
 			return
 		}
+		for personID := range console.state.Cleanups {
+			if err := console.retryPersonCleanupLocked(personID); err != nil {
+				failure(writer, 503, "person_cleanup_pending")
+				return
+			}
+		}
 		if now.Sub(console.lastPair) < 10*time.Second || (console.pair != nil && console.pair.Expires.After(now)) {
 			failure(writer, 429, "pairing_in_progress")
 			return
@@ -930,8 +938,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		delete(next.Clients, input.ID)
-		cleanup, err := console.removePersonConnectionsLocked(&next, removed.PersonID)
-		if err != nil {
+		if err := console.removePersonConnectionsLocked(&next, removed.PersonID); err != nil {
 			failure(writer, 500, "connection_cleanup_failed")
 			return
 		}
@@ -944,19 +951,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			failure(writer, 500, "invalid_connector_configuration")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		for _, runtime := range cleanup.runtimes {
-			_, _ = runtime.Action(ctx, "logout")
-		}
-		for _, credential := range cleanup.credentials {
-			if err := console.vault.Delete(credential); err != nil {
-				failure(writer, 500, "credential_cleanup_failed")
-				return
-			}
-		}
 		if console.pair != nil && console.pair.ID == input.ID {
 			console.pair = nil
+		}
+		if err := console.retryPersonCleanupLocked(removed.PersonID); err != nil {
+			failure(writer, 500, "connection_cleanup_pending")
+			return
 		}
 	case "/manage/api/target/delete":
 		old := next.Targets[input.ID]

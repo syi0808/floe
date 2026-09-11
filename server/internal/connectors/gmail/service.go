@@ -12,16 +12,13 @@ import (
 
 type AuthRuntime interface {
 	TokenSource
+	BindCredential(string) error
 	Ready() bool
 	Action(context.Context, string) (any, error)
 }
 
 func (service *Service) BindCredential(name string) error {
-	binder, ok := service.auth.(interface{ BindCredential(string) error })
-	if !ok {
-		return ErrInvalidInput
-	}
-	return binder.BindCredential(name)
+	return service.auth.BindCredential(name)
 }
 
 type Service struct {

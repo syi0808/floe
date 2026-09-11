@@ -27,6 +27,20 @@ type diskState struct {
 	Providers   map[string]providerProfile  `json:"providers,omitempty"`
 	Connections map[string]connectionRecord `json:"connections,omitempty"`
 	Clients     map[string]pairedClient     `json:"clients"`
+	Cleanups    map[string]personCleanup    `json:"person_cleanups"`
+}
+
+type personCleanup struct {
+	PersonID    string                  `json:"person_id"`
+	Connections []connectionCleanupStep `json:"connections"`
+}
+
+type connectionCleanupStep struct {
+	ConnectionID    string `json:"connection_id"`
+	ConnectorID     string `json:"connector_id"`
+	Credential      string `json:"credential,omitempty"`
+	RuntimeComplete bool   `json:"runtime_complete"`
+	VaultComplete   bool   `json:"vault_complete"`
 }
 
 type connectionRecord struct {
@@ -101,7 +115,7 @@ func writePrivate(path string, value []byte) error {
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return state, "", err
 	}
@@ -113,7 +127,10 @@ func readState(directory string) (diskState, string, error) {
 	if err == nil {
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 {
+		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || state.Cleanups == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 || len(state.Cleanups) > 16 {
+			return state, "", errors.New("invalid server state")
+		}
+		if len(state.Cleanups) > 1 || len(state.Cleanups) != 0 && (len(state.Clients) != 0 || len(state.Connections) != 0) {
 			return state, "", errors.New("invalid server state")
 		}
 		if state.Routes == nil {
@@ -135,19 +152,47 @@ func readState(directory string) (diskState, string, error) {
 		if configuredTargets > 32 {
 			return state, "", errors.New("invalid server state")
 		}
+		personID := ""
 		for _, client := range state.Clients {
 			if len(client.TokenHash) != sha256.Size*2 || !validPersonID(client.PersonID) || !validDeviceID(client.DeviceID) {
 				return state, "", errors.New("invalid server state")
+			}
+			if personID != "" && personID != client.PersonID {
+				return state, "", errors.New("invalid server state")
+			}
+			personID = client.PersonID
+		}
+		for key, cleanup := range state.Cleanups {
+			if key != cleanup.PersonID || !validPersonID(cleanup.PersonID) || personID != "" && personID != cleanup.PersonID || len(cleanup.Connections) == 0 || len(cleanup.Connections) > len(clientConnectorDefinitions) {
+				return state, "", errors.New("invalid server state")
+			}
+			personID = cleanup.PersonID
+			for _, step := range cleanup.Connections {
+				definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
+				if !exists || !validConnectionID(step.ConnectionID) || definition.AuthKind == "secret" && !step.RuntimeComplete || step.Credential == "" && !step.VaultComplete {
+					return state, "", errors.New("invalid server state")
+				}
+				credentialNamespace := definition.CredentialName
+				if credentialNamespace == "" {
+					credentialNamespace = definition.OAuthCredential
+				}
+				expectedCredential, _ := credentials.ConnectionName(credentialNamespace, step.ConnectionID, cleanup.PersonID)
+				if step.Credential != expectedCredential {
+					return state, "", errors.New("invalid server state")
+				}
 			}
 		}
 		personOwners := make(map[string]bool, len(state.Clients))
 		for _, client := range state.Clients {
 			personOwners[client.PersonID] = true
 		}
+		connectorOwners := make(map[string]bool, len(state.Connections))
 		for key, connection := range state.Connections {
-			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connection.Revision == 0 || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
+			ownerKey := connection.PersonID + "\x00" + connection.ConnectorID
+			if key != connection.ConnectionID || !validConnectionID(connection.ConnectionID) || !connectorIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connectorOwners[ownerKey] || connection.Revision == 0 || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
+			connectorOwners[ownerKey] = true
 			if definition, exists := clientConnectorDefinitionFor(connection.ConnectorID); exists {
 				if _, err := validatedConnectorScope(definition, connection.Scope); err != nil {
 					return state, "", errors.New("invalid server state")
@@ -189,7 +234,7 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}
@@ -214,6 +259,10 @@ func cloneState(state diskState) diskState {
 		}
 		value.Scope = cloneConnectorScope(value.Scope)
 		copy.Connections[key] = value
+	}
+	for key, value := range state.Cleanups {
+		value.Connections = append([]connectionCleanupStep(nil), value.Connections...)
+		copy.Cleanups[key] = value
 	}
 	return copy
 }

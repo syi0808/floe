@@ -181,6 +181,13 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 			failure(writer, http.StatusConflict, "already_connected")
 			return
 		}
+		if definition.AuthKind == "oauth_pkce" && existing.Credential != "" {
+			if console.vault.Delete(existing.Credential) != nil {
+				console.mu.Unlock()
+				failure(writer, http.StatusServiceUnavailable, "credential_cleanup_failed")
+				return
+			}
+		}
 		previous := cloneState(console.state)
 		delete(console.state.Connections, existing.ConnectionID)
 		if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
@@ -272,7 +279,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		return
 	}
 	runtime := definition.OAuthRuntime(console)
-	if err := bindClientOAuthCredential(runtime, definition, record); err != nil {
+	if err := bindClientOAuthCredential(runtime, record); err != nil {
 		console.mu.Unlock()
 		failure(writer, http.StatusServiceUnavailable, "credential_scope_unavailable")
 		return
@@ -436,8 +443,10 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 		return
 	}
 	var input struct {
-		SchemaVersion int            `json:"schema_version"`
-		Scope         map[string]any `json:"scope"`
+		SchemaVersion      int            `json:"schema_version"`
+		ConnectionID       string         `json:"connection_id"`
+		ConnectionRevision uint64         `json:"connection_revision"`
+		Scope              map[string]any `json:"scope"`
 	}
 	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
 		failure(writer, http.StatusBadRequest, "validation")
@@ -447,11 +456,11 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 	defer console.mu.Unlock()
 	record, exists := console.connectionForPerson(definition.ID, scope.PersonID)
 	if !exists {
-		if console.connectionExistsForOtherPerson(definition.ID, scope.PersonID) {
-			failure(writer, http.StatusForbidden, "connection_owned_by_another_person")
-		} else {
-			failure(writer, http.StatusNotFound, "connection_not_found")
-		}
+		failure(writer, http.StatusConflict, "connection_changed")
+		return
+	}
+	if record.ConnectionID != input.ConnectionID || record.Revision != input.ConnectionRevision {
+		failure(writer, http.StatusConflict, "connection_changed")
 		return
 	}
 	selectedScope, err := validatedConnectorScope(definition, input.Scope)
@@ -473,16 +482,25 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 }
 
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
+	var input struct {
+		SchemaVersion      int    `json:"schema_version"`
+		ConnectionID       string `json:"connection_id"`
+		ConnectionRevision uint64 `json:"connection_revision"`
+	}
+	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
+		failure(writer, http.StatusBadRequest, "validation")
+		return
+	}
 	console.mu.Lock()
 	record, exists := console.connectionForPerson(definition.ID, scope.PersonID)
 	if !exists {
-		foreign := console.connectionExistsForOtherPerson(definition.ID, scope.PersonID)
 		console.mu.Unlock()
-		if foreign {
-			failure(writer, http.StatusForbidden, "connection_owned_by_another_person")
-		} else {
-			failure(writer, http.StatusNotFound, "connection_not_found")
-		}
+		failure(writer, http.StatusConflict, "connection_changed")
+		return
+	}
+	if record.ConnectionID != input.ConnectionID || record.Revision != input.ConnectionRevision {
+		console.mu.Unlock()
+		failure(writer, http.StatusConflict, "connection_changed")
 		return
 	}
 	runtime := ConnectorOAuthRuntime(nil)
@@ -541,15 +559,8 @@ func oauthActionStatus(value any) (string, string, bool) {
 	return status, authorizationURL, true
 }
 
-func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, definition clientConnectorDefinition, record connectionRecord) error {
-	if definition.OAuthCredential == "" {
-		return nil
-	}
-	binder, ok := runtime.(interface{ BindCredential(string) error })
-	if !ok {
-		return nil
-	}
-	return binder.BindCredential(record.Credential)
+func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, record connectionRecord) error {
+	return runtime.BindCredential(record.Credential)
 }
 
 func connectorAttemptResponse(attempt *connectorAttempt) map[string]any {

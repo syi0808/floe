@@ -18,7 +18,8 @@ type serviceAuth struct {
 	actionErr  error
 }
 
-func (auth *serviceAuth) Ready() bool { return auth.ready }
+func (*serviceAuth) BindCredential(string) error { return nil }
+func (auth *serviceAuth) Ready() bool            { return auth.ready }
 func (auth *serviceAuth) Token(context.Context) (string, error) {
 	if auth.tokenError != nil {
 		auth.ready = false
@@ -152,5 +153,31 @@ func TestServiceRejectsConcurrentInvalidAndOutOfRangeScheduling(t *testing.T) {
 	cancel()
 	if err := service.Run(ctx, time.Minute); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestLogoutCanRetryAfterIndexResetFailure(t *testing.T) {
+	directory := t.TempDir()
+	os.Chmod(directory, 0700)
+	auth := &serviceAuth{ready: true}
+	client, _ := NewWithBaseURL(auth, "http://127.0.0.1:1")
+	service, err := newService(directory, "account-1", "newer_than:30d", auth, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(service.index.path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.index.path+"/blocked", []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Action(context.Background(), "logout"); err == nil {
+		t.Fatal("index reset failure was hidden")
+	}
+	if err := os.RemoveAll(service.index.path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Action(context.Background(), "logout"); err != nil {
+		t.Fatalf("logout cleanup could not retry: %v", err)
 	}
 }

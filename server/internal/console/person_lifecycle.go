@@ -1,33 +1,40 @@
 package console
 
-type personConnectionCleanup struct {
-	credentials []string
-	runtimes    []ConnectorOAuthRuntime
-}
+import (
+	"context"
+	"errors"
+	"time"
+)
 
-func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) (personConnectionCleanup, error) {
+func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) error {
 	for _, client := range state.Clients {
 		if client.PersonID == personID {
-			return personConnectionCleanup{}, nil
+			return nil
 		}
 	}
-	cleanup := personConnectionCleanup{}
+	cleanup := personCleanup{PersonID: personID}
+	seenCredentials := map[string]bool{}
+	appendStep := func(connectionID, connectorID, credential string) {
+		if credential != "" && seenCredentials[credential] {
+			return
+		}
+		definition, exists := clientConnectorDefinitionFor(connectorID)
+		if !exists {
+			return
+		}
+		cleanup.Connections = append(cleanup.Connections, connectionCleanupStep{
+			ConnectionID: connectionID, ConnectorID: connectorID, Credential: credential,
+			RuntimeComplete: definition.AuthKind == "secret", VaultComplete: credential == "",
+		})
+		if credential != "" {
+			seenCredentials[credential] = true
+		}
+	}
 	for connectionID, record := range state.Connections {
 		if record.PersonID != personID {
 			continue
 		}
-		if definition, exists := clientConnectorDefinitionFor(record.ConnectorID); exists {
-			if record.Credential != "" {
-				cleanup.credentials = append(cleanup.credentials, record.Credential)
-			}
-			if definition.AuthKind != "secret" && definition.OAuthCredential != "" {
-				if definition.OAuthRuntime != nil {
-					if runtime := definition.OAuthRuntime(console); runtime != nil {
-						cleanup.runtimes = append(cleanup.runtimes, runtime)
-					}
-				}
-			}
-		}
+		appendStep(record.ConnectionID, record.ConnectorID, record.Credential)
 		delete(state.Connections, connectionID)
 		for attemptID, attempt := range console.connectorAttempts {
 			if attempt.ConnectionID == connectionID {
@@ -39,30 +46,74 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		if attempt.PersonID != personID {
 			continue
 		}
-		alreadyScheduled := containsString(cleanup.credentials, attempt.Credential)
-		if attempt.Credential != "" && !alreadyScheduled {
-			cleanup.credentials = append(cleanup.credentials, attempt.Credential)
-		}
-		if !alreadyScheduled {
-			definition, exists := clientConnectorDefinitionFor(attempt.ConnectorID)
-			if !exists || definition.OAuthRuntime == nil {
-				delete(console.connectorAttempts, attemptID)
-				continue
-			}
-			if runtime := definition.OAuthRuntime(console); runtime != nil {
-				cleanup.runtimes = append(cleanup.runtimes, runtime)
-			}
-		}
+		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
 		delete(console.connectorAttempts, attemptID)
 	}
-	return cleanup, nil
+	if len(cleanup.Connections) != 0 {
+		state.Cleanups[personID] = cleanup
+	}
+	return nil
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+func (console *Console) retryPersonCleanupLocked(personID string) error {
+	cleanup, exists := console.state.Cleanups[personID]
+	if !exists {
+		return nil
+	}
+	var cleanupErrors []error
+	for index := range cleanup.Connections {
+		step := cleanup.Connections[index]
+		if !step.RuntimeComplete {
+			definition, exists := clientConnectorDefinitionFor(step.ConnectorID)
+			if !exists || definition.OAuthRuntime == nil || definition.OAuthRuntime(console) == nil {
+				cleanupErrors = append(cleanupErrors, errors.New("cleanup runtime unavailable"))
+			} else {
+				runtime := definition.OAuthRuntime(console)
+				err := runtime.BindCredential(step.Credential)
+				if err == nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+					_, err = runtime.Action(ctx, "logout")
+					cancel()
+				}
+				if err != nil {
+					cleanupErrors = append(cleanupErrors, err)
+				} else {
+					cleanup.Connections[index].RuntimeComplete = true
+					if err := console.persistPersonCleanupProgressLocked(cleanup); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if !step.VaultComplete {
+			if err := console.vault.Delete(step.Credential); err != nil {
+				cleanupErrors = append(cleanupErrors, err)
+			} else {
+				cleanup.Connections[index].VaultComplete = true
+				if err := console.persistPersonCleanupProgressLocked(cleanup); err != nil {
+					return err
+				}
+			}
 		}
 	}
-	return false
+	if len(cleanupErrors) != 0 {
+		return errors.Join(cleanupErrors...)
+	}
+	next := cloneState(console.state)
+	delete(next.Cleanups, personID)
+	if err := console.save(next); err != nil {
+		return err
+	}
+	console.state = next
+	return nil
+}
+
+func (console *Console) persistPersonCleanupProgressLocked(cleanup personCleanup) error {
+	next := cloneState(console.state)
+	next.Cleanups[cleanup.PersonID] = cleanup
+	if err := console.save(next); err != nil {
+		return err
+	}
+	console.state = next
+	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"floe/server/internal/connectors/common"
+	"floe/server/internal/credentials"
 )
 
 const fixturePersonID = "00000000-0000-4000-8000-000000000001"
@@ -33,6 +34,7 @@ type fakeDriveAuth struct{ token string }
 
 type fakeCalendarAuth struct{ token string }
 
+func (*fakeCalendarAuth) BindCredential(string) error                   { return nil }
 func (runtime *fakeCalendarAuth) Token(context.Context) (string, error) { return runtime.token, nil }
 func (runtime *fakeCalendarAuth) Ready() bool                           { return runtime.token != "" }
 func (*fakeCalendarAuth) Action(context.Context, string) (any, error) {
@@ -41,6 +43,7 @@ func (*fakeCalendarAuth) Action(context.Context, string) (any, error) {
 
 type fakeMicrosoftCalendarAuth struct{ token string }
 
+func (*fakeMicrosoftCalendarAuth) BindCredential(string) error { return nil }
 func (runtime *fakeMicrosoftCalendarAuth) Token(context.Context) (string, error) {
 	return runtime.token, nil
 }
@@ -48,6 +51,7 @@ func (runtime *fakeMicrosoftCalendarAuth) Ready() bool { return runtime.token !=
 
 type fakeMicrosoftTeamsAuth struct{ token string }
 
+func (*fakeMicrosoftTeamsAuth) BindCredential(string) error { return nil }
 func (runtime *fakeMicrosoftTeamsAuth) Token(context.Context) (string, error) {
 	return runtime.token, nil
 }
@@ -61,7 +65,8 @@ func (*fakeMicrosoftCalendarAuth) Action(context.Context, string) (any, error) {
 
 type fakeMicrosoftAuth struct{}
 
-func (*fakeMicrosoftAuth) Ready() bool { return true }
+func (*fakeMicrosoftAuth) BindCredential(string) error { return nil }
+func (*fakeMicrosoftAuth) Ready() bool                 { return true }
 
 func (*fakeMicrosoftAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "Mail.Read"}, nil
@@ -109,6 +114,7 @@ func (runtime *fakeCommunicationRuntime) ReadCommunicationView(context.Context, 
 }
 
 func (runtime *fakeDriveAuth) Token(context.Context) (string, error) { return runtime.token, nil }
+func (*fakeDriveAuth) BindCredential(string) error                   { return nil }
 func (runtime *fakeDriveAuth) Ready() bool                           { return runtime.token != "" }
 func (*fakeDriveAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/drive.readonly"}, nil
@@ -121,7 +127,8 @@ type fakeConnectorRuntime struct {
 	err           error
 }
 
-func (*fakeConnectorRuntime) Ready() bool { return true }
+func (*fakeConnectorRuntime) Ready() bool                 { return true }
+func (*fakeConnectorRuntime) BindCredential(string) error { return nil }
 
 type fakeContextRuntime struct {
 	snapshot any
@@ -405,6 +412,105 @@ func TestUnscopedConnectorCredentialStateIsRejected(test *testing.T) {
 	}
 }
 
+func TestPersistedStateRejectsMultiplePersons(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"first":{"token_hash":%q,"person_id":%q,"device_id":"first-device"},"second":{"token_hash":%q,"person_id":%q,"device_id":"second-device"}},"person_cleanups":{}}`, digest("first-token"), fixturePersonID, digest("second-token"), "00000000-0000-4000-8000-000000000002")
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("multi-Person state accepted: %v", err)
+	}
+}
+
+func TestPersistedStateRejectsClientAndCleanupForDifferentPersons(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	cleanupPersonID := "00000000-0000-4000-8000-000000000002"
+	connectionID := "00000000-0000-4000-8000-000000000020"
+	credential, _ := credentials.ConnectionName(githubTokenKey, connectionID, cleanupPersonID)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, digest("token"), fixturePersonID, fixtureDeviceID, cleanupPersonID, cleanupPersonID, connectionID, credential)
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("cross-Person client and cleanup accepted: %v", err)
+	}
+}
+
+func TestPersistedStateRejectsCleanupForMultiplePersons(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	otherPersonID := "00000000-0000-4000-8000-000000000002"
+	firstConnectionID := "00000000-0000-4000-8000-000000000021"
+	secondConnectionID := "00000000-0000-4000-8000-000000000022"
+	firstCredential, _ := credentials.ConnectionName(githubTokenKey, firstConnectionID, fixturePersonID)
+	secondCredential, _ := credentials.ConnectionName(githubTokenKey, secondConnectionID, otherPersonID)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]},%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, fixturePersonID, fixturePersonID, firstConnectionID, firstCredential, otherPersonID, otherPersonID, secondConnectionID, secondCredential)
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("multi-Person cleanup state accepted: %v", err)
+	}
+}
+
+func TestPersistedStateRejectsDuplicateConnectorForPerson(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"00000000-0000-4000-8000-000000000010":{"connection_id":"00000000-0000-4000-8000-000000000010","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}},"00000000-0000-4000-8000-000000000011":{"connection_id":"00000000-0000-4000-8000-000000000011","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID, fixturePersonID)
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("duplicate Person connector state accepted: %v", err)
+	}
+}
+
+func TestPersistedStateRejectsNonUUIDConnectionID(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"calendar.apple.primary":{"connection_id":"calendar.apple.primary","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID)
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("non-UUID connection accepted: %v", err)
+	}
+}
+
+func TestConnectionIdentityRequiresCanonicalUUIDv4(test *testing.T) {
+	for _, valid := range []string{
+		"00000000-0000-4000-8000-000000000010",
+		"ABCDEF12-3456-4ABC-9DEF-0123456789AB",
+	} {
+		if !validConnectionID(valid) {
+			test.Fatalf("canonical UUIDv4 rejected: %q", valid)
+		}
+	}
+	for _, invalid := range []string{
+		"00000000-0000-1000-8000-000000000010",
+		"00000000-0000-5000-8000-000000000010",
+		"calendar.apple.primary",
+		"{00000000-0000-4000-8000-000000000010}",
+	} {
+		if validConnectionID(invalid) {
+			test.Fatalf("non-canonical UUIDv4 accepted: %q", invalid)
+		}
+	}
+}
+
 func TestUnscopedBearerCannotReadViews(test *testing.T) {
 	fixture := setup(test)
 	token := "unscoped-token"
@@ -424,8 +530,9 @@ func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	fixture.pair()
 	fixture.console.mu.Lock()
 	next := cloneState(fixture.console.state)
-	next.Connections["calendar.apple.primary"] = connectionRecord{
-		ConnectionID: "calendar.apple.primary",
+	connectionID := "00000000-0000-4000-8000-000000000012"
+	next.Connections[connectionID] = connectionRecord{
+		ConnectionID: connectionID,
 		Revision:     1,
 		ConnectorID:  "calendar.apple",
 		PersonID:     fixturePersonID,
@@ -440,7 +547,7 @@ func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	connection := state.Connections["calendar.apple.primary"]
+	connection := state.Connections[connectionID]
 	if connection.PersonID != fixturePersonID || connection.Device == nil || connection.Device.DeviceID != fixtureDeviceID {
 		test.Fatalf("connection ownership lost: %#v", connection)
 	}
@@ -642,11 +749,15 @@ func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
 	fixture.ownConnector("calendar.google")
 	fixture.console.calendars = map[string]CalendarRuntime{"calendar.google.fixture": &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
 	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
 		test.Fatalf("view: %#v", value)
 	}
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
+	stale := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 2, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token)
+	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "connection_changed") {
+		test.Fatalf("stale calendar read accepted: %d %s", stale.Code, stale.Body.String())
+	}
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
 		test.Fatalf("invalid range accepted: %d", response.Code)
 	}
 }
@@ -662,15 +773,18 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
 	body := map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusConflict {
-		test.Fatalf("ambiguous provider accepted: %d %s", response.Code, response.Body.String())
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusBadRequest {
+		test.Fatalf("missing connection precondition accepted: %d %s", response.Code, response.Body.String())
 	}
 	body["connector_id"] = "calendar.microsoft"
+	body["connection_id"] = "calendar.microsoft.fixture"
+	body["connection_revision"] = 1
 	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token))
 	if value["view"].(map[string]any)["source_handle"] != "calendar.timeline:microsoft" {
 		test.Fatalf("view: %#v", value)
 	}
 	body["connector_id"] = "calendar.google"
+	body["connection_id"] = "calendar.google.fixture"
 	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusServiceUnavailable {
 		test.Fatalf("selected Google failure fell through to Microsoft: %d %s", response.Code, response.Body.String())
 	}
