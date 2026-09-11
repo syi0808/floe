@@ -1,4 +1,22 @@
 use super::*;
+use serde::de::DeserializeOwned;
+
+fn invoke_json<Request, Response>(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+    operation: impl FnOnce(&FloeHandle, Request) -> BridgeResult<Response>,
+) -> *mut c_char
+where
+    Request: DeserializeOwned,
+    Response: Serialize,
+{
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request = serde_json::from_str(c_input(request_json, "request_json")?)
+            .map_err(|value| invalid("request_json", value.to_string()))?;
+        operation(handle, request)
+    })
+}
 
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
@@ -50,12 +68,7 @@ pub unsafe extern "C" fn floe_core_local_context(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        local_context(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, local_context)
 }
 
 #[unsafe(no_mangle)]
@@ -64,12 +77,7 @@ pub unsafe extern "C" fn floe_core_load_day(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        load_day(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, load_day)
 }
 
 #[unsafe(no_mangle)]
@@ -78,12 +86,7 @@ pub unsafe extern "C" fn floe_core_execute(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        execute(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, execute)
 }
 
 #[unsafe(no_mangle)]
@@ -97,12 +100,7 @@ pub unsafe extern "C" fn floe_core_calendar_actions(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        calendar_actions(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, calendar_actions)
 }
 
 #[unsafe(no_mangle)]
@@ -111,12 +109,7 @@ pub unsafe extern "C" fn floe_core_agent_fixture(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        agent_fixture(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, agent_fixture)
 }
 
 #[unsafe(no_mangle)]
@@ -125,12 +118,7 @@ pub unsafe extern "C" fn floe_core_agent_fixture_run(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,
 ) -> *mut c_char {
-    guarded(|| {
-        let handle = handle(handle_ptr)?;
-        let request = serde_json::from_str(c_input(request_json, "request_json")?)
-            .map_err(|value| invalid("request_json", value.to_string()))?;
-        agent_run::run(handle, request)
-    })
+    invoke_json(handle_ptr, request_json, agent_run::run)
 }
 
 #[unsafe(no_mangle)]

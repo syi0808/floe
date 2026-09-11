@@ -14,15 +14,31 @@ mod error;
 mod native_context;
 mod store;
 
-pub use action_authority::*;
-pub use agent_action::*;
+pub use action_authority::{ActionAuthority, ActionAuthorityMode};
+pub use agent_action::{
+    AgentActionOrigin, ExpertCalendarDestination, ExpertCalendarInspection, ExpertCalendarRequest,
+    ExpertProposalReference,
+};
 #[cfg(unix)]
-pub use agent_calendar::*;
-pub use agent_fixture::*;
+pub use agent_calendar::{
+    CalendarAgentProposal, CalendarAgentTurnRequest, CalendarAgentTurnResult,
+};
+pub use agent_fixture::{
+    AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
+};
 #[cfg(unix)]
-pub use agent_vault::*;
-pub use calendar_action::*;
-pub use calendar_view::*;
-pub use core::*;
-pub use error::*;
-pub use store::*;
+pub use agent_vault::{
+    EncryptedAgentVault, KeyringVaultKeys, SessionCompactionResult, SessionSearchHit, VaultKey,
+    VaultKeyProvider,
+};
+pub use calendar_action::{
+    ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
+    CalendarActionState, CalendarCreateReceipt, CalendarMutation, CalendarPreflight,
+};
+pub use calendar_view::{
+    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest,
+    CalendarReadAccessStamp, CalendarTimelineGrant, CalendarTimelineViews,
+};
+pub use core::{Classification, FloeCore};
+pub use error::{CoreError, ErrorCode};
+pub(crate) use store::TursoStore;
