@@ -130,13 +130,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let setup =
             registry.refresh_builtin_expert_sources(self.person_id, expected_revision, sources)?;
         if registry.revision() != expected_revision {
-            self.save_expert_registry_checked(expected_revision, &registry.snapshot(), || {
-                if cancellation.is_cancelled() {
-                    Err(AgentFailure::Cancelled)
-                } else {
-                    Ok(())
-                }
-            })
+            self.save_expert_registry_change_checked(
+                expected_revision,
+                &registry.snapshot(),
+                None,
+                Some(setup.setup_id),
+                || {
+                    if cancellation.is_cancelled() {
+                        Err(AgentFailure::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
             .await?;
         }
         self.check_access()?;
@@ -232,6 +238,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             configuration.expected_revision,
             &registry.snapshot(),
             Some(configuration.setup_id),
+            None,
             || {
                 if cancellation.is_cancelled() {
                     Err(AgentFailure::Cancelled)
@@ -384,7 +391,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         snapshot: &RegistrySnapshot,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
-        self.save_expert_registry_change_checked(expected_revision, snapshot, None, check)
+        self.save_expert_registry_change_checked(expected_revision, snapshot, None, None, check)
             .await
     }
 
@@ -393,6 +400,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
         mutable_calendar_setup: Option<uuid::Uuid>,
+        mutable_builtin_setup: Option<uuid::Uuid>,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
     ) -> Result<(), AgentFailure> {
         check()?;
@@ -434,6 +442,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             && before.tool_assignment_id == after.tool_assignment_id
                             && before.expert_assignment_id == after.expert_assignment_id)
                 };
+            let builtin_receipt_allowed =
+                |before: &floe_agent::BuiltinExpertSetupReceipt,
+                 after: &floe_agent::BuiltinExpertSetupReceipt| {
+                    before == after
+                        || (mutable_builtin_setup == Some(before.setup_id)
+                            && before.setup_id == after.setup_id
+                            && before.person_id == after.person_id
+                            && before.expected_revision == after.expected_revision
+                            && before.assignments.len() == after.assignments.len()
+                            && before.assignments.iter().zip(&after.assignments).all(
+                                |(before, after)| {
+                                    before.expert == after.expert
+                                        && before.tool_installation_id == after.tool_installation_id
+                                        && before.expert_installation_id
+                                            == after.expert_installation_id
+                                        && before.tool_assignment_id == after.tool_assignment_id
+                                        && before.expert_assignment_id == after.expert_assignment_id
+                                },
+                            ))
+                };
             if previous.calendar_setups.iter().any(|before| {
                 !snapshot
                     .calendar_setups
@@ -442,15 +470,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }) {
                 return Err(AgentFailure::Conflict);
             }
-            if previous
-                .builtin_setups
-                .iter()
-                .any(|receipt| !snapshot.builtin_setups.contains(receipt))
-            {
+            if previous.builtin_setups.iter().any(|before| {
+                !snapshot
+                    .builtin_setups
+                    .iter()
+                    .any(|after| builtin_receipt_allowed(before, after))
+            }) {
                 return Err(AgentFailure::Conflict);
             }
             for receipt in &snapshot.builtin_setups {
-                if previous.builtin_setups.contains(receipt) {
+                if previous
+                    .builtin_setups
+                    .iter()
+                    .any(|before| builtin_receipt_allowed(before, receipt))
+                {
                     continue;
                 }
                 if receipt.expected_revision != expected_revision
