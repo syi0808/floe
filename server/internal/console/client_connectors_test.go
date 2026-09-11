@@ -523,6 +523,10 @@ func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *
 	if !strings.HasPrefix(runtime.credential, "FLOE_MICROSOFT_MAIL_OAUTH:") || len(runtime.credential) != len("FLOE_MICROSOFT_MAIL_OAUTH:")+64 {
 		test.Fatalf("OAuth credential was not Person scoped: %q", runtime.credential)
 	}
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil || len(persisted.Attempts) != 0 || len(persisted.Connections) != 1 {
+		test.Fatalf("OAuth success did not atomically replace durable attempt: attempts=%#v connections=%#v err=%v", persisted.Attempts, persisted.Connections, err)
+	}
 }
 
 func TestOAuthConnectRequiresCredentialBinding(test *testing.T) {
@@ -543,6 +547,36 @@ func TestOAuthConnectRequiresCredentialBinding(test *testing.T) {
 	fixture.console.mu.Unlock()
 	if attempts != 0 {
 		test.Fatal("credential binding failure retained an attempt")
+	}
+}
+
+func TestOAuthAttemptSaveFailureDoesNotStartLogin(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	statePath := filepath.Join(fixture.console.directory, "state.json")
+	backupPath := filepath.Join(fixture.console.directory, "state.backup")
+	if err := os.Rename(statePath, backupPath); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0700); err != nil {
+		test.Fatal(err)
+	}
+	response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if err := os.Remove(statePath); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Rename(backupPath, statePath); err != nil {
+		test.Fatal(err)
+	}
+	if response.Code != http.StatusInternalServerError || len(runtime.actions) != 0 {
+		test.Fatalf("OAuth login ran without durable attempt: %d %#v", response.Code, runtime.actions)
+	}
+	fixture.console.mu.Lock()
+	defer fixture.console.mu.Unlock()
+	if len(fixture.console.state.Attempts) != 0 || len(fixture.console.connectorAttempts) != 0 {
+		test.Fatal("attempt save failure retained transient state")
 	}
 }
 
@@ -684,7 +718,7 @@ func TestCancellingOAuthAttemptRemovesPendingConnection(test *testing.T) {
 	fixture.console.mu.Lock()
 	_, exists := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
 	fixture.console.mu.Unlock()
-	if exists || strings.Join(runtime.actions, ",") != "login,cancel" {
+	if exists || strings.Join(runtime.actions, ",") != "login,logout" {
 		test.Fatalf("cancel retained connection: %#v", runtime.actions)
 	}
 }
@@ -724,7 +758,7 @@ func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) 
 	}
 }
 
-func TestPendingOAuthAttemptIsNotPersistedAndRestartCanRetry(test *testing.T) {
+func TestPendingOAuthAttemptIsDurableAndRestartCleansBeforeRetry(test *testing.T) {
 	managementFixture := setup(test)
 	_, token := managementFixture.pair()
 	runtime := &clientOAuthRuntime{status: "disconnected", vault: managementFixture.vault}
@@ -739,6 +773,10 @@ func TestPendingOAuthAttemptIsNotPersistedAndRestartCanRetry(test *testing.T) {
 	managementFixture.console.mu.Unlock()
 	if stored {
 		test.Fatal("pending OAuth was persisted as a connection")
+	}
+	persisted, _, err := readState(managementFixture.console.directory)
+	if err != nil || len(persisted.Attempts) != 1 {
+		test.Fatalf("pending OAuth cleanup intent was not durable: %#v %v", persisted.Attempts, err)
 	}
 	reopened, err := New(managementFixture.console.directory, managementFixture.console.address, managementFixture.vault, nil)
 	if err != nil {
@@ -910,7 +948,7 @@ func TestOAuthDisconnectDeleteFailurePersistsCleanupTombstone(test *testing.T) {
 	}
 }
 
-func TestOAuthCancelCleanupCanBeRetried(test *testing.T) {
+func TestOAuthCancelDeleteFailureIsRetriedAfterRestart(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
@@ -923,34 +961,104 @@ func TestOAuthCancelCleanupCanBeRetried(test *testing.T) {
 	if response := fixture.call(http.MethodPost, path, map[string]any{}, token); response.Code != http.StatusInternalServerError {
 		test.Fatalf("cleanup failure was hidden: %d %s", response.Code, response.Body.String())
 	}
-	cancelled := fixture.value(fixture.call(http.MethodPost, path, map[string]any{}, token))
-	if cancelled["status"] != "cancelled" {
-		test.Fatalf("cleanup retry did not cancel: %#v", cancelled)
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil || len(persisted.Attempts) != 0 || len(persisted.Cleanups[fixturePersonID].Connections) != 1 {
+		test.Fatalf("failed Delete did not durably convert attempt to cleanup: attempts=%#v cleanup=%#v err=%v", persisted.Attempts, persisted.Cleanups, err)
+	}
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	runtime.credential = "wrong-credential"
+	restarted.SetMicrosoftMail(runtime, nil)
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if cleanupPending || runtime.credential == "wrong-credential" {
+		test.Fatalf("restart did not rebind and complete attempt cleanup: credential=%q", runtime.credential)
 	}
 	if _, exists := fixture.vault.values[runtime.credential]; exists {
 		test.Fatal("cancel retry retained credential")
 	}
 }
 
+func TestRestartCleansDurableOAuthAttemptAfterCallbackTokenSave(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+	fixture.console.SetMicrosoftMail(runtime, nil)
+	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+	attemptID := started["attempt_id"].(string)
+	credential := runtime.credential
+	if _, err := runtime.Action(context.Background(), "status"); err != nil {
+		test.Fatal(err)
+	}
+	persisted, _, err := readState(fixture.console.directory)
+	if err != nil {
+		test.Fatal(err)
+	}
+	attempt, exists := persisted.Attempts[attemptID]
+	if !exists || attempt.PersonID != fixturePersonID || attempt.DeviceID != fixtureDeviceID || attempt.ConnectorID != "microsoft.mail" || attempt.ConnectionID != started["connection_id"] || attempt.Credential != credential || attempt.CleanupKind != "oauth_logout" || len(persisted.Connections) != 0 {
+		test.Fatalf("OAuth attempt intent was not durable before callback: %#v", persisted)
+	}
+	if fixture.vault.values[credential] == "" {
+		test.Fatal("callback did not save credential")
+	}
+
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	restarted.mu.Lock()
+	_, attemptPending := restarted.state.Attempts[attemptID]
+	cleanup := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if attemptPending || len(cleanup.Connections) != 1 {
+		test.Fatalf("restart did not convert attempt to cleanup: %#v", cleanup)
+	}
+	restartedFixture := *fixture
+	restartedFixture.console = restarted
+	if response := restartedFixture.call(http.MethodGet, "/v1/connectors", nil, token); response.Code != http.StatusServiceUnavailable {
+		test.Fatalf("restart exposed callback credential before cleanup: %d %s", response.Code, response.Body.String())
+	}
+	runtime.credential = "wrong-credential"
+	restarted.SetMicrosoftMail(runtime, nil)
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	_, connected := restarted.state.Connections[attempt.ConnectionID]
+	restarted.mu.Unlock()
+	if cleanupPending || connected || runtime.credential != credential || fixture.vault.values[credential] != "" {
+		test.Fatalf("restart orphaned callback credential: cleanup=%v connected=%v credential=%q", cleanupPending, connected, runtime.credential)
+	}
+}
+
 func TestOAuthCancelRuntimeFailureLeavesRetryableAttempt(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault, failures: map[string]error{"cancel": errors.New("cancel failed")}}
+	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault, failures: map[string]error{"logout": errors.New("logout failed")}}
 	fixture.console.SetMicrosoftMail(runtime, nil)
 	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
 	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
 	fixture.vault.values[runtime.credential] = `{"partial":"credential"}`
 	path := "/v1/connectors/microsoft.mail/connection-attempts/" + started["attempt_id"].(string) + "/cancel"
-	if response := fixture.call(http.MethodPost, path, map[string]any{}, token); response.Code != http.StatusBadGateway {
+	if response := fixture.call(http.MethodPost, path, map[string]any{}, token); response.Code != http.StatusInternalServerError {
 		test.Fatalf("runtime cancellation failure was hidden: %d %s", response.Code, response.Body.String())
 	}
 	if fixture.vault.values[runtime.credential] == "" {
 		test.Fatal("runtime cancellation failure destroyed credential before retry")
 	}
-	delete(runtime.failures, "cancel")
-	cancelled := fixture.value(fixture.call(http.MethodPost, path, map[string]any{}, token))
-	if cancelled["status"] != "cancelled" {
-		test.Fatalf("runtime cancellation retry failed: %#v", cancelled)
+	delete(runtime.failures, "logout")
+	restarted, err := New(fixture.console.directory, fixture.console.address, fixture.vault, nil)
+	if err != nil {
+		test.Fatal(err)
+	}
+	restarted.SetMicrosoftMail(runtime, nil)
+	restarted.mu.Lock()
+	_, cleanupPending := restarted.state.Cleanups[fixturePersonID]
+	restarted.mu.Unlock()
+	if cleanupPending {
+		test.Fatal("runtime cleanup retry retained tombstone")
 	}
 }
 

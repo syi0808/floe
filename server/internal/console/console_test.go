@@ -405,6 +405,19 @@ func TestUnscopedPairedCredentialStateIsRejected(test *testing.T) {
 	}
 }
 
+func TestPersistedStateRequiresConnectionAttemptLedger(test *testing.T) {
+	directory := filepath.Join(test.TempDir(), "node")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(`{"targets":{},"routes":{},"clients":{},"person_cleanups":{}}`), 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := New(directory, "127.0.0.1:8431", &memoryVault{values: map[string]string{}}, nil); err == nil || err.Error() != "invalid server state" {
+		test.Fatalf("state without connection attempt ledger was accepted: %v", err)
+	}
+}
+
 func TestUnscopedConnectorCredentialStateIsRejected(test *testing.T) {
 	directory := filepath.Join(test.TempDir(), "node")
 	if err := os.MkdirAll(directory, 0700); err != nil {
@@ -424,7 +437,7 @@ func TestPersistedStateRejectsMultiplePersons(test *testing.T) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"first":{"token_hash":%q,"person_id":%q,"device_id":"first-device"},"second":{"token_hash":%q,"person_id":%q,"device_id":"second-device"}},"person_cleanups":{}}`, digest("first-token"), fixturePersonID, digest("second-token"), "00000000-0000-4000-8000-000000000002")
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"first":{"token_hash":%q,"person_id":%q,"device_id":"first-device"},"second":{"token_hash":%q,"person_id":%q,"device_id":"second-device"}},"connection_attempts":{},"person_cleanups":{}}`, digest("first-token"), fixturePersonID, digest("second-token"), "00000000-0000-4000-8000-000000000002")
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}
@@ -441,7 +454,7 @@ func TestPersistedStateRejectsClientAndCleanupForDifferentPersons(test *testing.
 	cleanupPersonID := "00000000-0000-4000-8000-000000000002"
 	connectionID := "00000000-0000-4000-8000-000000000020"
 	credential, _ := credentials.ConnectionName(githubTokenKey, connectionID, cleanupPersonID)
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, digest("token"), fixturePersonID, fixtureDeviceID, cleanupPersonID, cleanupPersonID, connectionID, credential)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connection_attempts":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, digest("token"), fixturePersonID, fixtureDeviceID, cleanupPersonID, cleanupPersonID, connectionID, credential)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}
@@ -460,7 +473,7 @@ func TestPersistedStateRejectsCleanupForMultiplePersons(test *testing.T) {
 	secondConnectionID := "00000000-0000-4000-8000-000000000022"
 	firstCredential, _ := credentials.ConnectionName(githubTokenKey, firstConnectionID, fixturePersonID)
 	secondCredential, _ := credentials.ConnectionName(githubTokenKey, secondConnectionID, otherPersonID)
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]},%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, fixturePersonID, fixturePersonID, firstConnectionID, firstCredential, otherPersonID, otherPersonID, secondConnectionID, secondCredential)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{},"connection_attempts":{},"person_cleanups":{%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]},%q:{"person_id":%q,"connections":[{"connection_id":%q,"connector_id":"github.issues","credential":%q,"runtime_complete":true,"vault_complete":false}]}}}`, fixturePersonID, fixturePersonID, firstConnectionID, firstCredential, otherPersonID, otherPersonID, secondConnectionID, secondCredential)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}
@@ -474,7 +487,7 @@ func TestPersistedStateRejectsDuplicateConnectorForPerson(test *testing.T) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"00000000-0000-4000-8000-000000000010":{"connection_id":"00000000-0000-4000-8000-000000000010","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}},"00000000-0000-4000-8000-000000000011":{"connection_id":"00000000-0000-4000-8000-000000000011","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID, fixturePersonID)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"00000000-0000-4000-8000-000000000010":{"connection_id":"00000000-0000-4000-8000-000000000010","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}},"00000000-0000-4000-8000-000000000011":{"connection_id":"00000000-0000-4000-8000-000000000011","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"connection_attempts":{},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID, fixturePersonID)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}
@@ -488,7 +501,7 @@ func TestPersistedStateRejectsNonUUIDConnectionID(test *testing.T) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		test.Fatal(err)
 	}
-	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"calendar.apple.primary":{"connection_id":"calendar.apple.primary","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID)
+	state := fmt.Sprintf(`{"targets":{},"routes":{},"clients":{"client":{"token_hash":%q,"person_id":%q,"device_id":%q}},"connections":{"calendar.apple.primary":{"connection_id":"calendar.apple.primary","revision":1,"connector_id":"calendar.apple","person_id":%q,"scope":{}}},"connection_attempts":{},"person_cleanups":{}}`, digest("token"), fixturePersonID, fixtureDeviceID, fixturePersonID)
 	if err := os.WriteFile(filepath.Join(directory, "state.json"), []byte(state), 0600); err != nil {
 		test.Fatal(err)
 	}

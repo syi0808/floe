@@ -320,6 +320,9 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	}
 	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
 	console.rebuild()
+	if err := console.recoverConnectionAttemptsLocked(); err != nil {
+		return nil, errors.New("connection attempt recovery unavailable")
+	}
 	console.retryPendingCleanupsLocked()
 	if err := console.rebuildConnectorRuntimes(); err != nil {
 		return nil, errors.New("invalid connector configuration")

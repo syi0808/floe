@@ -238,26 +238,11 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusServiceUnavailable, "connector_unavailable")
 		return
 	}
-	for identifier, attempt := range console.connectorAttempts {
+	for _, attempt := range console.connectorAttempts {
 		if attempt.ConnectorID == definition.ID && attempt.PersonID == scope.PersonID {
-			if attempt.Status == "pending" {
-				if time.Since(attempt.CreatedAt) <= 10*time.Minute {
-					console.mu.Unlock()
-					failure(writer, http.StatusConflict, "connection_in_progress")
-					return
-				}
-				if attempt.Credential != "" && console.vault.Delete(attempt.Credential) != nil {
-					console.mu.Unlock()
-					failure(writer, http.StatusServiceUnavailable, "credential_cleanup_failed")
-					return
-				}
-			}
-			if attempt.ErrorCode == "credential_cleanup_failed" && attempt.Credential != "" && console.vault.Delete(attempt.Credential) != nil {
-				console.mu.Unlock()
-				failure(writer, http.StatusServiceUnavailable, "credential_cleanup_failed")
-				return
-			}
-			delete(console.connectorAttempts, identifier)
+			console.mu.Unlock()
+			failure(writer, http.StatusConflict, "connection_in_progress")
+			return
 		}
 	}
 	connectionID, err := newConnectionID()
@@ -312,18 +297,43 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 	attempt := console.newConnectorAttempt(definition.ID, connectionID, scope, "pending", "")
 	attempt.Scope, attempt.Credential, attempt.Polling = cloneConnectorScope(record.Scope), record.Credential, true
 	attemptID := attempt.ID
+	next := cloneState(console.state)
+	next.Attempts[attemptID] = connectionAttemptRecord{
+		AttemptID: attemptID, PersonID: scope.PersonID, DeviceID: scope.DeviceID,
+		ConnectorID: definition.ID, ConnectionID: connectionID, Credential: record.Credential,
+		Scope: cloneConnectorScope(record.Scope), CreatedAtUnixMs: attempt.CreatedAt.UnixMilli(), CleanupKind: "oauth_logout",
+	}
+	if err := console.save(next); err != nil {
+		delete(console.connectorAttempts, attemptID)
+		console.mu.Unlock()
+		failure(writer, http.StatusInternalServerError, "save_failed")
+		return
+	}
+	console.state = next
+	console.connectorReservations[record.ConnectionID] = record
 	console.mu.Unlock()
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
 	value, err := runtime.Action(ctx, "login")
+	console.mu.Lock()
+	delete(console.connectorReservations, record.ConnectionID)
+	_, attemptStillOwned := console.state.Attempts[attemptID]
+	if !attemptStillOwned {
+		_ = console.retryPersonCleanupLocked(scope.PersonID)
+	}
+	console.mu.Unlock()
+	if !attemptStillOwned {
+		failure(writer, http.StatusConflict, "connection_changed")
+		return
+	}
 	if err != nil {
-		console.failClientOAuthAttempt(attemptID, runtime, record.Credential, "connector_authorization_unavailable")
+		console.failClientOAuthAttempt(attemptID, runtime)
 		failure(writer, http.StatusBadGateway, "connector_authorization_unavailable")
 		return
 	}
 	status, authorizationURL, valid := oauthActionStatus(value)
 	if !valid || status != "pending" && status != "connected" {
-		console.failClientOAuthAttempt(attemptID, runtime, record.Credential, "invalid_connector_response")
+		console.failClientOAuthAttempt(attemptID, runtime)
 		failure(writer, http.StatusBadGateway, "invalid_connector_response")
 		return
 	}
@@ -333,14 +343,14 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 	foreign := console.connectionExistsForOtherPerson(definition.ID, scope.PersonID)
 	if attempt == nil || raced || foreign {
 		console.mu.Unlock()
-		console.failClientOAuthAttempt(attemptID, runtime, record.Credential, "connection_changed")
+		console.failClientOAuthAttempt(attemptID, runtime)
 		failure(writer, http.StatusConflict, "connection_changed")
 		return
 	}
 	attempt.Status, attempt.AuthorizationURL, attempt.Polling = status, authorizationURL, false
 	console.mu.Unlock()
 	if status == "connected" && !console.finishClientOAuthAttempt(attemptID) {
-		console.failClientOAuthAttempt(attemptID, runtime, record.Credential, "credential_commit_failed")
+		console.failClientOAuthAttempt(attemptID, runtime)
 		failure(writer, http.StatusInternalServerError, "credential_commit_failed")
 		return
 	}
@@ -378,12 +388,29 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 	if definition.OAuthRuntime != nil && copy.Status == "pending" && !attempt.Polling {
 		attempt.Polling = true
 		runtime = definition.OAuthRuntime(console)
+		if durable, exists := console.state.Attempts[attemptID]; exists {
+			console.connectorReservations[durable.ConnectionID] = connectionRecord{
+				ConnectionID: durable.ConnectionID, ConnectorID: durable.ConnectorID,
+				PersonID: durable.PersonID, Credential: durable.Credential,
+			}
+		}
 	}
 	console.mu.Unlock()
 	if runtime != nil {
 		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 		defer cancel()
 		value, err := runtime.Action(ctx, "status")
+		console.mu.Lock()
+		delete(console.connectorReservations, copy.ConnectionID)
+		_, attemptStillOwned := console.state.Attempts[attemptID]
+		if !attemptStillOwned {
+			_ = console.retryPersonCleanupLocked(scope.PersonID)
+		}
+		console.mu.Unlock()
+		if !attemptStillOwned {
+			failure(writer, http.StatusConflict, "connection_changed")
+			return
+		}
 		if err != nil {
 			copy.ErrorCode = "connector_authorization_unavailable"
 		} else if status, authorizationURL, valid := oauthActionStatus(value); valid {
@@ -401,9 +428,8 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 			copy.Status, copy.ErrorCode = "failed", "credential_commit_failed"
 		}
 		if copy.Status == "failed" {
-			_, _ = runtime.Action(context.Background(), "cancel")
-			if copy.Credential != "" && console.vault.Delete(copy.Credential) != nil {
-				copy.ErrorCode = "credential_cleanup_failed"
+			if console.cleanupClientOAuthAttempt(request.Context(), attemptID, runtime) != nil {
+				copy.ErrorCode = "connection_cleanup_pending"
 			}
 		}
 		console.mu.Lock()
@@ -450,33 +476,15 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 		return
 	}
 	runtime := definition.OAuthRuntime(console)
-	credentialName := attempt.Credential
+	copy := *attempt
 	console.mu.Unlock()
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
-	if _, err := runtime.Action(ctx, "cancel"); err != nil {
-		failure(writer, http.StatusBadGateway, "connector_authorization_unavailable")
+	if console.cleanupClientOAuthAttempt(ctx, attemptID, runtime) != nil {
+		failure(writer, http.StatusInternalServerError, "connection_cleanup_pending")
 		return
 	}
-	if credentialName != "" && console.vault.Delete(credentialName) != nil {
-		console.mu.Lock()
-		if current := console.connectorAttempts[attemptID]; current != nil {
-			current.Status, current.ErrorCode, current.AuthorizationURL = "failed", "credential_cleanup_failed", ""
-		}
-		console.mu.Unlock()
-		failure(writer, http.StatusInternalServerError, "credential_cleanup_failed")
-		return
-	}
-	console.mu.Lock()
-	attempt = console.connectorAttempts[attemptID]
-	if attempt == nil || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
-		console.mu.Unlock()
-		failure(writer, http.StatusConflict, "connection_changed")
-		return
-	}
-	attempt.Status, attempt.AuthorizationURL = "cancelled", ""
-	console.mu.Unlock()
-	copy := *attempt
+	copy.Status, copy.AuthorizationURL = "cancelled", ""
 	reply(writer, http.StatusOK, connectorAttemptResponse(&copy))
 }
 
@@ -724,7 +732,8 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	console.mu.Lock()
 	defer console.mu.Unlock()
 	attempt := console.connectorAttempts[attemptID]
-	if attempt == nil || attempt.Status != "pending" && attempt.Status != "connected" {
+	durable, durableExists := console.state.Attempts[attemptID]
+	if attempt == nil || !durableExists || attempt.Status != "pending" && attempt.Status != "connected" || durable.ConnectionID != attempt.ConnectionID {
 		return false
 	}
 	record := connectionRecord{ConnectionID: attempt.ConnectionID, Revision: 1, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential}
@@ -734,9 +743,12 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	if existing, exists := console.connectionForPerson(record.ConnectorID, record.PersonID); exists && existing.ConnectionID != record.ConnectionID {
 		return false
 	}
-	previous := cloneState(console.state)
-	console.state.Connections[record.ConnectionID] = record
-	if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
+	next := cloneState(console.state)
+	next.Connections[record.ConnectionID] = record
+	delete(next.Attempts, attemptID)
+	previous := console.state
+	console.state = next
+	if console.rebuildConnectorRuntimes() != nil || console.save(next) != nil {
 		console.state = previous
 		_ = console.rebuildConnectorRuntimes()
 		return false
@@ -745,16 +757,59 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	return true
 }
 
-func (console *Console) failClientOAuthAttempt(attemptID string, runtime ConnectorOAuthRuntime, credentialName, errorCode string) {
-	_, _ = runtime.Action(context.Background(), "cancel")
-	if credentialName != "" && console.vault.Delete(credentialName) != nil {
-		errorCode = "credential_cleanup_failed"
+func (console *Console) failClientOAuthAttempt(attemptID string, runtime ConnectorOAuthRuntime) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = console.cleanupClientOAuthAttempt(ctx, attemptID, runtime)
+}
+
+func (console *Console) cleanupClientOAuthAttempt(ctx context.Context, attemptID string, runtime ConnectorOAuthRuntime) error {
+	console.mu.Lock()
+	attempt, exists := console.state.Attempts[attemptID]
+	if !exists {
+		console.mu.Unlock()
+		return errors.New("attempt cleanup unavailable")
+	}
+	next := cloneState(console.state)
+	delete(next.Attempts, attemptID)
+	cleanup := next.Cleanups[attempt.PersonID]
+	cleanup.PersonID = attempt.PersonID
+	cleanup.Connections = append(cleanup.Connections, connectionCleanupStep{
+		ConnectionID: attempt.ConnectionID, ConnectorID: attempt.ConnectorID, Credential: attempt.Credential,
+	})
+	next.Cleanups[attempt.PersonID] = cleanup
+	if err := console.save(next); err != nil {
+		console.mu.Unlock()
+		return err
+	}
+	console.state = next
+	delete(console.connectorAttempts, attemptID)
+	record := connectionRecord{ConnectionID: attempt.ConnectionID, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Credential: attempt.Credential}
+	console.connectorReservations[attempt.ConnectionID] = record
+	console.mu.Unlock()
+
+	runtimeComplete := false
+	if runtime != nil && runtime.BindCredential(attempt.Credential) == nil {
+		_, err := runtime.Action(ctx, "logout")
+		runtimeComplete = err == nil
+	}
+	if runtimeComplete {
+		console.mu.Lock()
+		_ = console.completeReservedCleanupLocked(record, true, false)
+		console.mu.Unlock()
+	}
+	vaultComplete := attempt.Credential == ""
+	if runtimeComplete && !vaultComplete {
+		vaultComplete = console.vault.Delete(attempt.Credential) == nil
 	}
 	console.mu.Lock()
-	defer console.mu.Unlock()
-	if attempt := console.connectorAttempts[attemptID]; attempt != nil {
-		attempt.Status, attempt.AuthorizationURL, attempt.ErrorCode, attempt.Polling = "failed", "", errorCode, false
+	delete(console.connectorReservations, attempt.ConnectionID)
+	err := console.completeReservedCleanupLocked(record, runtimeComplete, vaultComplete)
+	console.mu.Unlock()
+	if !runtimeComplete || !vaultComplete || err != nil {
+		return errors.New("connection cleanup pending")
 	}
+	return nil
 }
 
 func (console *Console) connectionForPerson(connectorID, personID string) (connectionRecord, bool) {

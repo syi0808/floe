@@ -61,6 +61,13 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
 		delete(console.connectorAttempts, attemptID)
 	}
+	for attemptID, attempt := range state.Attempts {
+		if attempt.PersonID != personID {
+			continue
+		}
+		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
+		delete(state.Attempts, attemptID)
+	}
 	for _, record := range console.connectorReservations {
 		if record.PersonID == personID {
 			appendStep(record.ConnectionID, record.ConnectorID, record.Credential)
@@ -75,6 +82,33 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 	if len(cleanup.Connections) != 0 {
 		state.Cleanups[personID] = cleanup
 	}
+	return nil
+}
+
+func (console *Console) recoverConnectionAttemptsLocked() error {
+	if len(console.state.Attempts) == 0 {
+		return nil
+	}
+	next := cloneState(console.state)
+	identifiers := make([]string, 0, len(next.Attempts))
+	for identifier := range next.Attempts {
+		identifiers = append(identifiers, identifier)
+	}
+	sort.Strings(identifiers)
+	for _, identifier := range identifiers {
+		attempt := next.Attempts[identifier]
+		cleanup := next.Cleanups[attempt.PersonID]
+		cleanup.PersonID = attempt.PersonID
+		cleanup.Connections = append(cleanup.Connections, connectionCleanupStep{
+			ConnectionID: attempt.ConnectionID, ConnectorID: attempt.ConnectorID, Credential: attempt.Credential,
+		})
+		next.Cleanups[attempt.PersonID] = cleanup
+		delete(next.Attempts, identifier)
+	}
+	if err := console.save(next); err != nil {
+		return err
+	}
+	console.state = next
 	return nil
 }
 
