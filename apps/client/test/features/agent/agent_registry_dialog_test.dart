@@ -1,7 +1,6 @@
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_registry_dialog.dart';
-import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,7 +20,8 @@ Widget app(AgentController controller, double scale) => MaterialApp(
   ),
   home: Scaffold(
     body: SingleChildScrollView(
-      child: SettingsScreen(client: null, agentController: controller),
+      padding: const EdgeInsets.all(24),
+      child: AgentRegistrySettings(controller: controller),
     ),
   ),
 );
@@ -56,6 +56,7 @@ void main() {
         );
         addTearDown(controller.dispose);
         await controller.load();
+        await controller.loadRegistry();
         await tester.pumpWidget(app(controller, width == 320 ? 2 : 1));
         await tester.pumpAndSettle();
         expect(find.byType(AgentRegistrySettings), findsOneWidget);
@@ -74,7 +75,7 @@ void main() {
         expect(tester.takeException(), isNull);
         if (width == 520) {
           await expectLater(
-            find.byType(SettingsScreen),
+            find.byType(AgentRegistrySettings),
             matchesGoldenFile('../../goldens/agent_registry.png'),
           );
         }
@@ -92,6 +93,7 @@ void main() {
       );
       addTearDown(controller.dispose);
       await controller.load();
+      await controller.loadRegistry();
       await tester.pumpWidget(app(controller, 1));
       await tester.pumpAndSettle();
       expect(
