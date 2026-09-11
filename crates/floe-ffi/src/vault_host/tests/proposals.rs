@@ -237,6 +237,8 @@ async fn seed(
                     expires_at: now + chrono::Duration::minutes(2),
                 },
                 assignment_id: setup.expert_assignment_id,
+                feasibility: None,
+                wellbeing: None,
                 destination: None,
                 propose_focus: true,
                 cancellation: Cancellation::default(),

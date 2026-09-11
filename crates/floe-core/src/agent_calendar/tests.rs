@@ -16,6 +16,111 @@ fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2050, 1, 15, 9, 0, 0).unwrap()
 }
 
+fn feasibility_view(expires_at: DateTime<Utc>) -> FeasibilityView {
+    FeasibilityView {
+        schema_version: AGENT_VERSION,
+        view_id: FEASIBILITY_VIEW_ID.into(),
+        source_handle: "apple-feasibility:local-device".into(),
+        observed_at_unix_ms: now().timestamp_millis() - 1_000,
+        expires_at_unix_ms: expires_at.timestamp_millis(),
+        items: vec![FeasibilityItem {
+            event_handle: "calendar-event:standup".into(),
+            evidence_handles: vec!["location:current".into(), "weather:hourly".into()],
+            travel_duration_seconds: 1_200,
+            leave_by_unix_ms: (now() + TimeDelta::minutes(40)).timestamp_millis(),
+            weather_impact: WeatherImpact::Significant,
+            confidence_millis: 900,
+        }],
+    }
+}
+
+fn wellbeing_view(expires_at: DateTime<Utc>) -> WellbeingView {
+    WellbeingView {
+        schema_version: AGENT_VERSION,
+        view_id: WELLBEING_VIEW_ID.into(),
+        source_handle: "wellbeing-derived:local-device".into(),
+        observed_at_unix_ms: now().timestamp_millis() - 1_000,
+        expires_at_unix_ms: expires_at.timestamp_millis(),
+        capacity: CapacityState::Reduced,
+        recovery: RecoveryState::NeedsRecovery,
+        confidence_millis: 800,
+        evidence_handles: vec!["health:derived-state".into()],
+    }
+}
+
+#[test]
+fn schedule_context_includes_fresh_feasibility_and_coarse_capacity() {
+    let expires_at = now() + TimeDelta::minutes(2);
+    let mut context = AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vec![],
+        evidence: vec![],
+    };
+
+    append_schedule_context(
+        &mut context,
+        Some(&feasibility_view(expires_at)),
+        Some(&wellbeing_view(expires_at)),
+        now(),
+        expires_at,
+    )
+    .unwrap();
+
+    assert_eq!(context.evidence.len(), 2);
+    assert_eq!(
+        context.evidence[0].source_handle,
+        "apple-feasibility:local-device"
+    );
+    assert!(
+        context.evidence[0]
+            .untrusted_text
+            .contains("leave_by_unix_ms")
+    );
+    assert!(context.evidence[0].untrusted_text.contains("significant"));
+    assert_eq!(
+        context.evidence[1].source_handle,
+        "wellbeing-derived:local-device"
+    );
+    assert!(context.evidence[1].untrusted_text.contains("reduced"));
+    assert!(
+        context.evidence[1]
+            .untrusted_text
+            .contains("needs_recovery")
+    );
+}
+
+#[test]
+fn schedule_context_marks_missing_or_stale_optional_views_unavailable() {
+    let expires_at = now() + TimeDelta::minutes(2);
+    let stale = feasibility_view(now() - TimeDelta::milliseconds(1));
+    let mut context = AgentContext {
+        projection_version: 1,
+        persona: None,
+        memories: vec![],
+        evidence: vec![],
+    };
+
+    append_schedule_context(&mut context, Some(&stale), None, now(), expires_at).unwrap();
+
+    assert_eq!(context.evidence.len(), 2);
+    assert_eq!(
+        context.evidence[0].source_handle,
+        "floe.context-status:schedule.feasibility"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&context.evidence[0].untrusted_text).unwrap(),
+        serde_json::json!({
+            "view_id": "schedule.feasibility",
+            "state": "stale"
+        })
+    );
+    assert_eq!(
+        context.evidence[1].source_handle,
+        "floe.context-status:wellbeing.derived"
+    );
+}
+
 #[derive(Clone, Default)]
 struct Keys(Arc<KeyState>);
 
@@ -397,6 +502,8 @@ impl Fixture {
             budget: AgentBudget::default(),
             grant: self.grant.clone(),
             assignment_id: self.assignment,
+            feasibility: None,
+            wellbeing: None,
             destination: Some(ExpertCalendarDestination {
                 provider: self.grant.provider,
                 calendar_id: "private-calendar-id".into(),

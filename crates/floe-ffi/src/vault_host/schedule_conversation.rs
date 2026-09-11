@@ -11,8 +11,8 @@ use floe_domain::{CalendarProvider, PersonId};
 use floe_protocol::{AgentConversationTurnRequestDto, PROTOCOL_VERSION};
 
 use crate::{
-    local_model::FoundationModelRunner, native_calendar::NativeCalendar,
-    remote_model::ServerModelRunner,
+    local_context::LocalContextStore, local_model::FoundationModelRunner,
+    native_calendar::NativeCalendar, remote_model::ServerModelRunner,
 };
 
 use super::session_uuid;
@@ -23,6 +23,7 @@ pub(super) async fn try_run_with_schedule_expert<
 >(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
+    local_context: &LocalContextStore,
     person_id: PersonId,
     request: &AgentConversationTurnRequestDto,
     context: floe_agent::AgentContext,
@@ -130,6 +131,8 @@ pub(super) async fn try_run_with_schedule_expert<
                     expires_at: now + chrono::Duration::minutes(2),
                 },
                 assignment_id: setup.expert_assignment_id,
+                feasibility: optional_local_view(local_context.feasibility(person_id))?,
+                wellbeing: optional_local_view(local_context.wellbeing(person_id))?,
                 destination: None,
                 propose_focus: false,
                 cancellation,
@@ -140,6 +143,14 @@ pub(super) async fn try_run_with_schedule_expert<
         )
         .await?;
     Ok(Some(result.session))
+}
+
+fn optional_local_view<T>(result: Result<T, AgentFailure>) -> Result<Option<T>, AgentFailure> {
+    match result {
+        Ok(view) => Ok(Some(view)),
+        Err(AgentFailure::CapabilityUnavailable | AgentFailure::StaleContext) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn range_bounds(

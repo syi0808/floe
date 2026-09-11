@@ -53,6 +53,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     if let Some(session) = super::schedule_conversation::try_run_with_schedule_expert(
         core,
         vault,
+        local_context,
         person_id,
         request,
         context.clone(),

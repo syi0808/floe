@@ -21,6 +21,8 @@ pub struct CalendarAgentTurnRequest {
     pub budget: AgentBudget,
     pub grant: CalendarTimelineGrant,
     pub assignment_id: Uuid,
+    pub feasibility: Option<FeasibilityView>,
+    pub wellbeing: Option<WellbeingView>,
     pub destination: Option<ExpertCalendarDestination>,
     pub propose_focus: bool,
     pub cancellation: Cancellation,
@@ -148,6 +150,13 @@ impl FloeCore {
                         .evidence
                         .push(native_context_evidence(&note_view)?);
                 }
+                append_schedule_context(
+                    &mut expert_context,
+                    request.feasibility.as_ref(),
+                    request.wellbeing.as_ref(),
+                    context_now,
+                    views.grant().expires_at,
+                )?;
             }
             let turn = CalendarTurn {
                 vault,
@@ -268,6 +277,74 @@ impl FloeCore {
             result = &mut operation => result,
         }
     }
+}
+
+fn append_schedule_context(
+    context: &mut AgentContext,
+    feasibility: Option<&FeasibilityView>,
+    wellbeing: Option<&WellbeingView>,
+    now: DateTime<Utc>,
+    calendar_expires_at: DateTime<Utc>,
+) -> Result<(), AgentFailure> {
+    let now_unix_ms = now.timestamp_millis();
+    let status_expires_at = u64::try_from(calendar_expires_at.timestamp_millis())
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    match feasibility {
+        Some(view) if validate_feasibility_view(view, now_unix_ms).is_ok() => {
+            context.evidence.push(personal_context_evidence(view)?);
+        }
+        Some(view) => context.evidence.push(context_status_evidence(
+            FEASIBILITY_VIEW_ID,
+            if view.expires_at_unix_ms <= now_unix_ms {
+                "stale"
+            } else {
+                "unavailable"
+            },
+            status_expires_at,
+        )?),
+        None => context.evidence.push(context_status_evidence(
+            FEASIBILITY_VIEW_ID,
+            "unavailable",
+            status_expires_at,
+        )?),
+    }
+    match wellbeing {
+        Some(view) if validate_wellbeing_view(view, now_unix_ms).is_ok() => {
+            context.evidence.push(personal_context_evidence(view)?);
+        }
+        Some(view) => context.evidence.push(context_status_evidence(
+            WELLBEING_VIEW_ID,
+            if view.expires_at_unix_ms <= now_unix_ms {
+                "stale"
+            } else {
+                "unavailable"
+            },
+            status_expires_at,
+        )?),
+        None => context.evidence.push(context_status_evidence(
+            WELLBEING_VIEW_ID,
+            "unavailable",
+            status_expires_at,
+        )?),
+    }
+    Ok(())
+}
+
+fn context_status_evidence(
+    view_id: &str,
+    state: &str,
+    expires_at_unix_ms: u64,
+) -> Result<ContextEvidence, AgentFailure> {
+    Ok(ContextEvidence {
+        source_handle: format!("floe.context-status:{view_id}"),
+        data_class: DataClass::Personal,
+        untrusted_text: serde_json::to_string(&serde_json::json!({
+            "view_id": view_id,
+            "state": state,
+        }))
+        .map_err(|_| AgentFailure::InvalidInput)?,
+        expires_at_unix_ms,
+    })
 }
 
 struct CancelTurn(Cancellation);
