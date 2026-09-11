@@ -67,13 +67,13 @@ final class NativeTransport {
   static String resolveLibraryPath() {
     final override = Platform.environment['FLOE_CORE_LIBRARY_PATH'];
     if (override != null && override.isNotEmpty) return override;
-    if (!Platform.isMacOS) {
-      throw UnsupportedError(
-        'The native Floe transport currently supports macOS only.',
-      );
+    if (Platform.isIOS) return '';
+    if (Platform.isAndroid) return 'libfloe_ffi.so';
+    if (Platform.isMacOS) {
+      final executableDirectory = File(Platform.resolvedExecutable).parent.path;
+      return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
     }
-    final executableDirectory = File(Platform.resolvedExecutable).parent.path;
-    return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
+    throw UnsupportedError('The native Floe transport is unavailable.');
   }
 
   Future<Map<String, dynamic>> request(
@@ -96,6 +96,48 @@ final class NativeTransport {
       );
     }
     return _unwrapEnvelope(result['response']! as String);
+  }
+
+  Future<void> publishLocalContext({
+    required String personId,
+    required String deviceId,
+    required Map<String, dynamic> view,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'publish', 'device_id': deviceId, 'view': view},
+    });
+  }
+
+  Future<Map<String, dynamic>> readLocalContext({
+    required String personId,
+    required String viewId,
+    String? deviceId,
+  }) async {
+    final result = await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'read', 'view_id': viewId, 'device_id': ?deviceId},
+    });
+    return _asMap(result['view']);
+  }
+
+  Future<int> revokeLocalContext({
+    required String personId,
+    required String deviceId,
+    String? viewId,
+  }) async {
+    final result = await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'revoke',
+        'device_id': deviceId,
+        'view_id': ?viewId,
+      },
+    });
+    return result['removed_count']! as int;
   }
 
   Future<void> close() async {
@@ -194,6 +236,7 @@ Future<void> _nativeWorkerMain(Map<String, Object?> configuration) async {
           'agent_fixture' => bindings.agentFixture(handle, input),
           'agent_fixture_run' => bindings.agentFixtureRun(handle, input),
           'agent_vault' => bindings.agentVault(handle, input),
+          'local_context' => bindings.localContext(handle, input),
           _ => throw StateError('Unknown core operation: $operation'),
         };
         if (output == nullptr) {

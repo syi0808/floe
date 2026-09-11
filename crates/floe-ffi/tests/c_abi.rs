@@ -57,6 +57,66 @@ impl Core {
         }).to_string()).unwrap();
         take_json(unsafe { floe_core_agent_fixture_run(self.0, request.as_ptr()) })
     }
+
+    fn local_context(&self, person_id: &str, operation: Value) -> Value {
+        let request = CString::new(
+            json!({
+                "schema_version": 1, "person_id": person_id, "operation": operation
+            })
+            .to_string(),
+        )
+        .unwrap();
+        take_json(unsafe { floe_core_local_context(self.0, request.as_ptr()) })
+    }
+}
+
+#[test]
+fn local_context_abi_is_ephemeral_person_and_device_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Core::open(directory.path().join("floe.db").to_str().unwrap());
+    let person_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp_millis();
+    let published = core.local_context(
+        &person_id,
+        json!({
+            "kind": "publish",
+            "device_id": "mac-local",
+            "view": {
+                "schema_version": 1,
+                "view_id": "attention.coarse",
+                "source_handle": "attention:macos_local",
+                "observed_at_unix_ms": now - 1,
+                "expires_at_unix_ms": now + 60_000,
+                "state": "focused",
+                "confidence_millis": 800,
+                "evidence_handles": ["activity:coarse"]
+            }
+        }),
+    );
+    assert_eq!(published["status"], "ok");
+    let read = core.local_context(
+        &person_id,
+        json!({"kind": "read", "view_id": "attention.coarse"}),
+    );
+    assert_eq!(read["data"]["device_id"], "mac-local");
+    assert_eq!(read["data"]["view"]["state"], "focused");
+    let revoked = core.local_context(
+        &person_id,
+        json!({
+            "kind": "revoke",
+            "device_id": "mac-local",
+            "view_id": "attention.coarse"
+        }),
+    );
+    assert_eq!(revoked["data"]["removed_count"], 1);
+    let missing = core.local_context(
+        &person_id,
+        json!({"kind": "read", "view_id": "attention.coarse"}),
+    );
+    assert_eq!(
+        missing["error"]["metadata"]["agent_failure"],
+        "capability_unavailable"
+    );
 }
 
 impl Drop for Core {

@@ -3,9 +3,9 @@ use floe_agent::{
     A2ATaskState, AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent,
     AgentFailure, AgentRuntime, AttentionView, CapabilityDescriptor, CapabilityHost,
     CapabilityInvocation, CommitmentsExpertResult, CommunicationExpertResult, DataClass,
-    EXPERT_RESULT_MEDIA_TYPE, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
-    InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
-    ModelRequest, ModelResponse, ModelRunner, PeopleView, PersonalExpertInvocation,
+    EXPERT_RESULT_MEDIA_TYPE, FeasibilityView, FocusExpertResult, InProcessA2ATransport,
+    InProcessAgent, InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation,
+    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, PeopleView, PersonalExpertInvocation,
     PortfolioExpertInvocation, RelationshipsExpertResult, SessionStore, TransferConsent,
     WellbeingExpertResult, WellbeingView, WorkContextExpertResult, run_commitments_expert,
     run_communication_expert, run_focus_expert, run_life_logistics_expert,
@@ -15,6 +15,7 @@ use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
 use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
+use crate::local_context::LocalContextStore;
 use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner};
 
 use super::session_uuid;
@@ -22,6 +23,7 @@ use super::session_uuid;
 pub(super) async fn run<Keys: VaultKeyProvider>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
+    local_context: &LocalContextStore,
     person_id: PersonId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
@@ -60,11 +62,16 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     }
     let model = Model::new(request.remote_route.clone())?;
     let policy = policy(&model, request.remote_route.as_ref());
-    let capabilities = ConversationCapabilities { model: &model };
+    let capabilities = ConversationCapabilities {
+        model: &model,
+        policy: &policy,
+        local_context,
+    };
     let experts = ConversationExperts {
         model: &model,
         policy: &policy,
         context: &context,
+        local_context,
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
@@ -177,36 +184,33 @@ impl ModelRunner for Model {
     }
 }
 
-trait PersonalViewSource {
-    async fn people_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_agent::Cancellation,
-    ) -> Result<PeopleView, AgentFailure>;
-
-    async fn attention_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_agent::Cancellation,
-    ) -> Result<AttentionView, AgentFailure>;
-
-    async fn wellbeing_view(
-        &self,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_agent::Cancellation,
-    ) -> Result<WellbeingView, AgentFailure>;
+struct PersonalViewSource<'a> {
+    model: &'a Model,
+    policy: &'a InferencePolicyDecision,
+    local_context: &'a LocalContextStore,
+    person_id: PersonId,
 }
 
-impl PersonalViewSource for Model {
+impl PersonalViewSource<'_> {
     async fn people_view(
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<PeopleView, AgentFailure> {
-        match self {
-            Self::Server(model) => model.read_people_view(deadline, cancellation).await,
-            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        match self.local_context.people(self.person_id) {
+            Ok(view) => Ok(view),
+            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
+                let Model::Server(model) = self.model else {
+                    unreachable!()
+                };
+                model.read_people_view(deadline, cancellation).await
+            }
+            Err(error) => Err(error),
         }
+    }
+
+    async fn feasibility_view(&self) -> Result<FeasibilityView, AgentFailure> {
+        self.local_context.feasibility(self.person_id)
     }
 
     async fn attention_view(
@@ -214,9 +218,15 @@ impl PersonalViewSource for Model {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<AttentionView, AgentFailure> {
-        match self {
-            Self::Server(model) => model.read_attention_view(deadline, cancellation).await,
-            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        match self.local_context.attention(self.person_id) {
+            Ok(view) => Ok(view),
+            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
+                let Model::Server(model) = self.model else {
+                    unreachable!()
+                };
+                model.read_attention_view(deadline, cancellation).await
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -225,10 +235,22 @@ impl PersonalViewSource for Model {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<WellbeingView, AgentFailure> {
-        match self {
-            Self::Server(model) => model.read_wellbeing_view(deadline, cancellation).await,
-            Self::Foundation(_) => Err(AgentFailure::CapabilityUnavailable),
+        match self.local_context.wellbeing(self.person_id) {
+            Ok(view) => Ok(view),
+            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
+                let Model::Server(model) = self.model else {
+                    unreachable!()
+                };
+                model.read_wellbeing_view(deadline, cancellation).await
+            }
+            Err(error) => Err(error),
         }
+    }
+
+    fn server_fallback_allowed(&self) -> bool {
+        matches!(self.model, Model::Server(_))
+            && (self.model.placement() == ModelPlacement::DeviceLocal
+                || self.policy.external_transfer_consent == TransferConsent::Granted)
     }
 }
 
@@ -246,36 +268,41 @@ impl CapabilityHost for NoCapabilities {
 
 struct ConversationCapabilities<'model> {
     model: &'model Model,
+    policy: &'model InferencePolicyDecision,
+    local_context: &'model LocalContextStore,
 }
 
 impl CapabilityHost for ConversationCapabilities<'_> {
     fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
-        if !matches!(self.model, Model::Server(_)) {
-            return vec![];
-        }
-        vec![
-            CapabilityDescriptor {
-                schema_version: AGENT_VERSION,
-                id: "mail.communication.read".into(),
-                version: "1.0.0".into(),
-                read_only: true,
-                output_data_class: DataClass::Personal,
-                input_schema: Some(serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "maxLength": 512},
-                        "cursor": {"type": "integer", "minimum": 0, "maximum": 10000},
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
-                    },
-                    "additionalProperties": false
-                })),
-            },
-            read_capability("work.context.read"),
-            read_capability("life.logistics.read"),
+        let mut descriptors = vec![
             read_capability("people.identity.read"),
+            read_capability("schedule.feasibility.read"),
             read_capability("attention.coarse.read"),
             read_capability("wellbeing.derived.read"),
-        ]
+        ];
+        if matches!(self.model, Model::Server(_)) {
+            descriptors.extend([
+                CapabilityDescriptor {
+                    schema_version: AGENT_VERSION,
+                    id: "mail.communication.read".into(),
+                    version: "1.0.0".into(),
+                    read_only: true,
+                    output_data_class: DataClass::Personal,
+                    input_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "maxLength": 512},
+                            "cursor": {"type": "integer", "minimum": 0, "maximum": 10000},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                        },
+                        "additionalProperties": false
+                    })),
+                },
+                read_capability("work.context.read"),
+                read_capability("life.logistics.read"),
+            ]);
+        }
+        descriptors
     }
 
     async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
@@ -289,11 +316,11 @@ impl CapabilityHost for ConversationCapabilities<'_> {
             #[serde(default = "default_communication_limit")]
             limit: usize,
         }
-        let Model::Server(model) = self.model else {
-            return Err(AgentFailure::CapabilityUnavailable);
-        };
         let output = match invocation.capability_id.as_str() {
             "mail.communication.read" => {
+                let Model::Server(model) = self.model else {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                };
                 let input: Input = serde_json::from_str(&invocation.input)
                     .map_err(|_| AgentFailure::InvalidInput)?;
                 serde_json::to_value(
@@ -311,6 +338,7 @@ impl CapabilityHost for ConversationCapabilities<'_> {
             "work.context.read"
             | "life.logistics.read"
             | "people.identity.read"
+            | "schedule.feasibility.read"
             | "attention.coarse.read"
             | "wellbeing.derived.read" => {
                 #[derive(serde::Deserialize)]
@@ -318,29 +346,51 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                 struct Empty {}
                 serde_json::from_str::<Empty>(&invocation.input)
                     .map_err(|_| AgentFailure::InvalidInput)?;
+                let personal = PersonalViewSource {
+                    model: self.model,
+                    policy: self.policy,
+                    local_context: self.local_context,
+                    person_id: invocation.person_id,
+                };
                 match invocation.capability_id.as_str() {
-                    "work.context.read" => serde_json::to_value(
-                        model
-                            .read_work_context_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
-                    "life.logistics.read" => serde_json::to_value(
-                        model
-                            .read_logistics_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
+                    "work.context.read" => {
+                        let Model::Server(model) = self.model else {
+                            return Err(AgentFailure::CapabilityUnavailable);
+                        };
+                        serde_json::to_value(
+                            model
+                                .read_work_context_view(
+                                    invocation.deadline,
+                                    &invocation.cancellation,
+                                )
+                                .await?,
+                        )
+                    }
+                    "life.logistics.read" => {
+                        let Model::Server(model) = self.model else {
+                            return Err(AgentFailure::CapabilityUnavailable);
+                        };
+                        serde_json::to_value(
+                            model
+                                .read_logistics_view(invocation.deadline, &invocation.cancellation)
+                                .await?,
+                        )
+                    }
                     "people.identity.read" => serde_json::to_value(
-                        self.model
+                        personal
                             .people_view(invocation.deadline, &invocation.cancellation)
                             .await?,
                     ),
+                    "schedule.feasibility.read" => {
+                        serde_json::to_value(personal.feasibility_view().await?)
+                    }
                     "attention.coarse.read" => serde_json::to_value(
-                        self.model
+                        personal
                             .attention_view(invocation.deadline, &invocation.cancellation)
                             .await?,
                     ),
                     "wellbeing.derived.read" => serde_json::to_value(
-                        self.model
+                        personal
                             .wellbeing_view(invocation.deadline, &invocation.cancellation)
                             .await?,
                     ),
@@ -385,14 +435,12 @@ struct ConversationExperts<'model> {
     model: &'model Model,
     policy: &'model InferencePolicyDecision,
     context: &'model AgentContext,
+    local_context: &'model LocalContextStore,
 }
 
 impl InProcessAgent for ConversationExperts<'_> {
     fn agent_cards(&self, _: PersonId) -> Vec<AgentCard> {
-        if !matches!(self.model, Model::Server(_)) {
-            return vec![];
-        }
-        vec![
+        let cards = vec![
             AgentCard {
                 schema_version: AGENT_VERSION,
                 protocol_version: A2A_PROTOCOL_VERSION.into(),
@@ -463,7 +511,20 @@ impl InProcessAgent for ConversationExperts<'_> {
                 domain_tags: vec!["wellbeing".into()],
                 skills: vec!["Offer non-diagnostic capacity guidance without reading raw health samples.".into()],
             },
-        ]
+        ];
+        if matches!(self.model, Model::Server(_)) {
+            cards
+        } else {
+            cards
+                .into_iter()
+                .filter(|card| {
+                    matches!(
+                        card.id.as_str(),
+                        RELATIONSHIPS_AGENT_ID | FOCUS_AGENT_ID | WELLBEING_AGENT_ID
+                    )
+                })
+                .collect()
+        }
     }
 
     async fn handle_message(
@@ -486,9 +547,6 @@ impl InProcessAgent for ConversationExperts<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let Model::Server(model) = self.model else {
-            return Err(AgentFailure::CapabilityUnavailable);
-        };
         let assignment = request.message.text()?.to_owned();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -536,8 +594,17 @@ impl InProcessAgent for ConversationExperts<'_> {
             deadline: request.deadline,
             cancellation: request.cancellation.clone(),
         };
+        let personal_views = PersonalViewSource {
+            model: self.model,
+            policy: self.policy,
+            local_context: self.local_context,
+            person_id: request.person_id,
+        };
         let (summary, data, name) = match request.agent_id.as_str() {
             COMMITMENTS_AGENT_ID => {
+                let Model::Server(model) = self.model else {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                };
                 let view = model
                     .read_communication_view(
                         "",
@@ -556,6 +623,9 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             COMMUNICATION_AGENT_ID => {
+                let Model::Server(model) = self.model else {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                };
                 let view = model
                     .read_communication_view(
                         "",
@@ -574,6 +644,9 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             WORK_CONTEXT_AGENT_ID => {
+                let Model::Server(model) = self.model else {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                };
                 let view = model
                     .read_work_context_view(request.deadline, &request.cancellation)
                     .await?;
@@ -587,6 +660,9 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             LIFE_LOGISTICS_AGENT_ID => {
+                let Model::Server(model) = self.model else {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                };
                 let view = model
                     .read_logistics_view(request.deadline, &request.cancellation)
                     .await?;
@@ -600,12 +676,11 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             RELATIONSHIPS_AGENT_ID => {
-                let view = self
-                    .model
+                let view = personal_views
                     .people_view(request.deadline, &request.cancellation)
                     .await?;
                 let result: RelationshipsExpertResult =
-                    run_relationships_expert(model, self.policy, personal_invocation(), view)
+                    run_relationships_expert(self.model, self.policy, personal_invocation(), view)
                         .await?;
                 (
                     result.summary.clone(),
@@ -614,12 +689,11 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             FOCUS_AGENT_ID => {
-                let view = self
-                    .model
+                let view = personal_views
                     .attention_view(request.deadline, &request.cancellation)
                     .await?;
                 let result: FocusExpertResult =
-                    run_focus_expert(model, self.policy, personal_invocation(), view).await?;
+                    run_focus_expert(self.model, self.policy, personal_invocation(), view).await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -627,12 +701,12 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             WELLBEING_AGENT_ID => {
-                let view = self
-                    .model
+                let view = personal_views
                     .wellbeing_view(request.deadline, &request.cancellation)
                     .await?;
                 let result: WellbeingExpertResult =
-                    run_wellbeing_expert(model, self.policy, personal_invocation(), view).await?;
+                    run_wellbeing_expert(self.model, self.policy, personal_invocation(), view)
+                        .await?;
                 (
                     result.summary.clone(),
                     serde_json::to_string(&result).map_err(|_| AgentFailure::InvalidModelOutput)?,
@@ -727,13 +801,74 @@ mod tests {
     #[tokio::test]
     async fn device_model_has_no_implicit_cross_device_personal_view_route() {
         let model = Model::new(None).unwrap();
-        let result = model
-            .attention_view(
-                tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-                &floe_agent::Cancellation::default(),
-            )
-            .await;
+        let policy = policy(&model, None);
+        let local_context = LocalContextStore::default();
+        let result = PersonalViewSource {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+            person_id: PersonId::new(),
+        }
+        .attention_view(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            &floe_agent::Cancellation::default(),
+        )
+        .await;
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
+    }
+
+    #[tokio::test]
+    async fn device_model_reads_person_bound_local_context() {
+        let model = Model::new(None).unwrap();
+        let policy = policy(&model, None);
+        let local_context = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        local_context
+            .request(
+                person_id,
+                floe_protocol::LocalContextOperationDto::Publish {
+                    device_id: "mac-local".into(),
+                    view: serde_json::json!({
+                        "schema_version": AGENT_VERSION,
+                        "view_id": "attention.coarse",
+                        "source_handle": "attention:macos_local",
+                        "observed_at_unix_ms": now - 1,
+                        "expires_at_unix_ms": now + 60_000,
+                        "state": "focused",
+                        "confidence_millis": 750,
+                        "evidence_handles": ["activity:coarse"]
+                    }),
+                },
+            )
+            .unwrap();
+        let capabilities = ConversationCapabilities {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+        };
+
+        let output = capabilities
+            .invoke(CapabilityInvocation {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                call_id: uuid::Uuid::new_v4(),
+                person_id,
+                session_id: uuid::Uuid::new_v4(),
+                turn_id: uuid::Uuid::new_v4(),
+                capability_id: "attention.coarse.read".into(),
+                input: "{}".into(),
+                max_output_bytes: 65_536,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                cancellation: floe_agent::Cancellation::default(),
+            })
+            .await
+            .unwrap();
+        let view: AttentionView = serde_json::from_str(&output).unwrap();
+        assert_eq!(view.source_handle, "attention:macos_local");
     }
 
     #[test]
@@ -746,21 +881,28 @@ mod tests {
             allow_external: false,
         }))
         .unwrap();
-        let capabilities = ConversationCapabilities { model: &model };
+        let policy = policy(&model, None);
+        let local_context = LocalContextStore::default();
+        let capabilities = ConversationCapabilities {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+        };
         let descriptors = capabilities.descriptors(PersonId::new());
-        assert_eq!(descriptors.len(), 6);
+        assert_eq!(descriptors.len(), 7);
         assert_eq!(
             descriptors
                 .iter()
                 .map(|descriptor| descriptor.id.as_str())
                 .collect::<Vec<_>>(),
             [
+                "people.identity.read",
+                "schedule.feasibility.read",
+                "attention.coarse.read",
+                "wellbeing.derived.read",
                 "mail.communication.read",
                 "work.context.read",
-                "life.logistics.read",
-                "people.identity.read",
-                "attention.coarse.read",
-                "wellbeing.derived.read"
+                "life.logistics.read"
             ]
         );
         for descriptor in &descriptors {
@@ -770,7 +912,6 @@ mod tests {
             assert_eq!(schema["additionalProperties"], false);
             assert!(schema.to_string().len() < 1024);
         }
-        let policy = policy(&model, None);
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -781,6 +922,7 @@ mod tests {
             model: &model,
             policy: &policy,
             context: &context,
+            local_context: &local_context,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -804,7 +946,13 @@ mod tests {
             allow_external: false,
         }))
         .unwrap();
-        let capabilities = ConversationCapabilities { model: &model };
+        let policy = policy(&model, None);
+        let local_context = LocalContextStore::default();
+        let capabilities = ConversationCapabilities {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+        };
         let result = capabilities
             .invoke(CapabilityInvocation {
                 usage: floe_agent::UsageLedger::default(),
@@ -916,10 +1064,12 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
+        let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
+            local_context: &local_context,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -1076,10 +1226,12 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
+        let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
+            local_context: &local_context,
         };
         let mut results = vec![];
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -1146,13 +1298,8 @@ mod tests {
                     }]
                 }),
                 serde_json::json!({
-                    "summary": "Alex has an evidence-linked follow-up.",
-                    "follow_ups": [{
-                        "identity_handle": "person:alex",
-                        "reason": "A confirmed interaction needs follow-up.",
-                        "evidence_handles": ["contact:alex"],
-                        "confidence_millis": 900
-                    }]
+                    "summary": "No confirmed interaction supports a follow-up.",
+                    "follow_ups": []
                 }),
                 "contacts:local",
             ),
@@ -1165,7 +1312,7 @@ mod tests {
                     "view_id": "attention.coarse",
                     "source_handle": "attention:mac-local",
                     "observed_at_unix_ms": now - 1,
-                    "expires_at_unix_ms": now + 299_999,
+                    "expires_at_unix_ms": now + 119_999,
                     "state": "focused",
                     "confidence_millis": 800,
                     "evidence_handles": ["attention:aggregate"]
@@ -1260,10 +1407,12 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
+        let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
+            local_context: &local_context,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let task = experts
@@ -1326,10 +1475,12 @@ mod tests {
             memories: vec![],
             evidence: vec![],
         };
+        let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
+            local_context: &local_context,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

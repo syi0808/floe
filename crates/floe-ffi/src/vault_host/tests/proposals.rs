@@ -287,7 +287,13 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         session_id: session.id.to_string(),
         invocation_id: evidence.invocation_id.to_string(),
     };
-    let worker = Worker::with_core(root.clone(), keys.clone(), core.clone()).unwrap();
+    let worker = Worker::with_core(
+        root.clone(),
+        keys.clone(),
+        core.clone(),
+        Arc::new(LocalContextStore::default()),
+    )
+    .unwrap();
     assert_eq!(
         perform(&worker, person, inspect.clone()).failure,
         Some(AgentFailure::VaultUnavailable)

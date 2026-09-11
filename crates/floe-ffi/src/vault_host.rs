@@ -25,6 +25,7 @@ use floe_protocol::*;
 use uuid::Uuid;
 
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
+use crate::local_context::LocalContextStore;
 
 mod conversation_turn;
 mod learner_worker;
@@ -38,14 +39,20 @@ pub(crate) struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
+    local_context: Arc<LocalContextStore>,
 }
 
 impl VaultBridge {
-    pub(crate) fn new(database_path: &str, core: Arc<FloeCore>) -> Self {
+    pub(crate) fn new(
+        database_path: &str,
+        core: Arc<FloeCore>,
+        local_context: Arc<LocalContextStore>,
+    ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
             core,
             worker: RefCell::new(None),
+            local_context,
         }
     }
 
@@ -59,8 +66,13 @@ impl VaultBridge {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
             *worker = Some(
-                Worker::with_core(self.root.clone(), KeyringVaultKeys, self.core.clone())
-                    .map_err(agent_failure)?,
+                Worker::with_core(
+                    self.root.clone(),
+                    KeyringVaultKeys,
+                    self.core.clone(),
+                    self.local_context.clone(),
+                )
+                .map_err(agent_failure)?,
             );
         }
         worker
@@ -107,6 +119,7 @@ impl Worker {
         root: PathBuf,
         keys: Keys,
         core: Arc<FloeCore>,
+        local_context: Arc<LocalContextStore>,
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
         let closing = Arc::new(AtomicBool::new(false));
@@ -132,9 +145,14 @@ impl Worker {
                                 break;
                             }
                             let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
-                                Ok(runtime) => {
-                                    runtime.block_on(execute(&root, &keys, &core, &mut vault, &job))
-                                }
+                                Ok(runtime) => runtime.block_on(execute(
+                                    &root,
+                                    &keys,
+                                    &core,
+                                    &local_context,
+                                    &mut vault,
+                                    &job,
+                                )),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
                             }))
                             .unwrap_or(Err(AgentFailure::Interrupted));
@@ -338,6 +356,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
     root: &std::path::Path,
     keys: &Keys,
     core: &FloeCore,
+    local_context: &LocalContextStore,
     current: &mut Option<(PersonId, EncryptedAgentVault<Keys>)>,
     job: &Job,
 ) -> Result<
@@ -587,6 +606,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             let session = conversation_turn::run(
                 core,
                 vault,
+                local_context,
                 job.person,
                 request,
                 job.cancellation.clone(),
@@ -852,7 +872,12 @@ mod tests {
                 .build()
                 .unwrap();
             let core = runtime.block_on(FloeCore::open(":memory:")).unwrap();
-            Self::with_core(root, keys, Arc::new(core))
+            Self::with_core(
+                root,
+                keys,
+                Arc::new(core),
+                Arc::new(LocalContextStore::default()),
+            )
         }
     }
 

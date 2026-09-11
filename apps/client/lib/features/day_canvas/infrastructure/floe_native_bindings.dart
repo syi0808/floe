@@ -27,7 +27,9 @@ typedef FloeProtocolVersionDart = int Function();
 
 final class FloeNativeBindings {
   FloeNativeBindings(String libraryPath)
-    : _library = DynamicLibrary.open(libraryPath) {
+    : _library = libraryPath.isEmpty
+          ? DynamicLibrary.process()
+          : DynamicLibrary.open(libraryPath) {
     open = _library.lookupFunction<FloeOpenNative, FloeOpenDart>(
       'floe_core_open',
     );
@@ -62,6 +64,8 @@ final class FloeNativeBindings {
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_fixture');
   late final FloeCallDart agentVault = _library
       .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_agent_vault');
+  late final FloeCallDart localContext = _library
+      .lookupFunction<FloeCallNative, FloeCallDart>('floe_core_local_context');
   late final FloeCallDart agentFixtureRun = _library
       .lookupFunction<FloeCallNative, FloeCallDart>(
         'floe_core_agent_fixture_run',

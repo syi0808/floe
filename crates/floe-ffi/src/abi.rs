@@ -16,12 +16,14 @@ pub unsafe extern "C" fn floe_core_open(
             .build()
             .map_err(|value| error(ErrorCodeDto::Internal, value.to_string()))?;
         let core = Arc::new(runtime.block_on(FloeCore::open(path)).map_err(core_error)?);
+        let local_context = Arc::new(local_context::LocalContextStore::default());
         Ok(Box::into_raw(Box::new(FloeHandle {
             runtime,
             core: core.clone(),
             agent_runs: Default::default(),
+            local_context: local_context.clone(),
             #[cfg(unix)]
-            agent_vault: vault_host::VaultBridge::new(path, core),
+            agent_vault: vault_host::VaultBridge::new(path, core, local_context),
         })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
@@ -40,6 +42,20 @@ pub unsafe extern "C" fn floe_core_open(
             ptr::null_mut()
         }
     }
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn floe_core_local_context(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    guarded(|| {
+        let handle = handle(handle_ptr)?;
+        let request = serde_json::from_str(c_input(request_json, "request_json")?)
+            .map_err(|value| invalid("request_json", value.to_string()))?;
+        local_context(handle, request)
+    })
 }
 
 #[unsafe(no_mangle)]

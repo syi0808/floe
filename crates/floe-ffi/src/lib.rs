@@ -2,6 +2,7 @@ mod abi;
 mod agent_run;
 
 pub use abi::*;
+mod local_context;
 pub mod local_model;
 mod native_calendar;
 mod remote_model;
@@ -28,8 +29,18 @@ pub struct FloeHandle {
     runtime: Runtime,
     core: Arc<FloeCore>,
     agent_runs: agent_run::AgentRuns,
+    local_context: Arc<local_context::LocalContextStore>,
     #[cfg(unix)]
     agent_vault: vault_host::VaultBridge,
+}
+
+pub fn local_context(
+    handle: &FloeHandle,
+    request: LocalContextRequestDto,
+) -> BridgeResult<LocalContextResultDto> {
+    check_version(request.schema_version)?;
+    let person_id = parse_person(&request.person_id)?;
+    handle.local_context.request(person_id, request.operation)
 }
 
 impl Drop for FloeHandle {
