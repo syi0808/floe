@@ -1,9 +1,9 @@
 use floe_agent::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConnectionState,
     ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot, ConnectorDescriptor,
-    ConnectorSnapshot, DataClass, ExecutionLocation, RetentionClass, SituationDescriptor,
-    SituationTrigger, SourceFailure, SourceFailureKind, ViewDescriptor, ViewSnapshot,
-    evaluate_situation, validate_connector_snapshot,
+    ConnectorSnapshot, DataClass, DeviceBinding, ExecutionLocation, RetentionClass,
+    SituationDescriptor, SituationTrigger, SourceFailure, SourceFailureKind, ViewDescriptor,
+    ViewSnapshot, evaluate_situation, validate_connector_snapshot,
 };
 
 const NOW: u64 = 2_000_000;
@@ -41,6 +41,9 @@ fn fixture(connector_id: &str, view_id: &str, source_handle: &str) -> ConnectorS
         connection: ConnectorConnectionSnapshot {
             schema_version: CONNECTED_CONTEXT_VERSION,
             connector_id: connector_id.into(),
+            connection_id: None,
+            person_id: None,
+            device_binding: None,
             state: ConnectionState::Ready,
             granted_scopes: vec![format!("{view_id}.read")],
             observed_at_unix_ms: NOW,
@@ -58,6 +61,33 @@ fn fixture(connector_id: &str, view_id: &str, source_handle: &str) -> ConnectorS
             provenance_count: 2,
         }],
     }
+}
+
+#[test]
+fn person_owned_device_connection_must_match_descriptor_device() {
+    let mut snapshot = fixture("calendar.apple", "view.timeline", "calendar:home");
+    snapshot.connection.connection_id = Some("calendar.apple.primary".into());
+    snapshot.connection.person_id = Some("00000000-0000-4000-8000-000000000001".into());
+    snapshot.connection.device_binding = Some(DeviceBinding {
+        device_id: "test-device".into(),
+    });
+    assert!(validate_connector_snapshot(&snapshot, NOW).is_empty());
+
+    snapshot.connection.person_id = Some("not-a-person".into());
+    snapshot.connection.device_binding = Some(DeviceBinding {
+        device_id: "other-device".into(),
+    });
+    let violations = validate_connector_snapshot(&snapshot, NOW);
+    assert!(
+        violations
+            .iter()
+            .any(|value| value.code == ConformanceCode::InvalidIdentifier)
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|value| value.code == ConformanceCode::ConnectorMismatch)
+    );
 }
 
 fn briefing() -> SituationDescriptor {

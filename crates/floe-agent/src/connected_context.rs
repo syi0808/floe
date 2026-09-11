@@ -111,6 +111,12 @@ pub struct SourceFailure {
 pub struct ConnectorConnectionSnapshot {
     pub schema_version: u32,
     pub connector_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_binding: Option<DeviceBinding>,
     pub state: ConnectionState,
     pub granted_scopes: Vec<String>,
     pub observed_at_unix_ms: u64,
@@ -118,6 +124,12 @@ pub struct ConnectorConnectionSnapshot {
     pub last_success_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<SourceFailure>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceBinding {
+    pub device_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -299,6 +311,38 @@ pub fn validate_connector_snapshot(
             ConformanceCode::ConnectorMismatch,
             &connection.connector_id,
         );
+    }
+    match (&connection.connection_id, &connection.person_id) {
+        (Some(connection_id), Some(person_id)) => {
+            validate_identifier(connection_id, &connection.connector_id, &mut violations);
+            if uuid::Uuid::parse_str(person_id).is_err() {
+                push(
+                    &mut violations,
+                    ConformanceCode::InvalidIdentifier,
+                    &connection.connector_id,
+                );
+            }
+        }
+        (None, None) => {}
+        _ => push(
+            &mut violations,
+            ConformanceCode::InvalidIdentifier,
+            &connection.connector_id,
+        ),
+    }
+    if let Some(binding) = &connection.device_binding {
+        if !matches!(
+            &descriptor.execution,
+            ExecutionLocation::Device { device_id } if device_id == &binding.device_id
+        ) || binding.device_id.trim().is_empty()
+            || binding.device_id.len() > 128
+        {
+            push(
+                &mut violations,
+                ConformanceCode::ConnectorMismatch,
+                &connection.connector_id,
+            );
+        }
     }
     if connection.observed_at_unix_ms > now_unix_ms
         || connection

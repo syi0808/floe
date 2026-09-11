@@ -44,7 +44,7 @@ pub use communication_context::{
 pub use connected_context::{
     CONNECTED_CONTEXT_VERSION, CapabilityAuthority, ConformanceCode, ConformanceViolation,
     ConnectionState, ConnectorCapabilityDescriptor, ConnectorConnectionSnapshot,
-    ConnectorDescriptor, ConnectorSnapshot, ExecutionLocation, RetentionClass,
+    ConnectorDescriptor, ConnectorSnapshot, DeviceBinding, ExecutionLocation, RetentionClass,
     SituationConformanceReport, SituationDescriptor, SituationTrigger, SourceFailure,
     SourceFailureKind, SourceIssue, ViewDescriptor, ViewSnapshot, evaluate_situation,
     validate_connector_snapshot,

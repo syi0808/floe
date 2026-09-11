@@ -223,6 +223,9 @@ fn project_calendar_connector(
         connection: ConnectorConnectionSnapshot {
             schema_version: CONNECTED_CONTEXT_VERSION,
             connector_id: connector_id.into(),
+            connection_id: None,
+            person_id: None,
+            device_binding: None,
             state,
             granted_scopes,
             observed_at_unix_ms: now_unix_ms,

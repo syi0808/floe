@@ -46,6 +46,9 @@ fn snapshot(
         connection: ConnectorConnectionSnapshot {
             schema_version: CONNECTED_CONTEXT_VERSION,
             connector_id: connector.into(),
+            connection_id: None,
+            person_id: None,
+            device_binding: None,
             state,
             granted_scopes: vec!["mail.read".into()],
             observed_at_unix_ms: NOW,
