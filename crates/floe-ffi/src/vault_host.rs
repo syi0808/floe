@@ -574,15 +574,17 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         }
         AgentVaultActionDto::ConversationSession { operation } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            ensure_builtin_experts(
-                vault,
-                core,
-                local_context,
-                job.person,
-                None,
-                job.cancellation.clone(),
-            )
-            .await?;
+            if vault.builtin_expert_overview().await?.is_none() {
+                ensure_builtin_experts(
+                    vault,
+                    core,
+                    local_context,
+                    job.person,
+                    None,
+                    job.cancellation.clone(),
+                )
+                .await?;
+            }
             let session = match operation {
                 AgentConversationSessionOperationDto::Start {} => vault.create_session().await?,
                 AgentConversationSessionOperationDto::Resume {} => vault.resume_session().await?,
@@ -878,14 +880,18 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
     })
     .collect::<Vec<_>>();
     let existing = vault.builtin_expert_overview().await?;
-    let result = if let Some(existing) = existing {
-        vault
-            .refresh_builtin_expert_sources(
-                existing.registry.revision,
-                sources,
-                cancellation.clone(),
-            )
-            .await?
+    let ensured = if let Some(existing) = existing {
+        if existing.setup.sources == sources {
+            Ok(existing)
+        } else {
+            vault
+                .refresh_builtin_expert_sources(
+                    existing.registry.revision,
+                    sources.clone(),
+                    cancellation.clone(),
+                )
+                .await
+        }
     } else {
         let revision = vault
             .registry_overview()
@@ -900,11 +906,32 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
                         &vault.registry_instance_id(),
                         b"floe.builtin.experts.v1",
                     ),
-                    sources,
+                    sources: sources.clone(),
                 },
                 cancellation.clone(),
             )
-            .await?
+            .await
+    };
+    let result = match ensured {
+        Ok(result) => result,
+        Err(AgentFailure::Conflict) => {
+            let latest = vault
+                .builtin_expert_overview()
+                .await?
+                .ok_or(AgentFailure::Conflict)?;
+            if latest.setup.sources == sources {
+                latest
+            } else {
+                vault
+                    .refresh_builtin_expert_sources(
+                        latest.registry.revision,
+                        sources,
+                        cancellation.clone(),
+                    )
+                    .await?
+            }
+        }
+        Err(failure) => return Err(failure),
     };
     if result.setup.assignments.len() != BuiltinExpertKind::BUILTIN_SETUP.len() {
         return Err(AgentFailure::VaultUnavailable);
@@ -1147,6 +1174,14 @@ mod tests {
         .unwrap();
         assert!(created.scope.is_none());
         assert_eq!(created.data_classes, [floe_agent::DataClass::Personal]);
+        let installed_revision = perform(
+            &worker,
+            person,
+            AgentVaultActionDto::Registry { change: None },
+        )
+        .registry
+        .unwrap()
+        .revision;
         let resumed = perform(
             &worker,
             person,
@@ -1157,6 +1192,17 @@ mod tests {
         .session
         .unwrap();
         assert_eq!(resumed.id, created.id);
+        assert_eq!(
+            perform(
+                &worker,
+                person,
+                AgentVaultActionDto::Registry { change: None },
+            )
+            .registry
+            .unwrap()
+            .revision,
+            installed_revision,
+        );
         let sample = perform(
             &worker,
             person,
