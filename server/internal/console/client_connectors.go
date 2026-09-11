@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"floe/server/internal/credentials"
@@ -60,6 +61,21 @@ func clientConnectorDefinitionFor(identifier string) (clientConnectorDefinition,
 		}
 	}
 	return clientConnectorDefinition{}, false
+}
+
+func (console *Console) lockConnectorLifecycle(connectorID string) func() {
+	console.connectorLifecycleMu.Lock()
+	if console.connectorLifecycles == nil {
+		console.connectorLifecycles = map[string]*sync.Mutex{}
+	}
+	lifecycle := console.connectorLifecycles[connectorID]
+	if lifecycle == nil {
+		lifecycle = &sync.Mutex{}
+		console.connectorLifecycles[connectorID] = lifecycle
+	}
+	console.connectorLifecycleMu.Unlock()
+	lifecycle.Lock()
+	return lifecycle.Unlock
 }
 
 func (console *Console) serveClientConnectors(writer http.ResponseWriter, request *http.Request, scope clientScope) {
@@ -156,6 +172,8 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 }
 
 func (console *Console) startClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
+	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
+	defer unlockLifecycle()
 	var input struct {
 		SchemaVersion int            `json:"schema_version"`
 		Secret        string         `json:"secret"`
@@ -332,6 +350,8 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 }
 
 func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition, attemptID string) {
+	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
+	defer unlockLifecycle()
 	console.mu.Lock()
 	attempt, exists := console.connectorAttempts[attemptID]
 	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
@@ -384,6 +404,8 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 }
 
 func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition, attemptID string) {
+	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
+	defer unlockLifecycle()
 	console.mu.Lock()
 	attempt, exists := console.connectorAttempts[attemptID]
 	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
@@ -438,6 +460,8 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 }
 
 func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
+	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
+	defer unlockLifecycle()
 	if len(definition.ScopeFields) == 0 {
 		failure(writer, http.StatusConflict, "capability_not_supported")
 		return
@@ -482,6 +506,8 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 }
 
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
+	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
+	defer unlockLifecycle()
 	var input struct {
 		SchemaVersion      int    `json:"schema_version"`
 		ConnectionID       string `json:"connection_id"`
