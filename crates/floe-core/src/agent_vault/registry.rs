@@ -6,6 +6,81 @@ use super::*;
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn builtin_expert_overview(
+        &self,
+    ) -> Result<Option<floe_agent::BuiltinExpertSetupResult>, AgentFailure> {
+        let Some(snapshot) = self.expert_registry().await? else {
+            return Ok(None);
+        };
+        let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+        let Some(setup) = registry
+            .snapshot()
+            .builtin_setups
+            .iter()
+            .find(|setup| setup.person_id == self.person_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        self.check_access()?;
+        Ok(Some(floe_agent::BuiltinExpertSetupResult {
+            setup,
+            registry: registry.overview(self.person_id),
+        }))
+    }
+
+    pub async fn install_builtin_experts(
+        &self,
+        request: floe_agent::BuiltinExpertSetup,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::BuiltinExpertSetupResult, AgentFailure> {
+        let check = || {
+            cancellation
+                .is_cancelled()
+                .then_some(AgentFailure::Cancelled)
+                .map_or(Ok(()), Err)
+        };
+        check()?;
+        if request.instance_id != self.vault_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let previous = self.expert_registry().await?;
+        let mut registry = match &previous {
+            Some(snapshot) => AgentRegistry::restore(snapshot.clone(), self.vault_id)?,
+            None => AgentRegistry::new(self.vault_id),
+        };
+        let revision = registry.revision();
+        let setup = registry.install_builtin_experts(self.person_id, &request)?;
+        if registry.revision() != revision {
+            match previous {
+                Some(_) => {
+                    self.save_expert_registry_checked(revision, &registry.snapshot(), &check)
+                        .await?
+                }
+                None => {
+                    self.initialize_expert_registry_checked(&registry.snapshot(), &check)
+                        .await?
+                }
+            }
+        }
+        self.check_access()?;
+        check()?;
+        Ok(floe_agent::BuiltinExpertSetupResult {
+            setup,
+            registry: registry.overview(self.person_id),
+        })
+    }
+
+    pub async fn enabled_expert_cards(&self) -> Result<Vec<floe_agent::AgentCard>, AgentFailure> {
+        let cards = match self.expert_registry().await? {
+            Some(snapshot) => AgentRegistry::restore(snapshot, self.vault_id)?
+                .enabled_expert_cards(self.person_id),
+            None => vec![],
+        };
+        self.check_access()?;
+        Ok(cards)
+    }
+
     pub async fn calendar_expert_overview(
         &self,
     ) -> Result<floe_agent::CalendarExpertOverview, AgentFailure> {
@@ -303,6 +378,43 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .any(|receipt| !snapshot.calendar_setups.contains(receipt))
             {
                 return Err(AgentFailure::Conflict);
+            }
+            if previous
+                .builtin_setups
+                .iter()
+                .any(|receipt| !snapshot.builtin_setups.contains(receipt))
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            for receipt in &snapshot.builtin_setups {
+                if previous.builtin_setups.contains(receipt) {
+                    continue;
+                }
+                if receipt.expected_revision != expected_revision
+                    || previous
+                        .builtin_setups
+                        .iter()
+                        .any(|entry| entry.setup_id == receipt.setup_id)
+                    || receipt.assignments.iter().any(|created| {
+                        previous.installations.iter().any(|entry| {
+                            [created.tool_installation_id, created.expert_installation_id]
+                                .contains(&entry.id)
+                        }) || previous.assignments.iter().any(|entry| {
+                            [created.tool_assignment_id, created.expert_assignment_id]
+                                .contains(&entry.id)
+                        }) || snapshot.installations.iter().any(|entry| {
+                            [created.tool_installation_id, created.expert_installation_id]
+                                .contains(&entry.id)
+                                && entry.enabled
+                        }) || snapshot.assignments.iter().any(|entry| {
+                            [created.tool_assignment_id, created.expert_assignment_id]
+                                .contains(&entry.id)
+                                && entry.enabled
+                        })
+                    })
+                {
+                    return Err(AgentFailure::Conflict);
+                }
             }
             if previous
                 .revoked_calendar_setups

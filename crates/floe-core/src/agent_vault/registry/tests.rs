@@ -14,6 +14,7 @@ use crate::{
     AgentFixturePrompt, AgentFixtureTurn, agent_fixture::FixtureCapabilities, recover_agent_sample,
 };
 
+mod builtin_setup;
 mod calendar_setup;
 
 #[tokio::test]

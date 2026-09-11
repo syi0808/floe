@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::{AGENT_VERSION, AgentFailure, DataClass};
 
+mod builtin_setup;
 mod calendar_setup;
+pub use builtin_setup::*;
 pub use calendar_setup::*;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +35,7 @@ pub enum ExpertRule {
 pub enum PackageImplementation {
     TimelineRead { data_class: DataClass },
     Schedule,
+    Builtin { expert: BuiltinExpertKind },
     Declarative { rules: Vec<ExpertRule> },
 }
 
@@ -91,6 +94,9 @@ impl AgentPackage {
                     && self.required_tools.is_empty()
                     && !matches!(data_class, DataClass::Credential | DataClass::DeviceOnlyRaw) => {}
             PackageImplementation::Schedule if self.reference.kind == PackageKind::Expert => {
+                self.validate_requirements()?;
+            }
+            PackageImplementation::Builtin { .. } if self.reference.kind == PackageKind::Expert => {
                 self.validate_requirements()?;
             }
             PackageImplementation::Declarative { rules }
@@ -180,6 +186,8 @@ pub struct RegistrySnapshot {
     pub calendar_setups: Vec<CalendarExpertSetupReceipt>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub revoked_calendar_setups: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub builtin_setups: Vec<BuiltinExpertSetupReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -308,6 +316,7 @@ impl AgentRegistry {
                 calendar_views: vec![],
                 calendar_setups: vec![],
                 revoked_calendar_setups: vec![],
+                builtin_setups: vec![],
             },
         }
     }
@@ -337,6 +346,7 @@ impl AgentRegistry {
             || snapshot.calendar_views.len() > 256
             || snapshot.calendar_setups.len() > 64
             || snapshot.revoked_calendar_setups.len() > 64
+            || snapshot.builtin_setups.len() > 64
         {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -386,6 +396,7 @@ impl AgentRegistry {
             }
         }
         registry.validate_calendar_setups()?;
+        registry.validate_builtin_setups()?;
         for (index, setup_id) in registry.snapshot.revoked_calendar_setups.iter().enumerate() {
             if setup_id.is_nil()
                 || registry.snapshot.revoked_calendar_setups[..index].contains(setup_id)
@@ -746,6 +757,7 @@ impl AgentRegistry {
                 domain_tags: vec!["custom".into()],
                 skills: vec!["Provide independent domain judgment".into()],
             },
+            PackageImplementation::Builtin { expert } => expert.metadata(),
             PackageImplementation::TimelineRead { .. } => {
                 return Err(AgentFailure::CapabilityDenied);
             }
