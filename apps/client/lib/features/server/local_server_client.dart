@@ -5,6 +5,10 @@ import 'package:flutter/services.dart';
 
 import '../../app/local_identity.dart';
 
+final _uuidPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+);
+
 abstract interface class ServerCredentialStore {
   Future<String?> read();
   Future<void> write(String value);
@@ -468,15 +472,25 @@ class LocalServerClient {
   Future<Map<String, Object?>> updateConnectorScope({
     required ServerConnection connection,
     required String connectorId,
+    required String connectionId,
+    required int connectionRevision,
     required Map<String, Object?> scope,
   }) async {
     _requireConnectionIdentity(connection);
+    if (connectionId.isEmpty || connectionRevision <= 0) {
+      throw ArgumentError('Invalid connector precondition');
+    }
     final value = await _request(
       connection.address,
       '/v1/connectors/${Uri.encodeComponent(connectorId)}/scope',
       method: 'PATCH',
       token: connection.token,
-      body: {'schema_version': 1, 'scope': scope},
+      body: {
+        'schema_version': 1,
+        'connection_id': connectionId,
+        'connection_revision': connectionRevision,
+        'scope': scope,
+      },
     );
     try {
       if (value['schema_version'] != 1 ||
@@ -495,13 +509,23 @@ class LocalServerClient {
   Future<void> disconnectConnector({
     required ServerConnection connection,
     required String connectorId,
+    required String connectionId,
+    required int connectionRevision,
   }) async {
     _requireConnectionIdentity(connection);
+    if (connectionId.isEmpty || connectionRevision <= 0) {
+      throw ArgumentError('Invalid connector precondition');
+    }
     final value = await _request(
       connection.address,
       '/v1/connectors/${Uri.encodeComponent(connectorId)}',
       method: 'DELETE',
       token: connection.token,
+      body: {
+        'schema_version': 1,
+        'connection_id': connectionId,
+        'connection_revision': connectionRevision,
+      },
     );
     if (value['schema_version'] != 1 ||
         value['person_id'] != connection.personId ||
@@ -714,6 +738,7 @@ ServerConnector _serverConnector(Object? raw) {
   final connectionId = value['connection_id'] as String?;
   final connectionRevision = value['connection_revision'] as int?;
   if ((connectionId == null) != (connectionRevision == null) ||
+      connectionId != null && !_uuidPattern.hasMatch(connectionId) ||
       connectionRevision != null && connectionRevision <= 0) {
     throw const FormatException();
   }

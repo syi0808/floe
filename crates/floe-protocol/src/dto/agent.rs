@@ -46,6 +46,8 @@ pub struct CalendarExpertSetupDto {
     pub provider: floe_domain::CalendarProvider,
     pub device_id: String,
     pub calendar_ids: Vec<String>,
+    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -67,6 +69,8 @@ pub enum CalendarAccessChangeDto {
         provider: floe_domain::CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,
+        connection_scope: floe_domain::CalendarScope,
+        connection_revision: u64,
     },
     Remove {},
 }
@@ -175,6 +179,15 @@ pub struct AgentRemoteRouteDto {
     pub purpose: String,
     pub external: bool,
     pub allow_external: bool,
+    pub calendar_connections: Vec<AgentRemoteCalendarConnectionDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRemoteCalendarConnectionDto {
+    pub connector_id: String,
+    pub connection_id: String,
+    pub connection_revision: u64,
 }
 
 impl std::fmt::Debug for AgentRemoteRouteDto {
@@ -186,6 +199,7 @@ impl std::fmt::Debug for AgentRemoteRouteDto {
             .field("purpose", &self.purpose)
             .field("external", &self.external)
             .field("allow_external", &self.allow_external)
+            .field("calendar_connections", &self.calendar_connections)
             .finish()
     }
 }

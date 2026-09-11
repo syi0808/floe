@@ -9,7 +9,7 @@ pub use dto::{
     AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,
     AgentMemoryReviewDecisionDto, AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto,
     AgentMemorySummaryDto, AgentProposalActionDto, AgentProposalInspectionDto,
-    AgentProposalStatusDto, AgentRemoteRouteDto, AgentSessionDto, AgentVaultActionDto,
+    AgentProposalStatusDto, AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto, AgentSessionDto, AgentVaultActionDto,
     AgentVaultOperationDto, AgentVaultRequestDto, AgentVaultResultDto, AgentVaultStateDto,
     CalendarAccessChangeDto, CalendarAccessConfigurationDto, CalendarActionDecisionDto,
     CalendarActionOperationDto, CalendarActionRequestDto, CalendarBatchDto,

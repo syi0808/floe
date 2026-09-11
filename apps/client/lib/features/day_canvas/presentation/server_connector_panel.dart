@@ -232,9 +232,16 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
       setState(() => error = 'Complete the required scope fields.');
       return;
     }
+    final connectionId = widget.connector.connectionId;
+    final connectionRevision = widget.connector.connectionRevision;
+    if (connectionId == null || connectionRevision == null) {
+      throw const ServerConnectionException('connection_changed');
+    }
     await widget.client.updateConnectorScope(
       connection: widget.connection,
       connectorId: widget.connector.id,
+      connectionId: connectionId,
+      connectionRevision: connectionRevision,
       scope: _scopeValue(),
     );
     await widget.onChanged();
@@ -261,9 +268,16 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    final connectionId = widget.connector.connectionId;
+    final connectionRevision = widget.connector.connectionRevision;
+    if (connectionId == null || connectionRevision == null) {
+      throw const ServerConnectionException('connection_changed');
+    }
     await widget.client.disconnectConnector(
       connection: widget.connection,
       connectorId: widget.connector.id,
+      connectionId: connectionId,
+      connectionRevision: connectionRevision,
     );
     await widget.onChanged();
   });

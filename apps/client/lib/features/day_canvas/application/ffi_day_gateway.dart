@@ -75,12 +75,31 @@ final class FfiDayGateway
       final consentCoversRoute =
           !route.requiresExternalConsent ||
           connection.coversExternalRecipient(route.recipient);
+      final catalog = await serverClient.connectorCatalog(connection);
+      final calendarConnections = catalog.connectors
+          .where(
+            (connector) =>
+                connector.status == ServerConnectorStatus.connected &&
+                const {
+                  'calendar.google',
+                  'calendar.microsoft',
+                }.contains(connector.id),
+          )
+          .map(
+            (connector) => {
+              'connector_id': connector.id,
+              'connection_id': connector.connectionId,
+              'connection_revision': connector.connectionRevision,
+            },
+          )
+          .toList(growable: false);
       return {
         'base_url': connection.address,
         'bearer_token': connection.token,
         'purpose': InferencePurpose.everydayAssistance.wireName,
         'external': route.requiresExternalConsent,
         'allow_external': consentCoversRoute,
+        'calendar_connections': calendarConnections,
       };
     } on ServerConnectionException {
       return null;

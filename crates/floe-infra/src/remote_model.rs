@@ -9,7 +9,7 @@ use floe_agent::{
     validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view,
     validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
-use floe_protocol::AgentRemoteRouteDto;
+use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
@@ -20,11 +20,23 @@ pub struct ServerModelRunner {
 }
 
 pub struct CalendarContextRequest<'input> {
-    pub connector_id: Option<&'input str>,
+    pub connector_id: &'input str,
+    pub connection_id: &'input str,
+    pub connection_revision: u64,
     pub range_start_unix_ms: i64,
     pub range_end_unix_ms: i64,
     pub cursor: &'input str,
     pub limit: usize,
+}
+
+fn valid_connection_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|identifier| {
+        identifier.get_version_num() == 4
+            && identifier
+                .hyphenated()
+                .to_string()
+                .eq_ignore_ascii_case(value)
+    })
 }
 
 impl ServerModelRunner {
@@ -43,6 +55,23 @@ impl ServerModelRunner {
                 .bytes()
                 .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
             || route.purpose != "everyday_assistance"
+            || route.calendar_connections.len() > 2
+            || route.calendar_connections.iter().any(|connection| {
+                !matches!(
+                    connection.connector_id.as_str(),
+                    "calendar.google" | "calendar.microsoft"
+                ) || !valid_connection_id(&connection.connection_id)
+                    || connection.connection_revision == 0
+            })
+            || route
+                .calendar_connections
+                .iter()
+                .enumerate()
+                .any(|(index, connection)| {
+                    route.calendar_connections[..index]
+                        .iter()
+                        .any(|candidate| candidate.connector_id == connection.connector_id)
+                })
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -52,6 +81,10 @@ impl ServerModelRunner {
             ModelPlacement::DeviceLocal
         };
         Ok(Self { route, placement })
+    }
+
+    pub fn calendar_connections(&self) -> &[AgentRemoteCalendarConnectionDto] {
+        &self.route.calendar_connections
     }
 
     pub async fn read_communication_view(
@@ -103,9 +136,12 @@ impl ServerModelRunner {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<CalendarContextView, AgentFailure> {
-        if request.connector_id.is_some_and(|identifier| {
-            !matches!(identifier, "calendar.google" | "calendar.microsoft")
-        }) || request.range_start_unix_ms < 0
+        if !matches!(
+            request.connector_id,
+            "calendar.google" | "calendar.microsoft"
+        ) || !valid_connection_id(request.connection_id)
+            || request.connection_revision == 0
+            || request.range_start_unix_ms < 0
             || request.range_end_unix_ms <= request.range_start_unix_ms
             || request.range_end_unix_ms - request.range_start_unix_ms > 32 * 86_400_000
             || request.cursor.len() > 2048
@@ -114,16 +150,16 @@ impl ServerModelRunner {
         {
             return Err(AgentFailure::InvalidInput);
         }
-        let mut input = json!({
+        let input = json!({
             "schema_version": AGENT_VERSION,
+            "connector_id": request.connector_id,
+            "connection_id": request.connection_id,
+            "connection_revision": request.connection_revision,
             "range_start_unix_ms": request.range_start_unix_ms,
             "range_end_unix_ms": request.range_end_unix_ms,
             "cursor": request.cursor,
             "limit": request.limit,
         });
-        if let Some(connector_id) = request.connector_id {
-            input["connector_id"] = json!(connector_id);
-        }
         self.read_view(
             "/v1/views/calendar.timeline",
             input,
@@ -808,6 +844,7 @@ mod tests {
             purpose: "everyday_assistance".into(),
             external: true,
             allow_external: false,
+            calendar_connections: vec![],
         }
     }
 
@@ -1045,6 +1082,20 @@ mod tests {
         ] {
             let mut candidate = route();
             candidate.base_url = invalid.into();
+            assert!(ServerModelRunner::new(candidate).is_err());
+        }
+
+        for (connection_id, revision) in [
+            ("not-a-uuid", 1),
+            ("00000000-0000-3000-8000-000000000001", 1),
+            ("00000000-0000-4000-8000-000000000001", 0),
+        ] {
+            let mut candidate = route();
+            candidate.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
+                connector_id: "calendar.google".into(),
+                connection_id: connection_id.into(),
+                connection_revision: revision,
+            }];
             assert!(ServerModelRunner::new(candidate).is_err());
         }
     }

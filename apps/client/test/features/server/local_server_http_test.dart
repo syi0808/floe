@@ -105,7 +105,7 @@ void main() {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final calls = <String>[];
       server.listen((request) async {
-        final body = request.method == 'GET' || request.method == 'DELETE'
+        final body = request.method == 'GET'
             ? <String, dynamic>{}
             : jsonDecode(await utf8.decoder.bind(request).join())
                   as Map<String, dynamic>;
@@ -177,6 +177,11 @@ void main() {
             );
           case '/v1/connectors/github.issues/scope':
             expect(request.method, 'PATCH');
+            expect(
+              body['connection_id'],
+              '00000000-0000-4000-8000-000000000010',
+            );
+            expect(body['connection_revision'], 1);
             request.response.write(
               jsonEncode({
                 'schema_version': 1,
@@ -187,6 +192,11 @@ void main() {
             );
           case '/v1/connectors/github.issues':
             expect(request.method, 'DELETE');
+            expect(
+              body['connection_id'],
+              '00000000-0000-4000-8000-000000000010',
+            );
+            expect(body['connection_revision'], 2);
             request.response.write(
               jsonEncode({
                 'schema_version': 1,
@@ -232,6 +242,8 @@ void main() {
         await client.updateConnectorScope(
           connection: connection,
           connectorId: 'github.issues',
+          connectionId: '00000000-0000-4000-8000-000000000010',
+          connectionRevision: 1,
           scope: {'owner': 'floe', 'repository': 'server'},
         ),
         {'owner': 'floe', 'repository': 'server'},
@@ -239,6 +251,8 @@ void main() {
       await client.disconnectConnector(
         connection: connection,
         connectorId: 'github.issues',
+        connectionId: '00000000-0000-4000-8000-000000000010',
+        connectionRevision: 2,
       );
       expect(calls, [
         'POST /pair/start',
