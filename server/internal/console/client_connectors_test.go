@@ -114,6 +114,17 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 		disconnected <- fixture.call(http.MethodDelete, "/v1/connectors/github.issues", precondition, token)
 	}()
 	<-vault.deleteEntered
+	reconnectStarted := make(chan struct{})
+	reconnected := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/v1/connectors/github.issues/connect", strings.NewReader(`{"schema_version":1,"secret":"replacement-github-token","scope":{"owner":"floe","repository":"server"}}`))
+		request.Header.Set("Content-Type", "application/json")
+		close(reconnectStarted)
+		response := httptest.NewRecorder()
+		fixture.console.serveClientConnectors(response, request, clientScope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID})
+		reconnected <- response
+	}()
+	<-reconnectStarted
 
 	if response := fixture.call(http.MethodPost, "/manage/api/client/delete", map[string]string{"id": clientID}, ""); response.Code != http.StatusOK {
 		test.Fatalf("last client revocation waited for connector cleanup: %d %s", response.Code, response.Body.String())
@@ -121,9 +132,22 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 	if response := fixture.call(http.MethodGet, "/v1/connectors", nil, token); response.Code != http.StatusUnauthorized {
 		test.Fatalf("revoked bearer remained active during connector cleanup: %d %s", response.Code, response.Body.String())
 	}
+	select {
+	case response := <-reconnected:
+		test.Fatalf("reconnect bypassed the disconnect lifecycle lock: %d %s", response.Code, response.Body.String())
+	default:
+	}
 	close(vault.releaseDelete)
 	if response := <-disconnected; response.Code != http.StatusInternalServerError {
 		test.Fatalf("vault cleanup failure was hidden: %d %s", response.Code, response.Body.String())
+	}
+	if response := <-reconnected; response.Code != http.StatusUnauthorized {
+		test.Fatalf("authenticated reconnect survived client revocation: %d %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-vault.putCalled:
+		test.Fatal("revoked reconnect stored a replacement credential")
+	default:
 	}
 
 	fixture.console.mu.Lock()
@@ -156,6 +180,43 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 	}
 	if value, _ := vault.Get(credential); value != "" {
 		test.Fatalf("cleanup retry retained credential: %q", value)
+	}
+}
+
+func TestConnectorLifecycleHandlersRevalidateAuthenticatedClient(test *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "connect", method: http.MethodPost, path: "/v1/connectors/github.issues/connect", body: `{"schema_version":1,"secret":"github-secret-token","scope":{"owner":"floe","repository":"server"}}`},
+		{name: "attempt poll", method: http.MethodGet, path: "/v1/connectors/microsoft.mail/connection-attempts/attempt"},
+		{name: "attempt cancel", method: http.MethodPost, path: "/v1/connectors/microsoft.mail/connection-attempts/attempt/cancel", body: `{}`},
+		{name: "scope", method: http.MethodPatch, path: "/v1/connectors/github.issues/scope", body: `{"schema_version":1,"connection_id":"00000000-0000-4000-8000-000000000001","connection_revision":1,"scope":{"owner":"floe","repository":"server"}}`},
+		{name: "disconnect", method: http.MethodDelete, path: "/v1/connectors/github.issues", body: `{"schema_version":1,"connection_id":"00000000-0000-4000-8000-000000000001","connection_revision":1}`},
+	}
+	for _, current := range tests {
+		test.Run(current.name, func(test *testing.T) {
+			fixture := setup(test)
+			clientID, _ := fixture.pair()
+			scope := clientScope{ClientID: clientID, PersonID: fixturePersonID, DeviceID: fixtureDeviceID}
+			fixture.console.mu.Lock()
+			delete(fixture.console.state.Clients, clientID)
+			fixture.console.mu.Unlock()
+			request := httptest.NewRequest(current.method, current.path, strings.NewReader(current.body))
+			if current.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			response := httptest.NewRecorder()
+			fixture.console.serveClientConnectors(response, request, scope)
+			if response.Code != http.StatusUnauthorized {
+				test.Fatalf("revoked authenticated scope reached %s lifecycle: %d %s", current.name, response.Code, response.Body.String())
+			}
+			if len(fixture.vault.values) != 0 {
+				test.Fatalf("revoked %s lifecycle mutated vault: %#v", current.name, fixture.vault.values)
+			}
+		})
 	}
 }
 

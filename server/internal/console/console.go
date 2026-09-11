@@ -145,6 +145,7 @@ type pairing struct {
 }
 
 type clientScope struct {
+	ClientID string
 	PersonID string
 	DeviceID string
 }
@@ -482,9 +483,9 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	var scope clientScope
 	if strings.HasPrefix(auth, "Bearer ") {
 		hash := digest(strings.TrimPrefix(auth, "Bearer "))
-		for _, value := range console.state.Clients {
+		for identifier, value := range console.state.Clients {
 			if hash == value.TokenHash {
-				scope = clientScope{PersonID: value.PersonID, DeviceID: value.DeviceID}
+				scope = clientScope{ClientID: identifier, PersonID: value.PersonID, DeviceID: value.DeviceID}
 			}
 		}
 	}

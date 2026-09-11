@@ -174,6 +174,9 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 func (console *Console) startClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
 	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
 	defer unlockLifecycle()
+	if !console.requireCurrentClientScope(writer, scope) {
+		return
+	}
 	var input struct {
 		SchemaVersion int            `json:"schema_version"`
 		Secret        string         `json:"secret"`
@@ -193,6 +196,10 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		return
 	}
 	console.mu.Lock()
+	if !console.requireCurrentClientScopeLocked(writer, scope) {
+		console.mu.Unlock()
+		return
+	}
 	if existing, exists := console.connectionForPerson(definition.ID, scope.PersonID); exists {
 		if console.connectionCredentialReady(existing) {
 			console.mu.Unlock()
@@ -352,7 +359,14 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition, attemptID string) {
 	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
 	defer unlockLifecycle()
+	if !console.requireCurrentClientScope(writer, scope) {
+		return
+	}
 	console.mu.Lock()
+	if !console.requireCurrentClientScopeLocked(writer, scope) {
+		console.mu.Unlock()
+		return
+	}
 	attempt, exists := console.connectorAttempts[attemptID]
 	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
 		console.mu.Unlock()
@@ -406,7 +420,14 @@ func (console *Console) writeClientConnectorAttempt(writer http.ResponseWriter, 
 func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition, attemptID string) {
 	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
 	defer unlockLifecycle()
+	if !console.requireCurrentClientScope(writer, scope) {
+		return
+	}
 	console.mu.Lock()
+	if !console.requireCurrentClientScopeLocked(writer, scope) {
+		console.mu.Unlock()
+		return
+	}
 	attempt, exists := console.connectorAttempts[attemptID]
 	if !exists || attempt.ConnectorID != definition.ID || attempt.PersonID != scope.PersonID || attempt.DeviceID != scope.DeviceID {
 		console.mu.Unlock()
@@ -462,6 +483,9 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
 	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
 	defer unlockLifecycle()
+	if !console.requireCurrentClientScope(writer, scope) {
+		return
+	}
 	if len(definition.ScopeFields) == 0 {
 		failure(writer, http.StatusConflict, "capability_not_supported")
 		return
@@ -478,6 +502,9 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 	}
 	console.mu.Lock()
 	defer console.mu.Unlock()
+	if !console.requireCurrentClientScopeLocked(writer, scope) {
+		return
+	}
 	record, exists := console.connectionForPerson(definition.ID, scope.PersonID)
 	if !exists {
 		failure(writer, http.StatusConflict, "connection_changed")
@@ -508,6 +535,9 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
 	unlockLifecycle := console.lockConnectorLifecycle(definition.ID)
 	defer unlockLifecycle()
+	if !console.requireCurrentClientScope(writer, scope) {
+		return
+	}
 	var input struct {
 		SchemaVersion      int    `json:"schema_version"`
 		ConnectionID       string `json:"connection_id"`
@@ -518,6 +548,10 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		return
 	}
 	console.mu.Lock()
+	if !console.requireCurrentClientScopeLocked(writer, scope) {
+		console.mu.Unlock()
+		return
+	}
 	record, exists := console.connectionForPerson(definition.ID, scope.PersonID)
 	if !exists {
 		console.mu.Unlock()
@@ -591,6 +625,25 @@ func (console *Console) personHasClientLocked(personID string) bool {
 		}
 	}
 	return false
+}
+
+func (console *Console) requireCurrentClientScopeLocked(writer http.ResponseWriter, scope clientScope) bool {
+	client, exists := console.state.Clients[scope.ClientID]
+	if !exists || client.PersonID != scope.PersonID || client.DeviceID != scope.DeviceID {
+		failure(writer, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if _, cleanupPending := console.state.Cleanups[scope.PersonID]; cleanupPending {
+		failure(writer, http.StatusConflict, "person_cleanup_pending")
+		return false
+	}
+	return true
+}
+
+func (console *Console) requireCurrentClientScope(writer http.ResponseWriter, scope clientScope) bool {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	return console.requireCurrentClientScopeLocked(writer, scope)
 }
 
 func oauthActionStatus(value any) (string, string, bool) {
