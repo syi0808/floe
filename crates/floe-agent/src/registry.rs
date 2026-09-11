@@ -46,7 +46,6 @@ pub struct AgentPackage {
     pub reference: PackageRef,
     pub publisher: String,
     pub implementation: PackageImplementation,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expert_metadata: Option<ExpertMetadata>,
     pub required_tools: Vec<PackageRef>,
     pub state_schema_version: u32,
@@ -57,9 +56,7 @@ pub struct AgentPackage {
 pub struct ExpertMetadata {
     pub name: String,
     pub description: String,
-    #[serde(default)]
     pub domain_tags: Vec<String>,
-    #[serde(default)]
     pub skills: Vec<String>,
 }
 
@@ -72,6 +69,7 @@ impl AgentPackage {
             || !valid_name(&self.reference.version)
             || !valid_name(&self.publisher)
             || (self.reference.kind == PackageKind::Tool && self.expert_metadata.is_some())
+            || (self.reference.kind == PackageKind::Expert && self.expert_metadata.is_none())
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -180,13 +178,9 @@ pub struct RegistrySnapshot {
     pub packages: Vec<AgentPackage>,
     pub installations: Vec<PackageInstallation>,
     pub assignments: Vec<PackageAssignment>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendar_views: Vec<CalendarViewBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendar_setups: Vec<CalendarExpertSetupReceipt>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub revoked_calendar_setups: Vec<Uuid>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub builtin_setups: Vec<BuiltinExpertSetupReceipt>,
 }
 
@@ -744,29 +738,11 @@ impl AgentRegistry {
             expected_revision,
             &[view_handle],
         )?;
-        let fallback = match resolved.package.implementation {
-            PackageImplementation::Schedule => ExpertMetadata {
-                name: "Schedule Expert".into(),
-                description: "Reviews calendars, availability, conflicts, and the realism of plans from a scheduling perspective.".into(),
-                domain_tags: vec!["schedule".into(), "calendar".into()],
-                skills: vec!["Provide independent scheduling judgment".into()],
-            },
-            PackageImplementation::Declarative { .. } => ExpertMetadata {
-                name: resolved.package.reference.id.clone(),
-                description: "Applies its installed domain guidance in an isolated context and returns focused advice.".into(),
-                domain_tags: vec!["custom".into()],
-                skills: vec!["Provide independent domain judgment".into()],
-            },
-            PackageImplementation::Builtin { expert } => expert.metadata(),
-            PackageImplementation::TimelineRead { .. } => {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-        };
         let metadata = resolved
             .package
             .expert_metadata
             .as_ref()
-            .unwrap_or(&fallback);
+            .ok_or(AgentFailure::CapabilityDenied)?;
         let card = crate::AgentCard {
             schema_version: AGENT_VERSION,
             protocol_version: crate::A2A_PROTOCOL_VERSION.into(),

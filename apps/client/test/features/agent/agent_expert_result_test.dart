@@ -58,7 +58,7 @@ void main() {
   );
 
   test('malformed and oversized evidence never reaches display', () {
-    for (final output in [null, '', 'legacy text', '[1]', '{', 'x' * 16385]) {
+    for (final output in [null, '', 'plain text', '[1]', '{', 'x' * 16385]) {
       expect(
         AgentExpertResult.tryParse(output, callId: 'call-1', personId: 'test'),
         isNull,

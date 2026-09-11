@@ -292,7 +292,7 @@ async fn calendar_bindings_persist_encrypted_without_exposing_sources_in_the_ove
 }
 
 #[tokio::test]
-async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_a_legacy_handle() {
+async fn persisted_binding_cannot_be_retargeted_removed_or_created_over_an_unbound_handle() {
     let fixture = Fixture::new().await;
     let snapshot = fixture.prepare().await;
     let mut registry =
@@ -534,7 +534,7 @@ async fn key_failure_rolls_back_component_initialization_before_retry() {
 }
 
 #[tokio::test]
-async fn missing_registry_is_reset_on_reopen_and_requires_explicit_initialization() {
+async fn missing_registry_fails_closed_on_reopen() {
     let mut fixture = Fixture::new().await;
     drop(fixture.vault);
     fixture.vault =
@@ -563,16 +563,11 @@ async fn missing_registry_is_reset_on_reopen_and_requires_explicit_initializatio
         Err(AgentFailure::VaultUnavailable)
     );
     drop(fixture.vault);
-    fixture.vault =
+    assert!(
         EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
             .await
-            .unwrap();
-    assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
-    fixture
-        .vault
-        .initialize_expert_registry(&snapshot)
-        .await
-        .unwrap();
+            .is_err()
+    );
 }
 
 #[tokio::test]

@@ -11,56 +11,6 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
 }
 
 #[tokio::test]
-async fn reopen_resets_an_incompatible_registry_without_losing_conversations() {
-    let mut fixture = Fixture::new().await;
-    let conversation = fixture.vault.create_session().await.unwrap();
-    fixture
-        .vault
-        .install_calendar_expert(setup_request(&fixture, 0), Cancellation::default())
-        .await
-        .unwrap();
-    let mut incompatible = fixture.vault.expert_registry().await.unwrap().unwrap();
-    incompatible
-        .packages
-        .iter_mut()
-        .find(|package| package.reference.kind == PackageKind::Expert)
-        .unwrap()
-        .expert_metadata = None;
-    fixture
-        .vault
-        .connection()
-        .unwrap()
-        .execute(
-            "UPDATE agent_expert_registry SET payload = ? WHERE id = 1",
-            [serde_json::to_string(&incompatible).unwrap()],
-        )
-        .await
-        .unwrap();
-
-    drop(fixture.vault);
-    fixture.vault =
-        EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
-            .await
-            .unwrap();
-
-    assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
-    assert_eq!(
-        fixture
-            .vault
-            .load(fixture.person, conversation.id)
-            .await
-            .unwrap(),
-        conversation
-    );
-    let reinstalled = fixture
-        .vault
-        .install_calendar_expert(setup_request(&fixture, 0), Cancellation::default())
-        .await
-        .unwrap();
-    assert_eq!(reinstalled.registry.revision, 1);
-}
-
-#[tokio::test]
 async fn aggregate_calendar_access_changes_persist_as_one_revision() {
     let fixture = Fixture::new().await;
     let installed = fixture

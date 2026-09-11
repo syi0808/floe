@@ -1,14 +1,13 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent::{
-    AGENT_VERSION, AgentContext, AgentFailure, COMMITMENTS_AGGREGATE_SOURCE_HANDLE,
-    CalendarContextItem, CalendarContextView, Cancellation, CommitmentEvidenceSource,
-    CommitmentsContextViews, CommunicationItem, CommunicationResultKind, CommunicationView,
-    ContextMemory, DataClass, EpistemicStatus, FindingEpistemicStatus, InferencePolicyDecision,
-    LearningEvidenceRef, MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse,
-    ModelRunner, ModelStep, NativeContextItem, NativeContextView, PersonalMemoryKind, PromptRole,
-    TaskContextPriority, TransferConsent, UsageLedger, run_commitments_expert_with_views,
-    run_communication_expert,
+    AGENT_VERSION, AgentContext, AgentFailure, CalendarContextItem, CalendarContextView,
+    Cancellation, CommitmentEvidenceSource, CommitmentsContextViews, CommunicationItem,
+    CommunicationResultKind, CommunicationView, ContextMemory, DataClass, EpistemicStatus,
+    FindingEpistemicStatus, InferencePolicyDecision, LearningEvidenceRef, MailExpertInvocation,
+    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep, NativeContextItem,
+    NativeContextView, PersonalMemoryKind, PromptRole, TaskContextPriority, TransferConsent,
+    UsageLedger, run_commitments_expert_with_views, run_communication_expert,
 };
 use floe_domain::PersonId;
 use serde::Deserialize;
@@ -130,7 +129,6 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
         .await
         .unwrap_or_else(|error| panic!("{} communication: {error:?}", scenario.id));
         assert_eq!(commitments.findings.len(), scenario.expected_commitments);
-        assert_eq!(commitments.source_handle, "mail:corpus");
         assert_eq!(commitments.source_handles, ["mail:corpus"]);
         assert_eq!(
             communication.assessments[0].needs_reply,
@@ -251,7 +249,6 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
         .unwrap();
 
     assert_eq!(result.expires_at_unix_ms, NOW + 200_000);
-    assert_eq!(result.source_handle, COMMITMENTS_AGGREGATE_SOURCE_HANDLE);
     assert_eq!(
         result.findings[0].evidence_source,
         CommitmentEvidenceSource::Mail
@@ -280,7 +277,7 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
 }
 
 #[tokio::test]
-async fn calendar_only_evidence_uses_calendar_as_the_compatibility_source() {
+async fn calendar_only_evidence_preserves_calendar_provenance() {
     let mut invocation = invocation(
         "Assess the calendar commitment",
         CommunicationItem {
@@ -331,7 +328,6 @@ async fn calendar_only_evidence_uses_calendar_as_the_compatibility_source() {
         .await
         .unwrap();
 
-    assert_eq!(result.source_handle, "calendar:only");
     assert_eq!(result.source_handles, ["calendar:only"]);
     assert_eq!(result.expires_at_unix_ms, NOW + 250_000);
     assert_eq!(result.findings[0].source_handle, "calendar:only");

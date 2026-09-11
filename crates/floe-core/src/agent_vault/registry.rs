@@ -326,52 +326,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.registry_on(&self.connection()?).await
     }
 
-    pub(super) async fn reset_expert_registry(&self) -> Result<(), AgentFailure> {
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(storage)?;
-        let result = async {
-            let mut identity = transaction
-                .query("SELECT version FROM vault_identity WHERE id = 1", ())
-                .await
-                .map_err(unavailable)?;
-            let version = identity
-                .next()
-                .await
-                .map_err(unavailable)?
-                .ok_or(AgentFailure::VaultUnavailable)?
-                .get::<i64>(0)
-                .map_err(unavailable)?;
-            drop(identity);
-            if version != 2 {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            transaction
-                .execute("DROP TABLE IF EXISTS agent_expert_receipts", ())
-                .await
-                .map_err(storage)?;
-            transaction
-                .execute("DROP TABLE IF EXISTS agent_expert_registry", ())
-                .await
-                .map_err(storage)?;
-            let changed = transaction
-                .execute(
-                    "UPDATE vault_identity SET version = 1 WHERE id = 1 AND version = 2",
-                    (),
-                )
-                .await
-                .map_err(storage)?;
-            if changed != 1 {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            self.check_access()
-        }
-        .await;
-        self.finish_registry_transaction(transaction, result).await
-    }
-
     pub async fn initialize_expert_registry(
         &self,
         snapshot: &RegistrySnapshot,

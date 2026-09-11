@@ -276,17 +276,9 @@ fn invalid_scope_capacity_and_package_collision_leave_no_partial_setup() {
 }
 
 #[test]
-fn legacy_snapshots_remain_empty_and_corrupt_setup_receipts_fail_restore() {
+fn corrupt_setup_receipts_fail_restore() {
     let person = PersonId::new();
     let mut registry = AgentRegistry::new(Uuid::new_v4());
-    let encoded = serde_json::to_string(&registry.snapshot()).unwrap();
-    assert!(!encoded.contains("calendar_setups"));
-    assert!(
-        serde_json::from_str::<RegistrySnapshot>(&encoded)
-            .unwrap()
-            .calendar_setups
-            .is_empty()
-    );
     let request = request(&registry, CalendarProvider::Fixture);
     registry.install_calendar_expert(person, &request).unwrap();
     let before = registry.snapshot();

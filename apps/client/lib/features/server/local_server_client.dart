@@ -162,11 +162,13 @@ class LocalServerClient {
       if (!RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(token)) {
         throw const FormatException();
       }
-      final recipients = value['external_recipients'] == null
-          ? const <String>[]
-          : List<String>.from(value['external_recipients'] as List);
+      final recipients = List<String>.from(
+        value['external_recipients'] as List,
+      );
+      final allowExternal = value['allow_external'] as bool;
       if (recipients.length > 16 ||
           recipients.toSet().length != recipients.length ||
+          (allowExternal && recipients.isEmpty) ||
           recipients.any(
             (recipient) => recipient.trim().isEmpty || recipient.length > 253,
           )) {
@@ -176,7 +178,7 @@ class LocalServerClient {
         address: address,
         token: token,
         clientId: value['client_id'] as String,
-        allowExternal: value['allow_external'] == true && recipients.isNotEmpty,
+        allowExternal: allowExternal,
         externalRecipients: recipients,
       );
     } on Object {

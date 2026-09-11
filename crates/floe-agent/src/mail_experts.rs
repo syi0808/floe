@@ -13,7 +13,6 @@ use crate::{
 };
 
 const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
-pub const COMMITMENTS_AGGREGATE_SOURCE_HANDLE: &str = "commitments:aggregate";
 
 pub struct MailExpertInvocation {
     pub usage: UsageLedger,
@@ -83,11 +82,6 @@ pub struct CommitmentFinding {
 pub struct CommitmentsExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
-    /// Compatibility handle for older consumers. Multi-source results use
-    /// `commitments:aggregate`; consumers should prefer `source_handles`.
-    pub source_handle: String,
-    /// Authoritative, sorted set of sources that supplied evidence.
-    #[serde(default)]
     pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
     pub summary: String,
@@ -196,14 +190,9 @@ pub async fn run_commitments_expert_with_views<Model: ModelRunner>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
-    let source_handle = compatibility_source_handle(
-        &evidence.source_handles,
-        invocation.view.source_handle.as_str(),
-    );
     Ok(CommitmentsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
-        source_handle,
         source_handles: evidence.source_handles,
         expires_at_unix_ms: evidence.expires_at_unix_ms,
         summary: output.summary,
@@ -443,14 +432,6 @@ fn commitment_evidence(
         source_handles,
         expires_at_unix_ms,
     })
-}
-
-fn compatibility_source_handle(source_handles: &[String], fallback: &str) -> String {
-    match source_handles {
-        [source_handle] => source_handle.clone(),
-        [] => fallback.to_owned(),
-        _ => COMMITMENTS_AGGREGATE_SOURCE_HANDLE.to_owned(),
-    }
 }
 
 fn decode_answer<Output: for<'de> Deserialize<'de>>(

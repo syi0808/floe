@@ -250,11 +250,7 @@ fn binding_restore_checks_cardinality_identity_order_and_tool_data_class() {
         ];
         assert!(AgentRegistry::restore(next, fixture.instance).is_err());
     }
-    let mut encoded = serde_json::to_value(&snapshot).unwrap();
-    encoded.as_object_mut().unwrap().remove("calendar_views");
-    let old: RegistrySnapshot = serde_json::from_value(encoded).unwrap();
-    assert!(old.calendar_views.is_empty());
-    let restored = AgentRegistry::restore(old, fixture.instance).unwrap();
+    let restored = AgentRegistry::restore(snapshot, fixture.instance).unwrap();
     assert!(
         restored
             .expert_card(
@@ -333,7 +329,12 @@ impl Fixture {
                 },
                 publisher: "floe".into(),
                 implementation: PackageImplementation::Schedule,
-                expert_metadata: None,
+                expert_metadata: Some(ExpertMetadata {
+                    name: "Schedule Expert".into(),
+                    description: "Reviews schedules".into(),
+                    domain_tags: vec!["schedule".into(), "calendar".into()],
+                    skills: vec!["Provide independent scheduling judgment".into()],
+                }),
                 required_tools: vec![tool_reference.clone()],
                 state_schema_version: 1,
             },
@@ -356,7 +357,12 @@ impl Fixture {
                         minimum_minutes: 30,
                     }],
                 },
-                expert_metadata: None,
+                expert_metadata: Some(ExpertMetadata {
+                    name: "Fixture Expert".into(),
+                    description: "Applies fixture rules".into(),
+                    domain_tags: vec!["custom".into()],
+                    skills: vec!["Apply fixture guidance".into()],
+                }),
                 required_tools: vec![tool_reference],
                 state_schema_version: 1,
             },

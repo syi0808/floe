@@ -82,19 +82,6 @@ void main() {
     );
   });
 
-  test('legacy unbound external consent is withdrawn during restore', () async {
-    final store = MemoryServerCredentials()
-      ..value = jsonEncode({
-        'base_url': 'http://127.0.0.1:9431',
-        'token': 'a' * 52,
-        'client_id': 'fixture',
-        'allow_external': true,
-      });
-    final restored = await LocalServerClient(store: store).connection();
-    expect(restored!.allowExternal, isFalse);
-    expect(restored.externalRecipients, isEmpty);
-  });
-
   testWidgets(
     'server panel exposes address entry and recovers from corrupt storage',
     (tester) async {

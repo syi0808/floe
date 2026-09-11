@@ -84,11 +84,10 @@ pub use learning::{
     PersonalMemoryKind, PersonalMemoryValue, StageMemoryCandidate,
 };
 pub use mail_experts::{
-    COMMITMENTS_AGGREGATE_SOURCE_HANDLE, CommitmentEvidenceSource, CommitmentFinding,
-    CommitmentKind, CommitmentsContextViews, CommitmentsExpertResult, CommunicationAssessment,
-    CommunicationChannel, CommunicationExpertResult, CommunicationResultKind,
-    FindingEpistemicStatus, MailExpertInvocation, run_commitments_expert_with_views,
-    run_communication_expert,
+    CommitmentEvidenceSource, CommitmentFinding, CommitmentKind, CommitmentsContextViews,
+    CommitmentsExpertResult, CommunicationAssessment, CommunicationChannel,
+    CommunicationExpertResult, CommunicationResultKind, FindingEpistemicStatus,
+    MailExpertInvocation, run_commitments_expert_with_views, run_communication_expert,
 };
 pub use model_attempt::generate_with_recovery;
 pub use model_journal::{ModelAttemptRecord, ModelAttemptState};

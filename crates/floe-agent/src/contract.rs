@@ -24,24 +24,17 @@ pub struct AgentSession {
     pub schema_version: u32,
     pub id: Uuid,
     pub person_id: PersonId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<AgentSessionScope>,
     pub revision: u64,
     pub data_classes: Vec<crate::DataClass>,
     pub messages: Vec<AgentMessage>,
-    #[serde(default)]
     pub usage: AgentUsage,
-    #[serde(default)]
     pub model_attempts: Vec<crate::ModelAttemptRecord>,
-    #[serde(default)]
     pub capability_executions: Vec<CapabilityExecution>,
-    #[serde(default)]
     pub delegation_executions: Vec<DelegationExecution>,
-    #[serde(default)]
     pub pending_output: Option<Vec<ModelStep>>,
     pub active_turn: Option<Uuid>,
     pub last_outcome: Option<AgentOutcome>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<AgentContinuation>,
 }
 
@@ -105,7 +98,6 @@ pub struct CapabilityExecution {
     pub input: String,
     pub state: CapabilityExecutionState,
     pub result: Option<Result<String, AgentFailure>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<ProviderReplay>,
 }
 
@@ -117,9 +109,7 @@ pub struct DelegationExecution {
     pub agent_id: String,
     pub message: String,
     pub state: DelegationExecutionState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::A2ATask>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay: Option<ProviderReplay>,
 }
 
@@ -161,9 +151,7 @@ pub enum CapabilityExecutionState {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentUsage {
-    #[serde(default)]
     pub model_attempts: u32,
-    #[serde(default)]
     pub estimated_tokens: u64,
     pub iterations: u32,
     pub capability_calls: u32,

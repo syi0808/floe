@@ -1396,7 +1396,6 @@ mod tests {
         assert_eq!(task.state, A2ATaskState::Completed);
         let data = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
         let result: CommitmentsExpertResult = serde_json::from_str(data).unwrap();
-        assert_eq!(result.source_handle, "mail:fresh");
         assert_eq!(result.findings.len(), 1);
         server.await.unwrap();
     }
@@ -1594,10 +1593,6 @@ mod tests {
             .unwrap();
         let result: CommitmentsExpertResult =
             serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
-        assert_eq!(
-            result.source_handle,
-            floe_agent::COMMITMENTS_AGGREGATE_SOURCE_HANDLE
-        );
         assert_eq!(result.findings.len(), 4);
         assert_eq!(result.expires_at_unix_ms, now + 180_000);
         assert!(result.source_handles.contains(&"mail:selected".into()));
