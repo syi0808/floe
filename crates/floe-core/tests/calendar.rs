@@ -48,6 +48,13 @@ async fn fixture() -> (FloeCore, PersonId, std::path::PathBuf) {
     (core, person, path)
 }
 
+fn selection(identifier: &str) -> Vec<CalendarSelection> {
+    vec![CalendarSelection {
+        calendar_id: identifier.into(),
+        calendar_name: identifier.into(),
+    }]
+}
+
 async fn snapshot(core: &FloeCore, person: PersonId, day: i64) -> DaySnapshot {
     core.day_snapshot(person, range(day).start_date, 32_400, now())
         .await
@@ -106,6 +113,93 @@ async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
             .code,
         ErrorCode::Conflict
     );
+    drop(core);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn connection_revision_is_monotonic_and_equal_revision_is_exactly_idempotent() {
+    let path = std::env::temp_dir().join(format!(
+        "floe-calendar-revision-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let core = FloeCore::open(&path).await.unwrap();
+    let person = PersonId::new();
+    let connection_id = "00000000-0000-4000-8000-000000000010";
+    core.set_calendar_scope(
+        person,
+        connection_id.into(),
+        7,
+        "device-a".into(),
+        CalendarProvider::EventKit,
+        selection("primary"),
+        CalendarScope::Selected,
+    )
+    .await
+    .unwrap();
+    core.set_calendar_scope(
+        person,
+        connection_id.into(),
+        7,
+        "device-a".into(),
+        CalendarProvider::EventKit,
+        selection("primary"),
+        CalendarScope::Selected,
+    )
+    .await
+    .unwrap();
+
+    for (revision, calendars, scope) in [
+        (6, selection("primary"), CalendarScope::Selected),
+        (7, selection("secondary"), CalendarScope::Selected),
+        (7, selection("primary"), CalendarScope::All),
+    ] {
+        assert_eq!(
+            core.set_calendar_scope(
+                person,
+                connection_id.into(),
+                revision,
+                "device-a".into(),
+                CalendarProvider::EventKit,
+                calendars,
+                scope,
+            )
+            .await
+            .unwrap_err()
+            .code,
+            ErrorCode::Conflict
+        );
+    }
+
+    core.set_calendar_scope(
+        person,
+        connection_id.into(),
+        8,
+        "device-a".into(),
+        CalendarProvider::EventKit,
+        selection("primary"),
+        CalendarScope::All,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        core.set_calendar_scope(
+            person,
+            connection_id.into(),
+            7,
+            "device-a".into(),
+            CalendarProvider::EventKit,
+            selection("primary"),
+            CalendarScope::Selected,
+        )
+        .await
+        .unwrap_err()
+        .code,
+        ErrorCode::Conflict
+    );
+    let connection = core.calendar_connection(person).await.unwrap().unwrap();
+    assert_eq!(connection.revision, 8);
+    assert_eq!(connection.scope, CalendarScope::All);
     drop(core);
     let _ = std::fs::remove_file(path);
 }

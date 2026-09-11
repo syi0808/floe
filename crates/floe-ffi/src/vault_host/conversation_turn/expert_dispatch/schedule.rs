@@ -226,9 +226,6 @@ fn validate_active_connection(
             }
         }
         (Some(_), _) => return Err(AgentFailure::StaleContext),
-        (None, Some(route)) if !route.calendar_connections.is_empty() => {
-            return Err(AgentFailure::StaleContext);
-        }
         (None, _) => {}
     }
     Ok(())
@@ -778,6 +775,71 @@ mod tests {
                 validate_active_connection(&setup, &binding, &connection, "device-b", None),
                 Err(AgentFailure::StaleContext)
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn device_active_schedule_ignores_connected_server_calendar_routes() {
+        for provider in [CalendarProvider::EventKit, CalendarProvider::Android] {
+            let (setup, binding, connection) = active_identity(provider);
+            let mut route = remote_route("calendar.google", &connection);
+            route.calendar_connections[0].connection_id = Uuid::new_v4().to_string();
+            route
+                .calendar_connections
+                .push(floe_protocol::AgentRemoteCalendarConnectionDto {
+                    connector_id: "calendar.microsoft".into(),
+                    connection_id: Uuid::new_v4().to_string(),
+                    connection_revision: 12,
+                });
+            assert_eq!(
+                validate_active_connection(&setup, &binding, &connection, "device-a", Some(&route),),
+                Ok(())
+            );
+
+            let store = LocalContextStore::default();
+            let now = chrono::Utc::now().timestamp_millis();
+            store
+                .request(
+                    setup.person_id,
+                    LocalContextOperationDto::PublishCalendarObservation {
+                        device_id: "device-a".into(),
+                        connection_revision: connection.revision,
+                        provider,
+                        calendar_ids: vec!["primary".into()],
+                        observed_at_unix_ms: now,
+                        expires_at_unix_ms: now + 240_000,
+                        range_start_unix_ms: now - 60_000,
+                        range_end_unix_ms: now + 60_000,
+                        batches: vec![CalendarBatchDto {
+                            calendar_id: "primary".into(),
+                            records: vec![],
+                            failure: None,
+                        }],
+                    },
+                )
+                .unwrap();
+            let model = Model::conversation(Some(route)).unwrap();
+            let access = Access::new(
+                provider,
+                binding.device_id.clone(),
+                binding.calendar_ids.clone(),
+                connection.connection_id.clone(),
+                connection.revision,
+                &model,
+                &store,
+            );
+            let stamp = access
+                .check(CalendarReadAccessRequest {
+                    person_id: setup.person_id,
+                    device_id: "device-a".into(),
+                    provider,
+                    calendar_ids: vec!["primary".into()],
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                    cancellation: floe_agent::Cancellation::default(),
+                })
+                .await
+                .unwrap();
+            assert!(stamp.generation.starts_with("device-device-a-7-"));
         }
     }
 

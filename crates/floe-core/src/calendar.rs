@@ -101,6 +101,23 @@ impl FloeCore {
         }) {
             return Ok(());
         }
+        if let Some(previous) = previous
+            .as_ref()
+            .filter(|mirror| mirror.connection.connection_id == connection_id)
+        {
+            if connection_revision < previous.connection.revision {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "calendar connection revision cannot decrease",
+                ));
+            }
+            if connection_revision == previous.connection.revision {
+                return Err(CoreError::new(
+                    ErrorCode::Conflict,
+                    "equal calendar connection revision requires an identical binding and scope",
+                ));
+            }
+        }
         let events = previous.as_ref().map_or_else(Vec::new, |mirror| {
             mirror.events.iter().filter(|event| {
                 matches!(&event.source, SourceRef::Calendar(source) if source.provider == provider && identifiers.contains(&source.calendar_id))
