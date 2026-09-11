@@ -20,7 +20,21 @@ final class NativeTransportException implements Exception {
   String toString() => message;
 }
 
-final class NativeTransport {
+abstract interface class LocalContextTransport {
+  Future<void> publishLocalContext({
+    required String personId,
+    required String deviceId,
+    required Map<String, dynamic> view,
+  });
+
+  Future<int> revokeLocalContext({
+    required String personId,
+    required String deviceId,
+    String? viewId,
+  });
+}
+
+final class NativeTransport implements LocalContextTransport {
   NativeTransport._(this._isolate, this._commands) {
     _finalizer.attach(this, _commands, detach: this);
   }
@@ -98,6 +112,7 @@ final class NativeTransport {
     return _unwrapEnvelope(result['response']! as String);
   }
 
+  @override
   Future<void> publishLocalContext({
     required String personId,
     required String deviceId,
@@ -123,6 +138,7 @@ final class NativeTransport {
     return _asMap(result['view']);
   }
 
+  @override
   Future<int> revokeLocalContext({
     required String personId,
     required String deviceId,

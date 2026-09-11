@@ -11,19 +11,43 @@ import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
 import 'infrastructure/native/android_context_gateway.dart';
 import 'infrastructure/native/apple_context_gateway.dart';
+import 'infrastructure/native/local_context_publication.dart';
+import 'infrastructure/native/macos_context_gateway.dart';
 import 'preview/design_feedback_overlay.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final gateway = await FfiDayGateway.openDefault();
+    final device = await LocalDeviceIdentity.openDefault();
+    final appleContext = Platform.isIOS
+        ? PublishingAppleContextGateway(
+            gateway: AppleContextGateway(),
+            transport: gateway.localContextTransport,
+            personId: localPersonId,
+            deviceId: device.id,
+          )
+        : null;
+    if (Platform.isMacOS) {
+      final macOSContext = PublishingMacOSContextGateway(
+        gateway: MacOSContextGateway(),
+        transport: gateway.localContextTransport,
+        personId: localPersonId,
+        deviceId: device.id,
+      );
+      try {
+        await macOSContext.readAttention();
+      } on Object catch (error) {
+        _ignoreOptionalContextFailure(error);
+      }
+    }
     runApp(
       FloeApp(
         gateway: gateway,
         agentGateway: gateway.secureAgent,
         serverClient: gateway.serverClient,
         androidContext: Platform.isAndroid ? AndroidContextGateway() : null,
-        appleContext: Platform.isIOS ? AppleContextGateway() : null,
+        appleContext: appleContext,
         onDisposeGateway: gateway.close,
         builder: kDebugMode
             ? (context, child) => DesignFeedbackOverlay(child: child!)
@@ -34,6 +58,8 @@ Future<void> main() async {
     runApp(_StartupErrorApp(message: error.toString()));
   }
 }
+
+void _ignoreOptionalContextFailure(Object _) {}
 
 class _StartupErrorApp extends StatelessWidget {
   const _StartupErrorApp({required this.message});

@@ -1,0 +1,292 @@
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/local_context_publication.dart';
+import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/native_transport.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  const person = '00000000-0000-4000-8000-000000000001';
+  const device = 'local-device';
+  final now = DateTime.fromMillisecondsSinceEpoch(1000, isUtc: true);
+
+  test('publishes only validated Apple View payloads', () async {
+    final transport = _RecordingTransport();
+    final native = _FakeAppleContext();
+    final gateway = PublishingAppleContextGateway(
+      gateway: native,
+      transport: transport,
+      personId: person,
+      deviceId: device,
+      clock: () => now,
+    );
+
+    await gateway.readContacts();
+    await gateway.readFeasibility(
+      AppleFeasibilityQuery(
+        eventHandle: 'event:one',
+        evidenceHandles: const ['calendar:event:one'],
+        latitude: 37.0,
+        longitude: 127.0,
+        eventStart: now,
+        eventEnd: now.add(const Duration(hours: 1)),
+        travelMode: AppleTravelMode.transit,
+      ),
+    );
+    await gateway.readWellbeing();
+
+    expect(transport.published.map((entry) => entry.view['view_id']), [
+      'people.identity',
+      'schedule.feasibility',
+      'wellbeing.derived',
+    ]);
+    expect(
+      transport.published.every((entry) => entry.personId == person),
+      true,
+    );
+    expect(
+      transport.published.every((entry) => entry.deviceId == device),
+      true,
+    );
+    expect(
+      transport.published[1].view.keys,
+      isNot(contains('weather_attribution')),
+    );
+  });
+
+  test('rejects invalid native output and revokes its cached View', () async {
+    final transport = _RecordingTransport();
+    final native = _FakeAppleContext()
+      ..people = {..._peopleView, 'raw_phone_number': '+82-10-0000-0000'};
+    final gateway = PublishingAppleContextGateway(
+      gateway: native,
+      transport: transport,
+      personId: person,
+      deviceId: device,
+      clock: () => now,
+    );
+
+    await expectLater(gateway.readContacts(), throwsFormatException);
+
+    expect(transport.published, isEmpty);
+    expect(transport.revoked.single.viewId, 'people.identity');
+  });
+
+  test(
+    'revokes unknown, stale, denied, logout, and former Person data',
+    () async {
+      final transport = _RecordingTransport();
+      final native = _FakeAppleContext()
+        ..wellbeing = {
+          ..._wellbeingView,
+          'capacity': 'unknown',
+          'recovery': 'unknown',
+          'confidence_millis': 0,
+        }
+        ..permissionGranted = false;
+      final gateway = PublishingAppleContextGateway(
+        gateway: native,
+        transport: transport,
+        personId: person,
+        deviceId: device,
+        clock: () => now,
+      );
+
+      await gateway.readWellbeing();
+      await gateway.requestPermission(AppleContextSource.contacts);
+      native.people = {
+        ..._peopleView,
+        'observed_at_unix_ms': 0,
+        'expires_at_unix_ms': 1,
+      };
+      await expectLater(gateway.readContacts(), throwsFormatException);
+      await gateway.bindPerson('00000000-0000-4000-8000-000000000002');
+      await gateway.logout();
+
+      expect(transport.revoked.map((entry) => entry.viewId), [
+        'wellbeing.derived',
+        'people.identity',
+        'people.identity',
+        null,
+        null,
+      ]);
+      expect(transport.revoked[3].personId, person);
+      expect(
+        transport.revoked[4].personId,
+        '00000000-0000-4000-8000-000000000002',
+      );
+    },
+  );
+
+  test(
+    'publishes macOS coarse attention and clears unknown attention',
+    () async {
+      final transport = _RecordingTransport();
+      final native = _FakeMacOSContext();
+      final gateway = PublishingMacOSContextGateway(
+        gateway: native,
+        transport: transport,
+        personId: person,
+        deviceId: device,
+        clock: () => now,
+      );
+
+      await gateway.readAttention();
+      native.view = {
+        ..._attentionView,
+        'state': 'unknown',
+        'confidence_millis': 0,
+        'evidence_handles': <String>[],
+      };
+      await gateway.readAttention();
+
+      expect(transport.published.single.view, _attentionView);
+      expect(transport.revoked.single.viewId, 'attention.coarse');
+    },
+  );
+}
+
+const _peopleView = <String, dynamic>{
+  'schema_version': 1,
+  'view_id': 'people.identity',
+  'source_handle': 'people:apple:source',
+  'observed_at_unix_ms': 1000,
+  'expires_at_unix_ms': 301000,
+  'coverage_complete': true,
+  'identities': <Map<String, dynamic>>[
+    {
+      'identity_handle': 'person.identity:one',
+      'display_name': 'Ada',
+      'aliases': <String>['email:ada@example.test'],
+      'confidence_millis': 1000,
+      'evidence_handles': <String>['contact.evidence:one'],
+    },
+  ],
+};
+
+const _wellbeingView = <String, dynamic>{
+  'schema_version': 1,
+  'view_id': 'wellbeing.derived',
+  'source_handle': 'wellbeing:apple-health',
+  'observed_at_unix_ms': 1000,
+  'expires_at_unix_ms': 1801000,
+  'capacity': 'typical',
+  'recovery': 'recovered',
+  'confidence_millis': 600,
+  'evidence_handles': <String>['health.sleep.window:one'],
+};
+
+const _attentionView = <String, dynamic>{
+  'schema_version': 1,
+  'view_id': 'attention.coarse',
+  'source_handle': 'attention:macos_local',
+  'observed_at_unix_ms': 1000,
+  'expires_at_unix_ms': 61000,
+  'state': 'focused',
+  'confidence_millis': 750,
+  'evidence_handles': <String>[
+    'attention.macos:stable_activity',
+    'attention.macos:recent_input',
+  ],
+};
+
+final class _FakeAppleContext implements AppleContextApi {
+  Map<String, dynamic> people = Map.of(_peopleView);
+  Map<String, dynamic> wellbeing = Map.of(_wellbeingView);
+  bool permissionGranted = true;
+
+  @override
+  Future<List<Map<String, dynamic>>> connections() async => [];
+
+  @override
+  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => people;
+
+  @override
+  Future<Map<String, dynamic>> readFeasibility(
+    AppleFeasibilityQuery query,
+  ) async => {
+    'view': {
+      'schema_version': 1,
+      'view_id': 'schedule.feasibility',
+      'source_handle': 'feasibility:apple',
+      'observed_at_unix_ms': 1000,
+      'expires_at_unix_ms': 301000,
+      'items': [
+        {
+          'event_handle': query.eventHandle,
+          'evidence_handles': query.evidenceHandles,
+          'travel_duration_seconds': 900,
+          'leave_by_unix_ms': 2000,
+          'weather_impact': 'minor',
+          'confidence_millis': 800,
+        },
+      ],
+    },
+    'weather_attribution': {
+      'legal_page_url': 'https://weather.example/legal',
+      'combined_mark_light_url': 'https://weather.example/light.svg',
+      'combined_mark_dark_url': 'https://weather.example/dark.svg',
+    },
+  };
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async => wellbeing;
+
+  @override
+  Future<bool> requestPermission(AppleContextSource source) async =>
+      permissionGranted;
+
+  @override
+  Future<Map<String, dynamic>> screenTimeCapability() async => {
+    'schema_version': 1,
+    'source_handle': 'attention:apple-device-activity',
+    'outcome': 'entitlement_unavailable',
+    'authorization': 'not_determined',
+    'region_availability': 'unknown',
+    'observed_at_unix_ms': 1000,
+  };
+}
+
+final class _FakeMacOSContext implements MacOSContextApi {
+  Map<String, dynamic> view = Map.of(_attentionView);
+
+  @override
+  Future<Map<String, dynamic>> readAttention() async => view;
+}
+
+final class _RecordingTransport implements LocalContextTransport {
+  final List<_Publication> published = [];
+  final List<_Revocation> revoked = [];
+
+  @override
+  Future<void> publishLocalContext({
+    required String personId,
+    required String deviceId,
+    required Map<String, dynamic> view,
+  }) async {
+    published.add(_Publication(personId, deviceId, Map.of(view)));
+  }
+
+  @override
+  Future<int> revokeLocalContext({
+    required String personId,
+    required String deviceId,
+    String? viewId,
+  }) async {
+    revoked.add(_Revocation(personId, deviceId, viewId));
+    return 1;
+  }
+}
+
+final class _Publication {
+  const _Publication(this.personId, this.deviceId, this.view);
+  final String personId;
+  final String deviceId;
+  final Map<String, dynamic> view;
+}
+
+final class _Revocation {
+  const _Revocation(this.personId, this.deviceId, this.viewId);
+  final String personId;
+  final String deviceId;
+  final String? viewId;
+}

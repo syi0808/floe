@@ -1,11 +1,15 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('floe/macos_context');
 
-final class MacOSContextGateway {
+abstract interface class MacOSContextApi {
+  Future<Map<String, dynamic>> readAttention();
+}
+
+final class MacOSContextGateway implements MacOSContextApi {
+  @override
   Future<Map<String, dynamic>> readAttention() async {
     if (!Platform.isMacOS) {
       throw UnsupportedError('macOS context is available only on macOS.');
@@ -18,7 +22,6 @@ final class MacOSContextGateway {
   }
 }
 
-@visibleForTesting
 void validateMacOSAttentionView(Map<String, dynamic> view) {
   const keys = {
     'schema_version',

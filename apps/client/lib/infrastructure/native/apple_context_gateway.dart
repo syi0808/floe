@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('floe/apple_context');
@@ -134,7 +133,6 @@ final class AppleContextGateway implements AppleContextApi {
   }
 }
 
-@visibleForTesting
 void validateApplePeopleView(Map<String, dynamic> view) {
   const keys = {
     'schema_version',
@@ -188,7 +186,6 @@ void validateApplePeopleView(Map<String, dynamic> view) {
   }
 }
 
-@visibleForTesting
 void validateAppleWellbeingView(Map<String, dynamic> view) {
   const keys = {
     'schema_version',
@@ -224,7 +221,6 @@ void validateAppleWellbeingView(Map<String, dynamic> view) {
   _validateTimes(view, maximumTtlMs: 1800000);
 }
 
-@visibleForTesting
 void validateAppleFeasibilityResult(Map<String, dynamic> result) {
   _requireExactKeys(result, {
     'view',
@@ -292,7 +288,6 @@ void validateAppleFeasibilityResult(Map<String, dynamic> result) {
   }
 }
 
-@visibleForTesting
 void validateAppleScreenTimeCapability(Map<String, dynamic> value) {
   const required = {
     'schema_version',
@@ -332,9 +327,10 @@ void validateAppleScreenTimeCapability(Map<String, dynamic> value) {
       _integer(value['observed_at_unix_ms']) < 0 ||
       value['outcome'] == 'supported' &&
           (value['authorization'] != 'approved' ||
-              !{'available', 'not_required'}.contains(
-                value['region_availability'],
-              )) ||
+              !{
+                'available',
+                'not_required',
+              }.contains(value['region_availability'])) ||
       value['detail_code'] != null && !_validHandle(value['detail_code'])) {
     throw const FormatException('Invalid Apple Screen Time capability.');
   }

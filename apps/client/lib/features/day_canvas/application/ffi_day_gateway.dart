@@ -43,6 +43,7 @@ final class FfiDayGateway
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
   final LocalServerClient serverClient;
+  LocalContextTransport get localContextTransport => _transport;
   late final AgentFixtureStreamingGateway _agentFixtureGateway =
       NativeAgentFixtureGateway(_request);
   late final NativeCalendarActionGateway _calendarActionGateway =
