@@ -146,6 +146,10 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	if started["status"] != "connected" || strings.Contains(string(encoded), secret) {
 		test.Fatalf("secret connection response: %s", encoded)
 	}
+	connectionID := started["connection_id"].(string)
+	if len(connectionID) != 36 || connectionID[8] != '-' || connectionID[13] != '-' || connectionID[18] != '-' || connectionID[23] != '-' {
+		test.Fatalf("connection identity is not a UUID: %q", connectionID)
+	}
 	fixture.console.mu.Lock()
 	connection, exists := fixture.console.connectionForPerson("github.issues", fixturePersonID)
 	fixture.console.mu.Unlock()
@@ -158,8 +162,13 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 	}
 
 	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
-	if updated["connection_id"] != connection.ConnectionID || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] != secret {
+	if updated["connection_id"] != connection.ConnectionID || updated["connection_revision"] != float64(2) || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] != secret {
 		test.Fatalf("scope update changed ownership or secret: %#v", updated)
+	}
+	catalog := fixture.value(fixture.call(http.MethodGet, "/v1/connectors", nil, token))
+	item := connectorCatalogItem(catalog, "github.issues")
+	if item["connection_id"] != connection.ConnectionID || item["connection_revision"] != float64(2) {
+		test.Fatalf("catalog lost authoritative connection identity: %#v", item)
 	}
 	disconnected := fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
 	if disconnected["connection_id"] != connection.ConnectionID || disconnected["person_id"] != fixturePersonID || disconnected["device_id"] != fixtureDeviceID {
@@ -177,7 +186,7 @@ func TestConnectorMutationsRejectCrossPersonCredentials(test *testing.T) {
 	fixture.console.mu.Lock()
 	fixture.console.state.Clients["other"] = pairedClient{TokenHash: digest(otherToken), PersonID: otherPersonID, DeviceID: "other-device"}
 	connectionID := "github.issues.foreign"
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "github.issues", PersonID: fixturePersonID}
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "github.issues", PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 
 	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, otherToken)
@@ -245,7 +254,7 @@ func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) 
 		test.Fatal(err)
 	}
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	fixture.vault.values[credential] = `{"access_token":"persisted"}`
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
@@ -351,7 +360,7 @@ func TestOAuthCatalogRequiresCredentialReadinessAndReconnectRepairsStaleRecord(t
 	connectionID := "microsoft.mail.stale"
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
 	}

@@ -31,6 +31,7 @@ type diskState struct {
 
 type connectionRecord struct {
 	ConnectionID string         `json:"connection_id"`
+	Revision     uint64         `json:"revision"`
 	ConnectorID  string         `json:"connector_id"`
 	PersonID     string         `json:"person_id"`
 	Device       *deviceBinding `json:"device_binding,omitempty"`
@@ -133,7 +134,7 @@ func readState(directory string) (diskState, string, error) {
 			personOwners[client.PersonID] = true
 		}
 		for key, connection := range state.Connections {
-			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
+			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connection.Revision == 0 || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
 			if definition, exists := clientConnectorDefinitionFor(connection.ConnectorID); exists {

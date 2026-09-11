@@ -147,6 +147,7 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 		}
 		if connected {
 			item["connection_id"] = connection.ConnectionID
+			item["connection_revision"] = connection.Revision
 			item["scope"] = cloneConnectorScope(connection.Scope)
 		}
 		items = append(items, item)
@@ -195,6 +196,11 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusForbidden, "connection_owned_by_another_person")
 		return
 	}
+	if isCalendarConnector(definition.ID) && console.calendarConnectionExistsForPerson(scope.PersonID, definition.ID) {
+		console.mu.Unlock()
+		failure(writer, http.StatusConflict, "calendar_connection_exists")
+		return
+	}
 	if !definition.Available(console) {
 		console.mu.Unlock()
 		failure(writer, http.StatusServiceUnavailable, "connector_unavailable")
@@ -222,8 +228,8 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 			delete(console.connectorAttempts, identifier)
 		}
 	}
-	connectionID := definition.ID + "." + digest(scope.PersonID + "\x00" + definition.ID)[:16]
-	record := connectionRecord{ConnectionID: connectionID, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope}
+	connectionID := stableConnectionID(scope.PersonID, definition.ID)
+	record := connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope}
 	credentialNamespace := definition.CredentialName
 	if credentialNamespace == "" {
 		credentialNamespace = definition.OAuthCredential
@@ -450,6 +456,7 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 	}
 	previous := cloneState(console.state)
 	record.Scope = selectedScope
+	record.Revision++
 	console.state.Connections[record.ConnectionID] = record
 	if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
 		console.state = previous
@@ -457,7 +464,7 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 		failure(writer, http.StatusBadRequest, "invalid_scope")
 		return
 	}
-	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "scope": cloneConnectorScope(selectedScope)})
+	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connection_revision": record.Revision, "connector_id": definition.ID, "scope": cloneConnectorScope(selectedScope)})
 }
 
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
@@ -603,7 +610,7 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	if attempt == nil || attempt.Status != "pending" && attempt.Status != "connected" {
 		return false
 	}
-	record := connectionRecord{ConnectionID: attempt.ConnectionID, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential}
+	record := connectionRecord{ConnectionID: attempt.ConnectionID, Revision: 1, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential}
 	if !console.connectionCredentialReady(record) {
 		return false
 	}
@@ -642,6 +649,11 @@ func (console *Console) connectionForPerson(connectorID, personID string) (conne
 	return connectionRecord{}, false
 }
 
+func stableConnectionID(personID, connectorID string) string {
+	hexadecimal := digest(personID + "\x00" + connectorID)
+	return hexadecimal[:8] + "-" + hexadecimal[8:12] + "-5" + hexadecimal[13:16] + "-a" + hexadecimal[17:20] + "-" + hexadecimal[20:32]
+}
+
 func (console *Console) connectionForConnector(connectorID string) (connectionRecord, bool) {
 	for _, record := range console.state.Connections {
 		if record.ConnectorID == connectorID {
@@ -654,6 +666,19 @@ func (console *Console) connectionForConnector(connectorID string) (connectionRe
 func (console *Console) connectionExistsForOtherPerson(connectorID, personID string) bool {
 	for _, record := range console.state.Connections {
 		if record.ConnectorID == connectorID && record.PersonID != personID {
+			return true
+		}
+	}
+	return false
+}
+
+func isCalendarConnector(connectorID string) bool {
+	return connectorID == "calendar.google" || connectorID == "calendar.microsoft"
+}
+
+func (console *Console) calendarConnectionExistsForPerson(personID, exceptConnectorID string) bool {
+	for _, record := range console.state.Connections {
+		if record.PersonID == personID && record.ConnectorID != exceptConnectorID && isCalendarConnector(record.ConnectorID) {
 			return true
 		}
 	}

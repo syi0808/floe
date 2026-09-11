@@ -348,7 +348,7 @@ func (fixture *fixture) ownConnector(connectorID string) {
 	fixture.test.Helper()
 	connectionID := connectorID + ".fixture"
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: connectorID, PersonID: fixturePersonID}
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: connectorID, PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
 }
 
@@ -426,6 +426,7 @@ func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	next := cloneState(fixture.console.state)
 	next.Connections["calendar.apple.primary"] = connectionRecord{
 		ConnectionID: "calendar.apple.primary",
+		Revision:     1,
 		ConnectorID:  "calendar.apple",
 		PersonID:     fixturePersonID,
 		Device:       &deviceBinding{DeviceID: fixtureDeviceID},
@@ -551,7 +552,7 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections["calendar.apple.fixture"] = connectionRecord{ConnectionID: "calendar.apple.fixture", ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
+	fixture.console.state.Connections["calendar.apple.fixture"] = connectionRecord{ConnectionID: "calendar.apple.fixture", Revision: 1, ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
 	fixture.console.mu.Unlock()
 	snapshot := map[string]any{
 		"descriptor": map[string]any{
