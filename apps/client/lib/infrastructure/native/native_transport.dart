@@ -32,6 +32,19 @@ abstract interface class LocalContextTransport {
     required String deviceId,
     String? viewId,
   });
+
+  Future<void> publishCalendarObservation({
+    required String personId,
+    required String deviceId,
+    required int connectionRevision,
+    required String provider,
+    required List<String> calendarIds,
+    required DateTime observedAt,
+    required DateTime expiresAt,
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    required List<Map<String, dynamic>> batches,
+  });
 }
 
 final class NativeTransport implements LocalContextTransport {
@@ -122,6 +135,37 @@ final class NativeTransport implements LocalContextTransport {
       'schema_version': nativeProtocolVersion,
       'person_id': personId,
       'operation': {'kind': 'publish', 'device_id': deviceId, 'view': view},
+    });
+  }
+
+  @override
+  Future<void> publishCalendarObservation({
+    required String personId,
+    required String deviceId,
+    required int connectionRevision,
+    required String provider,
+    required List<String> calendarIds,
+    required DateTime observedAt,
+    required DateTime expiresAt,
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    required List<Map<String, dynamic>> batches,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'publish_calendar_observation',
+        'device_id': deviceId,
+        'connection_revision': connectionRevision,
+        'provider': provider,
+        'calendar_ids': calendarIds,
+        'observed_at_unix_ms': observedAt.toUtc().millisecondsSinceEpoch,
+        'expires_at_unix_ms': expiresAt.toUtc().millisecondsSinceEpoch,
+        'range_start_unix_ms': rangeStart.toUtc().millisecondsSinceEpoch,
+        'range_end_unix_ms': rangeEnd.toUtc().millisecondsSinceEpoch,
+        'batches': batches,
+      },
     });
   }
 

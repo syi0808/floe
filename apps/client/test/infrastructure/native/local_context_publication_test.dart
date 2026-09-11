@@ -407,6 +407,20 @@ final class _RecordingTransport implements LocalContextTransport {
   final List<_Revocation> revoked = [];
 
   @override
+  Future<void> publishCalendarObservation({
+    required String personId,
+    required String deviceId,
+    required int connectionRevision,
+    required String provider,
+    required List<String> calendarIds,
+    required DateTime observedAt,
+    required DateTime expiresAt,
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    required List<Map<String, dynamic>> batches,
+  }) async {}
+
+  @override
   Future<void> publishLocalContext({
     required String personId,
     required String deviceId,

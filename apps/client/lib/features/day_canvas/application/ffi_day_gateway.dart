@@ -5,6 +5,7 @@ import '../domain/day_models.dart';
 import '../domain/calendar_action.dart';
 import 'day_gateway.dart';
 import 'calendar_gateway.dart';
+import 'calendar_observation_publisher.dart';
 import 'calendar_action_gateway.dart';
 import '../infrastructure/native_calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
@@ -37,11 +38,18 @@ final class FfiDayGateway
     this._clock,
     this._calendarAdapter,
     this.serverClient,
-  );
+    String? deviceId,
+  ) : _calendarObservationPublisher = deviceId == null
+          ? null
+          : CalendarObservationPublisher(
+              transport: _transport,
+              deviceId: deviceId,
+            );
 
   final NativeTransport _transport;
   final DateTime Function() _clock;
   final CalendarAdapter _calendarAdapter;
+  final CalendarObservationPublisher? _calendarObservationPublisher;
   final LocalServerClient serverClient;
   LocalContextTransport get localContextTransport => _transport;
   late final AgentFixtureStreamingGateway _agentFixtureGateway =
@@ -87,6 +95,8 @@ final class FfiDayGateway
 
   static Future<FfiDayGateway> openDefault({
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
+    LocalServerClient? serverClient,
+    required String deviceId,
   }) async {
     final transport = await _openTransport(
       NativeTransport.openDefault(personId: localPersonId),
@@ -95,7 +105,8 @@ final class FfiDayGateway
       transport,
       DateTime.now,
       calendarAdapter,
-      LocalServerClient.shared,
+      serverClient ?? LocalServerClient.shared,
+      deviceId,
     );
   }
 
@@ -105,6 +116,7 @@ final class FfiDayGateway
     DateTime Function()? clock,
     CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
     LocalServerClient? serverClient,
+    String? deviceId,
   }) async {
     final transport = await _openTransport(
       NativeTransport.open(
@@ -117,6 +129,7 @@ final class FfiDayGateway
       clock ?? DateTime.now,
       calendarAdapter,
       serverClient ?? LocalServerClient.shared,
+      deviceId,
     );
   }
 
@@ -448,8 +461,24 @@ final class FfiDayGateway
           'batches': batches,
         }),
       );
-      return _decodeSnapshot(_asMap(data['snapshot']));
+      final snapshot = _decodeSnapshot(_asMap(data['snapshot']));
+      final syncedConnection = snapshot.calendar;
+      if (syncedConnection != null) {
+        connection = syncedConnection;
+        await _calendarObservationPublisher?.publish(
+          personId: query.personId,
+          connection: syncedConnection,
+          observedAt: _clock().toUtc(),
+          rangeStart: query.startsAt,
+          rangeEnd: query.endsAt,
+          batches: batches,
+        );
+      }
+      return snapshot;
     } on Object catch (error) {
+      if (_calendarObservationPublisher?.supports(provider) ?? false) {
+        await _calendarObservationPublisher!.revoke(personId: query.personId);
+      }
       if (error is FfiDayGatewayException && error.code != 'validation') {
         rethrow;
       }
@@ -469,6 +498,10 @@ final class FfiDayGateway
   Future<DaySnapshot> disconnectCalendar(DayQuery query) async {
     final current = await loadDay(query);
     if (current.calendar == null) return current;
+    if (_calendarObservationPublisher?.supports(current.calendar!.provider) ??
+        false) {
+      await _calendarObservationPublisher!.revoke(personId: query.personId);
+    }
     final data = await _request(
       'execute',
       _commandRequest(query, {

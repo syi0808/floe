@@ -67,6 +67,62 @@ final query = DayQuery(
 );
 
 void main() {
+  test('device calendar sync publishes a bound Rust observation', () async {
+    final library = File('../../target/debug/libfloe_ffi.dylib').absolute;
+    if (!library.existsSync()) {
+      markTestSkipped('cargo build -p floe-ffi required');
+      return;
+    }
+    final directory = await Directory.systemTemp.createTemp(
+      'floe-calendar-observation-',
+    );
+    final now = DateTime.now().toUtc();
+    final publicationQuery = DayQuery(
+      personId: localPersonId,
+      date: DateTime.utc(now.year, now.month, now.day),
+      now: now,
+      timezoneOffsetSeconds: 0,
+    );
+    final adapter = FixtureCalendarAdapter()
+      ..inventory = const [
+        CalendarChoice('device-calendar', 'Device', provider: 'event_kit'),
+      ]
+      ..records = [
+        {
+          'external_id': 'device-event',
+          'can_modify': false,
+          'external_revision': '1',
+          'title': 'Device event',
+          'schedule': {
+            'kind': 'timed',
+            'starts_at': publicationQuery.startsAt
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+            'ends_at': publicationQuery.startsAt
+                .add(const Duration(hours: 2))
+                .toIso8601String(),
+            'timezone': 'UTC',
+          },
+        },
+      ];
+    final gateway = await FfiDayGateway.open(
+      libraryPath: library.path,
+      databasePath: '${directory.path}/calendar.db',
+      calendarAdapter: adapter,
+      deviceId: 'device-1',
+    );
+    try {
+      await gateway.selectCalendars(adapter.inventory, publicationQuery);
+      final snapshot = await gateway.syncCalendar(publicationQuery);
+
+      expect(snapshot.calendar!.provider, 'event_kit');
+      expect(snapshot.calendar!.revision, greaterThan(0));
+    } finally {
+      await gateway.close();
+      await directory.delete(recursive: true);
+    }
+  });
+
   test(
     'refresh updates cached drag capability through the native JSON bridge',
     () async {

@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app/floe_app.dart';
+import 'app/local_identity.dart';
 import 'app/design_tokens.dart';
 import 'app/floe_primitives.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
 import 'features/day_canvas/application/calendar_gateway.dart';
+import 'features/server/local_server_client.dart';
 import 'infrastructure/native/android_context_gateway.dart';
 import 'infrastructure/native/apple_context_gateway.dart';
 import 'infrastructure/native/local_context_publication.dart';
@@ -22,7 +24,13 @@ Future<void> main() async {
   try {
     final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
     final device = await LocalDeviceIdentity.openDefault();
+    final serverClient = LocalServerClient(
+      personId: defaultLocalPersonId,
+      deviceId: device.id,
+    );
     final gateway = await FfiDayGateway.openDefault(
+      serverClient: serverClient,
+      deviceId: device.id,
       calendarAdapter: androidNative == null
           ? EventKitCalendarAdapter(deviceId: device.id)
           : AndroidCalendarAdapter(androidNative),
