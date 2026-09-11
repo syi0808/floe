@@ -1,0 +1,11 @@
+{
+  "capability": {
+    "authorization": "not_determined",
+    "detail_code": "family_controls_entitlement_missing",
+    "observed_at_unix_ms": 1789056000000,
+    "outcome": "entitlement_unavailable",
+    "region_availability": "unknown",
+    "schema_version": 1,
+    "source_handle": "attention:apple-device-activity"
+  }
+}
