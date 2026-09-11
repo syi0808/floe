@@ -13,6 +13,7 @@ use crate::{
 };
 
 const MAX_MAIL_EXPERT_FINDINGS: usize = 16;
+pub const COMMITMENTS_AGGREGATE_SOURCE_HANDLE: &str = "commitments:aggregate";
 
 pub struct MailExpertInvocation {
     pub usage: UsageLedger,
@@ -82,7 +83,10 @@ pub struct CommitmentFinding {
 pub struct CommitmentsExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
+    /// Compatibility handle for older consumers. Multi-source results use
+    /// `commitments:aggregate`; consumers should prefer `source_handles`.
     pub source_handle: String,
+    /// Authoritative, sorted set of sources that supplied evidence.
     #[serde(default)]
     pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
@@ -206,10 +210,14 @@ pub async fn run_commitments_expert_with_views<Model: ModelRunner>(
             return Err(AgentFailure::InvalidModelOutput);
         }
     }
+    let source_handle = compatibility_source_handle(
+        &evidence.source_handles,
+        invocation.view.source_handle.as_str(),
+    );
     Ok(CommitmentsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
-        source_handle: invocation.view.source_handle,
+        source_handle,
         source_handles: evidence.source_handles,
         expires_at_unix_ms: evidence.expires_at_unix_ms,
         summary: output.summary,
@@ -365,8 +373,12 @@ fn commitment_evidence(
             )
         })
         .collect::<Vec<_>>();
-    let mut source_handles = vec![invocation.view.source_handle.clone()];
-    let mut expires_at_unix_ms = invocation.view.expires_at_unix_ms;
+    let mut source_handles = vec![];
+    let mut expires_at_unix_ms = i64::MAX;
+    if !invocation.view.items.is_empty() {
+        source_handles.push(invocation.view.source_handle.clone());
+        expires_at_unix_ms = invocation.view.expires_at_unix_ms;
+    }
 
     for view in &views.calendars {
         validate_calendar_context_view(view, now)?;
@@ -377,8 +389,10 @@ fn commitment_evidence(
                 view.source_handle.clone(),
             )
         }));
-        source_handles.push(view.source_handle.clone());
-        expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
+        if !view.items.is_empty() {
+            source_handles.push(view.source_handle.clone());
+            expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
+        }
         context.evidence.push(calendar_context_evidence(view)?);
     }
     for view in &views.tasks {
@@ -404,9 +418,12 @@ fn commitment_evidence(
             )),
             NativeContextItem::Note { .. } => None,
         }));
-        source_handles.push(view.source_handle.clone());
-        expires_at_unix_ms = expires_at_unix_ms
-            .min(i64::try_from(view.expires_at_unix_ms).map_err(|_| AgentFailure::InvalidInput)?);
+        if !view.items.is_empty() {
+            source_handles.push(view.source_handle.clone());
+            expires_at_unix_ms = expires_at_unix_ms.min(
+                i64::try_from(view.expires_at_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
+            );
+        }
         context.evidence.push(native_context_evidence(view)?);
     }
     for memory in &context.memories {
@@ -430,12 +447,24 @@ fn commitment_evidence(
     }
     source_handles.sort();
     source_handles.dedup();
+    if source_handles.is_empty() {
+        source_handles.push(invocation.view.source_handle.clone());
+        expires_at_unix_ms = invocation.view.expires_at_unix_ms;
+    }
     Ok(CommitmentEvidence {
         context,
         handles,
         source_handles,
         expires_at_unix_ms,
     })
+}
+
+fn compatibility_source_handle(source_handles: &[String], fallback: &str) -> String {
+    match source_handles {
+        [source_handle] => source_handle.clone(),
+        [] => fallback.to_owned(),
+        _ => COMMITMENTS_AGGREGATE_SOURCE_HANDLE.to_owned(),
+    }
 }
 
 fn decode_answer<Output: for<'de> Deserialize<'de>>(

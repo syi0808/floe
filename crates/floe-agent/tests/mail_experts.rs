@@ -1,14 +1,14 @@
 use std::{collections::VecDeque, sync::Mutex};
 
 use floe_agent::{
-    AGENT_VERSION, AgentContext, AgentFailure, CalendarContextItem, CalendarContextView,
-    Cancellation, CommitmentEvidenceSource, CommitmentsContextViews, CommunicationItem,
-    CommunicationResultKind, CommunicationView, ContextMemory, DataClass, EpistemicStatus,
-    FindingEpistemicStatus, InferencePolicyDecision, LearningEvidenceRef, MailExpertInvocation,
-    ModelPlacement, ModelRequest, ModelResponse, ModelRunner, ModelStep, NativeContextItem,
-    NativeContextView, PersonalMemoryKind, PromptRole, TaskContextPriority, TransferConsent,
-    UsageLedger, run_commitments_expert, run_commitments_expert_with_views,
-    run_communication_expert,
+    AGENT_VERSION, AgentContext, AgentFailure, COMMITMENTS_AGGREGATE_SOURCE_HANDLE,
+    CalendarContextItem, CalendarContextView, Cancellation, CommitmentEvidenceSource,
+    CommitmentsContextViews, CommunicationItem, CommunicationResultKind, CommunicationView,
+    ContextMemory, DataClass, EpistemicStatus, FindingEpistemicStatus, InferencePolicyDecision,
+    LearningEvidenceRef, MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse,
+    ModelRunner, ModelStep, NativeContextItem, NativeContextView, PersonalMemoryKind, PromptRole,
+    TaskContextPriority, TransferConsent, UsageLedger, run_commitments_expert,
+    run_commitments_expert_with_views, run_communication_expert,
 };
 use floe_domain::PersonId;
 use serde::Deserialize;
@@ -129,6 +129,8 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
         .await
         .unwrap_or_else(|error| panic!("{} communication: {error:?}", scenario.id));
         assert_eq!(commitments.findings.len(), scenario.expected_commitments);
+        assert_eq!(commitments.source_handle, "mail:corpus");
+        assert_eq!(commitments.source_handles, ["mail:corpus"]);
         assert_eq!(
             communication.assessments[0].needs_reply,
             scenario.expected_reply
@@ -248,6 +250,7 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
         .unwrap();
 
     assert_eq!(result.expires_at_unix_ms, NOW + 200_000);
+    assert_eq!(result.source_handle, COMMITMENTS_AGGREGATE_SOURCE_HANDLE);
     assert_eq!(
         result.findings[0].evidence_source,
         CommitmentEvidenceSource::Mail
@@ -273,6 +276,68 @@ async fn commitments_accept_bounded_multi_source_evidence_without_blurring_sourc
     assert_eq!(requests[0].context.evidence.len(), 3);
     assert_eq!(requests[0].context.memories.len(), 1);
     assert!(requests[0].capabilities.is_empty());
+}
+
+#[tokio::test]
+async fn calendar_only_evidence_uses_calendar_as_the_compatibility_source() {
+    let mut invocation = invocation(
+        "Assess the calendar commitment",
+        CommunicationItem {
+            evidence_handle: "unused:mail".into(),
+            thread_handle: "unused:thread".into(),
+            received_unix_ms: NOW - 1,
+            from: String::new(),
+            to: String::new(),
+            subject: String::new(),
+            snippet: String::new(),
+            labels: vec![],
+        },
+    );
+    invocation.view.items.clear();
+    let views = CommitmentsContextViews {
+        calendars: vec![CalendarContextView {
+            schema_version: AGENT_VERSION,
+            view_id: "calendar.timeline".into(),
+            source_handle: "calendar:only".into(),
+            observed_at_unix_ms: NOW,
+            expires_at_unix_ms: NOW + 250_000,
+            range_start_unix_ms: NOW - 86_400_000,
+            range_end_unix_ms: NOW + 86_400_000,
+            coverage_complete: true,
+            next_cursor: None,
+            items: vec![CalendarContextItem {
+                evidence_handle: "calendar:commitment".into(),
+                untrusted_title: "Submit report".into(),
+                starts_at_unix_ms: NOW + 10_000,
+                ends_at_unix_ms: NOW + 20_000,
+                all_day: false,
+            }],
+        }],
+        tasks: vec![],
+    };
+    let model = Model::new([serde_json::json!({
+        "summary": "The calendar contains one commitment.",
+        "findings": [{
+            "evidence_handle":"calendar:commitment",
+            "kind":"user_commitment",
+            "statement":"A report submission is scheduled.",
+            "epistemic_status":"observed",
+            "confidence_millis":1000
+        }]
+    })]);
+
+    let result = run_commitments_expert_with_views(&model, &policy(), invocation, views)
+        .await
+        .unwrap();
+
+    assert_eq!(result.source_handle, "calendar:only");
+    assert_eq!(result.source_handles, ["calendar:only"]);
+    assert_eq!(result.expires_at_unix_ms, NOW + 250_000);
+    assert_eq!(result.findings[0].source_handle, "calendar:only");
+    assert_eq!(
+        result.findings[0].evidence_source,
+        CommitmentEvidenceSource::Calendar
+    );
 }
 
 #[tokio::test]
