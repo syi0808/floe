@@ -9,11 +9,12 @@ import (
 
 var errConnectorLifecycleInProgress = errors.New("connector lifecycle in progress")
 
-func (console *Console) removeClientAttemptsLocked(state *diskState, clientID string) {
+func (console *Console) removeClientAttemptsLocked(state *diskState, clientID string) []string {
 	client, exists := state.Clients[clientID]
 	if !exists {
-		return
+		return nil
 	}
+	transientAttempts := []string{}
 	cleanup := state.Cleanups[client.PersonID]
 	cleanup.PersonID = client.PersonID
 	seenConnections := map[string]bool{}
@@ -31,15 +32,15 @@ func (console *Console) removeClientAttemptsLocked(state *diskState, clientID st
 			seenConnections[attempt.ConnectionID] = true
 		}
 		delete(state.Attempts, attemptID)
-		delete(console.connectorAttempts, attemptID)
+		transientAttempts = append(transientAttempts, attemptID)
 	}
 	for attemptID, attempt := range console.connectorAttempts {
 		if attempt.ClientID == clientID {
-			delete(console.connectorAttempts, attemptID)
+			transientAttempts = append(transientAttempts, attemptID)
 		}
 	}
 	if len(cleanup.Connections) == 0 {
-		return
+		return transientAttempts
 	}
 	sort.Slice(cleanup.Connections, func(left, right int) bool {
 		if cleanup.Connections[left].ConnectorID == cleanup.Connections[right].ConnectorID {
@@ -48,14 +49,16 @@ func (console *Console) removeClientAttemptsLocked(state *diskState, clientID st
 		return cleanup.Connections[left].ConnectorID < cleanup.Connections[right].ConnectorID
 	})
 	state.Cleanups[client.PersonID] = cleanup
+	return transientAttempts
 }
 
-func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) error {
+func (console *Console) removePersonConnectionsLocked(state *diskState, personID string) []string {
 	for _, client := range state.Clients {
 		if client.PersonID == personID {
 			return nil
 		}
 	}
+	transientAttempts := []string{}
 	cleanup := state.Cleanups[personID]
 	cleanup.PersonID = personID
 	seenCredentials := map[string]bool{}
@@ -91,7 +94,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 		delete(state.Connections, connectionID)
 		for attemptID, attempt := range console.connectorAttempts {
 			if attempt.ConnectionID == connectionID {
-				delete(console.connectorAttempts, attemptID)
+				transientAttempts = append(transientAttempts, attemptID)
 			}
 		}
 	}
@@ -100,7 +103,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 			continue
 		}
 		appendStep(attempt.ConnectionID, attempt.ConnectorID, attempt.Credential)
-		delete(console.connectorAttempts, attemptID)
+		transientAttempts = append(transientAttempts, attemptID)
 	}
 	for attemptID, attempt := range state.Attempts {
 		if attempt.PersonID != personID {
@@ -123,7 +126,7 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 	if len(cleanup.Connections) != 0 {
 		state.Cleanups[personID] = cleanup
 	}
-	return nil
+	return transientAttempts
 }
 
 func (console *Console) recoverConnectionAttemptsLocked() error {

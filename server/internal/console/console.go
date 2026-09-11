@@ -964,17 +964,17 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			failure(writer, 404, "client_not_found")
 			return
 		}
-		console.removeClientAttemptsLocked(&next, input.ID)
+		transientAttempts := console.removeClientAttemptsLocked(&next, input.ID)
 		delete(next.Clients, input.ID)
-		if err := console.removePersonConnectionsLocked(&next, removed.PersonID); err != nil {
-			failure(writer, 500, "connection_cleanup_failed")
-			return
-		}
+		transientAttempts = append(transientAttempts, console.removePersonConnectionsLocked(&next, removed.PersonID)...)
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
 			return
 		}
 		console.state = next
+		for _, attemptID := range transientAttempts {
+			delete(console.connectorAttempts, attemptID)
+		}
 		if err := console.rebuildConnectorRuntimes(); err != nil {
 			failure(writer, 500, "invalid_connector_configuration")
 			return

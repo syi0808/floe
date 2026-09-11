@@ -1325,6 +1325,90 @@ func TestRevokingClientPreservesOtherClientOAuthAttempt(test *testing.T) {
 	}
 }
 
+func TestClientDeleteSaveFailurePreservesOAuthAttemptAtomically(test *testing.T) {
+	for _, keepSecondClient := range []bool{false, true} {
+		name := "last-client"
+		if keepSecondClient {
+			name = "multiple-clients"
+		}
+		test.Run(name, func(test *testing.T) {
+			fixture := setup(test)
+			clientID, token := fixture.pair()
+			if keepSecondClient {
+				fixture.console.mu.Lock()
+				next := cloneState(fixture.console.state)
+				next.Clients["client-b"] = pairedClient{TokenHash: digest("client-b-token"), PersonID: fixturePersonID, DeviceID: "device-b"}
+				if err := fixture.console.save(next); err != nil {
+					fixture.console.mu.Unlock()
+					test.Fatal(err)
+				}
+				fixture.console.state = next
+				fixture.console.mu.Unlock()
+			}
+			runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
+			fixture.console.SetMicrosoftMail(runtime, nil)
+			startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+			if startedResponse.Code != http.StatusCreated {
+				test.Fatal(startedResponse.Body.String())
+			}
+			started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+			attemptID := started["attempt_id"].(string)
+
+			statePath := filepath.Join(fixture.console.directory, "state.json")
+			backupPath := filepath.Join(fixture.console.directory, "state.backup")
+			if err := os.Rename(statePath, backupPath); err != nil {
+				test.Fatal(err)
+			}
+			if err := os.Mkdir(statePath, 0700); err != nil {
+				test.Fatal(err)
+			}
+			deleted := fixture.call(http.MethodPost, "/manage/api/client/delete", map[string]string{"id": clientID}, "")
+			if err := os.Remove(statePath); err != nil {
+				test.Fatal(err)
+			}
+			if err := os.Rename(backupPath, statePath); err != nil {
+				test.Fatal(err)
+			}
+			if deleted.Code != http.StatusInternalServerError || !strings.Contains(deleted.Body.String(), "save_failed") {
+				test.Fatalf("client delete save failure was hidden: %d %s", deleted.Code, deleted.Body.String())
+			}
+			fixture.console.mu.Lock()
+			_, clientPreserved := fixture.console.state.Clients[clientID]
+			_, durablePreserved := fixture.console.state.Attempts[attemptID]
+			_, transientPreserved := fixture.console.connectorAttempts[attemptID]
+			fixture.console.mu.Unlock()
+			if !clientPreserved || !durablePreserved || !transientPreserved {
+				test.Fatalf("failed save partially revoked client: client=%v durable=%v transient=%v", clientPreserved, durablePreserved, transientPreserved)
+			}
+			restartDirectory := test.TempDir()
+			if err := os.Chmod(restartDirectory, 0700); err != nil {
+				test.Fatal(err)
+			}
+			for _, name := range []string{"state.json", "admin-token"} {
+				data, err := os.ReadFile(filepath.Join(fixture.console.directory, name))
+				if err != nil {
+					test.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(restartDirectory, name), data, 0600); err != nil {
+					test.Fatal(err)
+				}
+			}
+			if _, err := New(restartDirectory, fixture.console.address, fixture.vault, nil); err != nil {
+				test.Fatalf("retained pending attempt failed strict restart: %v", err)
+			}
+			if response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "connection_in_progress") {
+				test.Fatalf("duplicate connector was not blocked by retained attempt: %d %s", response.Code, response.Body.String())
+			}
+			if response := fixture.call(http.MethodGet, "/v1/connectors/microsoft.mail/connection-attempts/"+attemptID, nil, token); response.Code != http.StatusOK {
+				test.Fatalf("retained attempt could not be polled: %d %s", response.Code, response.Body.String())
+			}
+			if _, _, err := readState(fixture.console.directory); err != nil {
+				test.Fatalf("retained state failed strict validation: %v", err)
+			}
+		})
+	}
+}
+
 func TestOAuthCancelRuntimeFailureLeavesRetryableAttempt(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
