@@ -2,114 +2,6 @@ use super::*;
 
 pub const BUILTIN_EXPERT_PACKAGE_VERSION: &str = "1.0.0";
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinExpertKind {
-    Commitments,
-    Communication,
-    Relationships,
-    FocusAttention,
-    Wellbeing,
-    WorkContext,
-    LifeLogistics,
-}
-
-impl BuiltinExpertKind {
-    pub const ALL: [Self; 7] = [
-        Self::Commitments,
-        Self::Communication,
-        Self::Relationships,
-        Self::FocusAttention,
-        Self::Wellbeing,
-        Self::WorkContext,
-        Self::LifeLogistics,
-    ];
-
-    pub fn package_id(self) -> &'static str {
-        match self {
-            Self::Commitments => "floe.builtin.commitments",
-            Self::Communication => "floe.builtin.communication",
-            Self::Relationships => "floe.builtin.relationships",
-            Self::FocusAttention => "floe.builtin.focus-attention",
-            Self::Wellbeing => "floe.builtin.wellbeing",
-            Self::WorkContext => "floe.builtin.work-context",
-            Self::LifeLogistics => "floe.builtin.life-logistics",
-        }
-    }
-
-    fn tool_id(self) -> String {
-        format!("{}.context", self.package_id())
-    }
-
-    pub(crate) fn metadata(self) -> ExpertMetadata {
-        let (name, description, domain_tags, skills) = match self {
-            Self::Commitments => (
-                "Commitments Expert",
-                "Finds obligations and follow-ups across the bounded personal context granted to it.",
-                vec!["commitments", "planning"],
-                "Review commitments and follow-ups",
-            ),
-            Self::Communication => (
-                "Communication Expert",
-                "Assesses whether communication needs a response and prepares reviewable drafts.",
-                vec!["communication"],
-                "Recommend bounded communication actions",
-            ),
-            Self::Relationships => (
-                "Relationships Expert",
-                "Reviews explicitly granted people and confirmed-interaction context for follow-ups.",
-                vec!["relationships"],
-                "Identify relationship follow-ups",
-            ),
-            Self::FocusAttention => (
-                "Focus & Attention Expert",
-                "Combines bounded attention, schedule, and active-work context into focus guidance.",
-                vec!["focus", "attention"],
-                "Recommend focus protection",
-            ),
-            Self::Wellbeing => (
-                "Wellbeing Expert",
-                "Uses coarse derived wellbeing and schedule context to recommend sustainable load.",
-                vec!["wellbeing"],
-                "Recommend sustainable schedule load",
-            ),
-            Self::WorkContext => (
-                "Work Context Expert",
-                "Synthesizes bounded work context into blockers and next actions.",
-                vec!["work"],
-                "Identify work blockers and next actions",
-            ),
-            Self::LifeLogistics => (
-                "Life Logistics Expert",
-                "Synthesizes bounded logistics context into preparation recommendations.",
-                vec!["life", "logistics"],
-                "Recommend logistics preparation",
-            ),
-        };
-        ExpertMetadata {
-            name: name.into(),
-            description: description.into(),
-            domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
-            skills: vec![skills.into()],
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinContextSource {
-    Calendar,
-    Mail,
-    Tasks,
-    ConfirmedMemory,
-    Contacts,
-    ConfirmedInteractions,
-    Attention,
-    WorkContext,
-    Wellbeing,
-    Logistics,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinSourceState {
@@ -236,7 +128,8 @@ impl AgentRegistry {
             .ok_or(AgentFailure::BudgetExceeded)?;
         let mut receipts = Vec::with_capacity(BuiltinExpertKind::ALL.len());
         for expert in BuiltinExpertKind::ALL {
-            let views = required_sources(expert)
+            let views = expert
+                .required_sources()
                 .iter()
                 .filter_map(|source| {
                     request.sources.iter().find(|binding| {
@@ -332,7 +225,9 @@ impl AgentRegistry {
         let grants = assignments
             .iter()
             .map(|receipt| {
-                required_sources(receipt.expert)
+                receipt
+                    .expert
+                    .required_sources()
                     .iter()
                     .filter_map(|source| {
                         sources.iter().find(|binding| {
@@ -383,7 +278,7 @@ impl AgentRegistry {
                     return None;
                 }
                 if let PackageImplementation::Builtin { expert } = &package.implementation
-                    && !self.assignment_has_source(assignment.id, mandatory_source(*expert))
+                    && !self.assignment_has_source(assignment.id, expert.mandatory_source())
                 {
                     return None;
                 }
@@ -445,7 +340,9 @@ impl AgentRegistry {
             }
             validate_sources(&receipt.sources)?;
             for expert_receipt in &receipt.assignments {
-                let expected_views = required_sources(expert_receipt.expert)
+                let expected_views = expert_receipt
+                    .expert
+                    .required_sources()
                     .iter()
                     .filter_map(|source| {
                         receipt.sources.iter().find(|binding| {
@@ -511,32 +408,6 @@ fn validate_sources(sources: &[BuiltinSourceBinding]) -> Result<(), AgentFailure
     }
 }
 
-fn required_sources(expert: BuiltinExpertKind) -> &'static [BuiltinContextSource] {
-    use BuiltinContextSource::*;
-    match expert {
-        BuiltinExpertKind::Commitments => &[Mail, Calendar, Tasks, ConfirmedMemory],
-        BuiltinExpertKind::Communication => &[Mail],
-        BuiltinExpertKind::Relationships => &[Contacts, ConfirmedInteractions],
-        BuiltinExpertKind::FocusAttention => &[Attention, Calendar, WorkContext],
-        BuiltinExpertKind::Wellbeing => &[Wellbeing, Calendar],
-        BuiltinExpertKind::WorkContext => &[WorkContext],
-        BuiltinExpertKind::LifeLogistics => &[Logistics],
-    }
-}
-
-fn mandatory_source(expert: BuiltinExpertKind) -> BuiltinContextSource {
-    match expert {
-        BuiltinExpertKind::Commitments | BuiltinExpertKind::Communication => {
-            BuiltinContextSource::Mail
-        }
-        BuiltinExpertKind::Relationships => BuiltinContextSource::Contacts,
-        BuiltinExpertKind::FocusAttention => BuiltinContextSource::Attention,
-        BuiltinExpertKind::Wellbeing => BuiltinContextSource::Wellbeing,
-        BuiltinExpertKind::WorkContext => BuiltinContextSource::WorkContext,
-        BuiltinExpertKind::LifeLogistics => BuiltinContextSource::Logistics,
-    }
-}
-
 fn builtin_packages(kind: BuiltinExpertKind) -> [AgentPackage; 2] {
     let tool = PackageRef {
         kind: PackageKind::Tool,
@@ -549,11 +420,7 @@ fn builtin_packages(kind: BuiltinExpertKind) -> [AgentPackage; 2] {
             reference: tool.clone(),
             publisher: "floe".into(),
             implementation: PackageImplementation::TimelineRead {
-                data_class: if kind == BuiltinExpertKind::Wellbeing {
-                    DataClass::HighlySensitive
-                } else {
-                    DataClass::Personal
-                },
+                data_class: kind.context_data_class(),
             },
             expert_metadata: None,
             required_tools: vec![],

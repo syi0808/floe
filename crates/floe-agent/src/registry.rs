@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 use crate::{AGENT_VERSION, AgentFailure, DataClass};
 
+pub use crate::experts::{BuiltinContextSource, BuiltinExpertKind};
+
 mod builtin_setup;
 mod calendar_setup;
 pub use builtin_setup::*;

@@ -5,20 +5,17 @@ mod communication_context;
 mod connected_context;
 mod context_routing;
 mod contract;
-mod expert;
+mod experts;
 mod learner;
 mod learning;
-mod mail_experts;
 mod model_attempt;
 mod model_journal;
 mod model_usage;
 mod native_context;
 mod personal_context;
-mod personal_experts;
 mod playbook;
 mod policy;
 mod portfolio_context;
-mod portfolio_experts;
 mod prompts;
 mod registry;
 mod runtime;
@@ -65,10 +62,28 @@ pub use contract::{
     PromptManifestEntry, ProviderReplay, RuntimeContext, ScopedInstructions,
     SessionRecoveryPointer, SessionStore,
 };
-pub use expert::{
+pub use experts::{
+    CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView,
+    FocusContextViews, FocusExpertResult, FocusRecommendation, PersonalExpertInvocation,
+    RelationshipFollowUp, RelationshipsContextViews, RelationshipsExpertResult, ScheduleImpact,
+    WellbeingContextViews, WellbeingExpertResult, run_focus_expert_with_views,
+    run_relationships_expert_with_views, run_wellbeing_expert_with_views,
+    validate_confirmed_interaction_view,
+};
+pub use experts::{
+    CommitmentEvidenceSource, CommitmentFinding, CommitmentKind, CommitmentsContextViews,
+    CommitmentsExpertResult, CommunicationAssessment, CommunicationChannel,
+    CommunicationExpertResult, CommunicationResultKind, FindingEpistemicStatus,
+    MailExpertInvocation, run_commitments_expert_with_views, run_communication_expert,
+};
+pub use experts::{
     ExpertBudget, ExpertFocusProposal, ExpertHost, ExpertInput, ExpertInsight, ExpertInvocation,
     ExpertResult, ExpertTimelineView, ExpertViews, MAX_TIMELINE_VIEW_BYTES, MAX_TIMELINE_VIEW_DAYS,
     MAX_TIMELINE_VIEW_ITEMS, TimelineViewItem, TimelineViewRead,
+};
+pub use experts::{
+    LifeLogisticsExpertResult, LogisticsPreparation, LogisticsUrgency, PortfolioExpertInvocation,
+    WorkContextExpertResult, WorkInsight, run_life_logistics_expert, run_work_context_expert,
 };
 pub use learner::{
     LearnerBudget, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
@@ -82,12 +97,6 @@ pub use learning::{
     KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
     KnowledgeRevisionState, LearningEvidenceRef, LearningObservation, LearningObservationKind,
     PersonalMemoryKind, PersonalMemoryValue, StageMemoryCandidate,
-};
-pub use mail_experts::{
-    CommitmentEvidenceSource, CommitmentFinding, CommitmentKind, CommitmentsContextViews,
-    CommitmentsExpertResult, CommunicationAssessment, CommunicationChannel,
-    CommunicationExpertResult, CommunicationResultKind, FindingEpistemicStatus,
-    MailExpertInvocation, run_commitments_expert_with_views, run_communication_expert,
 };
 pub use model_attempt::generate_with_recovery;
 pub use model_journal::{ModelAttemptRecord, ModelAttemptState};
@@ -104,14 +113,6 @@ pub use personal_context::{
     WellbeingView, personal_context_evidence, validate_attention_view, validate_feasibility_view,
     validate_people_view, validate_wellbeing_view,
 };
-pub use personal_experts::{
-    CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView,
-    FocusContextViews, FocusExpertResult, FocusRecommendation, PersonalExpertInvocation,
-    RelationshipFollowUp, RelationshipsContextViews, RelationshipsExpertResult, ScheduleImpact,
-    WellbeingContextViews, WellbeingExpertResult, run_focus_expert_with_views,
-    run_relationships_expert_with_views, run_wellbeing_expert_with_views,
-    validate_confirmed_interaction_view,
-};
 pub use playbook::{
     LoadedPlaybook, MAX_LOADED_PLAYBOOK_BYTES, MAX_LOADED_PLAYBOOKS, MAX_PLAYBOOK_DEPTH,
     MAX_VISIBLE_PLAYBOOKS, Playbook, PlaybookBody, PlaybookChild, PlaybookIndexEntry, PlaybookRef,
@@ -126,10 +127,6 @@ pub use portfolio_context::{
     WORK_CONTEXT_VIEW_ID, WorkContextItem, WorkContextView, WorkItemKind,
     logistics_context_evidence, validate_logistics_view, validate_work_context_view,
     work_context_evidence,
-};
-pub use portfolio_experts::{
-    LifeLogisticsExpertResult, LogisticsPreparation, LogisticsUrgency, PortfolioExpertInvocation,
-    WorkContextExpertResult, WorkInsight, run_life_logistics_expert, run_work_context_expert,
 };
 pub use prompts::{
     PersonaProfile, PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
