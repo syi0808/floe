@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"floe/server/internal/inference"
 )
@@ -45,6 +46,18 @@ type pairedClient struct {
 	Legacy    bool   `json:"legacy_unscoped,omitempty"`
 }
 
+func validScopedCredential(namespace, value string) bool {
+	if value == "" {
+		return true
+	}
+	prefix := namespace + ":"
+	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, prefix))
+	return err == nil
+}
+
 func (client *pairedClient) UnmarshalJSON(data []byte) error {
 	var legacy string
 	if json.Unmarshal(data, &legacy) == nil {
@@ -73,11 +86,13 @@ type connectorConfigState struct {
 type githubConnectorConfig struct {
 	Owner      string `json:"owner"`
 	Repository string `json:"repository"`
+	Credential string `json:"credential,omitempty"`
 }
 
 type slackConnectorConfig struct {
-	Channel string `json:"channel"`
-	Thread  string `json:"thread,omitempty"`
+	Channel    string `json:"channel"`
+	Thread     string `json:"thread,omitempty"`
+	Credential string `json:"credential,omitempty"`
 }
 
 type googleDriveConnectorConfig struct {
@@ -98,8 +113,9 @@ type microsoftTeamsConnectorConfig struct {
 }
 
 type homeAssistantConnectorConfig struct {
-	BaseURL  string   `json:"base_url"`
-	Entities []string `json:"entities"`
+	BaseURL    string   `json:"base_url"`
+	Entities   []string `json:"entities"`
+	Credential string   `json:"credential,omitempty"`
 }
 
 type providerProfile struct {
@@ -184,6 +200,11 @@ func readState(directory string) (diskState, string, error) {
 			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
+		}
+		if state.Connectors.GitHub != nil && !validScopedCredential(githubTokenKey, state.Connectors.GitHub.Credential) ||
+			state.Connectors.Slack != nil && !validScopedCredential(slackTokenKey, state.Connectors.Slack.Credential) ||
+			state.Connectors.HomeAssistant != nil && !validScopedCredential(homeTokenKey, state.Connectors.HomeAssistant.Credential) {
+			return state, "", errors.New("invalid server state")
 		}
 	} else if !os.IsNotExist(err) {
 		return state, "", err

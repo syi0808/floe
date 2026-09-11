@@ -1,0 +1,205 @@
+package console
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+type clientOAuthRuntime struct {
+	status  string
+	actions []string
+}
+
+func createdValue(test *testing.T, responseBody *strings.Reader) map[string]any {
+	test.Helper()
+	var value map[string]any
+	if json.NewDecoder(responseBody).Decode(&value) != nil {
+		test.Fatal("invalid JSON")
+	}
+	return value
+}
+
+func (runtime *clientOAuthRuntime) Action(_ context.Context, action string) (any, error) {
+	runtime.actions = append(runtime.actions, action)
+	switch action {
+	case "login":
+		runtime.status = "pending"
+	case "cancel", "logout":
+		runtime.status = "disconnected"
+	case "status":
+		if runtime.status == "pending" {
+			runtime.status = "connected"
+		}
+	}
+	value := map[string]any{"status": runtime.status, "scope": "Mail.Read"}
+	if runtime.status == "pending" {
+		value["auth_url"] = "https://login.example.test/authorize?code_challenge=public-challenge"
+	}
+	return value, nil
+}
+
+func TestPairedConnectorCatalogIncludesDisconnectedAndUnavailableProviders(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	value := fixture.value(fixture.call(http.MethodGet, "/v1/connectors", nil, token))
+	connectors := value["connectors"].([]any)
+	if len(connectors) != len(clientConnectorDefinitions) {
+		test.Fatalf("catalog length: %d", len(connectors))
+	}
+	byID := map[string]map[string]any{}
+	for _, item := range connectors {
+		connector := item.(map[string]any)
+		byID[connector["id"].(string)] = connector
+	}
+	if byID["github.issues"]["status"] != "disconnected" || byID["github.issues"]["available"] != true {
+		test.Fatalf("PAT connector missing from catalog: %#v", byID["github.issues"])
+	}
+	if byID["gmail"]["status"] != "unavailable" || byID["gmail"]["available"] != false {
+		test.Fatalf("unconfigured OAuth connector not explicit: %#v", byID["gmail"])
+	}
+}
+
+func TestPairedOAuthConnectionReturnsOnlyAuthorizationURLAndServerAttempt(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected"}
+	fixture.console.mu.Lock()
+	fixture.console.microsoftAuth = runtime
+	fixture.console.mu.Unlock()
+
+	response := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	started := createdValue(test, strings.NewReader(response.Body.String()))
+	if started["status"] != "pending" || started["authorization_url"] == "" || started["attempt_id"] == "" {
+		test.Fatalf("invalid OAuth start: %#v", started)
+	}
+	encoded, _ := json.Marshal(started)
+	if strings.Contains(string(encoded), "verifier") || strings.Contains(string(encoded), "refresh_token") || strings.Contains(string(encoded), "access_token") {
+		test.Fatalf("server-owned OAuth secret escaped: %s", encoded)
+	}
+	attemptID := started["attempt_id"].(string)
+	status := fixture.value(fixture.call(http.MethodGet, "/v1/connectors/microsoft.mail/connection-attempts/"+attemptID, nil, token))
+	if status["status"] != "connected" || status["authorization_url"] != nil {
+		test.Fatalf("OAuth status did not settle: %#v", status)
+	}
+	if strings.Join(runtime.actions, ",") != "login,status" {
+		test.Fatalf("unexpected OAuth lifecycle: %#v", runtime.actions)
+	}
+}
+
+func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	secret := "private-github-pat"
+	response := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", map[string]any{
+		"schema_version": 1,
+		"secret":         secret,
+		"scope":          map[string]any{"owner": "floe", "repository": "product"},
+	}, token)
+	if response.Code != http.StatusCreated {
+		test.Fatal(response.Body.String())
+	}
+	started := createdValue(test, strings.NewReader(response.Body.String()))
+	encoded, _ := json.Marshal(started)
+	if started["status"] != "connected" || strings.Contains(string(encoded), secret) {
+		test.Fatalf("secret connection response: %s", encoded)
+	}
+	fixture.console.mu.Lock()
+	configured := *fixture.console.state.Connectors.GitHub
+	connection, exists := fixture.console.connectionForPerson("github.issues", fixturePersonID)
+	fixture.console.mu.Unlock()
+	if !exists || configured.Credential == "" || configured.Credential == githubTokenKey || fixture.vault.values[configured.Credential] != secret {
+		test.Fatalf("credential was not connection scoped: %#v %#v", configured, fixture.vault.values)
+	}
+	state, _ := json.Marshal(fixture.console.state)
+	if strings.Contains(string(state), secret) || !strings.Contains(configured.Credential, "FLOE_CONNECTOR_GITHUB_TOKEN:") {
+		test.Fatalf("plaintext credential persisted: %s", state)
+	}
+
+	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
+	if updated["connection_id"] != connection.ConnectionID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[configured.Credential] != secret {
+		test.Fatalf("scope update changed ownership or secret: %#v", updated)
+	}
+	fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
+	if _, exists := fixture.vault.values[configured.Credential]; exists {
+		test.Fatal("disconnect retained scoped credential")
+	}
+}
+
+func TestConnectorMutationsRejectLegacyAndCrossPersonCredentials(test *testing.T) {
+	fixture := setup(test)
+	legacyToken := "legacy-client-token"
+	otherToken := "other-device-token"
+	otherPersonID := "00000000-0000-4000-8000-000000000002"
+	fixture.console.mu.Lock()
+	fixture.console.state.Clients["legacy"] = pairedClient{TokenHash: digest(legacyToken), Legacy: true}
+	fixture.console.state.Clients["other"] = pairedClient{TokenHash: digest(otherToken), PersonID: otherPersonID, DeviceID: "other-device"}
+	connectionID := "github.issues.foreign"
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "github.issues", PersonID: fixturePersonID}
+	fixture.console.mu.Unlock()
+
+	body := map[string]any{"schema_version": 1, "secret": "private-token", "scope": map[string]any{"owner": "floe", "repository": "product"}}
+	legacy := fixture.call(http.MethodPost, "/v1/connectors/github.issues/connect", body, legacyToken)
+	if legacy.Code != http.StatusForbidden || !strings.Contains(legacy.Body.String(), "person_scope_required") {
+		test.Fatalf("legacy mutation accepted: %d %s", legacy.Code, legacy.Body.String())
+	}
+	foreign := fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, otherToken)
+	if foreign.Code != http.StatusForbidden || !strings.Contains(foreign.Body.String(), "connection_owned_by_another_person") {
+		test.Fatalf("cross-person mutation not blocked: %d %s", foreign.Code, foreign.Body.String())
+	}
+}
+
+func TestConnectorAttemptIsBoundToPairedDevice(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected"}
+	fixture.console.mu.Lock()
+	fixture.console.microsoftAuth = runtime
+	fixture.console.state.Clients["second-device"] = pairedClient{TokenHash: digest("second-device-token"), PersonID: fixturePersonID, DeviceID: "second-device"}
+	fixture.console.mu.Unlock()
+	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if startedResponse.Code != http.StatusCreated {
+		test.Fatal(startedResponse.Body.String())
+	}
+	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+	response := fixture.call(http.MethodGet, "/v1/connectors/microsoft.mail/connection-attempts/"+started["attempt_id"].(string), nil, "second-device-token")
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "attempt_not_found") {
+		test.Fatalf("cross-device attempt disclosed: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCancellingOAuthAttemptRemovesPendingConnection(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	runtime := &clientOAuthRuntime{status: "disconnected"}
+	fixture.console.mu.Lock()
+	fixture.console.microsoftAuth = runtime
+	fixture.console.mu.Unlock()
+	startedResponse := fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connect", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	started := createdValue(test, strings.NewReader(startedResponse.Body.String()))
+	attemptID := started["attempt_id"].(string)
+	cancelled := fixture.value(fixture.call(http.MethodPost, "/v1/connectors/microsoft.mail/connection-attempts/"+attemptID+"/cancel", map[string]any{}, token))
+	if cancelled["status"] != "cancelled" {
+		test.Fatalf("attempt was not cancelled: %#v", cancelled)
+	}
+	fixture.console.mu.Lock()
+	_, exists := fixture.console.connectionForPerson("microsoft.mail", fixturePersonID)
+	fixture.console.mu.Unlock()
+	if exists || strings.Join(runtime.actions, ",") != "login,cancel" {
+		test.Fatalf("cancel retained connection: %#v", runtime.actions)
+	}
+}
+
+func TestConnectorScopeCapabilityIsExplicit(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	response := fixture.call(http.MethodPatch, "/v1/connectors/gmail/scope", map[string]any{"schema_version": 1, "scope": map[string]any{}}, token)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "capability_not_supported") {
+		test.Fatalf("unsupported scope mutation was not explicit: %d %s", response.Code, response.Body.String())
+	}
+}

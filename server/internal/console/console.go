@@ -196,6 +196,7 @@ type Console struct {
 	loginWindow                                  time.Time
 	lastPair                                     time.Time
 	testActive                                   bool
+	connectorAttempts                            map[string]*connectorAttempt
 }
 
 func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
@@ -268,7 +269,7 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if err != nil {
 		return nil, err
 	}
-	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}}
+	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}}
 	console.rebuild()
 	if err := console.rebuildConnectorRuntimes(); err != nil {
 		return nil, errors.New("invalid connector configuration")
@@ -471,6 +472,10 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	}
 	if scope.Legacy && request.Method != http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/connectors/") {
 		failure(writer, 403, "person_scope_required")
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
+		console.serveClientConnectors(writer, request, scope)
 		return
 	}
 	if request.URL.Path == "/v1/connections" {

@@ -39,7 +39,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 	console.logistics = nil
 	console.calendars = nil
 	if configured := console.state.Connectors.GitHub; configured != nil {
-		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: githubTokenKey})
+		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, githubTokenKey)})
 		if err != nil {
 			return err
 		}
@@ -50,7 +50,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.Slack; configured != nil {
-		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: slackTokenKey})
+		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, slackTokenKey)})
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.work = append(console.work, service)
 	}
 	if configured := console.state.Connectors.HomeAssistant; configured != nil {
-		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: homeTokenKey}, configured.BaseURL, "primary")
+		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: connectorCredential(configured.Credential, homeTokenKey)}, configured.BaseURL, "primary")
 		if err != nil {
 			return err
 		}
@@ -116,6 +116,13 @@ func (console *Console) rebuildConnectorRuntimes() error {
 		console.logistics = append(console.logistics, service)
 	}
 	return nil
+}
+
+func connectorCredential(configured, fallback string) string {
+	if configured != "" {
+		return configured
+	}
+	return fallback
 }
 
 func (console *Console) updateGitHubConnector(writer http.ResponseWriter, request *http.Request) {
