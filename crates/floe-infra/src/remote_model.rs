@@ -298,6 +298,7 @@ impl ServerModelRunner {
         };
         match response.status() {
             StatusCode::BAD_REQUEST => return Err(AgentFailure::InvalidInput),
+            StatusCode::CONFLICT => return Err(AgentFailure::Conflict),
             StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
             StatusCode::TOO_MANY_REQUESTS => return Err(AgentFailure::QuotaExceeded),
             status if !status.is_success() => return Err(AgentFailure::CapabilityUnavailable),
