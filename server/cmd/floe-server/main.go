@@ -19,6 +19,7 @@ import (
 	"floe/server/internal/connectors/microsoftmail"
 	"floe/server/internal/console"
 	"floe/server/internal/credentials"
+	"floe/server/internal/envfile"
 	"floe/server/internal/googleauth"
 	"floe/server/internal/inference"
 	"floe/server/internal/microsoftauth"
@@ -26,6 +27,9 @@ import (
 )
 
 func main() {
+	if err := envfile.Load(); err != nil {
+		log.Fatal("Cannot load environment file: check FLOE_ENV_FILE")
+	}
 	var handler http.Handler
 	address := "127.0.0.1:8431"
 	if os.Getenv("FLOE_INFERENCE_CONFIG") == "" || os.Getenv("FLOE_SERVER_DATA") != "" {

@@ -18,6 +18,11 @@ cd server
 env -u FLOE_INFERENCE_CONFIG -u FLOE_INFERENCE_TOKEN go run ./cmd/floe-server
 ```
 
+At startup the server loads `.env` from its working directory without overwriting existing process
+environment variables. Set `FLOE_ENV_FILE` to use another path. Copy `.env.example` for a new local
+configuration. Deployment-specific OAuth registration and secret requirements are documented in
+[`docs/deployment/oauth-configuration.md`](../docs/deployment/oauth-configuration.md).
+
 Open `http://127.0.0.1:8431/manage/`. Unlock with the administrator token in
 `~/Library/Application Support/FloeServer/admin-token`. Keep this file private;
 do not paste its contents into chat, logs or committed files. The server prints
