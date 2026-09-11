@@ -6,9 +6,11 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
+import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -145,6 +147,73 @@ void main() {
     expect(androidContext.selected, {'work'});
     expect(androidContext.calendarReads, 1);
     expect(find.text('Ready'), findsOneWidget);
+  });
+
+  testWidgets('Apple feasibility requires an explicit next-event destination', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    final appleContext = _AppleContext();
+    addTearDown(controller.dispose);
+    await controller.load();
+    final event = EventItem(
+      id: '00000000-0000-4000-8000-000000000099',
+      title: 'Planning review',
+      revision: 1,
+      createdAt: DateTime.utc(2026, 9, 11),
+      startsAt: DateTime.utc(2026, 9, 11, 3),
+      endsAt: DateTime.utc(2026, 9, 11, 4),
+    );
+    final snapshot = DaySnapshot(
+      personId: registryPerson,
+      date: DateTime.utc(2026, 9, 11),
+      generatedAt: DateTime.utc(2026, 9, 11),
+      timezoneOffsetSeconds: 0,
+      items: [event],
+      nextEventId: event.id,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(
+              client: null,
+              agentController: controller,
+              appleContext: appleContext,
+              daySnapshot: snapshot,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final refresh = find.byKey(const ValueKey('apple-feasibility-refresh'));
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('feasibility-latitude')),
+      '37.5665',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('feasibility-longitude')),
+      '126.9780',
+    );
+    await tester.tap(find.byKey(const ValueKey('feasibility-refresh-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(appleContext.query?.eventStart, event.startsAt);
+    expect(appleContext.query?.latitude, 37.5665);
+    expect(appleContext.query?.longitude, 126.978);
+    expect(appleContext.query?.travelMode, AppleTravelMode.transit);
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -501,6 +570,17 @@ final class _AndroidContext implements AndroidContextApi {
   }
 
   @override
+  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => {
+    'schema_version': 1,
+    'view_id': 'people.identity',
+    'source_handle': 'people:test',
+    'observed_at_unix_ms': 1000,
+    'expires_at_unix_ms': 301000,
+    'coverage_complete': true,
+    'identities': <Object>[],
+  };
+
+  @override
   Future<Map<String, dynamic>> readWellbeing() async {
     wellbeingReads += 1;
     healthReady = true;
@@ -516,6 +596,35 @@ final class _AndroidContext implements AndroidContextApi {
       'evidence_handles': <String>['health.sleep.window:test'],
     };
   }
+}
+
+final class _AppleContext implements AppleContextApi {
+  AppleFeasibilityQuery? query;
+
+  @override
+  Future<List<Map<String, dynamic>>> connections() async => [
+    _appleFeasibilityConnection(),
+  ];
+
+  @override
+  Future<Map<String, dynamic>> readFeasibility(
+    AppleFeasibilityQuery query,
+  ) async {
+    this.query = query;
+    return <String, dynamic>{};
+  }
+
+  @override
+  Future<bool> requestPermission(AppleContextSource source) async => true;
+
+  @override
+  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => {};
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async => {};
+
+  @override
+  Future<Map<String, dynamic>> screenTimeCapability() async => {};
 }
 
 Map<String, dynamic> _healthConnection({required bool ready}) => {
@@ -645,6 +754,47 @@ Map<String, dynamic> _androidCalendarConnection({
           },
         ]
       : <Object?>[],
+};
+
+Map<String, dynamic> _appleFeasibilityConnection() => {
+  'descriptor': {
+    'schema_version': 1,
+    'id': 'feasibility.apple',
+    'version': '1.0.0',
+    'provider': 'apple_feasibility',
+    'execution': {'kind': 'device', 'device_id': 'apple-test'},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': 'schedule.feasibility.read',
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': ['CLLocationManager.whenInUse'],
+        'output_view_id': 'schedule.feasibility',
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': 'schedule.feasibility',
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'ephemeral',
+        'freshness_ttl_ms': 300000,
+        'max_items': 1,
+        'max_bytes': 16384,
+        'provenance_required': true,
+      },
+    ],
+  },
+  'connection': {
+    'schema_version': 1,
+    'connector_id': 'feasibility.apple',
+    'state': 'pending',
+    'granted_scopes': ['CLLocationManager.whenInUse'],
+    'observed_at_unix_ms': 2000,
+  },
+  'views': <Object>[],
 };
 
 final class _SettingsServerClient extends LocalServerClient {

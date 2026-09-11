@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
+
+import '../../features/day_canvas/application/calendar_gateway.dart';
+import '../../features/day_canvas/domain/day_models.dart';
 
 const _channel = MethodChannel('floe/android_context');
 
@@ -17,6 +19,7 @@ abstract interface class AndroidContextApi {
     String cursor = '',
     int limit = 128,
   });
+  Future<Map<String, dynamic>> readContacts({int limit = 64});
   Future<Map<String, dynamic>> readWellbeing();
 }
 
@@ -103,6 +106,7 @@ final class AndroidContextGateway implements AndroidContextApi {
     return view;
   }
 
+  @override
   Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
     _requireAndroid();
     final view = _strictMap(
@@ -131,6 +135,51 @@ final class AndroidContextGateway implements AndroidContextApi {
   }
 }
 
+final class AndroidCalendarAdapter implements CalendarAdapter {
+  const AndroidCalendarAdapter(this._gateway);
+
+  static const selectedCalendarId = 'android-selected';
+  final AndroidContextApi _gateway;
+
+  @override
+  Future<List<CalendarChoice>> calendars({bool requestAccess = true}) async {
+    final selected = await _gateway.selectedCalendars();
+    if (selected.isEmpty) return const [];
+    return const [
+      CalendarChoice(
+        selectedCalendarId,
+        'Selected Android calendars',
+        provider: 'android',
+      ),
+    ];
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> read(
+    String calendarId,
+    DayQuery query,
+  ) async {
+    if (calendarId != selectedCalendarId) {
+      throw PlatformException(code: 'calendar_unavailable');
+    }
+    final view = await _gateway.readCalendar(
+      rangeStart: query.startsAt,
+      rangeEnd: query.endsAt,
+    );
+    validateAndroidCalendarView(view);
+    if (view['coverage_complete'] != true) {
+      throw PlatformException(code: 'provider_unavailable');
+    }
+    return [
+      for (final raw in view['items']! as List)
+        _androidCalendarRecord(_strictMap(raw)),
+    ];
+  }
+
+  @override
+  Future<void> openSettings() async {}
+}
+
 final class AndroidCalendarOption {
   AndroidCalendarOption.fromJson(Object? value) {
     final json = _strictMap(value);
@@ -153,7 +202,6 @@ final class AndroidCalendarOption {
 
 enum AndroidContextSource { calendar, contacts, health }
 
-@visibleForTesting
 void validateAndroidCalendarView(Map<String, dynamic> view) {
   const required = {
     'schema_version',
@@ -222,7 +270,6 @@ void validateAndroidCalendarView(Map<String, dynamic> view) {
   }
 }
 
-@visibleForTesting
 void validateAndroidPeopleView(Map<String, dynamic> view) {
   const keys = {
     'schema_version',
@@ -283,7 +330,6 @@ void validateAndroidPeopleView(Map<String, dynamic> view) {
   }
 }
 
-@visibleForTesting
 void validateAndroidWellbeingView(Map<String, dynamic> view) {
   const keys = {
     'schema_version',
@@ -367,4 +413,39 @@ List<String> _calendarIds(Object? value) {
     throw const FormatException('Duplicate Android calendar identifier.');
   }
   return result;
+}
+
+Map<String, dynamic> _androidCalendarRecord(Map<String, dynamic> item) {
+  final startsAt = _integer(item['starts_at_unix_ms']);
+  final endsAt = _integer(item['ends_at_unix_ms']);
+  final allDay = item['all_day']! as bool;
+  return {
+    'external_id': item['evidence_handle'],
+    'external_revision': '${item['evidence_handle']}:$startsAt:$endsAt:$allDay',
+    'can_modify': false,
+    'title': item['untrusted_title'],
+    'schedule': allDay
+        ? {
+            'kind': 'all_day',
+            'start_date': _date(startsAt),
+            'end_date_exclusive': _date(endsAt),
+          }
+        : {
+            'kind': 'timed',
+            'starts_at': DateTime.fromMillisecondsSinceEpoch(
+              startsAt,
+              isUtc: true,
+            ).toIso8601String(),
+            'ends_at': DateTime.fromMillisecondsSinceEpoch(
+              endsAt,
+              isUtc: true,
+            ).toIso8601String(),
+            'timezone': 'UTC',
+          },
+  };
+}
+
+String _date(int milliseconds) {
+  final value = DateTime.fromMillisecondsSinceEpoch(milliseconds, isUtc: true);
+  return '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 }

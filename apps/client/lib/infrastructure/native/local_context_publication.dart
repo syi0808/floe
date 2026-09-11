@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../features/agent/agent_connections.dart';
+import 'android_context_gateway.dart';
 import 'apple_context_gateway.dart';
 import 'macos_context_gateway.dart';
 import 'native_transport.dart';
@@ -151,6 +152,196 @@ final class PublishingAppleContextGateway implements AppleContextApi {
       return capability;
     } on Object {
       await _revoke(_attentionViewId);
+      rethrow;
+    }
+  }
+
+  Future<void> bindPerson(String personId) async {
+    final previous = _personId;
+    if (previous == personId) return;
+    if (previous != null) {
+      await _transport.revokeLocalContext(
+        personId: previous,
+        deviceId: _deviceId,
+      );
+    }
+    _personId = personId;
+  }
+
+  Future<void> logout() async {
+    final personId = _personId;
+    if (personId == null) return;
+    await _transport.revokeLocalContext(
+      personId: personId,
+      deviceId: _deviceId,
+    );
+    _personId = null;
+  }
+
+  Future<Map<String, dynamic>> _publishValidated(
+    Map<String, dynamic> view,
+    String viewId,
+    void Function(Map<String, dynamic>) validate,
+  ) async {
+    try {
+      validate(view);
+      await _publishFresh(view, viewId);
+      return view;
+    } on Object {
+      await _revoke(viewId);
+      rethrow;
+    }
+  }
+
+  Future<T> _readNative<T>(String viewId, Future<T> Function() read) async {
+    try {
+      return await read();
+    } on PlatformException catch (error) {
+      if ({'permission_denied', 'authorization_denied'}.contains(error.code)) {
+        await _revoke(viewId);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _publishFresh(Map<String, dynamic> view, String viewId) async {
+    if (view['view_id'] != viewId ||
+        (view['expires_at_unix_ms'] as int) <=
+            _clock().toUtc().millisecondsSinceEpoch) {
+      throw const FormatException('Cannot publish stale local context.');
+    }
+    final personId = _personId;
+    if (personId == null) {
+      throw StateError('No Person is bound to local context publication.');
+    }
+    await _transport.publishLocalContext(
+      personId: personId,
+      deviceId: _deviceId,
+      view: view,
+    );
+  }
+
+  Future<void> _revoke(String viewId) async {
+    final personId = _personId;
+    if (personId == null) return;
+    await _transport.revokeLocalContext(
+      personId: personId,
+      deviceId: _deviceId,
+      viewId: viewId,
+    );
+  }
+}
+
+final class PublishingAndroidContextGateway implements AndroidContextApi {
+  factory PublishingAndroidContextGateway({
+    required AndroidContextApi gateway,
+    required LocalContextTransport transport,
+    required String personId,
+    required String deviceId,
+    DateTime Function()? clock,
+  }) => PublishingAndroidContextGateway._(
+    gateway,
+    transport,
+    personId,
+    deviceId,
+    clock ?? DateTime.now,
+  );
+
+  PublishingAndroidContextGateway._(
+    this._gateway,
+    this._transport,
+    this._personId,
+    this._deviceId,
+    this._clock,
+  );
+
+  final AndroidContextApi _gateway;
+  final LocalContextTransport _transport;
+  final DateTime Function() _clock;
+  final String _deviceId;
+  String? _personId;
+
+  @override
+  Future<List<Map<String, dynamic>>> connections() async {
+    final values = await _gateway.connections();
+    for (final value in values) {
+      final connection = AgentConnection.fromJson(value);
+      if ({
+        AgentConnectionState.disconnected,
+        AgentConnectionState.revoked,
+        AgentConnectionState.unsupported,
+        AgentConnectionState.unavailable,
+      }.contains(connection.state)) {
+        for (final view in connection.descriptor.views) {
+          if ({_peopleViewId, _wellbeingViewId}.contains(view.id)) {
+            await _revoke(view.id);
+          }
+        }
+      }
+    }
+    return values;
+  }
+
+  @override
+  Future<bool> requestPermission(AndroidContextSource source) async {
+    final granted = await _gateway.requestPermission(source);
+    if (!granted) {
+      final viewId = switch (source) {
+        AndroidContextSource.contacts => _peopleViewId,
+        AndroidContextSource.health => _wellbeingViewId,
+        AndroidContextSource.calendar => null,
+      };
+      if (viewId != null) await _revoke(viewId);
+    }
+    return granted;
+  }
+
+  @override
+  Future<List<AndroidCalendarOption>> listCalendars() =>
+      _gateway.listCalendars();
+
+  @override
+  Future<List<String>> selectedCalendars() => _gateway.selectedCalendars();
+
+  @override
+  Future<List<String>> setSelectedCalendars(List<String> calendarIds) =>
+      _gateway.setSelectedCalendars(calendarIds);
+
+  @override
+  Future<Map<String, dynamic>> readCalendar({
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    String cursor = '',
+    int limit = 128,
+  }) => _gateway.readCalendar(
+    rangeStart: rangeStart,
+    rangeEnd: rangeEnd,
+    cursor: cursor,
+    limit: limit,
+  );
+
+  @override
+  Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
+    final view = await _readNative(
+      _peopleViewId,
+      () => _gateway.readContacts(limit: limit),
+    );
+    return _publishValidated(view, _peopleViewId, validateAndroidPeopleView);
+  }
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async {
+    final view = await _readNative(_wellbeingViewId, _gateway.readWellbeing);
+    try {
+      validateAndroidWellbeingView(view);
+      if (view['capacity'] == 'unknown' && view['recovery'] == 'unknown') {
+        await _revoke(_wellbeingViewId);
+        return view;
+      }
+      await _publishFresh(view, _wellbeingViewId);
+      return view;
+    } on Object {
+      await _revoke(_wellbeingViewId);
       rethrow;
     }
   }

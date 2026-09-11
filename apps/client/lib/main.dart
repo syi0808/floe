@@ -10,6 +10,7 @@ import 'app/design_tokens.dart';
 import 'app/floe_primitives.dart';
 import 'app/floe_theme.dart';
 import 'features/day_canvas/application/ffi_day_gateway.dart';
+import 'features/day_canvas/application/calendar_gateway.dart';
 import 'infrastructure/native/android_context_gateway.dart';
 import 'infrastructure/native/apple_context_gateway.dart';
 import 'infrastructure/native/local_context_publication.dart';
@@ -19,7 +20,12 @@ import 'preview/design_feedback_overlay.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    final gateway = await FfiDayGateway.openDefault();
+    final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
+    final gateway = await FfiDayGateway.openDefault(
+      calendarAdapter: androidNative == null
+          ? const EventKitCalendarAdapter()
+          : AndroidCalendarAdapter(androidNative),
+    );
     final device = await LocalDeviceIdentity.openDefault();
     Timer? macOSContextRefresh;
     final appleContext = Platform.isIOS
@@ -30,6 +36,14 @@ Future<void> main() async {
             deviceId: device.id,
           )
         : null;
+    final androidContext = androidNative == null
+        ? null
+        : PublishingAndroidContextGateway(
+            gateway: androidNative,
+            transport: gateway.localContextTransport,
+            personId: localPersonId,
+            deviceId: device.id,
+          );
     if (Platform.isMacOS) {
       final macOSContext = PublishingMacOSContextGateway(
         gateway: MacOSContextGateway(),
@@ -56,7 +70,7 @@ Future<void> main() async {
         gateway: gateway,
         agentGateway: gateway.secureAgent,
         serverClient: gateway.serverClient,
-        androidContext: Platform.isAndroid ? AndroidContextGateway() : null,
+        androidContext: androidContext,
         appleContext: appleContext,
         onDisposeGateway: () async {
           macOSContextRefresh?.cancel();

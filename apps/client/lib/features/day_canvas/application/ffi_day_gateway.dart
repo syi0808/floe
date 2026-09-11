@@ -85,14 +85,16 @@ final class FfiDayGateway
     }
   }
 
-  static Future<FfiDayGateway> openDefault() async {
+  static Future<FfiDayGateway> openDefault({
+    CalendarAdapter calendarAdapter = const EventKitCalendarAdapter(),
+  }) async {
     final transport = await _openTransport(
       NativeTransport.openDefault(personId: localPersonId),
     );
     return FfiDayGateway._(
       transport,
       DateTime.now,
-      const EventKitCalendarAdapter(),
+      calendarAdapter,
       LocalServerClient.shared,
     );
   }

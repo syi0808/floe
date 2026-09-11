@@ -7,6 +7,7 @@ class _DataPrivacy extends StatefulWidget {
     required this.onManageMemory,
     this.androidContext,
     this.appleContext,
+    this.daySnapshot,
     this.calendarSources,
     this.calendarSourceChanges,
   });
@@ -16,6 +17,7 @@ class _DataPrivacy extends StatefulWidget {
   final VoidCallback onManageMemory;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
+  final DaySnapshot? daySnapshot;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
 
@@ -34,8 +36,10 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool androidConnectionsRequested = false;
   bool appleConnectionsRequested = false;
   bool androidHealthBusy = false;
+  bool androidContactsBusy = false;
   bool appleContactsBusy = false;
   bool appleHealthBusy = false;
+  bool appleFeasibilityBusy = false;
   bool androidCalendarBusy = false;
   List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
@@ -315,6 +319,35 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
+  Future<void> _refreshAndroidContacts(AgentConnection connection) async {
+    final gateway = widget.androidContext;
+    if (gateway == null || androidContactsBusy) return;
+    setState(() {
+      androidContactsBusy = true;
+      androidConnectionFailure = null;
+    });
+    try {
+      if (connection.state == AgentConnectionState.revoked) {
+        final granted = await gateway.requestPermission(
+          AndroidContextSource.contacts,
+        );
+        if (!granted) {
+          throw StateError('Android Contacts access was not granted.');
+        }
+      }
+      await gateway.readContacts();
+    } on Object catch (error) {
+      androidConnectionFailure = error;
+    } finally {
+      androidConnectionsRequested = false;
+      try {
+        await _load();
+      } finally {
+        if (mounted) setState(() => androidContactsBusy = false);
+      }
+    }
+  }
+
   Future<void> _allowAppleContacts(AgentConnection connection) async {
     final gateway = widget.appleContext;
     if (gateway == null || appleContactsBusy) return;
@@ -327,8 +360,9 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         final granted = await gateway.requestPermission(
           AppleContextSource.contacts,
         );
-        if (!granted)
+        if (!granted) {
           throw StateError('Apple Contacts access was not granted.');
+        }
       }
       await gateway.readContacts();
     } on Object catch (error) {
@@ -370,6 +404,52 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
+  Future<void> _refreshAppleFeasibility() async {
+    final gateway = widget.appleContext;
+    final snapshot = widget.daySnapshot;
+    if (gateway == null || snapshot == null || appleFeasibilityBusy) return;
+    EventItem? event;
+    for (final item in snapshot.items.whereType<EventItem>()) {
+      if (item.id == snapshot.nextEventId && !item.isAllDay) {
+        event = item;
+        break;
+      }
+    }
+    if (event == null) {
+      setState(() {
+        appleConnectionFailure = StateError(
+          'A timed next event is required for feasibility.',
+        );
+      });
+      return;
+    }
+    final query = await _feasibilityQuery(event);
+    if (query == null || !mounted) return;
+    setState(() {
+      appleFeasibilityBusy = true;
+      appleConnectionFailure = null;
+    });
+    try {
+      await gateway.readFeasibility(query);
+    } on Object catch (error) {
+      appleConnectionFailure = error;
+    } finally {
+      appleConnectionsRequested = false;
+      try {
+        await _load();
+      } finally {
+        if (mounted) setState(() => appleFeasibilityBusy = false);
+      }
+    }
+  }
+
+  Future<AppleFeasibilityQuery?> _feasibilityQuery(EventItem event) async {
+    return showFloeDialog<AppleFeasibilityQuery>(
+      context,
+      (_) => _FeasibilityDialog(event: event),
+    );
+  }
+
   @override
   void dispose() {
     controller.removeListener(_controllerChanged);
@@ -404,13 +484,16 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           widget.appleContext != null && appleDeviceConnections == null ||
           widget.serverClient != null && remoteConnections == null;
       AgentConnection? healthConnection;
+      AgentConnection? androidContactsConnection;
       AgentConnection? androidCalendarConnection;
       AgentConnection? appleContactsConnection;
       AgentConnection? appleHealthConnection;
+      AgentConnection? appleFeasibilityConnection;
       for (final connection in connections) {
         if (connection.descriptor.provider == 'health_connect') {
           healthConnection = connection;
-          break;
+        } else if (connection.descriptor.provider == 'android_contacts') {
+          androidContactsConnection = connection;
         }
       }
       for (final connection in connections) {
@@ -418,6 +501,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
           appleContactsConnection = connection;
         } else if (connection.descriptor.provider == 'apple_health') {
           appleHealthConnection = connection;
+        } else if (connection.descriptor.provider == 'apple_feasibility') {
+          appleFeasibilityConnection = connection;
         }
       }
       for (final connection in connections) {
@@ -543,6 +628,36 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
+                if (androidContactsConnection != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Android Contacts stay on this device. Floe exposes only bounded identity handles and selected aliases.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FloeButton.outlined(
+                      key: const ValueKey('android-contacts-refresh'),
+                      onPressed:
+                          androidContactsConnection.state ==
+                              AgentConnectionState.unsupported
+                          ? null
+                          : () => _refreshAndroidContacts(
+                              androidContactsConnection!,
+                            ),
+                      loading: androidContactsBusy,
+                      child: Text(
+                        androidContactsConnection.state ==
+                                AgentConnectionState.revoked
+                            ? 'Allow Android Contacts'
+                            : 'Refresh contacts',
+                      ),
+                    ),
+                  ),
+                ],
                 if (appleContactsConnection != null) ...[
                   const SizedBox(height: FloeSpace.sm),
                   Text(
@@ -600,6 +715,30 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
+                if (appleFeasibilityConnection != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  Text(
+                    'Location is read only when you request feasibility for the next timed event. Enter its destination explicitly; Floe does not retain location history.',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FloeButton.outlined(
+                      key: const ValueKey('apple-feasibility-refresh'),
+                      onPressed:
+                          appleFeasibilityConnection.state ==
+                                  AgentConnectionState.unsupported ||
+                              widget.daySnapshot?.nextEventId == null
+                          ? null
+                          : _refreshAppleFeasibility,
+                      loading: appleFeasibilityBusy,
+                      child: const Text('Refresh next trip'),
+                    ),
+                  ),
+                ],
                 if ((controller.hasConnections ||
                         widget.serverClient != null ||
                         widget.androidContext != null ||
@@ -647,4 +786,117 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       );
     },
   );
+}
+
+class _FeasibilityDialog extends StatefulWidget {
+  const _FeasibilityDialog({required this.event});
+
+  final EventItem event;
+
+  @override
+  State<_FeasibilityDialog> createState() => _FeasibilityDialogState();
+}
+
+class _FeasibilityDialogState extends State<_FeasibilityDialog> {
+  final latitude = TextEditingController();
+  final longitude = TextEditingController();
+  AppleTravelMode travelMode = AppleTravelMode.transit;
+
+  @override
+  void dispose() {
+    latitude.dispose();
+    longitude.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FloeDialog(
+    title: const Text('Refresh trip feasibility'),
+    content: SizedBox(
+      width: 420,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            widget.event.title,
+            style: FloeType.body.copyWith(color: FloePalette.neutral600),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          FloeInput(
+            key: const ValueKey('feasibility-latitude'),
+            label: 'Destination latitude',
+            controller: latitude,
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          FloeInput(
+            key: const ValueKey('feasibility-longitude'),
+            label: 'Destination longitude',
+            controller: longitude,
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          FloeRadioGroup<AppleTravelMode>(
+            value: travelMode,
+            onChanged: (value) {
+              if (value != null) setState(() => travelMode = value);
+            },
+            child: Column(
+              children: [
+                for (final mode in AppleTravelMode.values)
+                  FloeRadioTile<AppleTravelMode>(
+                    value: mode,
+                    title: Text(mode.name),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      FloeButton.text(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FloeButton.filled(
+        key: const ValueKey('feasibility-refresh-confirm'),
+        onPressed: _submit,
+        child: const Text('Refresh'),
+      ),
+    ],
+  );
+
+  void _submit() {
+    final parsedLatitude = double.tryParse(latitude.text.trim());
+    final parsedLongitude = double.tryParse(longitude.text.trim());
+    if (parsedLatitude == null ||
+        parsedLatitude < -90 ||
+        parsedLatitude > 90 ||
+        parsedLongitude == null ||
+        parsedLongitude < -180 ||
+        parsedLongitude > 180) {
+      return;
+    }
+    final event = widget.event;
+    Navigator.pop(
+      context,
+      AppleFeasibilityQuery(
+        eventHandle: 'event:${event.id}',
+        evidenceHandles: ['calendar.event:${event.id}'],
+        latitude: parsedLatitude,
+        longitude: parsedLongitude,
+        eventStart: event.startsAt,
+        eventEnd: event.endsAt,
+        travelMode: travelMode,
+      ),
+    );
+  }
 }

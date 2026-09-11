@@ -240,6 +240,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
         agentController: agentController,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
+        daySnapshot: controller.snapshot,
         calendarSources: _agentCalendarSources,
         calendarSourceChanges: controller,
       );

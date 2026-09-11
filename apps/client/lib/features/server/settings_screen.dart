@@ -7,6 +7,7 @@ import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_primitives.dart';
 import '../../app/floe_loading.dart';
+import '../../app/floe_input.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../agent/agent_calendar_sources.dart';
@@ -18,6 +19,7 @@ import '../agent/agent_memory_settings.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
+import '../day_canvas/domain/day_models.dart';
 import 'local_server_client.dart';
 import 'local_server_panel.dart';
 import '../../infrastructure/native/android_context_gateway.dart';
@@ -40,6 +42,7 @@ class SettingsScreen extends StatefulWidget {
     this.calendarSourceChanges,
     this.androidContext,
     this.appleContext,
+    this.daySnapshot,
   });
 
   final LocalServerClient? client;
@@ -49,6 +52,7 @@ class SettingsScreen extends StatefulWidget {
   final Listenable? calendarSourceChanges;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
+  final DaySnapshot? daySnapshot;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -91,6 +95,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       serverClient: widget.client,
       androidContext: widget.androidContext,
       appleContext: widget.appleContext,
+      daySnapshot: widget.daySnapshot,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),

@@ -1,4 +1,6 @@
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
+import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/infrastructure/native/local_context_publication.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_transport.dart';
@@ -143,6 +145,86 @@ void main() {
       expect(transport.revoked.single.viewId, 'attention.coarse');
     },
   );
+
+  test('publishes Android Contacts and Health Connect projections', () async {
+    final transport = _RecordingTransport();
+    final native = _FakeAndroidContext();
+    final gateway = PublishingAndroidContextGateway(
+      gateway: native,
+      transport: transport,
+      personId: person,
+      deviceId: device,
+      clock: () => now,
+    );
+
+    await gateway.readContacts();
+    await gateway.readWellbeing();
+
+    expect(transport.published.map((entry) => entry.view['view_id']), [
+      'people.identity',
+      'wellbeing.derived',
+    ]);
+    expect(
+      transport.published.expand((entry) => entry.view.keys),
+      isNot(contains('steps')),
+    );
+  });
+
+  test('Android denial and unknown health clear cached projections', () async {
+    final transport = _RecordingTransport();
+    final native = _FakeAndroidContext()
+      ..permissionGranted = false
+      ..wellbeing = {
+        ..._androidWellbeingView,
+        'capacity': 'unknown',
+        'recovery': 'unknown',
+        'confidence_millis': 0,
+        'evidence_handles': <String>[],
+      };
+    final gateway = PublishingAndroidContextGateway(
+      gateway: native,
+      transport: transport,
+      personId: person,
+      deviceId: device,
+      clock: () => now,
+    );
+
+    await gateway.requestPermission(AndroidContextSource.contacts);
+    await gateway.readWellbeing();
+
+    expect(transport.published, isEmpty);
+    expect(transport.revoked.map((entry) => entry.viewId), [
+      'people.identity',
+      'wellbeing.derived',
+    ]);
+  });
+
+  test(
+    'Android selected calendars cross the durable Calendar adapter',
+    () async {
+      final native = _FakeAndroidContext();
+      final adapter = AndroidCalendarAdapter(native);
+      final query = DayQuery(
+        personId: person,
+        date: DateTime.utc(1970, 1, 1),
+        now: now,
+        timezoneOffsetSeconds: 0,
+      );
+
+      final calendars = await adapter.calendars();
+      final records = await adapter.read(calendars.single.id, query);
+
+      expect(calendars.single.provider, 'android');
+      expect(records.single['external_id'], 'calendar.event:one');
+      expect(records.single['can_modify'], false);
+      expect(records.single['schedule'], {
+        'kind': 'timed',
+        'starts_at': '1970-01-01T00:00:02.000Z',
+        'ends_at': '1970-01-01T00:00:03.000Z',
+        'timezone': 'UTC',
+      });
+    },
+  );
 }
 
 const _peopleView = <String, dynamic>{
@@ -187,6 +269,18 @@ const _attentionView = <String, dynamic>{
     'attention.macos:stable_activity',
     'attention.macos:recent_input',
   ],
+};
+
+const _androidWellbeingView = <String, dynamic>{
+  'schema_version': 1,
+  'view_id': 'wellbeing.derived',
+  'source_handle': 'wellbeing:android-health',
+  'observed_at_unix_ms': 1000,
+  'expires_at_unix_ms': 301000,
+  'capacity': 'typical',
+  'recovery': 'recovered',
+  'confidence_millis': 600,
+  'evidence_handles': <String>['health.sleep.window:one'],
 };
 
 final class _FakeAppleContext implements AppleContextApi {
@@ -251,6 +345,61 @@ final class _FakeMacOSContext implements MacOSContextApi {
 
   @override
   Future<Map<String, dynamic>> readAttention() async => view;
+}
+
+final class _FakeAndroidContext implements AndroidContextApi {
+  bool permissionGranted = true;
+  Map<String, dynamic> wellbeing = Map.of(_androidWellbeingView);
+
+  @override
+  Future<List<Map<String, dynamic>>> connections() async => [];
+
+  @override
+  Future<List<AndroidCalendarOption>> listCalendars() async => [];
+
+  @override
+  Future<List<String>> selectedCalendars() async => ['calendar-one'];
+
+  @override
+  Future<List<String>> setSelectedCalendars(List<String> calendarIds) async =>
+      calendarIds;
+
+  @override
+  Future<bool> requestPermission(AndroidContextSource source) async =>
+      permissionGranted;
+
+  @override
+  Future<Map<String, dynamic>> readContacts({int limit = 64}) async =>
+      Map.of(_peopleView)..['source_handle'] = 'people:android:source';
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async => wellbeing;
+
+  @override
+  Future<Map<String, dynamic>> readCalendar({
+    required DateTime rangeStart,
+    required DateTime rangeEnd,
+    String cursor = '',
+    int limit = 128,
+  }) async => {
+    'schema_version': 1,
+    'view_id': 'calendar.timeline',
+    'source_handle': 'calendar.timeline:android',
+    'observed_at_unix_ms': 1000,
+    'expires_at_unix_ms': 301000,
+    'range_start_unix_ms': rangeStart.millisecondsSinceEpoch,
+    'range_end_unix_ms': rangeEnd.millisecondsSinceEpoch,
+    'coverage_complete': true,
+    'items': [
+      {
+        'evidence_handle': 'calendar.event:one',
+        'untrusted_title': 'Planning review',
+        'starts_at_unix_ms': 2000,
+        'ends_at_unix_ms': 3000,
+        'all_day': false,
+      },
+    ],
+  };
 }
 
 final class _RecordingTransport implements LocalContextTransport {
