@@ -26,7 +26,6 @@ class ServerConnectorPanel extends StatefulWidget {
     required this.connector,
     required this.connection,
     required this.client,
-    required this.legacyUnscoped,
     required this.onBack,
     required this.onChanged,
     this.authorizationLauncher = _launchConnectorAuthorization,
@@ -36,7 +35,6 @@ class ServerConnectorPanel extends StatefulWidget {
   final ServerConnector connector;
   final ServerConnection connection;
   final LocalServerClient client;
-  final bool legacyUnscoped;
   final VoidCallback onBack;
   final Future<void> Function() onChanged;
   final ConnectorAuthorizationLauncher authorizationLauncher;
@@ -315,16 +313,12 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                 ),
               ),
               SizedBox(height: FloeSpace.lg),
-              if (widget.legacyUnscoped)
-                const FloeInfoNote(
-                  text: 'Connector changes are disabled for this legacy pairing. Forget the server connection in Settings and pair this device again.',
-                )
-              else if (!widget.connector.available)
+              if (!widget.connector.available)
                 const FloeInfoNote(
                   text: 'This provider is known to Floe but is unavailable until its server configuration is installed.',
                 ),
               if (error != null) ...[
-                if (widget.legacyUnscoped || !widget.connector.available)
+                if (!widget.connector.available)
                   SizedBox(height: FloeSpace.base),
                 FloeInfoNote(text: error!),
               ],
@@ -337,10 +331,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                     key: Key('connector-scope-$field'),
                     label: _scopeLabel(field),
                     controller: scope[field]!,
-                    enabled:
-                        !busy &&
-                        !widget.legacyUnscoped &&
-                        widget.connector.available,
+                    enabled: !busy && widget.connector.available,
                     autocorrect: false,
                     enableSuggestions: false,
                   ),
@@ -353,10 +344,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                   key: const Key('connector-secret'),
                   label: 'Access token',
                   controller: secret,
-                  enabled:
-                      !busy &&
-                      !widget.legacyUnscoped &&
-                      widget.connector.available,
+                  enabled: !busy && widget.connector.available,
                   obscureText: true,
                   autocorrect: false,
                   enableSuggestions: false,
@@ -381,10 +369,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                       widget.connector.connectionId == null &&
                       widget.connector.capabilities.connect)
                     FloeButton.filled(
-                      onPressed:
-                          busy ||
-                              widget.legacyUnscoped ||
-                              !widget.connector.available
+                      onPressed: busy || !widget.connector.available
                           ? null
                           : _connect,
                       child: Text(
@@ -397,15 +382,13 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                       attempt != null &&
                       widget.connector.capabilities.cancel)
                     FloeButton.outlined(
-                      onPressed: busy || widget.legacyUnscoped ? null : _cancel,
+                      onPressed: busy ? null : _cancel,
                       child: const Text('Cancel connection'),
                     ),
                   if (displayStatus == ServerConnectorStatus.connected &&
                       widget.connector.capabilities.scopeUpdate)
                     FloeButton.outlined(
-                      onPressed: busy || widget.legacyUnscoped
-                          ? null
-                          : _updateScope,
+                      onPressed: busy ? null : _updateScope,
                       child: const Text('Update scope'),
                     ),
                   if ((displayStatus == ServerConnectorStatus.connected ||
@@ -414,9 +397,7 @@ class _ServerConnectorPanelState extends State<ServerConnectorPanel> {
                               attempt == null) &&
                       widget.connector.capabilities.disconnect)
                     FloeButton.text(
-                      onPressed: busy || widget.legacyUnscoped
-                          ? null
-                          : _disconnect,
+                      onPressed: busy ? null : _disconnect,
                       child: const Text('Disconnect'),
                     ),
                 ],
@@ -462,7 +443,8 @@ String _scopeLabel(String value) => switch (value) {
 };
 
 String connectorErrorMessage(String code) => switch (code) {
-  'person_scope_required' || 'authorization_required' => 'This pairing cannot change Person-owned connections. Forget it in Settings and pair this device again.',
+  'unauthorized' =>
+    'Server authorization expired. Pair this device again in Settings.',
   'connection_owned_by_another_person' =>
     'This connector belongs to another Person on the server.',
   'connector_unavailable' =>

@@ -35,6 +35,8 @@ class ServerConnection {
     required this.address,
     required this.token,
     required this.clientId,
+    required this.personId,
+    required this.deviceId,
     this.allowExternal = false,
     List<String> externalRecipients = const [],
   }) : externalRecipients = List.unmodifiable(externalRecipients);
@@ -42,6 +44,8 @@ class ServerConnection {
   final String address;
   final String token;
   final String clientId;
+  final String personId;
+  final String deviceId;
   final bool allowExternal;
   final List<String> externalRecipients;
 
@@ -49,6 +53,8 @@ class ServerConnection {
     'base_url': address,
     'token': token,
     'client_id': clientId,
+    'person_id': personId,
+    'device_id': deviceId,
     'allow_external': allowExternal,
     'external_recipients': externalRecipients,
   };
@@ -65,6 +71,8 @@ class ServerConnection {
     address: address,
     token: token,
     clientId: clientId,
+    personId: personId,
+    deviceId: deviceId,
     allowExternal: value && recipients.isNotEmpty,
     externalRecipients: value ? ([...recipients.toSet()]..sort()) : const [],
   );
@@ -186,13 +194,11 @@ final class ServerConnectorCatalog {
   const ServerConnectorCatalog({
     required this.personId,
     required this.deviceId,
-    required this.legacyUnscoped,
     required this.connectors,
   });
 
   final String personId;
   final String deviceId;
-  final bool legacyUnscoped;
   final List<ServerConnector> connectors;
 }
 
@@ -265,20 +271,32 @@ class LocalServerClient {
           )) {
         throw const FormatException();
       }
-      return ServerConnection(
+      final connection = ServerConnection(
         address: address,
         token: token,
         clientId: value['client_id'] as String,
+        personId: value['person_id'] as String,
+        deviceId: value['device_id'] as String,
         allowExternal: allowExternal,
         externalRecipients: recipients,
       );
+      _requireConnectionIdentity(connection);
+      return connection;
     } on Object {
       throw const ServerConnectionException('invalid_saved_connection');
     }
   }
 
-  Future<void> save(ServerConnection value) =>
-      store.write(jsonEncode(value.toJson()));
+  Future<void> save(ServerConnection value) {
+    _requireConnectionIdentity(value);
+    return store.write(jsonEncode(value.toJson()));
+  }
+
+  void _requireConnectionIdentity(ServerConnection connection) {
+    if (connection.personId != personId || connection.deviceId != deviceId) {
+      throw const ServerConnectionException('connection_identity_mismatch');
+    }
+  }
 
   Future<Map<String, dynamic>> request(
     String address,
@@ -327,7 +345,7 @@ class LocalServerClient {
           throw ServerConnectionException(
             serverCode ??
                 switch (response.statusCode) {
-                  401 => 'authorization_required',
+                  401 => 'unauthorized',
                   403 => 'external_transfer_denied',
                   429 => 'pairing_in_progress',
                   _ => 'server_rejected',
@@ -354,6 +372,7 @@ class LocalServerClient {
   Future<ServerConnectorCatalog> connectorCatalog(
     ServerConnection connection,
   ) async {
+    _requireConnectionIdentity(connection);
     final value = await _request(
       connection.address,
       '/v1/connectors',
@@ -361,7 +380,10 @@ class LocalServerClient {
       token: connection.token,
     );
     try {
-      if (value['schema_version'] != 1 || value['connectors'] is! List) {
+      if (value['schema_version'] != 1 ||
+          value['person_id'] != personId ||
+          value['device_id'] != deviceId ||
+          value['connectors'] is! List) {
         throw const FormatException();
       }
       final connectors = (value['connectors'] as List)
@@ -375,7 +397,6 @@ class LocalServerClient {
       return ServerConnectorCatalog(
         personId: value['person_id'] as String,
         deviceId: value['device_id'] as String,
-        legacyUnscoped: value['legacy_unscoped'] as bool,
         connectors: List.unmodifiable(connectors),
       );
     } on Object {
@@ -389,6 +410,7 @@ class LocalServerClient {
     required Map<String, Object?> scope,
     String? secret,
   }) async {
+    _requireConnectionIdentity(connection);
     final value = await _request(
       connection.address,
       '/v1/connectors/${Uri.encodeComponent(connectorId)}/connect',
@@ -397,41 +419,56 @@ class LocalServerClient {
       acceptedStatuses: const {201},
       body: {'schema_version': 1, 'scope': scope, 'secret': ?secret},
     );
-    return _connectorAttempt(value);
+    return _connectorAttempt(
+      value,
+      personId: connection.personId,
+      deviceId: connection.deviceId,
+    );
   }
 
   Future<ServerConnectorAttempt> connectorAttempt({
     required ServerConnection connection,
     required String connectorId,
     required String attemptId,
-  }) async => _connectorAttempt(
-    await _request(
-      connection.address,
-      '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}',
-      method: 'GET',
-      token: connection.token,
-    ),
-  );
+  }) async {
+    _requireConnectionIdentity(connection);
+    return _connectorAttempt(
+      await _request(
+        connection.address,
+        '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}',
+        method: 'GET',
+        token: connection.token,
+      ),
+      personId: connection.personId,
+      deviceId: connection.deviceId,
+    );
+  }
 
   Future<ServerConnectorAttempt> cancelConnectorAttempt({
     required ServerConnection connection,
     required String connectorId,
     required String attemptId,
-  }) async => _connectorAttempt(
-    await _request(
-      connection.address,
-      '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}/cancel',
-      method: 'POST',
-      token: connection.token,
-      body: const {},
-    ),
-  );
+  }) async {
+    _requireConnectionIdentity(connection);
+    return _connectorAttempt(
+      await _request(
+        connection.address,
+        '/v1/connectors/${Uri.encodeComponent(connectorId)}/connection-attempts/${Uri.encodeComponent(attemptId)}/cancel',
+        method: 'POST',
+        token: connection.token,
+        body: const {},
+      ),
+      personId: connection.personId,
+      deviceId: connection.deviceId,
+    );
+  }
 
   Future<Map<String, Object?>> updateConnectorScope({
     required ServerConnection connection,
     required String connectorId,
     required Map<String, Object?> scope,
   }) async {
+    _requireConnectionIdentity(connection);
     final value = await _request(
       connection.address,
       '/v1/connectors/${Uri.encodeComponent(connectorId)}/scope',
@@ -440,6 +477,11 @@ class LocalServerClient {
       body: {'schema_version': 1, 'scope': scope},
     );
     try {
+      if (value['schema_version'] != 1 ||
+          value['person_id'] != connection.personId ||
+          value['device_id'] != connection.deviceId) {
+        throw const FormatException();
+      }
       return Map<String, Object?>.unmodifiable(
         Map<String, Object?>.from(value['scope'] as Map),
       );
@@ -452,18 +494,23 @@ class LocalServerClient {
     required ServerConnection connection,
     required String connectorId,
   }) async {
+    _requireConnectionIdentity(connection);
     final value = await _request(
       connection.address,
       '/v1/connectors/${Uri.encodeComponent(connectorId)}',
       method: 'DELETE',
       token: connection.token,
     );
-    if (value['schema_version'] != 1 || value['disconnected'] != true) {
+    if (value['schema_version'] != 1 ||
+        value['person_id'] != connection.personId ||
+        value['device_id'] != connection.deviceId ||
+        value['disconnected'] != true) {
       throw const ServerConnectionException('invalid_response');
     }
   }
 
   Future<void> checkConnection(ServerConnection value) async {
+    _requireConnectionIdentity(value);
     final response = await request(
       value.address,
       '/v1/inference-purposes',
@@ -478,6 +525,7 @@ class LocalServerClient {
   Future<Map<InferencePurpose, InferencePurposeAvailability>> purposes(
     ServerConnection connection,
   ) async {
+    _requireConnectionIdentity(connection);
     final response = await request(
       connection.address,
       '/v1/inference-purposes',
@@ -501,12 +549,15 @@ class LocalServerClient {
   Future<List<Map<String, dynamic>>> connections(
     ServerConnection connection,
   ) async {
+    _requireConnectionIdentity(connection);
     final response = await request(
       connection.address,
       '/v1/connections',
       token: connection.token,
     );
     if (response['schema_version'] != 1 ||
+        response['person_id'] != connection.personId ||
+        response['device_id'] != connection.deviceId ||
         response['connections'] is! List ||
         (response['connections'] as List).length > 64) {
       throw const ServerConnectionException('invalid_response');
@@ -525,6 +576,7 @@ class LocalServerClient {
   Future<List<InferenceAuditRecord>> privacyActivity(
     ServerConnection connection,
   ) async {
+    _requireConnectionIdentity(connection);
     final response = await request(
       connection.address,
       '/v1/traces',
@@ -584,6 +636,7 @@ class LocalServerClient {
     required Map<String, Object?> outputSchema,
     String? replayOf,
   }) async {
+    _requireConnectionIdentity(connection);
     final response = await request(
       connection.address,
       '/v1/generate',
@@ -675,9 +728,17 @@ ServerConnector _serverConnector(Object? raw) {
   );
 }
 
-ServerConnectorAttempt _connectorAttempt(Map<String, dynamic> value) {
+ServerConnectorAttempt _connectorAttempt(
+  Map<String, dynamic> value, {
+  required String personId,
+  required String deviceId,
+}) {
   try {
-    if (value['schema_version'] != 1) throw const FormatException();
+    if (value['schema_version'] != 1 ||
+        value['person_id'] != personId ||
+        value['device_id'] != deviceId) {
+      throw const FormatException();
+    }
     final error = value['error'] == null
         ? null
         : Map<String, dynamic>.from(value['error'] as Map)['code'] as String;

@@ -129,7 +129,6 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         connector: serverConnector,
         connection: serverConnection!,
         client: widget.serverClient!,
-        legacyUnscoped: catalog?.legacyUnscoped ?? false,
         onBack: () => setState(() => selectedServerConnectorId = null),
         onChanged: _loadCatalog,
       );
@@ -194,14 +193,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
               : strings.connectedServicesCount(connectedCount),
           style: FloeType.title,
         ),
-        if (catalog?.legacyUnscoped == true ||
-            catalogError == 'person_scope_required' ||
-            catalogError == 'authorization_required') ...[
-          SizedBox(height: FloeSpace.base),
-          const FloeInfoNote(
-            text: 'This server pairing is read-only because it is not bound to a Person and device. Forget it in Settings, then pair this device again.',
-          ),
-        ] else if (catalogError != null) ...[
+        if (catalogError != null) ...[
           SizedBox(height: FloeSpace.base),
           FloeInfoNote(
             text: catalogError == 'pair_required'

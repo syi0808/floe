@@ -38,6 +38,8 @@ void main() {
         address: 'http://127.0.0.1:9431',
         token: 'a' * 52,
         clientId: 'fixture-client',
+        personId: '00000000-0000-4000-8000-000000000001',
+        deviceId: 'local-client',
       );
       await client.save(saved);
       final restored = await LocalServerClient(store: store).connection();
@@ -45,6 +47,8 @@ void main() {
         'base_url',
         'token',
         'client_id',
+        'person_id',
+        'device_id',
         'allow_external',
         'external_recipients',
       ]);
@@ -72,13 +76,39 @@ void main() {
   test('invalid saved credential fails closed', () async {
     final store = MemoryServerCredentials()
       ..value = jsonEncode({
-        'base_url': 'https://evil.example',
+        'base_url': 'http://127.0.0.1:8431',
         'token': 'a' * 52,
         'client_id': 'fixture',
+        'allow_external': false,
+        'external_recipients': <String>[],
       });
     await expectLater(
       LocalServerClient(store: store).connection(),
       throwsA(isA<ServerConnectionException>()),
+    );
+  });
+
+  test('connection identity must match the active Person and device', () {
+    final client = LocalServerClient(
+      store: MemoryServerCredentials(),
+      deviceId: 'current-device',
+    );
+    final connection = ServerConnection(
+      address: 'http://127.0.0.1:8431',
+      token: 'a' * 52,
+      clientId: 'fixture',
+      personId: '00000000-0000-4000-8000-000000000001',
+      deviceId: 'other-device',
+    );
+    expect(
+      () => client.save(connection),
+      throwsA(
+        isA<ServerConnectionException>().having(
+          (error) => error.code,
+          'code',
+          'connection_identity_mismatch',
+        ),
+      ),
     );
   });
 

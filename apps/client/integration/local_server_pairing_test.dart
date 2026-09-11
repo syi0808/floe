@@ -72,7 +72,7 @@ void main() {
       csrf = (await manage('state'))['csrf'] as String;
       final store = MemoryServerCredentials();
       final client = LocalServerClient(store: store);
-      final pair = await client.request(address, '/pair/start', body: {});
+      final pair = await client.startPairing(address);
       final pending = await client.request(
         address,
         '/pair/poll',
@@ -90,6 +90,8 @@ void main() {
         address: address,
         token: approved['token'] as String,
         clientId: approved['client_id'] as String,
+        personId: approved['person_id'] as String,
+        deviceId: approved['device_id'] as String,
       );
       await client.save(connection);
       await client.checkConnection(connection);
@@ -104,7 +106,7 @@ void main() {
           isA<ServerConnectionException>().having(
             (error) => error.code,
             'code',
-            'authorization_required',
+            'unauthorized',
           ),
         ),
       );

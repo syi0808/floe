@@ -298,6 +298,8 @@ void main() {
         address: 'http://127.0.0.1:8431',
         token: 'a' * 52,
         clientId: 'paired-client',
+        personId: registryPerson,
+        deviceId: 'local-client',
       ),
     );
     final controller = AgentController(
@@ -381,6 +383,8 @@ void main() {
         address: 'http://127.0.0.1:8431',
         token: 'a' * 52,
         clientId: 'paired-client',
+        personId: registryPerson,
+        deviceId: 'local-client',
       ),
     );
     final controller = AgentController(

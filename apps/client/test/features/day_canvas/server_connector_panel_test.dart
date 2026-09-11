@@ -17,6 +17,8 @@ final _connection = ServerConnection(
   address: 'http://127.0.0.1:8431',
   token: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'fixture',
+  personId: '00000000-0000-4000-8000-000000000001',
+  deviceId: 'local-test-device',
 );
 
 void main() {
@@ -43,7 +45,6 @@ void main() {
           ),
           connection: _connection,
           client: client,
-          legacyUnscoped: false,
           onBack: () {},
           onChanged: () async => changed++,
         ),
@@ -88,7 +89,6 @@ void main() {
             connector: _oauthConnector(),
             connection: _connection,
             client: client,
-            legacyUnscoped: false,
             onBack: () {},
             onChanged: () async => changed++,
             authorizationLauncher: (uri) async {
@@ -125,7 +125,6 @@ void main() {
           connector: _oauthConnector(),
           connection: _connection,
           client: client,
-          legacyUnscoped: false,
           onBack: () {},
           onChanged: () async {},
           authorizationLauncher: (_) async => true,
@@ -141,30 +140,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.cancelledAttempt, 'attempt');
     expect(find.text('Available'), findsOneWidget);
-  });
-
-  testWidgets('legacy pairing disables mutation and explains re-pair', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      _host(
-        ServerConnectorPanel(
-          connector: _oauthConnector(),
-          connection: _connection,
-          client: _ConnectorClient(
-            startResult: _attempt(ServerConnectorStatus.connecting),
-          ),
-          legacyUnscoped: true,
-          onBack: () {},
-          onChanged: () async {},
-        ),
-      ),
-    );
-    expect(find.textContaining('pair this device again'), findsOneWidget);
-    final button = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Continue to authorize'),
-    );
-    expect(button.onPressed, isNull);
   });
 }
 

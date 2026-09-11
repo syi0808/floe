@@ -21,6 +21,8 @@ void main() {
           case '/v1/traces':
             response['traces'] = <Object?>[];
           case '/v1/connections':
+            response['person_id'] = '00000000-0000-4000-8000-000000000001';
+            response['device_id'] = 'local-client';
             response['connections'] = <Object?>[];
           case '/v1/generate':
             final body =
@@ -49,6 +51,8 @@ void main() {
         address: 'http://127.0.0.1:${server.port}',
         token: 'a' * 52,
         clientId: 'fixture',
+        personId: '00000000-0000-4000-8000-000000000001',
+        deviceId: 'local-client',
       );
       await client.checkConnection(connection);
       expect(await client.connections(connection), isEmpty);
@@ -120,7 +124,6 @@ void main() {
                 'schema_version': 1,
                 'person_id': '00000000-0000-4000-8000-000000000001',
                 'device_id': 'local-persistent-device',
-                'legacy_unscoped': false,
                 'connectors': [
                   {
                     'id': 'github.issues',
@@ -163,6 +166,8 @@ void main() {
             request.response.write(
               jsonEncode({
                 'schema_version': 1,
+                'person_id': '00000000-0000-4000-8000-000000000001',
+                'device_id': 'local-persistent-device',
                 'attempt_id': 'attempt-1',
                 'connector_id': 'github.issues',
                 'connection_id': 'connection-1',
@@ -175,13 +180,20 @@ void main() {
             request.response.write(
               jsonEncode({
                 'schema_version': 1,
+                'person_id': '00000000-0000-4000-8000-000000000001',
+                'device_id': 'local-persistent-device',
                 'scope': {'owner': 'floe', 'repository': 'server'},
               }),
             );
           case '/v1/connectors/github.issues':
             expect(request.method, 'DELETE');
             request.response.write(
-              jsonEncode({'schema_version': 1, 'disconnected': true}),
+              jsonEncode({
+                'schema_version': 1,
+                'person_id': '00000000-0000-4000-8000-000000000001',
+                'device_id': 'local-persistent-device',
+                'disconnected': true,
+              }),
             );
           default:
             fail('Unexpected endpoint: ${request.uri.path}');
@@ -199,6 +211,8 @@ void main() {
         address: address,
         token: 'a' * 52,
         clientId: 'fixture',
+        personId: '00000000-0000-4000-8000-000000000001',
+        deviceId: 'local-persistent-device',
       );
       final catalog = await client.connectorCatalog(connection);
       expect(catalog.deviceId, 'local-persistent-device');
@@ -235,38 +249,4 @@ void main() {
       ]);
     },
   );
-
-  test('connector mutation errors preserve re-pair reason', () async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    server.listen((request) async {
-      request.response.statusCode = 403;
-      request.response.write(
-        jsonEncode({
-          'error': {'code': 'person_scope_required'},
-        }),
-      );
-      await request.response.close();
-    });
-    addTearDown(() => server.close(force: true));
-    final connection = ServerConnection(
-      address: 'http://127.0.0.1:${server.port}',
-      token: 'a' * 52,
-      clientId: 'fixture',
-    );
-    await expectLater(
-      LocalServerClient().connectConnector(
-        connection: connection,
-        connectorId: 'github.issues',
-        scope: {'owner': 'floe', 'repository': 'client'},
-        secret: 'one-shot-secret',
-      ),
-      throwsA(
-        isA<ServerConnectionException>().having(
-          (error) => error.code,
-          'code',
-          'person_scope_required',
-        ),
-      ),
-    );
-  });
 }

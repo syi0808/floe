@@ -101,10 +101,16 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         );
         if (!mounted || attempt != generation) return;
         if (response['status'] != 'approved') continue;
+        if (response['person_id'] != widget.client.personId ||
+            response['device_id'] != widget.client.deviceId) {
+          throw const ServerConnectionException('invalid_response');
+        }
         final saved = ServerConnection(
           address: base,
           token: response['token'] as String,
           clientId: response['client_id'] as String,
+          personId: widget.client.personId,
+          deviceId: widget.client.deviceId,
         );
         await widget.client.checkConnection(saved);
         if (!mounted || attempt != generation) return;
@@ -278,7 +284,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
 String _error(String code) => switch (code) {
   'invalid_address' =>
     'Enter a local HTTP address such as http://127.0.0.1:8431.',
-  'authorization_required' => 'App access was revoked or pairing expired. Forget the connection and pair again.',
+  'unauthorized' => 'App access was revoked or pairing expired. Forget the connection and pair again.',
   'pairing_in_progress' => 'Another pairing request is pending. Reject it in the dashboard or wait for it to expire.',
   'invalid_saved_connection' =>
     'Saved connection is invalid. Forget it and pair again.',

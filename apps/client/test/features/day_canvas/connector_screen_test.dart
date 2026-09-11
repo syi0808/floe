@@ -124,6 +124,8 @@ final class _CatalogClient extends LocalServerClient {
     address: 'http://127.0.0.1:8431',
     token: 'a' * 32,
     clientId: 'fixture',
+    personId: '00000000-0000-4000-8000-000000000001',
+    deviceId: 'local-test-device',
   );
 
   @override
@@ -132,7 +134,6 @@ final class _CatalogClient extends LocalServerClient {
   ) async => const ServerConnectorCatalog(
     personId: '00000000-0000-4000-8000-000000000001',
     deviceId: 'local-test-device',
-    legacyUnscoped: false,
     connectors: [
       ServerConnector(
         id: 'github.issues',
