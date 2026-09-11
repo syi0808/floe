@@ -7,6 +7,7 @@ import Security
 class MainFlutterWindow: NSWindow {
   private let calendarBridge = CalendarBridge()
   private let serverBridge = LocalServerBridge()
+  private let attentionBridge = MacOSAttentionBridge()
   private var designFeedbackChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
@@ -28,6 +29,8 @@ class MainFlutterWindow: NSWindow {
     channel.setMethodCallHandler(calendarBridge.handle)
     let serverChannel = FlutterMethodChannel(name: "floe/local-server", binaryMessenger: flutterViewController.engine.binaryMessenger)
     serverChannel.setMethodCallHandler(serverBridge.handle)
+    let contextChannel = FlutterMethodChannel(name: "floe/macos_context", binaryMessenger: flutterViewController.engine.binaryMessenger)
+    contextChannel.setMethodCallHandler(attentionBridge.handle)
     designFeedbackChannel = FlutterMethodChannel(name: "floe/design-feedback", binaryMessenger: flutterViewController.engine.binaryMessenger)
 #if DEBUG
     installDesignFeedbackMenuItem()
