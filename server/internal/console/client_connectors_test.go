@@ -418,7 +418,7 @@ func TestOAuthCatalogRequiresCredentialReadinessAndReconnectRepairsStaleRecord(t
 	_, token := fixture.pair()
 	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
 	fixture.console.SetMicrosoftMail(runtime, nil)
-	connectionID := "microsoft.mail.stale"
+	connectionID := "00000000-0000-4000-8000-000000000041"
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	fixture.vault.values[credential] = `{"stale":"credential"}`
 	fixture.console.mu.Lock()
@@ -448,7 +448,7 @@ func TestOAuthReconnectRetriesStaleCredentialCleanup(test *testing.T) {
 	_, token := fixture.pair()
 	runtime := &clientOAuthRuntime{status: "disconnected", vault: fixture.vault}
 	fixture.console.SetMicrosoftMail(runtime, nil)
-	connectionID := "microsoft.mail.stale"
+	connectionID := "00000000-0000-4000-8000-000000000042"
 	credential, _ := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
 	fixture.vault.values[credential] = `{"stale":"credential"}`
 	fixture.console.mu.Lock()

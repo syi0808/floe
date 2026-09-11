@@ -89,7 +89,7 @@ func TestForeignPersonCannotExecuteOwnedConnectorRuntime(test *testing.T) {
 	now := time.Now().UnixMilli()
 	runtime := &fakeContextRuntime{view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}}
 	fixture.console.mu.Lock()
-	fixture.console.work = map[string]WorkContextRuntime{"github.issues.fixture": runtime}
+	fixture.console.work = map[string]WorkContextRuntime{fixtureConnectionID("github.issues"): runtime}
 	fixture.console.state.Clients["foreign"] = pairedClient{TokenHash: digest("foreign-token"), PersonID: otherFixturePersonID, DeviceID: "foreign-device"}
 	fixture.console.mu.Unlock()
 
@@ -278,7 +278,9 @@ func TestGmailIndexResetFailureRetriesAfterCredentialWasDeleted(test *testing.T)
 func TestPersistedConnectionRequiresLivePersonOwner(test *testing.T) {
 	fixture := setup(test)
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections["gmail.orphan"] = connectionRecord{ConnectionID: "gmail.orphan", ConnectorID: "gmail", PersonID: fixturePersonID}
+	connectionID := "00000000-0000-4000-8000-000000000051"
+	credential, _ := credentials.ConnectionName("FLOE_GMAIL_OAUTH", connectionID, fixturePersonID)
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "gmail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
 	}

@@ -353,10 +353,17 @@ func (fixture *fixture) pair() (string, string) {
 
 func (fixture *fixture) ownConnector(connectorID string) {
 	fixture.test.Helper()
-	connectionID := connectorID + ".fixture"
+	connectionID := fixtureConnectionID(connectorID)
 	fixture.console.mu.Lock()
 	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: connectorID, PersonID: fixturePersonID}
 	fixture.console.mu.Unlock()
+}
+
+func fixtureConnectionID(connectorID string) string {
+	hexadecimal := []byte(digest("fixture:" + connectorID)[:32])
+	hexadecimal[12] = '4'
+	hexadecimal[16] = '8'
+	return string(hexadecimal[:8]) + "-" + string(hexadecimal[8:12]) + "-" + string(hexadecimal[12:16]) + "-" + string(hexadecimal[16:20]) + "-" + string(hexadecimal[20:])
 }
 
 func TestPairingRestartAndRevocation(test *testing.T) {
@@ -640,7 +647,7 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 		test.Fatalf("connections: %#v", connections)
 	}
 	connection := connections[0].(map[string]any)["connection"].(map[string]any)
-	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || connection["connection_id"] != "gmail.fixture" {
+	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || connection["connection_id"] != fixtureConnectionID("gmail") {
 		test.Fatalf("unbound connection: %#v", value)
 	}
 	connectionID := connection["connection_id"].(string)
@@ -659,7 +666,8 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections["calendar.apple.fixture"] = connectionRecord{ConnectionID: "calendar.apple.fixture", Revision: 1, ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
+	connectionID := fixtureConnectionID("calendar.apple")
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
 	fixture.console.mu.Unlock()
 	snapshot := map[string]any{
 		"descriptor": map[string]any{
@@ -669,7 +677,7 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 		"connection": map[string]any{"connector_id": "calendar.apple", "state": "ready"},
 		"views":      []any{},
 	}
-	fixture.console.calendars = map[string]CalendarRuntime{"calendar.apple.fixture": &fakeCalendarRuntime{snapshot: snapshot}}
+	fixture.console.calendars = map[string]CalendarRuntime{connectionID: &fakeCalendarRuntime{snapshot: snapshot}}
 	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "connection_scope_unavailable") {
 		test.Fatalf("foreign device connection accepted: %d %s", response.Code, response.Body.String())
@@ -747,17 +755,18 @@ func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	fixture.ownConnector("calendar.google")
-	fixture.console.calendars = map[string]CalendarRuntime{"calendar.google.fixture": &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
+	connectionID := fixtureConnectionID("calendar.google")
+	fixture.console.calendars = map[string]CalendarRuntime{connectionID: &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
+	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
 	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
 		test.Fatalf("view: %#v", value)
 	}
-	stale := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 2, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token)
+	stale := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 2, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token)
 	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "connection_changed") {
 		test.Fatalf("stale calendar read accepted: %d %s", stale.Code, stale.Body.String())
 	}
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": "calendar.google.fixture", "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
 		test.Fatalf("invalid range accepted: %d", response.Code)
 	}
 }
@@ -767,9 +776,11 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	_, token := fixture.pair()
 	fixture.ownConnector("calendar.google")
 	fixture.ownConnector("calendar.microsoft")
+	googleConnectionID := fixtureConnectionID("calendar.google")
+	microsoftConnectionID := fixtureConnectionID("calendar.microsoft")
 	fixture.console.calendars = map[string]CalendarRuntime{
-		"calendar.google.fixture":    &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
-		"calendar.microsoft.fixture": &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
+		googleConnectionID:    &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
+		microsoftConnectionID: &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
 	}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
 	body := map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}
@@ -777,14 +788,14 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 		test.Fatalf("missing connection precondition accepted: %d %s", response.Code, response.Body.String())
 	}
 	body["connector_id"] = "calendar.microsoft"
-	body["connection_id"] = "calendar.microsoft.fixture"
+	body["connection_id"] = microsoftConnectionID
 	body["connection_revision"] = 1
 	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token))
 	if value["view"].(map[string]any)["source_handle"] != "calendar.timeline:microsoft" {
 		test.Fatalf("view: %#v", value)
 	}
 	body["connector_id"] = "calendar.google"
-	body["connection_id"] = "calendar.google.fixture"
+	body["connection_id"] = googleConnectionID
 	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusServiceUnavailable {
 		test.Fatalf("selected Google failure fell through to Microsoft: %d %s", response.Code, response.Body.String())
 	}
@@ -848,15 +859,15 @@ func TestWorkContextRouteMergesHealthyProvidersAndToleratesOneFailure(test *test
 	fixture.ownConnector("github.issues")
 	fixture.ownConnector("slack.conversations")
 	fixture.console.work = map[string]WorkContextRuntime{
-		"github.issues.fixture":       &fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
-		"slack.conversations.fixture": &fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
+		fixtureConnectionID("github.issues"):       &fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
+		fixtureConnectionID("slack.conversations"): &fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
 	}
 	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
 	merged := response["view"].(map[string]any)
 	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "work:") {
 		test.Fatalf("merged view: %#v", merged)
 	}
-	fixture.console.work["github.issues.fixture"] = &fakeContextRuntime{err: errors.New("private provider failure")}
+	fixture.console.work[fixtureConnectionID("github.issues")] = &fakeContextRuntime{err: errors.New("private provider failure")}
 	response = fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
 	if len(response["view"].(map[string]any)["items"].([]any)) != 1 || strings.Contains(fmt.Sprint(response), "private provider failure") {
 		test.Fatalf("partial view: %#v", response)
