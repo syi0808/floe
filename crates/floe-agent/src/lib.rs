@@ -134,11 +134,11 @@ pub use portfolio_experts::{
 };
 pub use prompts::{
     PersonaProfile, PromptAssembly, PromptComponent, PromptComponentKind, PromptRole,
-    calendar_briefing_prompt, calendar_focus_proposal_prompt, commitments_expert_prompt,
-    communication_expert_prompt, fixture_follow_up_prompt, fixture_repeated_call_prompt,
-    fixture_today_prompt, fixture_unavailable_prompt, focus_expert_prompt, learner_prompt,
-    life_logistics_expert_prompt, manager_prompt, relationships_expert_prompt,
-    schedule_expert_prompt, wellbeing_expert_prompt, work_context_expert_prompt,
+    commitments_expert_prompt, communication_expert_prompt, fixture_follow_up_prompt,
+    fixture_repeated_call_prompt, fixture_today_prompt, fixture_unavailable_prompt,
+    focus_expert_prompt, learner_prompt, life_logistics_expert_prompt, manager_prompt,
+    relationships_expert_prompt, schedule_expert_prompt, wellbeing_expert_prompt,
+    work_context_expert_prompt,
 };
 pub use registry::{
     AgentPackage, AgentRegistry, AssignmentOverview, BUILTIN_EXPERT_PACKAGE_VERSION,

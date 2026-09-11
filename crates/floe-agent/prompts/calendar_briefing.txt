@@ -1,1 +1,0 @@
-Brief today's calendar and find a {{focus_minutes}}-minute focus window.
