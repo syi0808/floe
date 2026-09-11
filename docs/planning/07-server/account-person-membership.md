@@ -91,6 +91,21 @@ Read health         ✕
 Read emails         ✕
 ```
 
+## Cross-Person Context Sharing
+
+Membership는 운영 관계이고 context read grant가 아니다. 다른 Person의 Agent가 일정,
+상태 또는 coordination 정보를 필요로 하면 owner Person이 purpose-bound
+`SharedContextGrant`를 별도로 발급한다.
+
+- 일정은 busy/free와 timezone 같은 최소 availability projection만 공유한다.
+- mood/social availability는 owner가 명시적으로 선언한 coarse short-lived state만 공유한다.
+- inferred mood, raw Health, private Memory, mail body와 connector capability는 공유하지 않는다.
+- offline 사용은 grant가 허용한 최신 encrypted snapshot과 expiry 안에서만 가능하다.
+- revoke는 신규 query를 즉시 막고 저장된 projection에 tombstone을 전파한다.
+
+전체 query/relay/action 흐름은
+[ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md)를 따른다.
+
 ## Person Without Login
 
 Self-host admin이 Person을 먼저 만들고 login identity는 나중에 연결할 수 있는 여지를 둔다.

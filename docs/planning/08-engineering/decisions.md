@@ -497,6 +497,11 @@ paths. Location and Attention are device-scoped and route by interaction/presenc
 newest timestamp. Duplicate or disagreeing observations remain visible instead of being silently
 merged.
 
+The Go server is the authorization/control plane, device-capability directory, opaque lease relay,
+durable sync host and SaaS connector runtime; it is not a periodic raw device-data warehouse.
+Cross-Person access requires a separate owner-issued Shared Context grant and a purpose-minimized
+projection such as busy/free availability or an explicitly self-declared social state.
+
 macOS uses an opt-in public local-activity heuristic for coarse Attention and reports Apple Screen
 Time itself as unsupported. Private Screen Time/Knowledge databases, Full Disk Access and raw app
 history are excluded. S5.5 validates sources on their native hosts; S8 adds authenticated leases,

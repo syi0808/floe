@@ -98,14 +98,20 @@ Device Agent(s)
       ▼
 Floe Server
 ├─ Identity
+├─ Device / Capability Directory
+├─ ContextQuery Gateway / Opaque Relay
 ├─ Personal Core
 ├─ Intelligence
 ├─ Integration
 ├─ Security
-└─ Sync
+└─ Durable Sync
 ```
 
 일부 Local Sensitive Compute는 서버 밖 Device Agent에 존재한다.
+Location/ETA/Attention 같은 fast context는 일반 sync DB가 아니라 만료되는 query lease로
+요청하며, cross-Person context는 owner가 허용한 Shared View만 전달한다. source별 collection,
+freshness, routing과 transfer 경계는
+[ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md)를 따른다.
 
 ## Implementation Baseline
 

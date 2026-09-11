@@ -78,6 +78,16 @@ Source route는 timestamp 하나로 선택하지 않는다. source-of-truth, sel
 owner, interaction/device presence, freshness와 health를 적용하고, disagreement를 보존한다.
 Location과 Attention은 device-scoped이며 여러 기기의 값을 자동 평균하지 않는다.
 
+Go server는 durable sync 외에 Device Gateway와 capability directory를 제공한다. Local Agent의
+cross-device read는 server를 통한 deadline-bounded lease이며, producer가 online이고 OS가 실행을
+허용할 때만 fresh 응답을 보장할 수 있다. Highly Sensitive projection은 server가 해독하지 않는
+opaque relay가 기본이다.
+
+모든 device context를 주기적으로 적재하지 않는다. 주기 heartbeat는 presence/capability health
+metadata만 갱신한다. canonical/mirror record는 change delta로, 허용된 derived state는 최신
+encrypted snapshot 하나로, Location/ETA/Attention은 content를 저장하지 않는 query lease로
+전달한다.
+
 ## Device Arbitration
 
 "Floe" 호출을 여러 기기가 동시에 듣는 복잡한 arbitration은 초기 핵심 요구에서 제외한다.

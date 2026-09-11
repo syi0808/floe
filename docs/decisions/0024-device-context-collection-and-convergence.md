@@ -61,7 +61,67 @@ proposal → policy → exact-target review → authority owner → provider res
 An observation is evidence, not a command. A synchronized View is not a new source of truth. An
 Expert result is not permission to notify the user or execute an action.
 
-### 2. Describe every source using the same policy dimensions
+### 2. Use the Go server as control plane, relay and durable sync host
+
+The local Agent remains the owner of its active session and final context assembly. The Go server
+does not become a universal raw-context collector.
+
+```mermaid
+flowchart LR
+    subgraph Mac[macOS Device Agent]
+        MA[Local Manager / Experts]
+        MC[Calendar, Contacts, Location, ETA, Weather]
+        MH[Public activity heuristic]
+        MP[Privacy projector]
+        MC --> MP
+        MH --> MP
+        MP --> MA
+    end
+
+    subgraph Mobile[iPhone / iPad / Android Device Agent]
+        DC[Calendar, Contacts, Location]
+        DH[HealthKit / Health Connect]
+        DS[Supported Screen Time / activity]
+        DP[Privacy projector]
+        DC --> DP
+        DH --> DP
+        DS --> DP
+    end
+
+    subgraph Server[Go server]
+        ID[Identity, Person, Membership]
+        DD[Device and capability directory]
+        GW[Device Gateway / lease relay]
+        SY[Durable sync store]
+        SC[SaaS connectors]
+    end
+
+    MA -->|ContextQuery| GW
+    GW -->|bounded lease request| DP
+    DP -->|E2E encrypted View| GW
+    GW -->|opaque relay| MA
+    MC -->|eligible durable deltas| SY
+    DP -->|allowed derived snapshot only| SY
+    SC -->|server-owned Views| MA
+    ID --> DD
+    DD --> GW
+```
+
+The server owns:
+
+- Account/Person/Membership authorization and device revocation;
+- short-lived device presence and capability advertisements;
+- routing an authorized `ContextQuery` to an eligible online Device Agent;
+- opaque relay of end-to-end encrypted device context;
+- durable convergence of records whose retention policy permits sync;
+- server-native SaaS connectors and their credentials; and
+- action idempotency and routing metadata.
+
+The server does not own raw Health, raw activity/Screen Time, precise location, local provider
+credentials or an always-growing history of ephemeral Context Views. A self-hosted deployment uses
+the same boundary; deployment ownership does not weaken data policy.
+
+### 3. Describe every source using the same policy dimensions
 
 Every connector or device provider declares:
 
@@ -81,7 +141,7 @@ Every connector or device provider declares:
 Capability discovery synchronizes this policy metadata and health state, not credentials, raw
 provider identifiers or source content.
 
-### 3. Use a common observation envelope
+### 4. Use a common observation envelope
 
 A produced View carries a runtime-owned envelope equivalent to:
 
@@ -117,7 +177,7 @@ An unavailable source publishes typed lifecycle state, never a fabricated empty 
 states include `permission_required`, `revoked`, `offline`, `stale`, `no_data`, `rate_limited`,
 `partial`, `entitlement_unavailable`, `region_unsupported`, `clock_skew` and `conflicting`.
 
-### 4. Choose collection mode from source semantics
+### 5. Choose collection mode from source semantics
 
 | Source | Execution and trigger | Retention and cross-device rule |
 | --- | --- | --- |
@@ -135,7 +195,7 @@ states include `permission_required`, `revoked`, `offline`, `stale`, `no_data`, 
 Background collection does not imply background intervention. Before S9, it may refresh a View or
 connector health state but cannot independently contact the user.
 
-### 5. Apply purpose-specific freshness profiles
+### 6. Apply purpose-specific freshness profiles
 
 `expiresAt` in the View remains authoritative. The following are initial policy profiles rather
 than provider guarantees:
@@ -154,7 +214,7 @@ cached evidence is usable only until expiry and is labeled degraded. Wall-clock 
 accepted bound produces `clock_skew`; it does not make a future-dated View fresher. Local producers
 use monotonic elapsed time while running, and a relay validates wall-clock observations at receipt.
 
-### 6. Route by meaning, scope and presence—not by newest timestamp alone
+### 7. Route by meaning, scope and presence—not by newest timestamp alone
 
 The Context Router applies this order:
 
@@ -183,7 +243,7 @@ Special rules are mandatory:
 If required sources disagree materially, the Expert returns uncertainty, alternatives or no
 conclusion. It does not pick the most convenient claim invisibly.
 
-### 7. Make cross-device access query-first and data-minimal
+### 8. Make cross-device access query-first and data-minimal
 
 Fast-changing device context is not database replication. A cross-device request uses a bounded
 lease:
@@ -199,6 +259,35 @@ Manager/Context Assembler
   → View expires and ephemeral payload is discarded
 ```
 
+```mermaid
+sequenceDiagram
+    participant A as Local Agent on Mac
+    participant S as Go Device Gateway
+    participant D as Mobile Device Agent
+    participant P as Native provider
+
+    A->>S: ContextQuery(view, purpose, maxAge, deadline)
+    S->>S: Check Person, device grant and capability lease
+    alt device online and OS permits execution
+        S->>D: Forward signed bounded query
+        D->>P: Read or refresh locally
+        P-->>D: Raw provider result
+        D->>D: Normalize and privacy-project
+        D-->>S: E2E encrypted ContextObservation
+        S-->>A: Opaque relay
+        A->>A: Validate, deduplicate and assemble
+    else sleeping, offline or permission unavailable
+        S-->>A: Typed unavailable/offline/permission state
+        A->>A: Use only unexpired allowed fallback or report missing source
+    end
+```
+
+“Real-time” therefore means **deadline-bounded best effort**, not guaranteed synchronous access.
+Desktop Device Agents can maintain a foreground connection to the gateway. Mobile operating systems
+may suspend network execution; a push can be only a wake hint, not proof that a fresh View will be
+returned. The Agent must finish with remaining evidence or report the missing source when the lease
+deadline expires.
+
 Durable synchronization is reserved for canonical Floe records, normalized mirrors, selected
 identity references and explicitly allowed derived snapshots. Location, ETA, raw activity, raw
 Health, credentials and Temporary AI Context are never durable sync records.
@@ -213,7 +302,83 @@ Revoking a device stops new leases immediately. Revoking a connector invalidates
 advertisement and future reads. Ephemeral Views expire; synchronized durable projections follow a
 provenance-linked tombstone policy instead of being silently resurrected by an offline device.
 
-### 8. Use a public macOS Attention provider, not a Screen Time workaround
+### 9. Do not periodically upload every collected value
+
+The periodic unit is normally **capability health metadata**, not source content.
+
+| Data | Delivery | Server persistence |
+| --- | --- | --- |
+| device presence/capability health | bounded heartbeat with TTL | ephemeral directory state only |
+| Floe canonical records and allowed mirrors | event-driven delta plus reconnect catch-up | durable encrypted record/revision/tombstone |
+| slow-changing derived state | on meaningful change or bounded OS-compliant refresh, only when cross-device use is enabled | latest encrypted snapshot only, with expiry; no history by default |
+| location, ETA and Attention | foreground/on-demand query lease | no content persistence; relay metadata only |
+| raw Health, Screen Time/activity and credentials | never uploaded | prohibited |
+| shared cross-Person projection | on demand, or latest encrypted snapshot when the grant explicitly allows offline use | grant-bounded payload with expiry and revocation tombstone |
+
+Reconnect does not dump a device's historical raw observations. It uploads capability state and
+eligible durable deltas since the acknowledged revision, then answers new context queries. Scheduled
+refresh is allowed only when the source semantics and OS lifecycle justify it; it is not a generic
+“send everything to Go every N minutes” loop.
+
+### 10. Share with another Person through explicit projections
+
+Another Person's source is never attached directly to the requesting Person's Agent. The source
+Person owns the data and issues a revocable `SharedContextGrant` for a purpose-specific projection.
+
+```text
+SharedContextGrant {
+  ownerPersonId
+  recipientPersonId or recipientAccountId
+  viewType
+  purpose
+  allowedGranularity
+  maximumAge
+  offlineSnapshotAllowed
+  validUntil
+  revocationRevision
+}
+```
+
+Initial shared Views are deliberately narrower than the owner's internal Views:
+
+| Need | Shareable projection | Excluded |
+| --- | --- | --- |
+| scheduling | busy/free intervals, timezone, optional named availability window | event title, attendees, location, notes |
+| coordination | accepted commitment or response-needed state explicitly shared for that purpose | mailbox/message body and unrelated commitments |
+| mood/social availability | self-declared coarse state such as `available`, `needs_space` or `support_requested`, with short expiry | inferred mood, raw Health, private Memory and diagnostic claims |
+| caregiving | separately consented status/check-in claim and escalation preference | manager-role access to Health, Memory or Mail by implication |
+
+Inferred mood is not shared in the initial model. A Person may explicitly publish a coarse social
+availability claim; a local model cannot turn private behavior or Health into a cross-Person mood
+feed without a new reviewed grant.
+
+```mermaid
+sequenceDiagram
+    participant A as Person A Local Agent
+    participant S as Go server
+    participant B as Person B Context owner
+
+    A->>S: Request B availability for stated purpose
+    S->>S: Validate Membership and SharedContextGrant
+    alt live producer reachable
+        S->>B: Request availability projection only
+        B->>B: Read private calendar and reduce locally
+        B-->>S: Encrypted busy/free Shared View
+        S-->>A: Authorized relay
+    else offline snapshot explicitly allowed
+        S-->>A: Latest unexpired encrypted Shared View
+    else no grant, expired or unavailable
+        S-->>A: Denied or unavailable
+    end
+    A->>A: Compute candidate overlap locally
+```
+
+The recipient receives only the Shared View, not the owner's connector capability, credential or
+internal provenance. A resulting action against the other Person's calendar requires that Person's
+own policy and transaction-bound approval. `manager` Membership can manage devices or connectors but
+does not imply a Shared Context grant.
+
+### 11. Use a public macOS Attention provider, not a Screen Time workaround
 
 The macOS provider is named and presented as a **local activity heuristic**, not Screen Time. It may
 use public signals such as:
@@ -238,7 +403,7 @@ On macOS, the Apple Screen Time capability itself reports `entitlement_unavailab
 not masquerade as successful Apple Screen Time API evidence. On iPhone/iPad, the public Screen Time
 feasibility gate remains a separate provider and may validly resolve to supported or unsupported.
 
-### 9. Keep action authority at the execution owner
+### 12. Keep action authority at the execution owner
 
 Cross-device observation never moves provider authority. An action targeting a device-native
 calendar or OS capability is routed to the device that owns the Act grant. If that device is
@@ -249,7 +414,7 @@ Review binds the exact Person, target connection/resource, source revision, prop
 executor device and idempotency key. A review may occur on another authenticated device, but the
 executor revalidates permission, freshness and provider state immediately before mutation.
 
-### 10. Expose policy and failures to the user
+### 13. Expose policy and failures to the user
 
 Connections/Data & privacy shows, per source:
 
@@ -264,6 +429,22 @@ Connections/Data & privacy shows, per source:
 Source enablement, selected scope, cross-device use and remote-model transfer are distinct controls.
 Permission is requested progressively when a scenario needs the value, not as one installation-time
 bundle.
+
+## Current implementation gap
+
+This ADR defines the target contract; it is not a claim that cross-device access exists today. The
+current Go routes serve paired server connector Views, and Rust validates a `device_id` in connector
+descriptors, but the repository does not yet implement:
+
+- authenticated multi-device Account/Person enrollment;
+- Device Gateway, presence heartbeat or capability directory;
+- `ContextQuery`/lease wire protocol and mobile wake handling;
+- end-to-end encrypted opaque relay or derived snapshot sync;
+- `SharedContextGrant` and Shared View projection; or
+- revoked-device/tombstone convergence across two physical devices.
+
+These are S8 implementation work. S5.5 should add the envelope and routing fixtures needed to keep
+its device-local source work compatible with this policy.
 
 ## S5.5 and S8 rollout boundary
 

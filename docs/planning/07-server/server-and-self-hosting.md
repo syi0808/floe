@@ -45,8 +45,17 @@ Memory
 Manager Runtime
 Connector Workers
 Sync
+Device Directory / Gateway
+Opaque Context Relay
 Admin Dashboard
 ```
+
+Go server는 cross-device control plane이지만 raw device-context warehouse가 아니다. Device
+Gateway는 authenticated capability/presence metadata와 bounded ContextQuery lease를 중계한다.
+Raw Health, raw Screen Time/activity와 precise location은 적재하지 않으며, 허용된 Highly
+Sensitive projection은 기본적으로 server가 해독하지 않는 end-to-end encrypted payload로
+relay한다. 상세 경계는
+[ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md)를 따른다.
 
 ### Personal/Home Node
 
