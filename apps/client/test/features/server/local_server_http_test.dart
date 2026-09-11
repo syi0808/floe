@@ -104,6 +104,7 @@ void main() {
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final calls = <String>[];
+      var catalogCalls = 0;
       server.listen((request) async {
         final body = request.method == 'GET'
             ? <String, dynamic>{}
@@ -119,6 +120,7 @@ void main() {
               jsonEncode({'proof': 'proof', 'code': 'CODE'}),
             );
           case '/v1/connectors':
+            catalogCalls++;
             request.response.write(
               jsonEncode({
                 'schema_version': 1,
@@ -130,7 +132,11 @@ void main() {
                     'name': 'GitHub Issues',
                     'auth_kind': 'secret',
                     'available': true,
-                    'status': 'disconnected',
+                    'status': catalogCalls == 1 ? 'disconnected' : 'connected',
+                    if (catalogCalls > 1) ...{
+                      'connection_id': 'not-a-uuid',
+                      'connection_revision': 1,
+                    },
                     'required_scopes': ['github.issues.read'],
                     'scope_fields': ['owner', 'repository'],
                     'capabilities': {
@@ -254,12 +260,23 @@ void main() {
         connectionId: '00000000-0000-4000-8000-000000000010',
         connectionRevision: 2,
       );
+      await expectLater(
+        client.connectorCatalog(connection),
+        throwsA(
+          isA<ServerConnectionException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_response',
+          ),
+        ),
+      );
       expect(calls, [
         'POST /pair/start',
         'GET /v1/connectors',
         'POST /v1/connectors/github.issues/connect',
         'PATCH /v1/connectors/github.issues/scope',
         'DELETE /v1/connectors/github.issues',
+        'GET /v1/connectors',
       ]);
     },
   );
