@@ -10,6 +10,10 @@ import (
 	"floe/server/internal/credentials"
 )
 
+func invalidConnectorToken(token string) bool {
+	return token != "" && len(token) < 8 || len(token) > 4096 || strings.ContainsAny(token, "\r\n\x00")
+}
+
 type connectorAttempt struct {
 	ID               string
 	ConnectorID      string
@@ -134,7 +138,7 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 		}
 		if connected {
 			item["connection_id"] = connection.ConnectionID
-			item["scope"] = console.connectorScope(definition.ID)
+			item["scope"] = cloneConnectorScope(connection.Scope)
 		}
 		items = append(items, item)
 	}
@@ -155,6 +159,11 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
+	selectedScope, err := validatedConnectorScope(definition, input.Scope)
+	if err != nil {
+		failure(writer, http.StatusBadRequest, "invalid_scope")
+		return
+	}
 	console.mu.Lock()
 	if _, exists := console.connectionForPerson(definition.ID, scope.PersonID); exists {
 		console.mu.Unlock()
@@ -172,24 +181,31 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		return
 	}
 	connectionID := definition.ID + "." + digest(scope.PersonID + "\x00" + definition.ID)[:16]
-	record := connectionRecord{ConnectionID: connectionID, ConnectorID: definition.ID, PersonID: scope.PersonID}
-	previous := cloneState(console.state)
-	if err := console.applyClientConnectorScope(definition, input.Scope); err != nil {
-		console.state = previous
-		console.mu.Unlock()
-		failure(writer, http.StatusBadRequest, "invalid_scope")
-		return
+	record := connectionRecord{ConnectionID: connectionID, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope}
+	credentialNamespace := definition.CredentialName
+	if credentialNamespace == "" {
+		credentialNamespace = definition.OAuthCredential
 	}
+	if credentialNamespace != "" {
+		credentialName, err := credentials.ConnectionName(credentialNamespace, connectionID, scope.PersonID)
+		if err != nil {
+			console.mu.Unlock()
+			failure(writer, http.StatusServiceUnavailable, "credential_scope_unavailable")
+			return
+		}
+		record.Credential = credentialName
+	}
+	previous := cloneState(console.state)
 	if definition.AuthKind == "secret" {
-		credentialName, err := credentials.ConnectionName(definition.CredentialName, connectionID, scope.PersonID)
-		if err != nil || console.vault.Put(credentialName, input.Secret) != nil {
+		if console.vault.Put(record.Credential, input.Secret) != nil {
 			console.state = previous
 			console.mu.Unlock()
 			failure(writer, http.StatusServiceUnavailable, "credential_store_unavailable")
 			return
 		}
-		if err := console.setClientSecretCredential(definition.ID, credentialName); err != nil || console.persistClientConnection(record) != nil {
-			_ = console.vault.Delete(credentialName)
+		console.state.Connections[connectionID] = record
+		if err := console.rebuildConnectorRuntimes(); err != nil || console.save(console.state) != nil {
+			_ = console.vault.Delete(record.Credential)
 			console.state = previous
 			_ = console.rebuildConnectorRuntimes()
 			console.mu.Unlock()
@@ -202,7 +218,6 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		return
 	}
 	runtime := definition.OAuthRuntime(console)
-	console.state = previous
 	console.mu.Unlock()
 	if err := bindClientOAuthCredential(runtime, definition, record); err != nil {
 		failure(writer, http.StatusServiceUnavailable, "credential_scope_unavailable")
@@ -230,7 +245,8 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusConflict, "connection_changed")
 		return
 	}
-	if err := console.applyClientConnectorScope(definition, input.Scope); err != nil || console.rebuildConnectorRuntimes() != nil || console.persistClientConnection(record) != nil {
+	console.state.Connections[connectionID] = record
+	if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
 		console.state = current
 		_ = console.rebuildConnectorRuntimes()
 		console.mu.Unlock()
@@ -312,7 +328,6 @@ func (console *Console) cancelClientConnectorAttempt(writer http.ResponseWriter,
 	}
 	attempt.Status, attempt.AuthorizationURL = "cancelled", ""
 	previous := cloneState(console.state)
-	console.clearClientConnectorConfiguration(definition.ID)
 	delete(console.state.Connections, attempt.ConnectionID)
 	if err := console.rebuildConnectorRuntimes(); err != nil || console.save(console.state) != nil {
 		console.state = previous
@@ -350,14 +365,21 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 		}
 		return
 	}
+	selectedScope, err := validatedConnectorScope(definition, input.Scope)
+	if err != nil {
+		failure(writer, http.StatusBadRequest, "invalid_scope")
+		return
+	}
 	previous := cloneState(console.state)
-	if err := console.applyClientConnectorScope(definition, input.Scope); err != nil || console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
+	record.Scope = selectedScope
+	console.state.Connections[record.ConnectionID] = record
+	if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
 		console.state = previous
 		_ = console.rebuildConnectorRuntimes()
 		failure(writer, http.StatusBadRequest, "invalid_scope")
 		return
 	}
-	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "scope": console.connectorScope(definition.ID)})
+	reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connector_id": definition.ID, "scope": cloneConnectorScope(selectedScope)})
 }
 
 func (console *Console) disconnectClientConnector(writer http.ResponseWriter, request *http.Request, scope clientScope, definition clientConnectorDefinition) {
@@ -377,15 +399,12 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 	if definition.OAuthRuntime != nil {
 		runtime = definition.OAuthRuntime(console)
 	}
-	credentialName := console.clientSecretCredential(definition.ID)
+	credentialName := record.Credential
 	console.mu.Unlock()
 	if runtime != nil {
 		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 		defer cancel()
-		if _, err := runtime.Action(ctx, "logout"); err != nil {
-			failure(writer, http.StatusBadGateway, "connector_authorization_unavailable")
-			return
-		}
+		_, _ = runtime.Action(ctx, "logout")
 	}
 	console.mu.Lock()
 	current, stillOwned := console.connectionForPerson(definition.ID, scope.PersonID)
@@ -395,7 +414,6 @@ func (console *Console) disconnectClientConnector(writer http.ResponseWriter, re
 		return
 	}
 	previous := cloneState(console.state)
-	console.clearClientConnectorConfiguration(definition.ID)
 	delete(console.state.Connections, record.ConnectionID)
 	if err := console.rebuildConnectorRuntimes(); err != nil || console.save(console.state) != nil {
 		console.state = previous
@@ -441,11 +459,7 @@ func bindClientOAuthCredential(runtime ConnectorOAuthRuntime, definition clientC
 	if !ok {
 		return nil
 	}
-	name, err := credentials.ConnectionName(definition.OAuthCredential, record.ConnectionID, record.PersonID)
-	if err != nil {
-		return err
-	}
-	return binder.BindCredential(name)
+	return binder.BindCredential(record.Credential)
 }
 
 func connectorAttemptResponse(attempt *connectorAttempt) map[string]any {
@@ -495,6 +509,15 @@ func (console *Console) connectionForPerson(connectorID, personID string) (conne
 	return connectionRecord{}, false
 }
 
+func (console *Console) connectionForConnector(connectorID string) (connectionRecord, bool) {
+	for _, record := range console.state.Connections {
+		if record.ConnectorID == connectorID {
+			return record, true
+		}
+	}
+	return connectionRecord{}, false
+}
+
 func (console *Console) connectionExistsForOtherPerson(connectorID, personID string) bool {
 	for _, record := range console.state.Connections {
 		if record.ConnectorID == connectorID && record.PersonID != personID {
@@ -502,16 +525,6 @@ func (console *Console) connectionExistsForOtherPerson(connectorID, personID str
 		}
 	}
 	return false
-}
-
-func (console *Console) persistClientConnection(record connectionRecord) error {
-	next := cloneState(console.state)
-	next.Connections[record.ConnectionID] = record
-	if err := console.save(next); err != nil {
-		return err
-	}
-	console.state = next
-	return nil
 }
 
 func onlyScopeFields(scope map[string]any, allowed ...string) bool {
@@ -532,26 +545,26 @@ func scopeString(scope map[string]any, key string) (string, bool) {
 	return strings.TrimSpace(value), ok && value == strings.TrimSpace(value)
 }
 
-func (console *Console) applyClientConnectorScope(definition clientConnectorDefinition, scope map[string]any) error {
+func validatedConnectorScope(definition clientConnectorDefinition, scope map[string]any) (map[string]any, error) {
 	if scope == nil {
 		scope = map[string]any{}
 	}
 	if !onlyScopeFields(scope, definition.ScopeFields...) {
-		return errors.New("unknown scope field")
+		return nil, errors.New("unknown scope field")
 	}
 	switch definition.ID {
 	case "gmail", "microsoft.mail":
 		if len(scope) != 0 {
-			return errors.New("scope unsupported")
+			return nil, errors.New("scope unsupported")
 		}
+		return map[string]any{}, nil
 	case "github.issues":
 		owner, ownerOK := scopeString(scope, "owner")
 		repository, repositoryOK := scopeString(scope, "repository")
 		if !ownerOK || !repositoryOK || owner == "" || repository == "" || len(owner) > 128 || len(repository) > 128 {
-			return errors.New("invalid github scope")
+			return nil, errors.New("invalid github scope")
 		}
-		credential := console.clientSecretCredential(definition.ID)
-		console.state.Connectors.GitHub = &githubConnectorConfig{Owner: owner, Repository: repository, Credential: credential}
+		return map[string]any{"owner": owner, "repository": repository}, nil
 	case "slack.conversations":
 		channel, channelOK := scopeString(scope, "channel")
 		thread := ""
@@ -559,14 +572,13 @@ func (console *Console) applyClientConnectorScope(definition clientConnectorDefi
 			var ok bool
 			thread, ok = value.(string)
 			if !ok || thread != strings.TrimSpace(thread) {
-				return errors.New("invalid slack thread")
+				return nil, errors.New("invalid slack thread")
 			}
 		}
 		if !channelOK || channel == "" || len(channel) > 128 || len(thread) > 128 {
-			return errors.New("invalid slack scope")
+			return nil, errors.New("invalid slack scope")
 		}
-		credential := console.clientSecretCredential(definition.ID)
-		console.state.Connectors.Slack = &slackConnectorConfig{Channel: channel, Thread: thread, Credential: credential}
+		return map[string]any{"channel": channel, "thread": thread}, nil
 	case "home_assistant.states":
 		baseURL, baseURLOK := scopeString(scope, "base_url")
 		items, itemsOK := scope["entities"].([]any)
@@ -574,127 +586,52 @@ func (console *Console) applyClientConnectorScope(definition clientConnectorDefi
 		for _, item := range items {
 			value, ok := item.(string)
 			if !ok || value == "" || value != strings.TrimSpace(value) {
-				return errors.New("invalid entity")
+				return nil, errors.New("invalid entity")
 			}
 			entities = append(entities, value)
 		}
 		if !baseURLOK || !itemsOK || baseURL == "" || len(entities) == 0 || len(entities) > 128 {
-			return errors.New("invalid home assistant scope")
+			return nil, errors.New("invalid home assistant scope")
 		}
-		credential := console.clientSecretCredential(definition.ID)
-		console.state.Connectors.HomeAssistant = &homeAssistantConnectorConfig{BaseURL: baseURL, Entities: entities, Credential: credential}
+		return map[string]any{"base_url": baseURL, "entities": entities}, nil
 	case "google_drive.files":
 		folderID, ok := scopeString(scope, "folder_id")
 		if !ok || folderID == "" || len(folderID) > 256 {
-			return errors.New("invalid drive scope")
+			return nil, errors.New("invalid drive scope")
 		}
-		console.state.Connectors.GoogleDrive = &googleDriveConnectorConfig{FolderID: folderID}
+		return map[string]any{"folder_id": folderID}, nil
 	case "calendar.google":
 		calendarID, ok := scopeString(scope, "calendar_id")
 		if !ok || calendarID == "" || len(calendarID) > 256 {
-			return errors.New("invalid calendar scope")
+			return nil, errors.New("invalid calendar scope")
 		}
-		console.state.Connectors.GoogleCalendar = &googleCalendarConnectorConfig{CalendarID: calendarID}
+		return map[string]any{"calendar_id": calendarID}, nil
 	case "calendar.microsoft":
 		calendarID, ok := scopeString(scope, "calendar_id")
 		if !ok || calendarID == "" || len(calendarID) > 256 {
-			return errors.New("invalid calendar scope")
+			return nil, errors.New("invalid calendar scope")
 		}
-		console.state.Connectors.MicrosoftCalendar = &microsoftCalendarConnectorConfig{CalendarID: calendarID}
+		return map[string]any{"calendar_id": calendarID}, nil
 	case "microsoft.teams":
 		teamID, teamOK := scopeString(scope, "team_id")
 		channelID, channelOK := scopeString(scope, "channel_id")
 		if !teamOK || !channelOK || teamID == "" || channelID == "" || len(teamID) > 256 || len(channelID) > 256 {
-			return errors.New("invalid teams scope")
+			return nil, errors.New("invalid teams scope")
 		}
-		console.state.Connectors.MicrosoftTeams = &microsoftTeamsConnectorConfig{TeamID: teamID, ChannelID: channelID}
+		return map[string]any{"team_id": teamID, "channel_id": channelID}, nil
 	default:
-		return errors.New("unknown connector")
-	}
-	return nil
-}
-
-func (console *Console) setClientSecretCredential(connectorID, credentialName string) error {
-	switch connectorID {
-	case "github.issues":
-		console.state.Connectors.GitHub.Credential = credentialName
-	case "slack.conversations":
-		console.state.Connectors.Slack.Credential = credentialName
-	case "home_assistant.states":
-		console.state.Connectors.HomeAssistant.Credential = credentialName
-	default:
-		return errors.New("not a secret connector")
-	}
-	return console.rebuildConnectorRuntimes()
-}
-
-func (console *Console) clientSecretCredential(connectorID string) string {
-	switch connectorID {
-	case "github.issues":
-		if console.state.Connectors.GitHub != nil {
-			return console.state.Connectors.GitHub.Credential
-		}
-	case "slack.conversations":
-		if console.state.Connectors.Slack != nil {
-			return console.state.Connectors.Slack.Credential
-		}
-	case "home_assistant.states":
-		if console.state.Connectors.HomeAssistant != nil {
-			return console.state.Connectors.HomeAssistant.Credential
-		}
-	}
-	return ""
-}
-
-func (console *Console) clearClientConnectorConfiguration(connectorID string) {
-	switch connectorID {
-	case "github.issues":
-		console.state.Connectors.GitHub = nil
-	case "slack.conversations":
-		console.state.Connectors.Slack = nil
-	case "home_assistant.states":
-		console.state.Connectors.HomeAssistant = nil
-	case "google_drive.files":
-		console.state.Connectors.GoogleDrive = nil
-	case "calendar.google":
-		console.state.Connectors.GoogleCalendar = nil
-	case "calendar.microsoft":
-		console.state.Connectors.MicrosoftCalendar = nil
-	case "microsoft.teams":
-		console.state.Connectors.MicrosoftTeams = nil
+		return nil, errors.New("unknown connector")
 	}
 }
 
-func (console *Console) connectorScope(connectorID string) map[string]any {
-	switch connectorID {
-	case "github.issues":
-		if value := console.state.Connectors.GitHub; value != nil {
-			return map[string]any{"owner": value.Owner, "repository": value.Repository}
-		}
-	case "slack.conversations":
-		if value := console.state.Connectors.Slack; value != nil {
-			return map[string]any{"channel": value.Channel, "thread": value.Thread}
-		}
-	case "home_assistant.states":
-		if value := console.state.Connectors.HomeAssistant; value != nil {
-			return map[string]any{"base_url": value.BaseURL, "entities": value.Entities}
-		}
-	case "google_drive.files":
-		if value := console.state.Connectors.GoogleDrive; value != nil {
-			return map[string]any{"folder_id": value.FolderID}
-		}
-	case "calendar.google":
-		if value := console.state.Connectors.GoogleCalendar; value != nil {
-			return map[string]any{"calendar_id": value.CalendarID}
-		}
-	case "calendar.microsoft":
-		if value := console.state.Connectors.MicrosoftCalendar; value != nil {
-			return map[string]any{"calendar_id": value.CalendarID}
-		}
-	case "microsoft.teams":
-		if value := console.state.Connectors.MicrosoftTeams; value != nil {
-			return map[string]any{"team_id": value.TeamID, "channel_id": value.ChannelID}
+func cloneConnectorScope(scope map[string]any) map[string]any {
+	copy := make(map[string]any, len(scope))
+	for key, value := range scope {
+		if values, ok := connectorScopeStrings(value); ok {
+			copy[key] = values
+		} else {
+			copy[key] = value
 		}
 	}
-	return map[string]any{}
+	return copy
 }

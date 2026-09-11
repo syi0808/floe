@@ -118,6 +118,7 @@ type fakeContextRuntime struct {
 	snapshot any
 	view     any
 	err      error
+	reads    atomic.Int32
 }
 
 func (*fakeConnectorRuntime) Action(context.Context, string) (any, error) {
@@ -147,6 +148,7 @@ func (runtime *fakeContextRuntime) ConnectionSnapshot(context.Context) (any, err
 }
 
 func (runtime *fakeContextRuntime) ReadWorkContextView(context.Context) (common.WorkContextView, error) {
+	runtime.reads.Add(1)
 	if runtime.err != nil {
 		return common.WorkContextView{}, runtime.err
 	}
@@ -326,6 +328,14 @@ func (fixture *fixture) pair() (string, string) {
 	return approved["client_id"].(string), approved["token"].(string)
 }
 
+func (fixture *fixture) ownConnector(connectorID string) {
+	fixture.test.Helper()
+	connectionID := connectorID + ".fixture"
+	fixture.console.mu.Lock()
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: connectorID, PersonID: fixturePersonID}
+	fixture.console.mu.Unlock()
+}
+
 func TestPairingRestartAndRevocation(test *testing.T) {
 	fixture := setup(test)
 	identifier, token := fixture.pair()
@@ -384,7 +394,7 @@ func TestUnscopedBearerCannotReadViews(test *testing.T) {
 	token := "unscoped-token"
 	fixture.console.mu.Lock()
 	fixture.console.state.Clients["unscoped"] = pairedClient{TokenHash: digest(token)}
-	fixture.console.logistics = []LogisticsRuntime{&fakeContextRuntime{}}
+	fixture.console.logistics = map[string]LogisticsRuntime{"home_assistant.states.fixture": &fakeContextRuntime{}}
 	fixture.console.mu.Unlock()
 
 	response := fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token)
@@ -395,6 +405,7 @@ func TestUnscopedBearerCannotReadViews(test *testing.T) {
 
 func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	fixture := setup(test)
+	fixture.pair()
 	fixture.console.mu.Lock()
 	next := cloneState(fixture.console.state)
 	next.Connections["calendar.apple.primary"] = connectionRecord{
@@ -420,7 +431,7 @@ func TestConnectionOwnershipAndDeviceBindingPersist(test *testing.T) {
 	encoded, _ := json.Marshal(state)
 	var raw map[string]any
 	_ = json.Unmarshal(encoded, &raw)
-	if strings.Contains(string(encoded), "credential") || raw["connections"] == nil {
+	if strings.Contains(string(encoded), "private-") || raw["connections"] == nil {
 		test.Fatalf("invalid connection persistence boundary: %s", encoded)
 	}
 }
@@ -460,45 +471,38 @@ func TestManagementAndInferenceAuthAreSeparate(test *testing.T) {
 	}
 }
 
-func TestGmailOAuthActionsRequireManagementSessionAndConfiguredRuntime(test *testing.T) {
+func TestPersonalConnectorActionsAreNotExposedByManagementAPI(test *testing.T) {
 	fixture := setup(test)
-	if response := fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("unconfigured status: %d %s", response.Code, response.Body.String())
+	state := fixture.value(fixture.call(http.MethodGet, "/manage/api/state", nil, ""))
+	if state["connectors"] != nil {
+		test.Fatalf("personal connector state leaked through management API: %#v", state["connectors"])
 	}
-	fixture.console.SetGmailAuth(&fakeConnectorRuntime{})
-	value := fixture.value(fixture.call("POST", "/manage/api/gmail/status", map[string]any{}, ""))
-	if value["status"] != "connected" {
-		test.Fatalf("status: %#v", value)
+	paths := []string{
+		"/manage/api/gmail/login",
+		"/manage/api/microsoft-mail/logout",
+		"/manage/api/drive/status",
+		"/manage/api/calendar/login",
+		"/manage/api/microsoft-calendar/cancel",
+		"/manage/api/microsoft-teams/status",
+		"/manage/api/connector/github",
+		"/manage/api/connector/slack",
+		"/manage/api/connector/home-assistant",
 	}
-	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8431/manage/api/gmail/logout", strings.NewReader(`{}`))
-	request.Host = "127.0.0.1:8431"
-	request.Header.Set("Origin", "http://127.0.0.1:8431")
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	fixture.console.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		test.Fatalf("unauthorized action: %d", response.Code)
-	}
-}
-
-func TestMicrosoftMailOAuthActionsRequireConfiguredRuntime(test *testing.T) {
-	fixture := setup(test)
-	if response := fixture.call("POST", "/manage/api/microsoft-mail/status", map[string]any{}, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("unconfigured status: %d %s", response.Code, response.Body.String())
-	}
-	fixture.console.SetMicrosoftMail(&fakeMicrosoftAuth{}, &fakeCommunicationRuntime{})
-	value := fixture.value(fixture.call("POST", "/manage/api/microsoft-mail/status", map[string]any{}, ""))
-	if value["status"] != "connected" || value["scope"] != "Mail.Read" {
-		test.Fatalf("status: %#v", value)
+	for _, path := range paths {
+		response := fixture.call(http.MethodPost, path, map[string]any{}, "")
+		if response.Code != http.StatusNotFound {
+			test.Fatalf("management connector action still exposed at %s: %d %s", path, response.Code, response.Body.String())
+		}
 	}
 }
 
 func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
+	fixture.ownConnector("gmail")
 	snapshot := map[string]any{
-		"descriptor": map[string]any{"id": "gmail.fixture", "provider": "gmail"},
-		"connection": map[string]any{"connector_id": "gmail.fixture", "state": "ready"},
+		"descriptor": map[string]any{"id": "gmail", "provider": "gmail"},
+		"connection": map[string]any{"connector_id": "gmail", "state": "ready"},
 		"views":      []any{},
 	}
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{snapshot: snapshot})
@@ -512,11 +516,11 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 		test.Fatalf("connections: %#v", connections)
 	}
 	connection := connections[0].(map[string]any)["connection"].(map[string]any)
-	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || !strings.HasPrefix(connection["connection_id"].(string), "gmail.fixture.") {
+	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || connection["connection_id"] != "gmail.fixture" {
 		test.Fatalf("unbound connection: %#v", value)
 	}
 	connectionID := connection["connection_id"].(string)
-	if stored := fixture.console.state.Connections[connectionID]; stored.PersonID != fixturePersonID || stored.ConnectorID != "gmail.fixture" {
+	if stored := fixture.console.state.Connections[connectionID]; stored.PersonID != fixturePersonID || stored.ConnectorID != "gmail" {
 		test.Fatalf("connection owner was not persisted: %#v", stored)
 	}
 	if response := fixture.call(http.MethodPost, "/v1/connections", map[string]any{}, token); response.Code != http.StatusNotFound {
@@ -530,6 +534,9 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
+	fixture.console.mu.Lock()
+	fixture.console.state.Connections["calendar.apple.fixture"] = connectionRecord{ConnectionID: "calendar.apple.fixture", ConnectorID: "calendar.apple", PersonID: fixturePersonID, Device: &deviceBinding{DeviceID: fixtureDeviceID}}
+	fixture.console.mu.Unlock()
 	snapshot := map[string]any{
 		"descriptor": map[string]any{
 			"id":        "calendar.apple",
@@ -538,7 +545,7 @@ func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
 		"connection": map[string]any{"connector_id": "calendar.apple", "state": "ready"},
 		"views":      []any{},
 	}
-	fixture.console.SetGmailAuth(&fakeConnectorRuntime{snapshot: snapshot})
+	fixture.console.calendars = map[string]CalendarRuntime{"calendar.apple.fixture": &fakeCalendarRuntime{snapshot: snapshot}}
 	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "connection_scope_unavailable") {
 		test.Fatalf("foreign device connection accepted: %d %s", response.Code, response.Body.String())
@@ -568,6 +575,7 @@ func TestPairingRejectsMissingAndDifferentPersonIdentity(test *testing.T) {
 func TestConnectorSnapshotFailureIsRedacted(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
+	fixture.ownConnector("gmail")
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("private connector failure")})
 	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
 	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private connector failure") {
@@ -578,6 +586,7 @@ func TestConnectorSnapshotFailureIsRedacted(test *testing.T) {
 func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
+	fixture.ownConnector("gmail")
 	view := map[string]any{
 		"schema_version": 1,
 		"view_id":        "mail.communication",
@@ -613,7 +622,8 @@ func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
 func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	fixture.console.calendars = []CalendarRuntime{&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
+	fixture.ownConnector("calendar.google")
+	fixture.console.calendars = map[string]CalendarRuntime{"calendar.google.fixture": &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
 	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
 	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
@@ -627,9 +637,11 @@ func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
 func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
-	fixture.console.calendars = []CalendarRuntime{
-		&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
-		&fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
+	fixture.ownConnector("calendar.google")
+	fixture.ownConnector("calendar.microsoft")
+	fixture.console.calendars = map[string]CalendarRuntime{
+		"calendar.google.fixture":    &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), readErr: errors.New("google unavailable")},
+		"calendar.microsoft.fixture": &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.microsoft", "microsoft_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:microsoft", "items": []any{}}},
 	}
 	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
 	body := map[string]any{"schema_version": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}
@@ -650,6 +662,8 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 func TestCommunicationRouteFallsBackToMicrosoftMail(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
+	fixture.ownConnector("gmail")
+	fixture.ownConnector("microsoft.mail")
 	view := map[string]any{"schema_version": 1, "view_id": "mail.communication", "source_handle": "mail:microsoft", "items": []any{}}
 	microsoft := &fakeCommunicationRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "microsoft.mail", "provider": "microsoft", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "microsoft.mail"}}, view: view}
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("gmail unavailable")})
@@ -670,6 +684,8 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	now := time.Now().UnixMilli()
+	fixture.ownConnector("github.repository")
+	fixture.ownConnector("home_assistant.selected")
 	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "github.repository", "provider": "github", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "github.repository"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "home_assistant.selected", "provider": "home_assistant", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "home_assistant.selected"}}, view: map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": "home:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 
@@ -698,16 +714,18 @@ func TestWorkContextRouteMergesHealthyProvidersAndToleratesOneFailure(test *test
 	view := func(source, scope, evidence string) map[string]any {
 		return map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": source, "scope_handle": scope, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": "communication", "title": "Selected work", "observed_at_unix_ms": now - 2}}}
 	}
-	fixture.console.work = []WorkContextRuntime{
-		&fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
-		&fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
+	fixture.ownConnector("github.issues")
+	fixture.ownConnector("slack.conversations")
+	fixture.console.work = map[string]WorkContextRuntime{
+		"github.issues.fixture":       &fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
+		"slack.conversations.fixture": &fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
 	}
 	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
 	merged := response["view"].(map[string]any)
 	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "work:") {
 		test.Fatalf("merged view: %#v", merged)
 	}
-	fixture.console.work[0] = &fakeContextRuntime{err: errors.New("private provider failure")}
+	fixture.console.work["github.issues.fixture"] = &fakeContextRuntime{err: errors.New("private provider failure")}
 	response = fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
 	if len(response["view"].(map[string]any)["items"].([]any)) != 1 || strings.Contains(fmt.Sprint(response), "private provider failure") {
 		test.Fatalf("partial view: %#v", response)
@@ -722,182 +740,13 @@ func TestLogisticsRouteMergesMailAndHomeEvidence(test *testing.T) {
 		return map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": source, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": kind, "summary": "Selected evidence", "status": "observed", "needs_attention": false}}}
 	}
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{logisticsView: view("mail:a", "mail:item", "delivery")})
-	fixture.console.SetLogistics(&fakeContextRuntime{view: view("home:b", "home:item", "home_state")})
+	fixture.ownConnector("gmail")
+	fixture.ownConnector("home_assistant.states")
+	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"connection": map[string]any{"connector_id": "home_assistant.states"}}, view: view("home:b", "home:item", "home_state")})
 	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
 	merged := response["view"].(map[string]any)
 	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "logistics:") {
 		test.Fatalf("merged logistics: %#v", merged)
-	}
-}
-
-func TestConnectorConfigurationKeepsTokensInVaultAndRestoresRuntime(test *testing.T) {
-	now := time.Now().UTC()
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/states/sensor.temperature" || request.Header.Get("Authorization") != "Bearer private-home-token" {
-			test.Fatalf("unsafe connector request: %s", request.URL.Path)
-		}
-		_, _ = writer.Write([]byte(fmt.Sprintf(`{"entity_id":"sensor.temperature","state":"22","last_updated":%q,"attributes":{"friendly_name":"Temperature"}}`, now.Format(time.RFC3339Nano))))
-	}))
-	defer upstream.Close()
-	fixture := setup(test)
-
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/home-assistant", map[string]any{
-		"enabled": true, "base_url": upstream.URL, "entities": []string{"sensor.temperature"}, "token": "private-home-token",
-	}, ""))
-	if fixture.vault.values[homeTokenKey] != "private-home-token" || fixture.console.logistics == nil {
-		test.Fatal("connector credential or runtime missing")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-home-token") || !strings.Contains(string(state), "sensor.temperature") {
-		test.Fatal("connector state crossed credential boundary")
-	}
-	_, token := fixture.pair()
-	view := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
-	if view["view"].(map[string]any)["view_id"] != "life.logistics" {
-		test.Fatalf("view: %#v", view)
-	}
-
-	restarted, err := New(fixture.console.directory, "127.0.0.1:8431", fixture.vault, nil)
-	if err != nil || restarted.logistics == nil {
-		test.Fatalf("restart: %v", err)
-	}
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/home-assistant", map[string]any{
-		"enabled": false, "base_url": "", "entities": []string{}, "token": "",
-	}, ""))
-	if _, exists := fixture.vault.values[homeTokenKey]; exists || fixture.console.logistics != nil {
-		test.Fatal("connector credential or runtime survived disconnect")
-	}
-}
-
-func TestGitHubConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
-	fixture := setup(test)
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/github", map[string]any{
-		"enabled": true, "owner": "acme", "repository": "floe", "token": "private-github-token",
-	}, ""))
-	if fixture.console.work == nil || fixture.vault.values[githubTokenKey] != "private-github-token" {
-		test.Fatal("GitHub connector was not installed")
-	}
-	response := fixture.call(http.MethodPost, "/manage/api/connector/github", map[string]any{
-		"enabled": true, "owner": "../all", "repository": "floe", "token": "replacement-token",
-	}, "")
-	if response.Code != http.StatusBadRequest || fixture.vault.values[githubTokenKey] != "private-github-token" {
-		test.Fatal("invalid scope changed credential")
-	}
-}
-
-func TestSlackConnectorConfigurationIsSelectedAndValidated(test *testing.T) {
-	fixture := setup(test)
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/slack", map[string]any{
-		"enabled": true, "channel": "C12345678", "thread": "1789127940.123456", "token": "private-slack-token",
-	}, ""))
-	if len(fixture.console.work) != 1 || fixture.vault.values[slackTokenKey] != "private-slack-token" {
-		test.Fatal("Slack connector was not installed")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-slack-token") {
-		test.Fatal("Slack token entered server state")
-	}
-	response := fixture.call(http.MethodPost, "/manage/api/connector/slack", map[string]any{
-		"enabled": true, "channel": "*", "thread": "", "token": "replacement-token",
-	}, "")
-	if response.Code != http.StatusBadRequest || fixture.vault.values[slackTokenKey] != "private-slack-token" {
-		test.Fatal("invalid Slack scope changed credential")
-	}
-}
-
-func TestGoogleDriveSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
-	fixture := setup(test)
-	input := map[string]any{"enabled": true, "folder_id": "folder12345"}
-	if response := fixture.call(http.MethodPost, "/manage/api/connector/google-drive", input, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("missing Drive auth accepted: %d", response.Code)
-	}
-	if err := fixture.console.SetDriveAuth(&fakeDriveAuth{token: "private-drive-token"}); err != nil {
-		test.Fatal(err)
-	}
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/google-drive", input, ""))
-	if len(fixture.console.work) != 1 || fixture.console.state.Connectors.GoogleDrive.FolderID != "folder12345" {
-		test.Fatal("Drive selection was not installed")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-drive-token") {
-		test.Fatal("Drive credential entered server state")
-	}
-	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/drive/status", map[string]any{}, ""))
-	if status["scope"] != "https://www.googleapis.com/auth/drive.readonly" {
-		test.Fatalf("status: %#v", status)
-	}
-}
-
-func TestGoogleCalendarSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
-	fixture := setup(test)
-	input := map[string]any{"enabled": true, "calendar_id": "team/selected"}
-	if response := fixture.call(http.MethodPost, "/manage/api/connector/google-calendar", input, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("missing Calendar auth accepted: %d", response.Code)
-	}
-	if err := fixture.console.SetCalendarAuth(&fakeCalendarAuth{token: "private-calendar-token"}); err != nil {
-		test.Fatal(err)
-	}
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/google-calendar", input, ""))
-	if len(fixture.console.calendars) != 1 || fixture.console.state.Connectors.GoogleCalendar.CalendarID != "team/selected" {
-		test.Fatal("Calendar selection was not installed")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-calendar-token") {
-		test.Fatal("Calendar credential entered server state")
-	}
-	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/calendar/status", map[string]any{}, ""))
-	if status["scope"] != "https://www.googleapis.com/auth/calendar.readonly" {
-		test.Fatalf("status: %#v", status)
-	}
-}
-
-func TestMicrosoftCalendarSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
-	fixture := setup(test)
-	input := map[string]any{"enabled": true, "calendar_id": "team/selected"}
-	if response := fixture.call(http.MethodPost, "/manage/api/connector/microsoft-calendar", input, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("missing Microsoft Calendar auth accepted: %d", response.Code)
-	}
-	if err := fixture.console.SetMicrosoftCalendarAuth(&fakeMicrosoftCalendarAuth{token: "private-calendar-token"}); err != nil {
-		test.Fatal(err)
-	}
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/microsoft-calendar", input, ""))
-	if len(fixture.console.calendars) != 1 || fixture.console.state.Connectors.MicrosoftCalendar.CalendarID != "team/selected" {
-		test.Fatal("Microsoft Calendar selection was not installed")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-calendar-token") {
-		test.Fatal("Microsoft Calendar credential entered server state")
-	}
-	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/microsoft-calendar/status", map[string]any{}, ""))
-	if status["scope"] != "Calendars.Read" {
-		test.Fatalf("status: %#v", status)
-	}
-}
-
-func TestMicrosoftTeamsSelectionRequiresDedicatedAuthRuntime(test *testing.T) {
-	fixture := setup(test)
-	input := map[string]any{"enabled": true, "team_id": "2f5d86d0-2527-4c94-8f03-33423b9db904", "channel_id": "19:launch@thread.tacv2"}
-	if response := fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", input, ""); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("missing Microsoft Teams auth accepted: %d", response.Code)
-	}
-	if err := fixture.console.SetMicrosoftTeamsAuth(&fakeMicrosoftTeamsAuth{token: "private-teams-token"}); err != nil {
-		test.Fatal(err)
-	}
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", input, ""))
-	if len(fixture.console.work) != 1 || fixture.console.state.Connectors.MicrosoftTeams.TeamID != input["team_id"] || fixture.console.state.Connectors.MicrosoftTeams.ChannelID != input["channel_id"] {
-		test.Fatal("Microsoft Teams selection was not installed")
-	}
-	state, _ := os.ReadFile(filepath.Join(fixture.console.directory, "state.json"))
-	if strings.Contains(string(state), "private-teams-token") {
-		test.Fatal("Microsoft Teams credential entered server state")
-	}
-	status := fixture.value(fixture.call(http.MethodPost, "/manage/api/microsoft-teams/status", map[string]any{}, ""))
-	if status["scope"] != "ChannelMessage.Read.All" {
-		test.Fatalf("status: %#v", status)
-	}
-	response := fixture.call(http.MethodPost, "/manage/api/connector/microsoft-teams", map[string]any{"enabled": true, "team_id": "../all", "channel_id": "*"}, "")
-	if response.Code != http.StatusBadRequest || fixture.console.state.Connectors.MicrosoftTeams.TeamID != input["team_id"] {
-		test.Fatal("invalid Microsoft Teams scope changed selection")
 	}
 }
 
@@ -1002,7 +851,7 @@ func TestDashboardUsesProviderHierarchyWithoutTargetControls(test *testing.T) {
 	if response.Code != 200 || !strings.Contains(response.Body.String(), "Codex OAuth") || !strings.Contains(response.Body.String(), "Claude OAuth") || !strings.Contains(response.Body.String(), "OpenAI-compatible API") {
 		test.Fatal("provider hierarchy is missing")
 	}
-	for _, removed := range []string{"Target ID", "Add or update a target", "Model target"} {
+	for _, removed := range []string{"Target ID", "Add or update a target", "Model target", "Context sources", "Start Calendar login", "Save GitHub source", "Home Assistant source"} {
 		if strings.Contains(response.Body.String(), removed) {
 			test.Fatalf("dashboard still exposes %q", removed)
 		}

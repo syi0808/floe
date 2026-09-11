@@ -57,6 +57,13 @@ provider flow. On restart, the persisted connection record rebinds the runtime b
 refreshes a token. Paired-client flows never read, write, migrate, or delete an unscoped credential
 name.
 
+Connection inventory and every `/v1/views/*` execution select runtimes by the authenticated
+`person_id` and persisted `connection_id` before invoking provider code. A runtime without a live
+owned connection is never used as an implicit source. Revoking the Person's last paired client
+removes that Person's connections, attempts, runtimes, and scoped credentials; a subsequently
+paired Person cannot inherit cached observations. Gmail clears its local index even when remote
+grant revocation fails.
+
 ## Connector identifiers and selectable scope
 
 | Connector | Authentication | Selectable scope |
@@ -72,5 +79,6 @@ name.
 | `home_assistant.states` | one-shot token | `base_url`, `entities` |
 
 The fixed `required_scopes` are least-privilege read grants and cannot be enlarged through this API.
-The existing `/manage/api` endpoints serve the current dashboard and are not called or proxied by
-the paired-client handlers.
+The management dashboard has no personal connector state or mutation endpoints. Server operators
+provide non-person OAuth application capability through process configuration; only the paired
+Flutter client starts, scopes, or disconnects a personal provider connection.

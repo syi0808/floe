@@ -51,40 +51,20 @@ func connectionSnapshotMetadata(snapshot any) (map[string]any, string, string, b
 	return value, connectorID, deviceID, true
 }
 
-func (console *Console) bindConnectionOwners(snapshots []any, scope clientScope) ([]any, error) {
+func (console *Console) ownedConnectionSnapshots(snapshots []any, scope clientScope) ([]any, error) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	next := cloneState(console.state)
-	changed := false
-	bound := make([]any, 0, len(snapshots))
+	owned := make([]any, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		value, connectorID, deviceID, ok := connectionSnapshotMetadata(snapshot)
-		if !ok || deviceID != "" && deviceID != scope.DeviceID {
+		if !ok {
 			return nil, errors.New("invalid connection ownership")
 		}
-		var record connectionRecord
-		for _, candidate := range next.Connections {
-			if candidate.ConnectorID == connectorID {
-				if candidate.PersonID != scope.PersonID {
-					return nil, errors.New("connection belongs to another person")
-				}
-				record = candidate
-				break
-			}
+		record, exists := console.connectionForPerson(connectorID, scope.PersonID)
+		if !exists {
+			continue
 		}
-		if record.ConnectionID == "" {
-			record = connectionRecord{
-				ConnectionID: connectorID + "." + digest(scope.PersonID + "\x00" + connectorID)[:16],
-				ConnectorID:  connectorID,
-				PersonID:     scope.PersonID,
-			}
-			if deviceID != "" {
-				record.Device = &deviceBinding{DeviceID: deviceID}
-			}
-			next.Connections[record.ConnectionID] = record
-			changed = true
-		}
-		if record.Device != nil && record.Device.DeviceID != deviceID || record.Device == nil && deviceID != "" {
+		if record.Device != nil && (record.Device.DeviceID != scope.DeviceID || record.Device.DeviceID != deviceID) || record.Device == nil && deviceID != "" {
 			return nil, errors.New("connection device binding mismatch")
 		}
 		connection := value["connection"].(map[string]any)
@@ -93,15 +73,9 @@ func (console *Console) bindConnectionOwners(snapshots []any, scope clientScope)
 		if record.Device != nil {
 			connection["device_binding"] = map[string]any{"device_id": record.Device.DeviceID}
 		}
-		bound = append(bound, value)
+		owned = append(owned, value)
 	}
-	if changed {
-		if err := console.save(next); err != nil {
-			return nil, err
-		}
-		console.state = next
-	}
-	return bound, nil
+	return owned, nil
 }
 
 //go:embed web/*
@@ -179,13 +153,13 @@ type Console struct {
 	gmail                                        ConnectorAuthRuntime
 	microsoftAuth                                ConnectorOAuthRuntime
 	microsoftMail                                CommunicationRuntime
-	work                                         []WorkContextRuntime
-	logistics                                    []LogisticsRuntime
+	work                                         map[string]WorkContextRuntime
+	logistics                                    map[string]LogisticsRuntime
 	driveAuth                                    DriveAuthRuntime
 	calendarAuth                                 DriveAuthRuntime
 	microsoftCalendarAuth                        DriveAuthRuntime
 	microsoftTeamsAuth                           DriveAuthRuntime
-	calendars                                    []CalendarRuntime
+	calendars                                    map[string]CalendarRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
 	unavailable                                  map[string]bool
@@ -201,21 +175,37 @@ type Console struct {
 func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	if runtime == nil {
-		console.work = nil
-	} else {
-		console.work = []WorkContextRuntime{runtime}
+	console.work = map[string]WorkContextRuntime{}
+	if connectorID, ok := contextRuntimeConnectorID(runtime); ok {
+		if record, exists := console.connectionForConnector(connectorID); exists {
+			console.work[record.ConnectionID] = runtime
+		}
 	}
 }
 
 func (console *Console) SetLogistics(runtime LogisticsRuntime) {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	if runtime == nil {
-		console.logistics = nil
-	} else {
-		console.logistics = []LogisticsRuntime{runtime}
+	console.logistics = map[string]LogisticsRuntime{}
+	if connectorID, ok := contextRuntimeConnectorID(runtime); ok {
+		if record, exists := console.connectionForConnector(connectorID); exists {
+			console.logistics[record.ConnectionID] = runtime
+		}
 	}
+}
+
+func contextRuntimeConnectorID(runtime interface {
+	ConnectionSnapshot(context.Context) (any, error)
+}) (string, bool) {
+	if runtime == nil {
+		return "", false
+	}
+	snapshot, err := runtime.ConnectionSnapshot(context.Background())
+	if err != nil {
+		return "", false
+	}
+	_, connectorID, _, ok := connectionSnapshotMetadata(snapshot)
+	return connectorID, ok
 }
 
 func (console *Console) SetDriveAuth(runtime DriveAuthRuntime) error {
@@ -494,9 +484,22 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	gateway := console.gateway
 	gmail := console.gmail
 	microsoftMail := console.microsoftMail
-	work := append([]WorkContextRuntime(nil), console.work...)
-	logistics := append([]LogisticsRuntime(nil), console.logistics...)
-	calendars := append([]CalendarRuntime(nil), console.calendars...)
+	work := make(map[string]WorkContextRuntime, len(console.work))
+	for connectorID, runtime := range console.work {
+		work[connectorID] = runtime
+	}
+	logistics := make(map[string]LogisticsRuntime, len(console.logistics))
+	for connectorID, runtime := range console.logistics {
+		logistics[connectorID] = runtime
+	}
+	calendars := make(map[string]CalendarRuntime, len(console.calendars))
+	for connectorID, runtime := range console.calendars {
+		calendars[connectorID] = runtime
+	}
+	connectionRecords := make(map[string]connectionRecord, len(console.state.Connections))
+	for connectionID, record := range console.state.Connections {
+		connectionRecords[connectionID] = record
+	}
 	console.mu.Unlock()
 	if !validPersonID(scope.PersonID) || !validDeviceID(scope.DeviceID) {
 		failure(writer, 401, "unauthorized")
@@ -512,7 +515,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			return
 		}
 		connections := []any{}
-		if gmail != nil {
+		if gmail != nil && connectionOwnedBy(connectionRecords, "gmail", scope) {
 			snapshot, err := gmail.ConnectionSnapshot()
 			if err != nil {
 				failure(writer, 503, "connections_unavailable")
@@ -520,7 +523,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			}
 			connections = append(connections, snapshot)
 		}
-		if microsoftMail != nil {
+		if microsoftMail != nil && connectionOwnedBy(connectionRecords, "microsoft.mail", scope) {
 			snapshot, err := microsoftMail.ConnectionSnapshot(request.Context())
 			if err != nil {
 				failure(writer, 503, "connections_unavailable")
@@ -531,14 +534,20 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		runtimes := make([]interface {
 			ConnectionSnapshot(context.Context) (any, error)
 		}, 0, len(work)+len(logistics)+len(calendars))
-		for _, runtime := range work {
-			runtimes = append(runtimes, runtime)
+		for connectionID, runtime := range work {
+			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				runtimes = append(runtimes, runtime)
+			}
 		}
-		for _, runtime := range logistics {
-			runtimes = append(runtimes, runtime)
+		for connectionID, runtime := range logistics {
+			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				runtimes = append(runtimes, runtime)
+			}
 		}
-		for _, runtime := range calendars {
-			runtimes = append(runtimes, runtime)
+		for connectionID, runtime := range calendars {
+			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				runtimes = append(runtimes, runtime)
+			}
 		}
 		for _, runtime := range runtimes {
 			if runtime == nil {
@@ -552,7 +561,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			connections = append(connections, snapshot)
 		}
 		var err error
-		connections, err = console.bindConnectionOwners(connections, scope)
+		connections, err = console.ownedConnectionSnapshots(connections, scope)
 		if err != nil {
 			failure(writer, 503, "connection_scope_unavailable")
 			return
@@ -561,6 +570,14 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
+		ownsGmail := connectionOwnedBy(connectionRecords, "gmail", scope)
+		ownsMicrosoftMail := connectionOwnedBy(connectionRecords, "microsoft.mail", scope)
+		if !ownsGmail {
+			gmail = nil
+		}
+		if !ownsMicrosoftMail {
+			microsoftMail = nil
+		}
 		if request.Method != http.MethodPost || gmail == nil && microsoftMail == nil {
 			failure(writer, 404, "not_found")
 			return
@@ -607,13 +624,19 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, 400, "validation")
 			return
 		}
-		if input.ConnectorID == "" && len(calendars) != 1 {
+		ownedCalendars := make(map[string]CalendarRuntime)
+		for connectionID, runtime := range calendars {
+			if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+				ownedCalendars[connectionID] = runtime
+			}
+		}
+		if input.ConnectorID == "" && len(ownedCalendars) != 1 {
 			failure(writer, http.StatusConflict, "calendar_selector_required")
 			return
 		}
 		var selected CalendarRuntime
 		var selectedSnapshot any
-		for _, runtime := range calendars {
+		for _, runtime := range ownedCalendars {
 			snapshot, err := runtime.ConnectionSnapshot(request.Context())
 			if err != nil {
 				continue
@@ -628,8 +651,9 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
 			return
 		}
-		if _, err := console.bindConnectionOwners([]any{selectedSnapshot}, scope); err != nil {
-			failure(writer, http.StatusForbidden, "connection_owner_mismatch")
+		owned, err := console.ownedConnectionSnapshots([]any{selectedSnapshot}, scope)
+		if err != nil || len(owned) != 1 {
+			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
 			return
 		}
 		view, err := selected.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
@@ -641,15 +665,16 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		return
 	}
 	if request.URL.Path == "/v1/views/work.context" {
-		console.serveWorkContextView(writer, request, work)
+		console.serveWorkContextView(writer, request, ownedWorkContextRuntimes(scope, work, connectionRecords))
 		return
 	}
 	if request.URL.Path == "/v1/views/life.logistics" {
 		readers := make([]LogisticsViewReader, 0, len(logistics)+1)
-		if gmail != nil {
+		ownsGmail := connectionOwnedBy(connectionRecords, "gmail", scope)
+		if gmail != nil && ownsGmail {
 			readers = append(readers, gmail)
 		}
-		for _, runtime := range logistics {
+		for _, runtime := range ownedLogisticsRuntimes(scope, logistics, connectionRecords) {
 			readers = append(readers, runtime)
 		}
 		console.serveLogisticsView(writer, request, readers)
@@ -658,6 +683,40 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	forward := request.Clone(request.Context())
 	forward.Header.Set("Authorization", "Bearer "+console.internalToken)
 	gateway.ServeHTTP(writer, forward)
+}
+
+func ownedWorkContextRuntimes(scope clientScope, runtimes map[string]WorkContextRuntime, connections map[string]connectionRecord) []WorkContextRuntime {
+	owned := make([]WorkContextRuntime, 0, len(runtimes))
+	for connectionID, runtime := range runtimes {
+		if runtimeConnectionOwnedBy(connections, connectionID, scope) {
+			owned = append(owned, runtime)
+		}
+	}
+	return owned
+}
+
+func ownedLogisticsRuntimes(scope clientScope, runtimes map[string]LogisticsRuntime, connections map[string]connectionRecord) []LogisticsRuntime {
+	owned := make([]LogisticsRuntime, 0, len(runtimes))
+	for connectionID, runtime := range runtimes {
+		if runtimeConnectionOwnedBy(connections, connectionID, scope) {
+			owned = append(owned, runtime)
+		}
+	}
+	return owned
+}
+
+func connectionOwnedBy(connections map[string]connectionRecord, connectorID string, scope clientScope) bool {
+	for _, record := range connections {
+		if record.ConnectorID == connectorID && record.PersonID == scope.PersonID && (record.Device == nil || record.Device.DeviceID == scope.DeviceID) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeConnectionOwnedBy(connections map[string]connectionRecord, connectionID string, scope clientScope) bool {
+	record, exists := connections[connectionID]
+	return exists && record.PersonID == scope.PersonID && (record.Device == nil || record.Device.DeviceID == scope.DeviceID)
 }
 
 func (console *Console) serveLogisticsView(writer http.ResponseWriter, request *http.Request, runtimes []LogisticsViewReader) {
@@ -784,96 +843,6 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
-	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-teams/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.microsoftTeamsAuth
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "microsoft_teams_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-teams/"))
-		if err != nil {
-			failure(writer, 502, "microsoft_teams_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
-	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-calendar/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.microsoftCalendarAuth
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "microsoft_calendar_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-calendar/"))
-		if err != nil {
-			failure(writer, 502, "microsoft_calendar_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
-	if strings.HasPrefix(request.URL.Path, "/manage/api/calendar/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.calendarAuth
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "calendar_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/calendar/"))
-		if err != nil {
-			failure(writer, 502, "calendar_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
-	if strings.HasPrefix(request.URL.Path, "/manage/api/microsoft-mail/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.microsoftAuth
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "microsoft_mail_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/microsoft-mail/"))
-		if err != nil {
-			failure(writer, 502, "microsoft_mail_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
-	if strings.HasPrefix(request.URL.Path, "/manage/api/gmail/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.gmail
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "gmail_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/gmail/"))
-		if err != nil {
-			failure(writer, 502, "gmail_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") && request.Method == "POST" {
 		if console.runtime == nil {
 			failure(writer, 503, "codex_unavailable")
@@ -884,24 +853,6 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		value, err := console.runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/codex/"))
 		if err != nil {
 			failure(writer, 502, "codex_unavailable")
-			return
-		}
-		reply(writer, 200, value)
-		return
-	}
-	if strings.HasPrefix(request.URL.Path, "/manage/api/drive/") && request.Method == "POST" {
-		console.mu.Lock()
-		runtime := console.driveAuth
-		console.mu.Unlock()
-		if runtime == nil {
-			failure(writer, 503, "drive_unavailable")
-			return
-		}
-		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-		defer cancel()
-		value, err := runtime.Action(ctx, strings.TrimPrefix(request.URL.Path, "/manage/api/drive/"))
-		if err != nil {
-			failure(writer, 502, "drive_unavailable")
 			return
 		}
 		reply(writer, 200, value)
@@ -925,48 +876,6 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 	}
 	if request.URL.Path == "/manage/api/state" && request.Method == "GET" {
 		console.writeState(writer, current)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/github" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateGitHubConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/home-assistant" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateHomeAssistantConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/slack" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateSlackConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/google-drive" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateGoogleDriveConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/google-calendar" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateGoogleCalendarConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/microsoft-calendar" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateMicrosoftCalendarConnector(writer, request)
-		return
-	}
-	if request.URL.Path == "/manage/api/connector/microsoft-teams" && request.Method == "POST" {
-		console.mu.Lock()
-		defer console.mu.Unlock()
-		console.updateMicrosoftTeamsConnector(writer, request)
 		return
 	}
 	console.mu.Lock()
@@ -1012,12 +921,37 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			console.pair = nil
 		}
 	case "/manage/api/client/delete":
+		removed, exists := next.Clients[input.ID]
+		if !exists {
+			failure(writer, 404, "client_not_found")
+			return
+		}
 		delete(next.Clients, input.ID)
+		cleanup, err := console.removePersonConnectionsLocked(&next, removed.PersonID)
+		if err != nil {
+			failure(writer, 500, "connection_cleanup_failed")
+			return
+		}
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
 			return
 		}
 		console.state = next
+		if err := console.rebuildConnectorRuntimes(); err != nil {
+			failure(writer, 500, "invalid_connector_configuration")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		for _, runtime := range cleanup.runtimes {
+			_, _ = runtime.Action(ctx, "logout")
+		}
+		for _, credential := range cleanup.credentials {
+			if err := console.vault.Delete(credential); err != nil {
+				failure(writer, 500, "credential_cleanup_failed")
+				return
+			}
+		}
 		if console.pair != nil && console.pair.ID == input.ID {
 			console.pair = nil
 		}
@@ -1081,16 +1015,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		}
 		providers[provider] = map[string]any{"base_url": profile.BaseURL, "has_credential": profile.APIKeyEnv != "", "classes": classes}
 	}
-	connectors := map[string]any{
-		"github":             map[string]any{"configured": state.Connectors.GitHub != nil},
-		"slack":              map[string]any{"configured": state.Connectors.Slack != nil},
-		"google_drive":       map[string]any{"configured": state.Connectors.GoogleDrive != nil},
-		"google_calendar":    map[string]any{"configured": state.Connectors.GoogleCalendar != nil},
-		"microsoft_calendar": map[string]any{"configured": state.Connectors.MicrosoftCalendar != nil},
-		"microsoft_teams":    map[string]any{"configured": state.Connectors.MicrosoftTeams != nil},
-		"home_assistant":     map[string]any{"configured": state.Connectors.HomeAssistant != nil},
-	}
-	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "connectors": connectors, "clients": clients, "client_scopes": clientScopes, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
+	reply(writer, 200, map[string]any{"csrf": current.csrf, "providers": providers, "clients": clients, "client_scopes": clientScopes, "pairing": pending, "address": "http://" + address, "traces": gateway.Traces(20)})
 }
 
 func (console *Console) updateRoute(writer http.ResponseWriter, request *http.Request) {

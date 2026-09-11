@@ -23,9 +23,10 @@ Provider secrets use a credential-store name derived from both `person_id` and `
 secrets remain outside `state.json`. OAuth flow state and token exchange remain server-owned.
 
 Every persisted `clients` entry must contain a token hash, `person_id`, and `device_id`. The server
-rejects unscoped state instead of accepting or migrating it implicitly. Dashboard-managed connector
-operations remain available because the dashboard is a current product caller; paired-client
-connector credentials use only Person-and-connection-scoped vault names.
+rejects unscoped state instead of accepting or migrating it implicitly. Personal connector setup,
+scope changes, OAuth actions, and disconnects are available only through the paired-client API.
+The management dashboard configures non-person inference capability and approves or revokes paired
+apps; it does not expose personal connector state or mutations.
 
 ## Contract
 

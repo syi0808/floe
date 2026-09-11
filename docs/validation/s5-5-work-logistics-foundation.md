@@ -36,10 +36,10 @@
 - Paired general conversations now advertise read-only Work Context and Life Logistics capabilities
   and stateless A2A Expert cards. Delegation fetches and strictly validates a fresh bounded View,
   then runs the matching isolated Expert without granting it provider actions.
-- The loopback management console now configures one selected GitHub repository and one bounded
-  Home Assistant entity allowlist. Tokens live only in macOS Keychain, connector selection persists
+- The paired Floe client configures one selected GitHub repository and one bounded Home Assistant
+  entity allowlist. Person-scoped tokens live only in macOS Keychain, connector selection persists
   without credentials in private server state, startup restores runtimes, and disconnect deletes
-  the credential. The dashboard exposes these setup and disconnect controls.
+  the credential. The management dashboard exposes no personal connector controls or state.
 - GitHub and Home Assistant services publish typed revoked, rate-limited, partial-fetch and
   unavailable connection failures. A fresh prior View remains visible only as degraded and only
   until its declared expiry; provider failure no longer drops the whole connection inventory.
@@ -47,7 +47,7 @@
   single GET-only history/replies read, exports bounded message text as Work Context communication
   evidence, hashes channel/message identity, and excludes files, reactions, profiles and provider
   IDs. Invalid auth, missing scope and rate limits become typed connector failures.
-- Slack configuration and tokens use the same private console/Keychain lifecycle. GitHub and Slack
+- Slack configuration and tokens use the same paired-client/Keychain lifecycle. GitHub and Slack
   Work Context Views merge behind one provider-neutral Agent route with deterministic aggregate
   handles, duplicate rejection and partial-provider tolerance.
 - Added a server-native Microsoft Teams adapter for one explicitly selected team/channel. It makes

@@ -1,15 +1,17 @@
 package console
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 )
 
@@ -23,7 +25,6 @@ type diskState struct {
 	Targets     map[string]inference.Target `json:"targets"`
 	Routes      map[string]inference.Route  `json:"routes"`
 	Providers   map[string]providerProfile  `json:"providers,omitempty"`
-	Connectors  connectorConfigState        `json:"connectors,omitempty"`
 	Connections map[string]connectionRecord `json:"connections,omitempty"`
 	Clients     map[string]pairedClient     `json:"clients"`
 }
@@ -33,6 +34,8 @@ type connectionRecord struct {
 	ConnectorID  string         `json:"connector_id"`
 	PersonID     string         `json:"person_id"`
 	Device       *deviceBinding `json:"device_binding,omitempty"`
+	Scope        map[string]any `json:"scope"`
+	Credential   string         `json:"credential,omitempty"`
 }
 
 type deviceBinding struct {
@@ -43,63 +46,6 @@ type pairedClient struct {
 	TokenHash string `json:"token_hash"`
 	PersonID  string `json:"person_id"`
 	DeviceID  string `json:"device_id"`
-}
-
-func validCredentialName(namespace, value string) bool {
-	if value == namespace {
-		return true
-	}
-	prefix := namespace + ":"
-	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(strings.TrimPrefix(value, prefix))
-	return err == nil
-}
-
-type connectorConfigState struct {
-	GitHub            *githubConnectorConfig            `json:"github,omitempty"`
-	Slack             *slackConnectorConfig             `json:"slack,omitempty"`
-	GoogleDrive       *googleDriveConnectorConfig       `json:"google_drive,omitempty"`
-	GoogleCalendar    *googleCalendarConnectorConfig    `json:"google_calendar,omitempty"`
-	MicrosoftCalendar *microsoftCalendarConnectorConfig `json:"microsoft_calendar,omitempty"`
-	MicrosoftTeams    *microsoftTeamsConnectorConfig    `json:"microsoft_teams,omitempty"`
-	HomeAssistant     *homeAssistantConnectorConfig     `json:"home_assistant,omitempty"`
-}
-
-type githubConnectorConfig struct {
-	Owner      string `json:"owner"`
-	Repository string `json:"repository"`
-	Credential string `json:"credential,omitempty"`
-}
-
-type slackConnectorConfig struct {
-	Channel    string `json:"channel"`
-	Thread     string `json:"thread,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
-
-type googleDriveConnectorConfig struct {
-	FolderID string `json:"folder_id"`
-}
-
-type googleCalendarConnectorConfig struct {
-	CalendarID string `json:"calendar_id"`
-}
-
-type microsoftCalendarConnectorConfig struct {
-	CalendarID string `json:"calendar_id"`
-}
-
-type microsoftTeamsConnectorConfig struct {
-	TeamID    string `json:"team_id"`
-	ChannelID string `json:"channel_id"`
-}
-
-type homeAssistantConnectorConfig struct {
-	BaseURL    string   `json:"base_url"`
-	Entities   []string `json:"entities"`
-	Credential string   `json:"credential,omitempty"`
 }
 
 type providerProfile struct {
@@ -153,7 +99,9 @@ func readState(directory string) (diskState, string, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(directory, "state.json"))
 	if err == nil {
-		if json.Unmarshal(data, &state) != nil || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 {
 			return state, "", errors.New("invalid server state")
 		}
 		if state.Routes == nil {
@@ -180,15 +128,30 @@ func readState(directory string) (diskState, string, error) {
 				return state, "", errors.New("invalid server state")
 			}
 		}
+		personOwners := make(map[string]bool, len(state.Clients))
+		for _, client := range state.Clients {
+			personOwners[client.PersonID] = true
+		}
 		for key, connection := range state.Connections {
-			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
+			if key != connection.ConnectionID || !connectionIDPattern.MatchString(connection.ConnectionID) || !connectionIDPattern.MatchString(connection.ConnectorID) || !validPersonID(connection.PersonID) || !personOwners[connection.PersonID] || connection.Device != nil && !validDeviceID(connection.Device.DeviceID) {
 				return state, "", errors.New("invalid server state")
 			}
-		}
-		if state.Connectors.GitHub != nil && !validCredentialName(githubTokenKey, state.Connectors.GitHub.Credential) ||
-			state.Connectors.Slack != nil && !validCredentialName(slackTokenKey, state.Connectors.Slack.Credential) ||
-			state.Connectors.HomeAssistant != nil && !validCredentialName(homeTokenKey, state.Connectors.HomeAssistant.Credential) {
-			return state, "", errors.New("invalid server state")
+			if definition, exists := clientConnectorDefinitionFor(connection.ConnectorID); exists {
+				if _, err := validatedConnectorScope(definition, connection.Scope); err != nil {
+					return state, "", errors.New("invalid server state")
+				}
+				credentialNamespace := definition.CredentialName
+				if credentialNamespace == "" {
+					credentialNamespace = definition.OAuthCredential
+				}
+				expectedCredential := ""
+				if credentialNamespace != "" {
+					expectedCredential, _ = credentials.ConnectionName(credentialNamespace, connection.ConnectionID, connection.PersonID)
+				}
+				if connection.Credential != expectedCredential {
+					return state, "", errors.New("invalid server state")
+				}
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return state, "", err
@@ -214,36 +177,7 @@ func (console *Console) save(state diskState) error {
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Connectors: state.Connectors}
-	if state.Connectors.GitHub != nil {
-		configured := *state.Connectors.GitHub
-		copy.Connectors.GitHub = &configured
-	}
-	if state.Connectors.HomeAssistant != nil {
-		configured := *state.Connectors.HomeAssistant
-		configured.Entities = append([]string(nil), configured.Entities...)
-		copy.Connectors.HomeAssistant = &configured
-	}
-	if state.Connectors.Slack != nil {
-		configured := *state.Connectors.Slack
-		copy.Connectors.Slack = &configured
-	}
-	if state.Connectors.GoogleDrive != nil {
-		configured := *state.Connectors.GoogleDrive
-		copy.Connectors.GoogleDrive = &configured
-	}
-	if state.Connectors.GoogleCalendar != nil {
-		configured := *state.Connectors.GoogleCalendar
-		copy.Connectors.GoogleCalendar = &configured
-	}
-	if state.Connectors.MicrosoftCalendar != nil {
-		configured := *state.Connectors.MicrosoftCalendar
-		copy.Connectors.MicrosoftCalendar = &configured
-	}
-	if state.Connectors.MicrosoftTeams != nil {
-		configured := *state.Connectors.MicrosoftTeams
-		copy.Connectors.MicrosoftTeams = &configured
-	}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}
@@ -266,6 +200,7 @@ func cloneState(state diskState) diskState {
 			binding := *value.Device
 			value.Device = &binding
 		}
+		value.Scope = cloneConnectorScope(value.Scope)
 		copy.Connections[key] = value
 	}
 	return copy

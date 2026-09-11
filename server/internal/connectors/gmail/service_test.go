@@ -15,6 +15,7 @@ type serviceAuth struct {
 	ready      bool
 	actions    []string
 	tokenError error
+	actionErr  error
 }
 
 func (auth *serviceAuth) Ready() bool { return auth.ready }
@@ -29,6 +30,9 @@ func (auth *serviceAuth) Action(_ context.Context, action string) (any, error) {
 	auth.actions = append(auth.actions, action)
 	if action == "logout" {
 		auth.ready = false
+	}
+	if auth.actionErr != nil {
+		return nil, auth.actionErr
 	}
 	return map[string]any{"status": map[bool]string{true: "connected", false: "disconnected"}[auth.ready]}, nil
 }
@@ -117,9 +121,11 @@ func TestServicePersistsLifecycleDegradesAndDisconnectClearsViews(t *testing.T) 
 		t.Fatalf("revoked view read: %v", err)
 	}
 	auth.tokenError = nil
-	if _, err := reopened.Action(context.Background(), "logout"); err != nil {
-		t.Fatal(err)
+	auth.actionErr = ErrUnavailable
+	if _, err := reopened.Action(context.Background(), "logout"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("logout error: %v", err)
 	}
+	auth.actionErr = nil
 	disconnected, _ := reopened.Action(context.Background(), "status")
 	disconnectedSnapshot := disconnected.(map[string]any)["connection"].(Snapshot)
 	if disconnectedSnapshot.Connection.State != "disconnected" || len(disconnectedSnapshot.Views) != 0 || reopened.index.HistoryID() != "" {

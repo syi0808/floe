@@ -88,11 +88,9 @@ func (service *Service) Action(ctx context.Context, action string) (any, error) 
 		return service.auth.Action(ctx, action)
 	case "logout":
 		value, err := service.auth.Action(ctx, action)
-		if err != nil {
-			return nil, err
-		}
-		if err := service.index.Reset(); err != nil {
-			return nil, err
+		resetErr := service.index.Reset()
+		if err != nil || resetErr != nil {
+			return nil, errors.Join(err, resetErr)
 		}
 		return value, nil
 	case "sync":

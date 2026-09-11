@@ -5,14 +5,8 @@ let pairing = null;
 let unlocked = false;
 let polling = false;
 let codexPending = false;
-let gmailPending = false;
-let drivePending = false;
-let microsoftMailPending = false;
-let calendarPending = false;
-let microsoftCalendarPending = false;
-let microsoftTeamsPending = false;
 let editing = false;
-let state = {providers: {}, connectors: {}, clients: []};
+let state = {providers: {}, clients: []};
 let selectedProvider = 'openai_compatible';
 
 function notice(message) { element('notice').textContent = message; }
@@ -30,14 +24,8 @@ async function api(path, body) {
   return value;
 }
 function lock() {
-  unlocked = false; csrf = ''; codexPending = false; gmailPending = false; drivePending = false; microsoftMailPending = false; calendarPending = false; microsoftCalendarPending = false; microsoftTeamsPending = false;
+  unlocked = false; csrf = ''; codexPending = false;
   element('codex-link').removeAttribute('href'); element('codex-link').hidden = true;
-  element('gmail-link').removeAttribute('href'); element('gmail-link').hidden = true;
-  element('drive-link').removeAttribute('href'); element('drive-link').hidden = true;
-  element('microsoft-mail-link').removeAttribute('href'); element('microsoft-mail-link').hidden = true;
-  element('calendar-link').removeAttribute('href'); element('calendar-link').hidden = true;
-  element('microsoft-calendar-link').removeAttribute('href'); element('microsoft-calendar-link').hidden = true;
-  element('microsoft-teams-link').removeAttribute('href'); element('microsoft-teams-link').hidden = true;
   element('dashboard').hidden = true; element('login-panel').hidden = false;
 }
 async function action(button, operation) {
@@ -92,13 +80,6 @@ async function refresh() {
   element('address').textContent = state.address; pairing = state.pairing;
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
   renderProvider();
-  element('github-state').textContent = state.connectors?.github?.configured ? 'Configured · selected repository read only' : 'Not configured';
-  element('slack-state').textContent = state.connectors?.slack?.configured ? 'Configured · selected conversation read only' : 'Not configured';
-  element('drive-state').textContent = state.connectors?.google_drive?.configured ? 'Configured · selected folder ephemeral read' : 'Not configured';
-  element('calendar-state').textContent = state.connectors?.google_calendar?.configured ? 'Configured · selected calendar ephemeral read' : 'Not configured';
-  element('microsoft-calendar-state').textContent = state.connectors?.microsoft_calendar?.configured ? 'Configured · selected calendar ephemeral read' : 'Not configured';
-  element('microsoft-teams-state').textContent = state.connectors?.microsoft_teams?.configured ? 'Configured · selected channel read only' : 'Not configured';
-  element('home-state').textContent = state.connectors?.home_assistant?.configured ? 'Configured · selected state entities read only' : 'Not configured';
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
   for (const identifier of state.clients) {
@@ -160,133 +141,10 @@ async function codex(operation) {
   if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
 }
 for (const operation of ['login', 'status', 'cancel', 'logout']) element(`codex-${operation}`).onclick = () => action(element(`codex-${operation}`), () => codex(operation));
-async function gmail(operation) {
-  const value = await api(`gmail/${operation}`, {}); gmailPending = value.status === 'pending';
-  const connection = value.connection?.connection?.state;
-  element('gmail-state').textContent = `Authentication: ${value.status || 'connected'} · Context: ${connection || (operation === 'sync' ? 'synced' : 'not inspected')} · Scope: Gmail read-only`;
-  const link = element('gmail-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`gmail-${operation}`).onclick = () => action(element(`gmail-${operation}`), () => gmail(operation));
-element('gmail-sync').onclick = () => action(element('gmail-sync'), async () => { await gmail('sync'); await gmail('status'); });
-async function microsoftMail(operation) {
-  const value = await api(`microsoft-mail/${operation}`, {}); microsoftMailPending = value.status === 'pending';
-  element('microsoft-mail-state').textContent = `Authentication: ${value.status} · Scope: Mail.Read`;
-  const link = element('microsoft-mail-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`microsoft-mail-${operation}`).onclick = () => action(element(`microsoft-mail-${operation}`), () => microsoftMail(operation));
-for (const form of [element('github-form'), element('slack-form'), element('drive-form'), element('calendar-form'), element('microsoft-calendar-form'), element('microsoft-teams-form'), element('home-form')]) form.addEventListener('input', () => { editing = true; });
-element('github-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/github', {enabled: true, owner: form.elements.owner.value.trim(), repository: form.elements.repository.value.trim(), token: form.elements.token.value});
-    form.elements.token.value = ''; editing = false; await refresh(); notice('GitHub source configuration saved.');
-  });
-});
-element('home-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    const entities = form.elements.entities.value.split(',').map((value) => value.trim()).filter(Boolean);
-    await api('connector/home-assistant', {enabled: true, base_url: form.elements.base_url.value, entities, token: form.elements.token.value});
-    form.elements.token.value = ''; editing = false; await refresh(); notice('Home Assistant source configuration saved.');
-  });
-});
-element('slack-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/slack', {enabled: true, channel: form.elements.channel.value.trim(), thread: form.elements.thread.value.trim(), token: form.elements.token.value});
-    form.elements.token.value = ''; editing = false; await refresh(); notice('Slack source configuration saved.');
-  });
-});
-element('drive-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/google-drive', {enabled: true, folder_id: form.elements.folder_id.value.trim()});
-    editing = false; await refresh(); notice('Google Drive folder selection saved.');
-  });
-});
-element('calendar-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/google-calendar', {enabled: true, calendar_id: form.elements.calendar_id.value.trim()});
-    editing = false; await refresh(); notice('Google Calendar selection saved.');
-  });
-});
-element('microsoft-calendar-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/microsoft-calendar', {enabled: true, calendar_id: form.elements.calendar_id.value.trim()});
-    editing = false; await refresh(); notice('Microsoft Calendar selection saved.');
-  });
-});
-element('microsoft-teams-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target;
-    await api('connector/microsoft-teams', {enabled: true, team_id: form.elements.team_id.value.trim(), channel_id: form.elements.channel_id.value.trim()});
-    editing = false; await refresh(); notice('Microsoft Teams channel selection saved.');
-  });
-});
-element('github-disconnect').onclick = () => action(element('github-disconnect'), async () => {
-  if (!confirm('Disconnect GitHub and delete its stored token?')) return;
-  await api('connector/github', {enabled: false, owner: '', repository: '', token: ''}); editing = false; await refresh(); notice('GitHub source disconnected.');
-});
-element('home-disconnect').onclick = () => action(element('home-disconnect'), async () => {
-  if (!confirm('Disconnect Home Assistant and delete its stored token?')) return;
-  await api('connector/home-assistant', {enabled: false, base_url: '', entities: [], token: ''}); editing = false; await refresh(); notice('Home Assistant source disconnected.');
-});
-element('slack-disconnect').onclick = () => action(element('slack-disconnect'), async () => {
-  if (!confirm('Disconnect Slack and delete its stored token?')) return;
-  await api('connector/slack', {enabled: false, channel: '', thread: '', token: ''}); editing = false; await refresh(); notice('Slack source disconnected.');
-});
-element('drive-disconnect').onclick = () => action(element('drive-disconnect'), async () => {
-  if (!confirm('Remove the selected Drive folder from Floe?')) return;
-  await api('connector/google-drive', {enabled: false, folder_id: ''}); editing = false; await refresh(); notice('Google Drive folder removed.');
-});
-element('calendar-disconnect').onclick = () => action(element('calendar-disconnect'), async () => {
-  if (!confirm('Remove the selected Google Calendar from Floe?')) return;
-  await api('connector/google-calendar', {enabled: false, calendar_id: ''}); editing = false; await refresh(); notice('Google Calendar selection removed.');
-});
-element('microsoft-calendar-disconnect').onclick = () => action(element('microsoft-calendar-disconnect'), async () => {
-  if (!confirm('Remove the selected Microsoft Calendar from Floe?')) return;
-  await api('connector/microsoft-calendar', {enabled: false, calendar_id: ''}); editing = false; await refresh(); notice('Microsoft Calendar selection removed.');
-});
-element('microsoft-teams-disconnect').onclick = () => action(element('microsoft-teams-disconnect'), async () => {
-  if (!confirm('Remove the selected Microsoft Teams channel from Floe?')) return;
-  await api('connector/microsoft-teams', {enabled: false, team_id: '', channel_id: ''}); editing = false; await refresh(); notice('Microsoft Teams channel removed.');
-});
-async function drive(operation) {
-  const value = await api(`drive/${operation}`, {}); drivePending = value.status === 'pending';
-  element('drive-auth-state').textContent = `Authentication: ${value.status} · Scope: Drive read-only`;
-  const link = element('drive-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`drive-${operation}`).onclick = () => action(element(`drive-${operation}`), () => drive(operation));
-async function calendar(operation) {
-  const value = await api(`calendar/${operation}`, {}); calendarPending = value.status === 'pending';
-  element('calendar-auth-state').textContent = `Authentication: ${value.status} · Scope: Calendar read-only`;
-  const link = element('calendar-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`calendar-${operation}`).onclick = () => action(element(`calendar-${operation}`), () => calendar(operation));
-async function microsoftCalendar(operation) {
-  const value = await api(`microsoft-calendar/${operation}`, {}); microsoftCalendarPending = value.status === 'pending';
-  element('microsoft-calendar-auth-state').textContent = `Authentication: ${value.status} · Scope: Calendars.Read`;
-  const link = element('microsoft-calendar-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`microsoft-calendar-${operation}`).onclick = () => action(element(`microsoft-calendar-${operation}`), () => microsoftCalendar(operation));
-async function microsoftTeams(operation) {
-  const value = await api(`microsoft-teams/${operation}`, {}); microsoftTeamsPending = value.status === 'pending';
-  element('microsoft-teams-auth-state').textContent = `Authentication: ${value.status} · Scope: ChannelMessage.Read.All`;
-  const link = element('microsoft-teams-link'); link.hidden = !value.auth_url;
-  if (value.auth_url) link.href = value.auth_url; else link.removeAttribute('href');
-}
-for (const operation of ['login', 'status', 'cancel', 'logout']) element(`microsoft-teams-${operation}`).onclick = () => action(element(`microsoft-teams-${operation}`), () => microsoftTeams(operation));
 setInterval(async () => {
   if (!unlocked || polling || editing || document.hidden) return;
   polling = true;
-  try { await refresh(); if (codexPending) await codex('status'); if (gmailPending) await gmail('status'); if (drivePending) await drive('status'); if (microsoftMailPending) await microsoftMail('status'); if (calendarPending) await calendar('status'); if (microsoftCalendarPending) await microsoftCalendar('status'); if (microsoftTeamsPending) await microsoftTeams('status'); }
+  try { await refresh(); if (codexPending) await codex('status'); }
   catch (error) { notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);

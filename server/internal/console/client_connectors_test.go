@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"floe/server/internal/credentials"
 )
 
 type clientOAuthRuntime struct {
@@ -119,26 +121,25 @@ func TestPairedSecretConnectionUsesScopedVaultAndNeverEchoesSecret(test *testing
 		test.Fatalf("secret connection response: %s", encoded)
 	}
 	fixture.console.mu.Lock()
-	configured := *fixture.console.state.Connectors.GitHub
 	connection, exists := fixture.console.connectionForPerson("github.issues", fixturePersonID)
 	fixture.console.mu.Unlock()
-	if !exists || configured.Credential == "" || configured.Credential == githubTokenKey || fixture.vault.values[configured.Credential] != secret {
-		test.Fatalf("credential was not connection scoped: %#v %#v", configured, fixture.vault.values)
+	if !exists || connection.Credential == "" || connection.Credential == githubTokenKey || fixture.vault.values[connection.Credential] != secret {
+		test.Fatalf("credential was not connection scoped: %#v %#v", connection, fixture.vault.values)
 	}
 	state, _ := json.Marshal(fixture.console.state)
-	if strings.Contains(string(state), secret) || !strings.Contains(configured.Credential, "FLOE_CONNECTOR_GITHUB_TOKEN:") {
+	if strings.Contains(string(state), secret) || !strings.Contains(connection.Credential, "FLOE_CONNECTOR_GITHUB_TOKEN:") {
 		test.Fatalf("plaintext credential persisted: %s", state)
 	}
 
 	updated := fixture.value(fixture.call(http.MethodPatch, "/v1/connectors/github.issues/scope", map[string]any{"schema_version": 1, "scope": map[string]any{"owner": "floe", "repository": "server"}}, token))
-	if updated["connection_id"] != connection.ConnectionID || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[configured.Credential] != secret {
+	if updated["connection_id"] != connection.ConnectionID || updated["person_id"] != fixturePersonID || updated["device_id"] != fixtureDeviceID || updated["scope"].(map[string]any)["repository"] != "server" || fixture.vault.values[connection.Credential] != secret {
 		test.Fatalf("scope update changed ownership or secret: %#v", updated)
 	}
 	disconnected := fixture.value(fixture.call(http.MethodDelete, "/v1/connectors/github.issues", nil, token))
 	if disconnected["connection_id"] != connection.ConnectionID || disconnected["person_id"] != fixturePersonID || disconnected["device_id"] != fixtureDeviceID {
 		test.Fatalf("disconnect ownership missing: %#v", disconnected)
 	}
-	if _, exists := fixture.vault.values[configured.Credential]; exists {
+	if _, exists := fixture.vault.values[connection.Credential]; exists {
 		test.Fatal("disconnect retained scoped credential")
 	}
 }
@@ -211,9 +212,14 @@ func TestConnectorScopeCapabilityIsExplicit(test *testing.T) {
 
 func TestOAuthRuntimeRebindsPersistedConnectionOnServerRestart(test *testing.T) {
 	fixture := setup(test)
+	fixture.pair()
 	connectionID := "microsoft.mail.persisted"
+	credential, err := credentials.ConnectionName("FLOE_MICROSOFT_MAIL_OAUTH", connectionID, fixturePersonID)
+	if err != nil {
+		test.Fatal(err)
+	}
 	fixture.console.mu.Lock()
-	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "microsoft.mail", PersonID: fixturePersonID}
+	fixture.console.state.Connections[connectionID] = connectionRecord{ConnectionID: connectionID, ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Scope: map[string]any{}, Credential: credential}
 	if err := fixture.console.save(fixture.console.state); err != nil {
 		test.Fatal(err)
 	}

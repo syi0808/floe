@@ -3,8 +3,6 @@ package console
 import (
 	"context"
 	"errors"
-	"net/http"
-	"strings"
 
 	githubconnector "floe/server/internal/connectors/github"
 	calendarconnector "floe/server/internal/connectors/googlecalendar"
@@ -35,380 +33,125 @@ func (source vaultTokenSource) Token(context.Context) (string, error) {
 }
 
 func (console *Console) rebuildConnectorRuntimes() error {
-	console.work = nil
-	console.logistics = nil
-	console.calendars = nil
-	if configured := console.state.Connectors.GitHub; configured != nil {
-		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential})
-		if err != nil {
+	console.work = map[string]WorkContextRuntime{}
+	console.logistics = map[string]LogisticsRuntime{}
+	console.calendars = map[string]CalendarRuntime{}
+	for _, connection := range console.state.Connections {
+		if err := console.rebuildConnectorRuntime(connection); err != nil {
 			return err
 		}
-		service, err := githubconnector.NewService(client, configured.Owner, configured.Repository)
-		if err != nil {
-			return err
-		}
-		console.work = append(console.work, service)
-	}
-	if configured := console.state.Connectors.Slack; configured != nil {
-		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential})
-		if err != nil {
-			return err
-		}
-		service, err := slackconnector.NewService(client, configured.Channel, configured.Thread)
-		if err != nil {
-			return err
-		}
-		console.work = append(console.work, service)
-	}
-	if configured := console.state.Connectors.GoogleDrive; configured != nil && console.driveAuth != nil {
-		client, err := driveconnector.New(console.driveAuth)
-		if err != nil {
-			return err
-		}
-		service, err := driveconnector.NewService(client, configured.FolderID)
-		if err != nil {
-			return err
-		}
-		console.work = append(console.work, service)
-	}
-	if configured := console.state.Connectors.GoogleCalendar; configured != nil && console.calendarAuth != nil {
-		client, err := calendarconnector.New(console.calendarAuth, configured.CalendarID, "primary")
-		if err != nil {
-			return err
-		}
-		service, err := calendarconnector.NewService(client)
-		if err != nil {
-			return err
-		}
-		console.calendars = append(console.calendars, service)
-	}
-	if configured := console.state.Connectors.MicrosoftCalendar; configured != nil && console.microsoftCalendarAuth != nil {
-		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, configured.CalendarID, "primary")
-		if err != nil {
-			return err
-		}
-		service, err := microsoftcalendarconnector.NewService(client)
-		if err != nil {
-			return err
-		}
-		console.calendars = append(console.calendars, service)
-	}
-	if configured := console.state.Connectors.MicrosoftTeams; configured != nil && console.microsoftTeamsAuth != nil {
-		client, err := microsoftteamsconnector.New(console.microsoftTeamsAuth)
-		if err != nil {
-			return err
-		}
-		service, err := microsoftteamsconnector.NewService(client, configured.TeamID, configured.ChannelID)
-		if err != nil {
-			return err
-		}
-		console.work = append(console.work, service)
-	}
-	if configured := console.state.Connectors.HomeAssistant; configured != nil {
-		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: configured.Credential}, configured.BaseURL, "primary")
-		if err != nil {
-			return err
-		}
-		service, err := homeconnector.NewService(client, configured.Entities)
-		if err != nil {
-			return err
-		}
-		console.logistics = append(console.logistics, service)
 	}
 	return nil
 }
 
-func (console *Console) updateGitHubConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled    bool   `json:"enabled"`
-		Owner      string `json:"owner"`
-		Repository string `json:"repository"`
-		Token      string `json:"token"`
-	}
-	if !decode(writer, request, &input) || invalidConnectorToken(input.Token) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.GitHub = nil
-		if !console.saveConnectorState(writer, next, githubTokenKey, "") {
-			return
+func (console *Console) rebuildConnectorRuntime(connection connectionRecord) error {
+	scope := connection.Scope
+	switch connection.ConnectorID {
+	case "github.issues":
+		client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: connection.Credential})
+		if err != nil {
+			return err
 		}
-		return
-	}
-	client, err := githubconnector.New(vaultTokenSource{vault: console.vault, name: githubTokenKey})
-	if err != nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	if _, err = githubconnector.NewService(client, input.Owner, input.Repository); err != nil || input.Token == "" && console.state.Connectors.GitHub == nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	next.Connectors.GitHub = &githubConnectorConfig{Owner: input.Owner, Repository: input.Repository, Credential: githubTokenKey}
-	console.saveConnectorState(writer, next, githubTokenKey, input.Token)
-}
-
-func (console *Console) updateHomeAssistantConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled  bool     `json:"enabled"`
-		BaseURL  string   `json:"base_url"`
-		Entities []string `json:"entities"`
-		Token    string   `json:"token"`
-	}
-	if !decode(writer, request, &input) || invalidConnectorToken(input.Token) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.HomeAssistant = nil
-		if !console.saveConnectorState(writer, next, homeTokenKey, "") {
-			return
+		service, err := githubconnector.NewService(client, scope["owner"].(string), scope["repository"].(string))
+		if err == nil {
+			console.work[connection.ConnectionID] = service
 		}
-		return
-	}
-	client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: homeTokenKey}, input.BaseURL, "primary")
-	if err != nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	if _, err = homeconnector.NewService(client, input.Entities); err != nil || input.Token == "" && console.state.Connectors.HomeAssistant == nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	next.Connectors.HomeAssistant = &homeAssistantConnectorConfig{BaseURL: input.BaseURL, Entities: append([]string(nil), input.Entities...), Credential: homeTokenKey}
-	console.saveConnectorState(writer, next, homeTokenKey, input.Token)
-}
-
-func (console *Console) updateSlackConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled bool   `json:"enabled"`
-		Channel string `json:"channel"`
-		Thread  string `json:"thread"`
-		Token   string `json:"token"`
-	}
-	if !decode(writer, request, &input) || invalidConnectorToken(input.Token) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.Slack = nil
-		console.saveConnectorState(writer, next, slackTokenKey, "")
-		return
-	}
-	client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: slackTokenKey})
-	if err != nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	if _, err = slackconnector.NewService(client, input.Channel, input.Thread); err != nil || input.Token == "" && console.state.Connectors.Slack == nil {
-		failure(writer, 400, "validation")
-		return
-	}
-	next.Connectors.Slack = &slackConnectorConfig{Channel: input.Channel, Thread: input.Thread, Credential: slackTokenKey}
-	console.saveConnectorState(writer, next, slackTokenKey, input.Token)
-}
-
-func (console *Console) updateGoogleDriveConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled  bool   `json:"enabled"`
-		FolderID string `json:"folder_id"`
-	}
-	if !decode(writer, request, &input) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.GoogleDrive = nil
-	} else {
+		return err
+	case "slack.conversations":
+		client, err := slackconnector.New(vaultTokenSource{vault: console.vault, name: connection.Credential})
+		if err != nil {
+			return err
+		}
+		service, err := slackconnector.NewService(client, scope["channel"].(string), scope["thread"].(string))
+		if err == nil {
+			console.work[connection.ConnectionID] = service
+		}
+		return err
+	case "google_drive.files":
 		if console.driveAuth == nil {
-			failure(writer, 503, "drive_unavailable")
-			return
+			return nil
 		}
 		client, err := driveconnector.New(console.driveAuth)
 		if err != nil {
-			failure(writer, 400, "validation")
-			return
+			return err
 		}
-		if _, err := driveconnector.NewService(client, input.FolderID); err != nil {
-			failure(writer, 400, "validation")
-			return
+		service, err := driveconnector.NewService(client, scope["folder_id"].(string))
+		if err == nil {
+			console.work[connection.ConnectionID] = service
 		}
-		next.Connectors.GoogleDrive = &googleDriveConnectorConfig{FolderID: input.FolderID}
-	}
-	if console.save(next) != nil {
-		failure(writer, 500, "save_failed")
-		return
-	}
-	console.state = next
-	if err := console.rebuildConnectorRuntimes(); err != nil {
-		failure(writer, 500, "invalid_connector_configuration")
-		return
-	}
-	reply(writer, 200, map[string]bool{"ok": true})
-}
-
-func (console *Console) updateGoogleCalendarConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled    bool   `json:"enabled"`
-		CalendarID string `json:"calendar_id"`
-	}
-	if !decode(writer, request, &input) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.GoogleCalendar = nil
-	} else {
+		return err
+	case "calendar.google":
 		if console.calendarAuth == nil {
-			failure(writer, 503, "calendar_unavailable")
-			return
+			return nil
 		}
-		client, err := calendarconnector.New(console.calendarAuth, input.CalendarID, "primary")
+		client, err := calendarconnector.New(console.calendarAuth, scope["calendar_id"].(string), connection.ConnectionID)
 		if err != nil {
-			failure(writer, 400, "validation")
-			return
+			return err
 		}
-		if _, err := calendarconnector.NewService(client); err != nil {
-			failure(writer, 400, "validation")
-			return
+		service, err := calendarconnector.NewService(client)
+		if err == nil {
+			console.calendars[connection.ConnectionID] = service
 		}
-		next.Connectors.GoogleCalendar = &googleCalendarConnectorConfig{CalendarID: input.CalendarID}
-	}
-	if console.save(next) != nil {
-		failure(writer, 500, "save_failed")
-		return
-	}
-	console.state = next
-	if err := console.rebuildConnectorRuntimes(); err != nil {
-		failure(writer, 500, "invalid_connector_configuration")
-		return
-	}
-	reply(writer, 200, map[string]bool{"ok": true})
-}
-
-func (console *Console) updateMicrosoftCalendarConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled    bool   `json:"enabled"`
-		CalendarID string `json:"calendar_id"`
-	}
-	if !decode(writer, request, &input) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.MicrosoftCalendar = nil
-	} else {
+		return err
+	case "calendar.microsoft":
 		if console.microsoftCalendarAuth == nil {
-			failure(writer, 503, "microsoft_calendar_unavailable")
-			return
+			return nil
 		}
-		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, input.CalendarID, "primary")
+		client, err := microsoftcalendarconnector.New(console.microsoftCalendarAuth, scope["calendar_id"].(string), connection.ConnectionID)
 		if err != nil {
-			failure(writer, 400, "validation")
-			return
+			return err
 		}
-		if _, err := microsoftcalendarconnector.NewService(client); err != nil {
-			failure(writer, 400, "validation")
-			return
+		service, err := microsoftcalendarconnector.NewService(client)
+		if err == nil {
+			console.calendars[connection.ConnectionID] = service
 		}
-		next.Connectors.MicrosoftCalendar = &microsoftCalendarConnectorConfig{CalendarID: input.CalendarID}
-	}
-	if console.save(next) != nil {
-		failure(writer, 500, "save_failed")
-		return
-	}
-	console.state = next
-	if err := console.rebuildConnectorRuntimes(); err != nil {
-		failure(writer, 500, "invalid_connector_configuration")
-		return
-	}
-	reply(writer, 200, map[string]bool{"ok": true})
-}
-
-func (console *Console) updateMicrosoftTeamsConnector(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Enabled   bool   `json:"enabled"`
-		TeamID    string `json:"team_id"`
-		ChannelID string `json:"channel_id"`
-	}
-	if !decode(writer, request, &input) {
-		failure(writer, 400, "validation")
-		return
-	}
-	next := cloneState(console.state)
-	if !input.Enabled {
-		next.Connectors.MicrosoftTeams = nil
-	} else {
+		return err
+	case "microsoft.teams":
 		if console.microsoftTeamsAuth == nil {
-			failure(writer, 503, "microsoft_teams_unavailable")
-			return
+			return nil
 		}
 		client, err := microsoftteamsconnector.New(console.microsoftTeamsAuth)
 		if err != nil {
-			failure(writer, 400, "validation")
-			return
+			return err
 		}
-		if _, err := microsoftteamsconnector.NewService(client, input.TeamID, input.ChannelID); err != nil {
-			failure(writer, 400, "validation")
-			return
+		service, err := microsoftteamsconnector.NewService(client, scope["team_id"].(string), scope["channel_id"].(string))
+		if err == nil {
+			console.work[connection.ConnectionID] = service
 		}
-		next.Connectors.MicrosoftTeams = &microsoftTeamsConnectorConfig{TeamID: input.TeamID, ChannelID: input.ChannelID}
+		return err
+	case "home_assistant.states":
+		entities, ok := connectorScopeStrings(scope["entities"])
+		if !ok {
+			return errors.New("invalid connector scope")
+		}
+		client, err := homeconnector.New(vaultTokenSource{vault: console.vault, name: connection.Credential}, scope["base_url"].(string), connection.ConnectionID)
+		if err != nil {
+			return err
+		}
+		service, err := homeconnector.NewService(client, entities)
+		if err == nil {
+			console.logistics[connection.ConnectionID] = service
+		}
+		return err
 	}
-	if console.save(next) != nil {
-		failure(writer, 500, "save_failed")
-		return
-	}
-	console.state = next
-	if err := console.rebuildConnectorRuntimes(); err != nil {
-		failure(writer, 500, "invalid_connector_configuration")
-		return
-	}
-	reply(writer, 200, map[string]bool{"ok": true})
+	return nil
 }
 
-func invalidConnectorToken(token string) bool {
-	return token != "" && len(token) < 8 || len(token) > 4096 || strings.ContainsAny(token, "\r\n\x00")
-}
-
-func (console *Console) saveConnectorState(writer http.ResponseWriter, next diskState, tokenKey, token string) bool {
-	previous, _ := console.vault.Get(tokenKey)
-	if token != "" && console.vault.Put(tokenKey, token) != nil {
-		failure(writer, 503, "credential_store_unavailable")
-		return false
-	}
-	if console.save(next) != nil {
-		if token != "" {
-			if previous == "" {
-				_ = console.vault.Delete(tokenKey)
-			} else {
-				_ = console.vault.Put(tokenKey, previous)
+func connectorScopeStrings(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...), true
+	case []any:
+		items := make([]string, len(values))
+		for index, value := range values {
+			item, ok := value.(string)
+			if !ok {
+				return nil, false
 			}
+			items[index] = item
 		}
-		failure(writer, 500, "save_failed")
-		return false
+		return items, true
+	default:
+		return nil, false
 	}
-	console.state = next
-	if err := console.rebuildConnectorRuntimes(); err != nil {
-		failure(writer, 500, "invalid_connector_configuration")
-		return false
-	}
-	if token == "" && previous != "" && connectorTokenUnused(next, tokenKey) {
-		if console.vault.Delete(tokenKey) != nil {
-			failure(writer, 500, "credential_cleanup_failed")
-			return false
-		}
-	}
-	reply(writer, 200, map[string]bool{"ok": true})
-	return true
-}
-
-func connectorTokenUnused(state diskState, tokenKey string) bool {
-	return tokenKey == githubTokenKey && state.Connectors.GitHub == nil || tokenKey == slackTokenKey && state.Connectors.Slack == nil || tokenKey == homeTokenKey && state.Connectors.HomeAssistant == nil
 }

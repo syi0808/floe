@@ -79,21 +79,21 @@ export FLOE_GOOGLE_OAUTH_CLIENT_SECRET='optional-client-secret'
 go run ./cmd/floe-server
 ```
 
-In the dashboard, use **Context sources → Gmail → Start browser login**. Floe opens no embedded
-webview: the returned authorization URL must be opened in the system browser. The flow uses a
+In the Floe app, open **Connections**, select Gmail, and start the browser login. Floe opens no
+embedded webview: the returned authorization URL must be opened in the system browser. The flow uses a
 random loopback callback port, PKCE S256, five-minute state, offline access and only
 `gmail.readonly`. Access and refresh tokens are stored together in macOS Keychain and are never
-returned by the management API. Disconnect first revokes the Google grant and then deletes the
-local credential. Changing the configured client ID never inherits an older client's tokens.
+returned to the app. Disconnect first revokes the Google grant and then deletes the
+Person-and-connection-scoped credential. Changing the configured client ID never inherits an older client's tokens.
 
 The connector performs a bounded purpose-filtered metadata refresh every five minutes while
-connected; **Sync now** runs the same checkpointed path. `FLOE_GMAIL_QUERY` can replace the default
+connected. `FLOE_GMAIL_QUERY` can replace the default
 `newer_than:30d -in:spam -in:trash` query. OAuth setup and a live mailbox run are still required
 before Gmail evidence is available to Floe clients.
 
-The same Google client registration also enables a separate **Google Calendar** dashboard login.
-That flow stores `FLOE_GOOGLE_CALENDAR_OAUTH` independently and requests only
-`calendar.readonly`. Select one calendar ID in the dashboard; paired clients may then request a
+The same Google client registration also enables a separate **Google Calendar** connection in the
+app. That flow stores an independently scoped credential and requests only
+`calendar.readonly`. Select one calendar ID in the app; paired clients may then request a
 bounded `calendar.timeline` range of up to 32 days. Floe exports title and timing only—calendar IDs,
 provider event IDs, descriptions, locations and attendees are excluded from Agent context.
 
@@ -109,16 +109,16 @@ export FLOE_MICROSOFT_OAUTH_CLIENT_SECRET='optional-client-secret'
 go run ./cmd/floe-server
 ```
 
-Use **Context sources → Microsoft Mail → Start Microsoft login** in the dashboard. The PKCE flow
+Use **Connections → Microsoft Mail → Connect** in the Floe app. The PKCE flow
 requests only `Mail.Read` and `offline_access`, stores the resulting credential under a separate
-macOS Keychain name, and binds stored tokens to the configured client ID. The paired communication
+Person-and-connection-scoped Keychain name, and binds stored tokens to the configured client ID. The paired communication
 route uses Gmail first when both providers are configured and falls back to Microsoft on absence or
-failure. Dashboard disconnect deletes the local credential; revoke the application's consent in the
+failure. Disconnect in Floe deletes the local credential; revoke the application's consent in the
 Microsoft account when the remote grant must also be invalidated.
 
-The same Microsoft application registration enables a separate **Microsoft Calendar** login with
-its own `FLOE_MICROSOFT_CALENDAR_OAUTH` Keychain credential and exact `Calendars.Read` scope. Select
-one calendar ID in the dashboard. The paired timeline route tries configured Google Calendar first
+The same Microsoft application registration enables a separate **Microsoft Calendar** connection
+with its own Person-scoped Keychain credential and exact `Calendars.Read` scope. Select
+one calendar ID in the app. The paired timeline route tries configured Google Calendar first
 and Microsoft Calendar second, returning the first healthy bounded View without exposing routing
 policy, calendar IDs, bodies, locations or attendees to Agent context.
 
