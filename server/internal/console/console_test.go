@@ -22,8 +22,9 @@ const fixturePersonID = "00000000-0000-4000-8000-000000000001"
 const fixtureDeviceID = "fixture-device"
 
 type memoryVault struct {
-	values map[string]string
-	fail   bool
+	values      map[string]string
+	fail        bool
+	failDeletes int
 }
 
 type fakeAuthRuntime struct{ ready bool }
@@ -33,6 +34,7 @@ type fakeDriveAuth struct{ token string }
 type fakeCalendarAuth struct{ token string }
 
 func (runtime *fakeCalendarAuth) Token(context.Context) (string, error) { return runtime.token, nil }
+func (runtime *fakeCalendarAuth) Ready() bool                           { return runtime.token != "" }
 func (*fakeCalendarAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/calendar.readonly"}, nil
 }
@@ -42,12 +44,14 @@ type fakeMicrosoftCalendarAuth struct{ token string }
 func (runtime *fakeMicrosoftCalendarAuth) Token(context.Context) (string, error) {
 	return runtime.token, nil
 }
+func (runtime *fakeMicrosoftCalendarAuth) Ready() bool { return runtime.token != "" }
 
 type fakeMicrosoftTeamsAuth struct{ token string }
 
 func (runtime *fakeMicrosoftTeamsAuth) Token(context.Context) (string, error) {
 	return runtime.token, nil
 }
+func (runtime *fakeMicrosoftTeamsAuth) Ready() bool { return runtime.token != "" }
 func (*fakeMicrosoftTeamsAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "ChannelMessage.Read.All"}, nil
 }
@@ -56,6 +60,8 @@ func (*fakeMicrosoftCalendarAuth) Action(context.Context, string) (any, error) {
 }
 
 type fakeMicrosoftAuth struct{}
+
+func (*fakeMicrosoftAuth) Ready() bool { return true }
 
 func (*fakeMicrosoftAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "Mail.Read"}, nil
@@ -103,6 +109,7 @@ func (runtime *fakeCommunicationRuntime) ReadCommunicationView(context.Context, 
 }
 
 func (runtime *fakeDriveAuth) Token(context.Context) (string, error) { return runtime.token, nil }
+func (runtime *fakeDriveAuth) Ready() bool                           { return runtime.token != "" }
 func (*fakeDriveAuth) Action(context.Context, string) (any, error) {
 	return map[string]any{"status": "connected", "scope": "https://www.googleapis.com/auth/drive.readonly"}, nil
 }
@@ -113,6 +120,8 @@ type fakeConnectorRuntime struct {
 	logisticsView any
 	err           error
 }
+
+func (*fakeConnectorRuntime) Ready() bool { return true }
 
 type fakeContextRuntime struct {
 	snapshot any
@@ -212,7 +221,14 @@ func (vault *memoryVault) Put(key, value string) error {
 	vault.values[key] = value
 	return nil
 }
-func (vault *memoryVault) Delete(key string) error { delete(vault.values, key); return nil }
+func (vault *memoryVault) Delete(key string) error {
+	if vault.failDeletes > 0 {
+		vault.failDeletes--
+		return errors.New("private failure detail")
+	}
+	delete(vault.values, key)
+	return nil
+}
 
 type fixture struct {
 	console *Console

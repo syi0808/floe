@@ -88,6 +88,7 @@ type AuthRuntime interface {
 
 type ConnectorAuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	Ready() bool
 	ConnectionSnapshot() (any, error)
 	ReadCommunicationView(string, int, int) (any, error)
 	ReadLogisticsView(context.Context) (common.LogisticsView, error)
@@ -95,6 +96,7 @@ type ConnectorAuthRuntime interface {
 
 type ConnectorOAuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	Ready() bool
 }
 
 type CommunicationRuntime interface {
@@ -123,6 +125,7 @@ type LogisticsRuntime interface {
 
 type DriveAuthRuntime interface {
 	Action(context.Context, string) (any, error)
+	Ready() bool
 	Token(context.Context) (string, error)
 }
 

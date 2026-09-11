@@ -35,5 +35,34 @@ func (console *Console) removePersonConnectionsLocked(state *diskState, personID
 			}
 		}
 	}
+	for attemptID, attempt := range console.connectorAttempts {
+		if attempt.PersonID != personID {
+			continue
+		}
+		alreadyScheduled := containsString(cleanup.credentials, attempt.Credential)
+		if attempt.Credential != "" && !alreadyScheduled {
+			cleanup.credentials = append(cleanup.credentials, attempt.Credential)
+		}
+		if !alreadyScheduled {
+			definition, exists := clientConnectorDefinitionFor(attempt.ConnectorID)
+			if !exists || definition.OAuthRuntime == nil {
+				delete(console.connectorAttempts, attemptID)
+				continue
+			}
+			if runtime := definition.OAuthRuntime(console); runtime != nil {
+				cleanup.runtimes = append(cleanup.runtimes, runtime)
+			}
+		}
+		delete(console.connectorAttempts, attemptID)
+	}
 	return cleanup, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

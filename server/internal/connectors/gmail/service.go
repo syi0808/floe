@@ -32,6 +32,8 @@ type Service struct {
 	clock     func() time.Time
 }
 
+func (service *Service) Ready() bool { return service.auth.Ready() }
+
 func NewService(directory, connectionID, query string, auth AuthRuntime) (*Service, error) {
 	if auth == nil {
 		return nil, ErrInvalidInput
