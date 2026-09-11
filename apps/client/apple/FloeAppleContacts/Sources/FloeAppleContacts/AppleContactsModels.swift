@@ -75,6 +75,14 @@ public struct AppleContactIdentity: Codable, Equatable, Sendable {
         evidenceHandles = [evidenceHandle]
     }
 
+    init(replacingAliasesOf identity: AppleContactIdentity, with aliases: [String]) {
+        identityHandle = identity.identityHandle
+        displayName = identity.displayName
+        self.aliases = aliases
+        confidenceMillis = identity.confidenceMillis
+        evidenceHandles = identity.evidenceHandles
+    }
+
     enum CodingKeys: String, CodingKey {
         case identityHandle = "identity_handle"
         case displayName = "display_name"

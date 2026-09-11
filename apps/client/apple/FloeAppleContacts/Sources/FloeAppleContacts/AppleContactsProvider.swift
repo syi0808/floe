@@ -3,6 +3,7 @@ import Foundation
 
 public final class AppleContactsProvider {
     public static let maximumIdentityCount = 64
+    public static let maximumSerializedViewBytes = 32_768
     static let maximumScanCount = 512
     static let freshnessMilliseconds: Int64 = 300_000
 
@@ -100,13 +101,50 @@ public final class AppleContactsProvider {
             ? batch.coverageComplete && !outputWasTruncated
             : selectionResolved && !outputWasTruncated
         let observedAt = Int64(now().timeIntervalSince1970 * 1_000)
-        return AppleContactsPeopleView(
+        return budgetedView(
             sourceHandle: opaqueHandle(prefix: "people:apple", value: "source"),
             observedAtUnixMilliseconds: observedAt,
             expiresAtUnixMilliseconds: observedAt + Self.freshnessMilliseconds,
-            coverageComplete: coverageComplete,
+            requestedCoverageComplete: coverageComplete,
             identities: identities
         )
+    }
+
+    private func budgetedView(
+        sourceHandle: String,
+        observedAtUnixMilliseconds: Int64,
+        expiresAtUnixMilliseconds: Int64,
+        requestedCoverageComplete: Bool,
+        identities: [AppleContactIdentity]
+    ) -> AppleContactsPeopleView {
+        var boundedIdentities = identities
+        var contentWasReduced = false
+        while true {
+            let view = AppleContactsPeopleView(
+                sourceHandle: sourceHandle,
+                observedAtUnixMilliseconds: observedAtUnixMilliseconds,
+                expiresAtUnixMilliseconds: expiresAtUnixMilliseconds,
+                coverageComplete: requestedCoverageComplete && !contentWasReduced,
+                identities: boundedIdentities
+            )
+            if Self.serializedSize(of: view) <= Self.maximumSerializedViewBytes {
+                return view
+            }
+            contentWasReduced = true
+            if let index = boundedIdentities.lastIndex(where: { !$0.aliases.isEmpty }) {
+                let identity = boundedIdentities[index]
+                boundedIdentities[index] = AppleContactIdentity(
+                    replacingAliasesOf: identity,
+                    with: Array(identity.aliases.dropLast())
+                )
+            } else if !boundedIdentities.isEmpty {
+                boundedIdentities.removeLast()
+            }
+        }
+    }
+
+    private static func serializedSize(of view: AppleContactsPeopleView) -> Int {
+        (try? JSONEncoder().encode(view).count) ?? .max
     }
 
     private func project(_ record: AppleContactRecord) -> AppleContactIdentity? {

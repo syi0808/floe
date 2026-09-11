@@ -21,5 +21,9 @@ notes, postal addresses, birthdays, images, or write authority.
 Missing selections yield `coverage_complete: false`; they never cause a fallback
 to the full authorized set.
 
+The projection is capped at 32,768 encoded JSON bytes to match Rust's Personal
+Context budget. It deterministically removes trailing aliases first and then
+trailing identities. Any budget reduction sets `coverage_complete` to `false`.
+
 The host must not persist a returned View beyond its expiry or interpret it as an
 address-book mirror. Relationship memories remain separate, confirmed Floe data.

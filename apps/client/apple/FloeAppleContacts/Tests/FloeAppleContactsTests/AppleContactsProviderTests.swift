@@ -115,6 +115,28 @@ final class AppleContactsProviderTests: XCTestCase {
         }
     }
 
+    func testMaximumProjectionIsReducedToRustPersonalContextBudget() throws {
+        let longText = String(repeating: "x", count: 256)
+        let records = (0..<64).map { index in
+            AppleContactRecord(
+                identifier: "contact-\(index)",
+                displayName: "\(String(format: "%02d", index))\(String(repeating: "n", count: 254))",
+                nickname: "\(index)-\(longText)",
+                emailAddresses: (0..<7).map { alias in "\(index)-\(alias)-\(longText)" },
+                phoneNumbers: []
+            )
+        }
+        let provider = try makeProvider(
+            store: MockContactsStore(state: .authorized, records: records)
+        )
+        let view = try provider.readPeopleView(limit: 64)
+        let encoded = try JSONEncoder().encode(view)
+        XCTAssertLessThanOrEqual(encoded.count, AppleContactsProvider.maximumSerializedViewBytes)
+        XCTAssertFalse(view.coverageComplete)
+        XCTAssertFalse(view.identities.isEmpty)
+        XCTAssertTrue(view.identities.contains { $0.aliases.count < 8 })
+    }
+
     func testRejectsInvalidLimitsSelectionsAndShortSecrets() throws {
         XCTAssertThrowsError(
             try AppleContactsProvider(store: MockContactsStore(state: .authorized), handleSecret: Data())
