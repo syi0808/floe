@@ -42,16 +42,34 @@ class ConnectorScreen extends StatefulWidget {
 }
 
 class _ConnectorScreenState extends State<ConnectorScreen> {
-  bool appleDetail = false;
+  bool deviceCalendarDetail = false;
   String? selectedServerConnectorId;
   ServerConnection? serverConnection;
   ServerConnectorCatalog? catalog;
   String? catalogError;
   bool loadingCatalog = false;
 
-  bool get supportsAppleCalendar =>
+  bool get supportsDeviceCalendar =>
       effectivePlatform == TargetPlatform.iOS ||
-      effectivePlatform == TargetPlatform.macOS;
+      effectivePlatform == TargetPlatform.macOS ||
+      effectivePlatform == TargetPlatform.android;
+
+  String get deviceCalendarProvider =>
+      effectivePlatform == TargetPlatform.android ? 'android' : 'event_kit';
+
+  CalendarConnection? get deviceCalendarConnection {
+    final connection = widget.connection;
+    return connection?.provider == deviceCalendarProvider ? connection : null;
+  }
+
+  ServerConnectorStatus get deviceCalendarStatus {
+    if (widget.gateway == null) return ServerConnectorStatus.unavailable;
+    final connection = deviceCalendarConnection;
+    if (connection?.error != null) return ServerConnectorStatus.error;
+    return connection == null
+        ? ServerConnectorStatus.available
+        : ServerConnectorStatus.connected;
+  }
 
   TargetPlatform get effectivePlatform =>
       widget.platform ?? defaultTargetPlatform;
@@ -122,7 +140,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (appleDetail) return _appleCalendarDetail(context);
+    if (deviceCalendarDetail) return _deviceCalendarDetail(context);
     final serverConnector = selectedServerConnector;
     if (serverConnector != null && serverConnection != null) {
       return ServerConnectorPanel(
@@ -143,27 +161,26 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         serverConnectors
             .where((item) => item.status == ServerConnectorStatus.connected)
             .length +
-        (widget.connection == null ? 0 : 1);
+        (supportsDeviceCalendar &&
+                deviceCalendarStatus == ServerConnectorStatus.connected
+            ? 1
+            : 0);
     final cards = <Widget>[
-      if (supportsAppleCalendar)
+      if (supportsDeviceCalendar)
         _ConnectorCard(
-          key: const Key('connector-calendar-apple'),
+          key: Key(
+            effectivePlatform == TargetPlatform.android
+                ? 'connector-calendar-android'
+                : 'connector-calendar-apple',
+          ),
           icon: LucideIcons.calendarDays,
-          name: 'Apple Calendar',
-          description: effectivePlatform == TargetPlatform.iOS
-              ? 'Calendar events on this iPhone or iPad.'
-              : 'Calendar events on this Mac.',
-          status: widget.gateway == null
-              ? ServerConnectorStatus.unavailable
-              : widget.connection?.error != null
-              ? ServerConnectorStatus.error
-              : widget.connection == null
-              ? ServerConnectorStatus.available
-              : ServerConnectorStatus.connected,
+          name: _deviceCalendarName(strings, effectivePlatform),
+          description: _deviceCalendarDescription(strings, effectivePlatform),
+          status: deviceCalendarStatus,
           binding: widget.deviceId == null
               ? null
               : 'Bound to this device · ${widget.deviceId}',
-          onPressed: () => setState(() => appleDetail = true),
+          onPressed: () => setState(() => deviceCalendarDetail = true),
         ),
       for (final connector in serverConnectors)
         _ConnectorCard(
@@ -232,7 +249,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     );
   }
 
-  Widget _appleCalendarDetail(BuildContext context) => Column(
+  Widget _deviceCalendarDetail(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Align(
@@ -240,11 +257,14 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         child: FloeTextLink(
           label: AppLocalizations.of(context).backToConnections,
           icon: LucideIcons.arrowLeft,
-          onPressed: () => setState(() => appleDetail = false),
+          onPressed: () => setState(() => deviceCalendarDetail = false),
         ),
       ),
       SizedBox(height: FloeSpace.lg),
-      Text('Apple Calendar', style: FloeType.headline),
+      Text(
+        _deviceCalendarName(AppLocalizations.of(context), effectivePlatform),
+        style: FloeType.headline,
+      ),
       if (widget.deviceId != null) ...[
         SizedBox(height: FloeSpace.sm),
         Text(
@@ -257,8 +277,9 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         CalendarPanel(
           gateway: widget.gateway!,
           query: widget.query,
-          connection: widget.connection,
+          connection: deviceCalendarConnection,
           onChanged: widget.onChanged,
+          platform: effectivePlatform,
         )
       else
         FloeSquircle(
@@ -269,8 +290,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
           ),
         ),
       SizedBox(height: FloeSpace.lg),
-      const FloeInfoNote(
-        text: 'Calendar permission and data stay on this Apple device. This connection is separate from server-hosted connectors.',
+      FloeInfoNote(
+        text: effectivePlatform == TargetPlatform.android
+            ? AppLocalizations.of(context).androidCalendarDeviceBoundary
+            : AppLocalizations.of(context).appleCalendarDeviceBoundary,
       ),
     ],
   );
@@ -375,3 +398,21 @@ String _connectorDescription(ServerConnector connector) =>
       'home_assistant.states' => 'Read selected Home Assistant entity states.',
       _ => 'Bring bounded context into Floe through your server.',
     };
+
+String _deviceCalendarName(AppLocalizations strings, TargetPlatform platform) =>
+    switch (platform) {
+      TargetPlatform.iOS => strings.appleCalendar,
+      TargetPlatform.macOS => strings.macosCalendar,
+      TargetPlatform.android => strings.androidCalendar,
+      _ => strings.deviceCalendar,
+    };
+
+String _deviceCalendarDescription(
+  AppLocalizations strings,
+  TargetPlatform platform,
+) => switch (platform) {
+  TargetPlatform.iOS => strings.calendarsAlreadyOnThisIphoneOrIpad,
+  TargetPlatform.macOS => strings.calendarsAlreadyOnThisMac,
+  TargetPlatform.android => strings.selectedCalendarsOnThisAndroidDevice,
+  _ => strings.calendarsAlreadyOnThisDevice,
+};

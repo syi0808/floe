@@ -1099,7 +1099,7 @@ abstract class AppLocalizations {
   /// No description provided for @noCalendarsAreAvailableAddACalendar.
   ///
   /// In en, this message translates to:
-  /// **'No calendars are available. Add a calendar in macOS Calendar first.'**
+  /// **'No calendars are available. Add or select a calendar in this device\'s Calendar settings first.'**
   String get noCalendarsAreAvailableAddACalendar;
 
   /// No description provided for @chooseACalendar.
@@ -1135,7 +1135,7 @@ abstract class AppLocalizations {
   /// No description provided for @disconnectCalendarExplanation.
   ///
   /// In en, this message translates to:
-  /// **'Remove imported Calendar copies from this Mac? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.'**
+  /// **'Remove imported Calendar copies from this device? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.'**
   String get disconnectCalendarExplanation;
 
   /// No description provided for @calendarAccessWasDeniedOrRevokedAllow.
@@ -1173,6 +1173,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Calendars already on this Mac'**
   String get calendarsAlreadyOnThisMac;
+
+  /// No description provided for @appleCalendar.
+  ///
+  /// In en, this message translates to:
+  /// **'Apple Calendar'**
+  String get appleCalendar;
+
+  /// No description provided for @calendarsAlreadyOnThisIphoneOrIpad.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars already on this iPhone or iPad'**
+  String get calendarsAlreadyOnThisIphoneOrIpad;
+
+  /// No description provided for @androidCalendar.
+  ///
+  /// In en, this message translates to:
+  /// **'Android Calendar'**
+  String get androidCalendar;
+
+  /// No description provided for @selectedCalendarsOnThisAndroidDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars selected on this Android device'**
+  String get selectedCalendarsOnThisAndroidDevice;
+
+  /// No description provided for @deviceCalendar.
+  ///
+  /// In en, this message translates to:
+  /// **'Device Calendar'**
+  String get deviceCalendar;
+
+  /// No description provided for @calendarsAlreadyOnThisDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars already on this device'**
+  String get calendarsAlreadyOnThisDevice;
+
+  /// No description provided for @appleCalendarDeviceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar permission and data stay on this Apple device. This connection is separate from server-hosted connectors.'**
+  String get appleCalendarDeviceBoundary;
+
+  /// No description provided for @androidCalendarDeviceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar permission and data stay on this Android device. This connection is separate from server-hosted connectors.'**
+  String get androidCalendarDeviceBoundary;
 
   /// No description provided for @bringYourCalendarIntoOneDayFloe.
   ///

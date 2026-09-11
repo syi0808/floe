@@ -564,7 +564,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noCalendarsAreAvailableAddACalendar =>
-      'No calendars are available. Add a calendar in macOS Calendar first.';
+      'No calendars are available. Add or select a calendar in this device\'s Calendar settings first.';
 
   @override
   String get chooseACalendar => 'Choose calendars';
@@ -583,7 +583,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get disconnectCalendarExplanation =>
-      'Remove imported Calendar copies from this Mac? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.';
+      'Remove imported Calendar copies from this device? Your local tasks, notes and events, and all external calendars stay unchanged. Reconnect to read them again. OS permission is managed separately.';
 
   @override
   String get calendarAccessWasDeniedOrRevokedAllow =>
@@ -605,6 +605,34 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get calendarsAlreadyOnThisMac => 'Calendars already on this Mac';
+
+  @override
+  String get appleCalendar => 'Apple Calendar';
+
+  @override
+  String get calendarsAlreadyOnThisIphoneOrIpad =>
+      'Calendars already on this iPhone or iPad';
+
+  @override
+  String get androidCalendar => 'Android Calendar';
+
+  @override
+  String get selectedCalendarsOnThisAndroidDevice =>
+      'Calendars selected on this Android device';
+
+  @override
+  String get deviceCalendar => 'Device Calendar';
+
+  @override
+  String get calendarsAlreadyOnThisDevice => 'Calendars already on this device';
+
+  @override
+  String get appleCalendarDeviceBoundary =>
+      'Calendar permission and data stay on this Apple device. This connection is separate from server-hosted connectors.';
+
+  @override
+  String get androidCalendarDeviceBoundary =>
+      'Calendar permission and data stay on this Android device. This connection is separate from server-hosted connectors.';
 
   @override
   String get bringYourCalendarIntoOneDayFloe =>

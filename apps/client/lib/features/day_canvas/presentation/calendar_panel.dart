@@ -1,6 +1,7 @@
 import 'calendar_layout.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -97,11 +98,13 @@ class CalendarPanel extends StatefulWidget {
     required this.query,
     required this.connection,
     required this.onChanged,
+    this.platform,
   });
   final CalendarGateway gateway;
   final DayQuery query;
   final CalendarConnection? connection;
   final Future<void> Function() onChanged;
+  final TargetPlatform? platform;
 
   @override
   State<CalendarPanel> createState() => _CalendarPanelState();
@@ -284,6 +287,8 @@ class _CalendarPanelState extends State<CalendarPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    final platform = widget.platform ?? defaultTargetPlatform;
     final connection = widget.connection;
     final failure = connection?.error;
     final status = switch (failure) {
@@ -329,12 +334,12 @@ class _CalendarPanelState extends State<CalendarPanel> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        AppLocalizations.of(context).macosCalendar,
+                        _calendarName(strings, platform),
                         style: FloeType.titleLarge,
                       ),
                       SizedBox(height: 6),
                       Text(
-                        AppLocalizations.of(context).calendarsAlreadyOnThisMac,
+                        _calendarDescription(strings, platform),
                         style: FloeType.bodySmall.copyWith(
                           color: FloePalette.neutral600,
                         ),
@@ -358,9 +363,7 @@ class _CalendarPanelState extends State<CalendarPanel> {
             SizedBox(height: 28),
             Text(
               AppLocalizations.of(context).connectedCalendar,
-              style: FloeType.caption.copyWith(
-                color: FloePalette.neutral600,
-              ),
+              style: FloeType.caption.copyWith(color: FloePalette.neutral600),
             ),
             SizedBox(height: FloeSpace.md),
             if (connection == null)
@@ -490,3 +493,21 @@ class _CalendarPanelState extends State<CalendarPanel> {
     );
   }
 }
+
+String _calendarName(AppLocalizations strings, TargetPlatform platform) =>
+    switch (platform) {
+      TargetPlatform.iOS => strings.appleCalendar,
+      TargetPlatform.macOS => strings.macosCalendar,
+      TargetPlatform.android => strings.androidCalendar,
+      _ => strings.deviceCalendar,
+    };
+
+String _calendarDescription(
+  AppLocalizations strings,
+  TargetPlatform platform,
+) => switch (platform) {
+  TargetPlatform.iOS => strings.calendarsAlreadyOnThisIphoneOrIpad,
+  TargetPlatform.macOS => strings.calendarsAlreadyOnThisMac,
+  TargetPlatform.android => strings.selectedCalendarsOnThisAndroidDevice,
+  _ => strings.calendarsAlreadyOnThisDevice,
+};
