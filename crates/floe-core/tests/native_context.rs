@@ -30,7 +30,7 @@ async fn projects_bounded_floe_native_task_and_note_views() {
         .create_task(person, "Already done", None, Priority::Normal, now)
         .await
         .unwrap();
-    core.complete_task(completed.id, completed.revision, now)
+    core.set_task_completed(completed.id, completed.revision, true, now)
         .await
         .unwrap();
     core.create_task(other, "Private to another person", None, Priority::Low, now)

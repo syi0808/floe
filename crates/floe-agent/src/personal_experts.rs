@@ -161,24 +161,6 @@ struct WellbeingOutput {
     evidence_handles: Vec<String>,
 }
 
-pub async fn run_relationships_expert<Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: PersonalExpertInvocation,
-    view: PeopleView,
-) -> Result<RelationshipsExpertResult, AgentFailure> {
-    run_relationships_expert_with_views(
-        model,
-        policy,
-        invocation,
-        RelationshipsContextViews {
-            people: view,
-            confirmed_interactions: vec![],
-        },
-    )
-    .await
-}
-
 pub async fn run_relationships_expert_with_views<Model: ModelRunner>(
     model: &Model,
     policy: &InferencePolicyDecision,
@@ -282,25 +264,6 @@ pub async fn run_relationships_expert_with_views<Model: ModelRunner>(
     })
 }
 
-pub async fn run_focus_expert<Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: PersonalExpertInvocation,
-    view: AttentionView,
-) -> Result<FocusExpertResult, AgentFailure> {
-    run_focus_expert_with_views(
-        model,
-        policy,
-        invocation,
-        FocusContextViews {
-            attention: view,
-            calendars: vec![],
-            active_work: vec![],
-        },
-    )
-    .await
-}
-
 pub async fn run_focus_expert_with_views<Model: ModelRunner>(
     model: &Model,
     policy: &InferencePolicyDecision,
@@ -351,24 +314,6 @@ pub async fn run_focus_expert_with_views<Model: ModelRunner>(
         rationale: output.rationale,
         evidence_handles: output.evidence_handles,
     })
-}
-
-pub async fn run_wellbeing_expert<Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: PersonalExpertInvocation,
-    view: WellbeingView,
-) -> Result<WellbeingExpertResult, AgentFailure> {
-    run_wellbeing_expert_with_views(
-        model,
-        policy,
-        invocation,
-        WellbeingContextViews {
-            wellbeing: view,
-            calendars: vec![],
-        },
-    )
-    .await
 }
 
 pub async fn run_wellbeing_expert_with_views<Model: ModelRunner>(

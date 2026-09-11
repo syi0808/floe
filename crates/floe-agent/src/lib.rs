@@ -87,8 +87,8 @@ pub use mail_experts::{
     COMMITMENTS_AGGREGATE_SOURCE_HANDLE, CommitmentEvidenceSource, CommitmentFinding,
     CommitmentKind, CommitmentsContextViews, CommitmentsExpertResult, CommunicationAssessment,
     CommunicationChannel, CommunicationExpertResult, CommunicationResultKind,
-    FindingEpistemicStatus, MailExpertInvocation, run_commitments_expert,
-    run_commitments_expert_with_views, run_communication_expert,
+    FindingEpistemicStatus, MailExpertInvocation, run_commitments_expert_with_views,
+    run_communication_expert,
 };
 pub use model_attempt::generate_with_recovery;
 pub use model_journal::{ModelAttemptRecord, ModelAttemptState};
@@ -109,9 +109,9 @@ pub use personal_experts::{
     CONFIRMED_INTERACTION_VIEW_ID, ConfirmedInteraction, ConfirmedInteractionView,
     FocusContextViews, FocusExpertResult, FocusRecommendation, PersonalExpertInvocation,
     RelationshipFollowUp, RelationshipsContextViews, RelationshipsExpertResult, ScheduleImpact,
-    WellbeingContextViews, WellbeingExpertResult, run_focus_expert, run_focus_expert_with_views,
-    run_relationships_expert, run_relationships_expert_with_views, run_wellbeing_expert,
-    run_wellbeing_expert_with_views, validate_confirmed_interaction_view,
+    WellbeingContextViews, WellbeingExpertResult, run_focus_expert_with_views,
+    run_relationships_expert_with_views, run_wellbeing_expert_with_views,
+    validate_confirmed_interaction_view,
 };
 pub use playbook::{
     LoadedPlaybook, MAX_LOADED_PLAYBOOK_BYTES, MAX_LOADED_PLAYBOOKS, MAX_PLAYBOOK_DEPTH,

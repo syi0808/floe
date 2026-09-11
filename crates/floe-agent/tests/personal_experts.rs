@@ -8,10 +8,9 @@ use floe_agent::{
     ModelRequest, ModelResponse, ModelRunner, ModelStep, PeopleIdentity, PeopleView,
     PersonalExpertInvocation, PersonalMemoryKind, PromptRole, RecoveryState,
     RelationshipsContextViews, ScheduleImpact, TransferConsent, UsageLedger, WellbeingContextViews,
-    WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, run_focus_expert,
-    run_focus_expert_with_views, run_relationships_expert, run_relationships_expert_with_views,
-    run_wellbeing_expert, run_wellbeing_expert_with_views, validate_calendar_context_view,
-    validate_work_context_view,
+    WellbeingView, WorkContextItem, WorkContextView, WorkItemKind, run_focus_expert_with_views,
+    run_relationships_expert_with_views, run_wellbeing_expert_with_views,
+    validate_calendar_context_view, validate_work_context_view,
 };
 use floe_domain::PersonId;
 use tokio::time::{Duration, Instant};
@@ -285,7 +284,16 @@ async fn domain_experts_reject_invented_evidence_and_diagnostic_escalation() {
         }]
     })]);
     assert_eq!(
-        run_relationships_expert(&model, &policy(), invocation(), people()).await,
+        run_relationships_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            RelationshipsContextViews {
+                people: people(),
+                confirmed_interactions: vec![],
+            },
+        )
+        .await,
         Err(AgentFailure::InvalidModelOutput)
     );
 
@@ -297,7 +305,16 @@ async fn domain_experts_reject_invented_evidence_and_diagnostic_escalation() {
         "diagnosis": "fatigue"
     })]);
     assert_eq!(
-        run_wellbeing_expert(&model, &policy(), invocation(), wellbeing()).await,
+        run_wellbeing_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            WellbeingContextViews {
+                wellbeing: wellbeing(),
+                calendars: vec![],
+            },
+        )
+        .await,
         Err(AgentFailure::InvalidModelOutput)
     );
 
@@ -308,7 +325,17 @@ async fn domain_experts_reject_invented_evidence_and_diagnostic_escalation() {
         "evidence_handles": ["app:private"]
     })]);
     assert_eq!(
-        run_focus_expert(&model, &policy(), invocation(), attention()).await,
+        run_focus_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            FocusContextViews {
+                attention: attention(),
+                calendars: vec![],
+                active_work: vec![],
+            },
+        )
+        .await,
         Err(AgentFailure::InvalidModelOutput)
     );
 }
@@ -325,7 +352,16 @@ async fn relationships_require_interaction_or_confirmed_memory_support() {
         }]
     })]);
     assert_eq!(
-        run_relationships_expert(&model, &policy(), invocation(), people()).await,
+        run_relationships_expert_with_views(
+            &model,
+            &policy(),
+            invocation(),
+            RelationshipsContextViews {
+                people: people(),
+                confirmed_interactions: vec![],
+            },
+        )
+        .await,
         Err(AgentFailure::InvalidModelOutput)
     );
 

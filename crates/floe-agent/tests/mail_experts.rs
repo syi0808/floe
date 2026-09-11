@@ -7,8 +7,8 @@ use floe_agent::{
     ContextMemory, DataClass, EpistemicStatus, FindingEpistemicStatus, InferencePolicyDecision,
     LearningEvidenceRef, MailExpertInvocation, ModelPlacement, ModelRequest, ModelResponse,
     ModelRunner, ModelStep, NativeContextItem, NativeContextView, PersonalMemoryKind, PromptRole,
-    TaskContextPriority, TransferConsent, UsageLedger, run_commitments_expert,
-    run_commitments_expert_with_views, run_communication_expert,
+    TaskContextPriority, TransferConsent, UsageLedger, run_commitments_expert_with_views,
+    run_communication_expert,
 };
 use floe_domain::PersonId;
 use serde::Deserialize;
@@ -114,10 +114,11 @@ async fn commitments_and_communication_corpus_preserve_evidence_and_authority() 
         serde_json::from_str(include_str!("fixtures/mail_expert_corpus.json")).unwrap();
     for scenario in scenarios {
         let model = Model::new([scenario.commitments_output, scenario.communication_output]);
-        let commitments = run_commitments_expert(
+        let commitments = run_commitments_expert_with_views(
             &model,
             &policy(),
             invocation(&scenario.assignment, scenario.item.clone()),
+            CommitmentsContextViews::default(),
         )
         .await
         .unwrap_or_else(|error| panic!("{} commitments: {error:?}", scenario.id));
@@ -376,7 +377,13 @@ async fn expert_outputs_cannot_invent_evidence_or_blur_inference() {
     ] {
         let model = Model::new([output]);
         assert_eq!(
-            run_commitments_expert(&model, &policy(), invocation("Assess", item.clone())).await,
+            run_commitments_expert_with_views(
+                &model,
+                &policy(),
+                invocation("Assess", item.clone()),
+                CommitmentsContextViews::default(),
+            )
+            .await,
             Err(AgentFailure::InvalidModelOutput)
         );
     }

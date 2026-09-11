@@ -154,16 +154,6 @@ impl FloeCore {
         Ok(task)
     }
 
-    pub async fn complete_task(
-        &self,
-        task_id: TaskId,
-        expected_revision: Revision,
-        now: DateTime<Utc>,
-    ) -> Result<Task, CoreError> {
-        self.set_task_completed(task_id, expected_revision, true, now)
-            .await
-    }
-
     pub async fn update_event(
         &self,
         event_id: EventId,

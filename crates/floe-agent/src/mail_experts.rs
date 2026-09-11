@@ -150,20 +150,6 @@ struct CommunicationModelOutput {
     assessments: Vec<CommunicationAssessment>,
 }
 
-pub async fn run_commitments_expert<Model: ModelRunner>(
-    model: &Model,
-    policy: &InferencePolicyDecision,
-    invocation: MailExpertInvocation,
-) -> Result<CommitmentsExpertResult, AgentFailure> {
-    run_commitments_expert_with_views(
-        model,
-        policy,
-        invocation,
-        CommitmentsContextViews::default(),
-    )
-    .await
-}
-
 pub async fn run_commitments_expert_with_views<Model: ModelRunner>(
     model: &Model,
     policy: &InferencePolicyDecision,
