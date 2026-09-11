@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('floe/apple_context');
@@ -42,10 +43,19 @@ final class AppleFeasibilityQuery {
 enum AppleTravelMode { automobile, transit, walking }
 
 final class AppleContextGateway implements AppleContextApi {
+  AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
+    validateAppleDeviceId(deviceId);
+  }
+
+  final String _deviceId;
+
   @override
   Future<List<Map<String, dynamic>>> connections() async {
     _requireAppleMobile();
-    final values = await _channel.invokeListMethod<Object?>('connections');
+    final values = await _channel.invokeListMethod<Object?>(
+      'connections',
+      appleNativeArguments(_deviceId),
+    );
     final connections = (values ?? const <Object?>[])
         .map(_strictMap)
         .toList(growable: false);
@@ -60,6 +70,7 @@ final class AppleContextGateway implements AppleContextApi {
     _requireAppleMobile();
     final value = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('requestPermission', {
+        'device_id': _deviceId,
         'source': source.name,
       }),
     );
@@ -75,6 +86,7 @@ final class AppleContextGateway implements AppleContextApi {
     _requireAppleMobile();
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('readContacts', {
+        'device_id': _deviceId,
         'limit': limit,
       }),
     );
@@ -89,6 +101,7 @@ final class AppleContextGateway implements AppleContextApi {
     _requireAppleMobile();
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('readFeasibility', {
+        'device_id': _deviceId,
         'event_handle': query.eventHandle,
         'evidence_handles': query.evidenceHandles,
         'destination_latitude': query.latitude,
@@ -108,7 +121,10 @@ final class AppleContextGateway implements AppleContextApi {
   Future<Map<String, dynamic>> readWellbeing() async {
     _requireAppleMobile();
     final view = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>('readWellbeing'),
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'readWellbeing',
+        appleNativeArguments(_deviceId),
+      ),
     );
     validateAppleWellbeingView(view);
     return view;
@@ -118,7 +134,10 @@ final class AppleContextGateway implements AppleContextApi {
   Future<Map<String, dynamic>> screenTimeCapability() async {
     _requireAppleMobile();
     final value = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>('screenTimeCapability'),
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'screenTimeCapability',
+        appleNativeArguments(_deviceId),
+      ),
     );
     validateAppleScreenTimeCapability(value);
     return value;
@@ -131,6 +150,22 @@ final class AppleContextGateway implements AppleContextApi {
       );
     }
   }
+}
+
+@visibleForTesting
+void validateAppleDeviceId(String value) {
+  if (value.isEmpty || value.length > 128 || value.contains(RegExp(r'\s'))) {
+    throw ArgumentError.value(value, 'deviceId', 'Invalid local device ID.');
+  }
+}
+
+@visibleForTesting
+Map<String, Object?> appleNativeArguments(
+  String deviceId, [
+  Map<String, Object?> values = const {},
+]) {
+  validateAppleDeviceId(deviceId);
+  return {'device_id': deviceId, ...values};
 }
 
 void validateApplePeopleView(Map<String, dynamic> view) {

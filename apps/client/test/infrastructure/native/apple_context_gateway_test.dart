@@ -4,6 +4,19 @@ import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 void main() {
   const observed = 1789056000000;
 
+  test('uses the validated local cache producer ID at the native boundary', () {
+    const deviceId = 'local-00000000-0000-4000-8000-000000000001';
+    expect(appleNativeArguments(deviceId), {'device_id': deviceId});
+    expect(appleNativeArguments(deviceId, {'limit': 64}), {
+      'device_id': deviceId,
+      'limit': 64,
+    });
+    expect(
+      () => AppleContextGateway(deviceId: 'different device'),
+      throwsArgumentError,
+    );
+  });
+
   test('accepts bounded Apple native views and capability gate', () {
     validateApplePeopleView({
       'schema_version': 1,

@@ -26,6 +26,7 @@ final class AppleContextChannel {
   private var healthLastSuccess: Int64?
   private var feasibilityLastView: [String: Any]?
   private var feasibilityLastSuccess: Int64?
+  private var boundDeviceID: String?
 
   init(messenger: FlutterBinaryMessenger) throws {
     channel = FlutterMethodChannel(name: Self.channelName, binaryMessenger: messenger)
@@ -48,18 +49,23 @@ final class AppleContextChannel {
 
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) async {
     do {
+      let arguments = try arguments(call)
+      let deviceID = try bindDeviceID(arguments)
       switch call.method {
       case "connections":
-        result(await connectionSnapshots())
+        try requireExactKeys(arguments, ["device_id"])
+        result(await connectionSnapshots(deviceID: deviceID))
       case "requestPermission":
-        result(try await requestPermission(arguments(call)))
+        result(try await requestPermission(arguments))
       case "readContacts":
-        result(try readContacts(arguments(call)))
+        result(try readContacts(arguments))
       case "readFeasibility":
-        result(try await readFeasibility(arguments(call)))
+        result(try await readFeasibility(arguments))
       case "readWellbeing":
+        try requireExactKeys(arguments, ["device_id"])
         result(try await readWellbeing())
       case "screenTimeCapability":
+        try requireExactKeys(arguments, ["device_id"])
         result(try screenTimeCapability())
       default:
         result(FlutterMethodNotImplemented)
@@ -78,7 +84,7 @@ final class AppleContextChannel {
   }
 
   private func requestPermission(_ arguments: [String: Any]) async throws -> [String: Any] {
-    try requireExactKeys(arguments, ["source"])
+    try requireExactKeys(arguments, ["device_id", "source"])
     guard let source = arguments["source"] as? String else { throw ChannelFailure.invalidInput }
     switch source {
     case "contacts":
@@ -92,7 +98,7 @@ final class AppleContextChannel {
   }
 
   private func readContacts(_ arguments: [String: Any]) throws -> [String: Any] {
-    try requireExactKeys(arguments, ["limit"])
+    try requireExactKeys(arguments, ["device_id", "limit"])
     guard let limit = arguments["limit"] as? Int, (1...64).contains(limit) else {
       throw ChannelFailure.invalidInput
     }
@@ -104,6 +110,7 @@ final class AppleContextChannel {
 
   private func readFeasibility(_ arguments: [String: Any]) async throws -> [String: Any] {
     let keys: Set<String> = [
+      "device_id",
       "event_handle", "evidence_handles", "destination_latitude", "destination_longitude",
       "event_start_unix_ms", "event_end_unix_ms", "travel_mode", "source_handle", "timeout_ms",
     ]
@@ -173,7 +180,7 @@ final class AppleContextChannel {
     )
   }
 
-  private func connectionSnapshots() async -> [[String: Any]] {
+  private func connectionSnapshots(deviceID: String) async -> [[String: Any]] {
     let observed = nowMilliseconds()
     let contactsSnapshot = contacts.connectionSnapshot()
     let healthLifecycle = await health.lifecycle()
@@ -186,7 +193,7 @@ final class AppleContextChannel {
         viewID: "people.identity", freshnessMs: 300_000, maxItems: 64, maxBytes: 32_768,
         authorized: contactsSnapshot.canRead, unsupported: false,
         lastView: contactsLastView, lastSuccess: contactsLastSuccess,
-        itemKey: "identities", observed: observed
+        itemKey: "identities", observed: observed, deviceID: deviceID
       ),
       connectionSnapshot(
         connectorID: "feasibility.apple", provider: "apple_feasibility",
@@ -195,7 +202,7 @@ final class AppleContextChannel {
         authorized: locationAuthorization == .authorizedAlways || locationAuthorization == .authorizedWhenInUse,
         unsupported: !CLLocationManager.locationServicesEnabled(),
         lastView: feasibilityLastView, lastSuccess: feasibilityLastSuccess,
-        itemKey: "items", observed: observed
+        itemKey: "items", observed: observed, deviceID: deviceID
       ),
       connectionSnapshot(
         connectorID: "health.apple", provider: "apple_health",
@@ -204,14 +211,14 @@ final class AppleContextChannel {
         authorized: healthLifecycle.state != .permissionRequired,
         unsupported: healthLifecycle.state == .unsupported,
         lastView: healthLastView, lastSuccess: healthLastSuccess,
-        itemKey: nil, observed: observed
+        itemKey: nil, observed: observed, deviceID: deviceID
       ),
       connectionSnapshot(
         connectorID: "attention.apple", provider: "apple_screen_time",
         capabilityID: "attention.coarse.read", requiredScopes: ["FamilyControls.authorization"],
         viewID: "attention.coarse", freshnessMs: 120_000, maxItems: 1, maxBytes: 8_192,
         authorized: false, unsupported: true, lastView: nil, lastSuccess: nil,
-        itemKey: nil, observed: observed,
+        itemKey: nil, observed: observed, deviceID: deviceID,
         failureKind: (screenTime?["outcome"] as? String) ?? "entitlement_unavailable"
       ),
     ]
@@ -222,6 +229,7 @@ final class AppleContextChannel {
     requiredScopes: [String], viewID: String, freshnessMs: Int,
     maxItems: Int, maxBytes: Int, authorized: Bool, unsupported: Bool,
     lastView: [String: Any]?, lastSuccess: Int64?, itemKey: String?, observed: Int64,
+    deviceID: String,
     failureKind: String? = nil
   ) -> [String: Any] {
     let fresh = authorized && (lastView?["expires_at_unix_ms"] as? Int64 ?? 0) > observed
@@ -255,7 +263,7 @@ final class AppleContextChannel {
     return [
       "descriptor": [
         "schema_version": 1, "id": connectorID, "version": "1.0.0", "provider": provider,
-        "execution": ["kind": "device", "device_id": deviceID()],
+        "execution": ["kind": "device", "device_id": deviceID],
         "capabilities": [[
           "schema_version": 1, "id": capabilityID, "version": "1.0.0", "authority": "observe",
           "required_scopes": requiredScopes, "output_view_id": viewID,
@@ -278,6 +286,20 @@ final class AppleContextChannel {
 
   private func requireExactKeys(_ value: [String: Any], _ keys: Set<String>) throws {
     guard Set(value.keys) == keys else { throw ChannelFailure.invalidInput }
+  }
+
+  private func bindDeviceID(_ arguments: [String: Any]) throws -> String {
+    guard let value = arguments["device_id"] as? String,
+          !value.isEmpty, value.utf8.count <= 128,
+          !value.contains(where: { $0.isWhitespace }) else {
+      throw ChannelFailure.invalidInput
+    }
+    if let boundDeviceID {
+      guard boundDeviceID == value else { throw ChannelFailure.invalidInput }
+    } else {
+      boundDeviceID = value
+    }
+    return value
   }
 
   private func encodedObject<T: Encodable>(_ value: T) throws -> [String: Any] {
@@ -324,14 +346,6 @@ final class AppleContextChannel {
 
   private func nowMilliseconds() -> Int64 {
     Int64(Date().timeIntervalSince1970 * 1_000)
-  }
-
-  private func deviceID() -> String {
-    let key = "floe.apple.device_id"
-    if let value = UserDefaults.standard.string(forKey: key) { return value }
-    let value = "apple-\(UUID().uuidString.lowercased())"
-    UserDefaults.standard.set(value, forKey: key)
-    return value
   }
 
   private static func contactsHandleSecret() throws -> Data {

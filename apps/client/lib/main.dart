@@ -24,7 +24,7 @@ Future<void> main() async {
     Timer? macOSContextRefresh;
     final appleContext = Platform.isIOS
         ? PublishingAppleContextGateway(
-            gateway: AppleContextGateway(),
+            gateway: AppleContextGateway(deviceId: device.id),
             transport: gateway.localContextTransport,
             personId: localPersonId,
             deviceId: device.id,
