@@ -89,15 +89,19 @@ enum AppleWellbeingReducer {
         let availableSignals = [aggregate.sleepHours, aggregate.steps, aggregate.exerciseMinutes].compactMap { $0 }
         guard !availableSignals.isEmpty else { return nil }
 
+        let hasActivityEvidence = aggregate.steps != nil || aggregate.exerciseMinutes != nil
         let capacity: AppleHealthCapacity
-        if let sleepHours = aggregate.sleepHours, sleepHours < 6 {
-            capacity = .reduced
-        } else if let sleepHours = aggregate.sleepHours,
-                  sleepHours >= 8,
-                  (aggregate.steps ?? 0) >= 8_000 || (aggregate.exerciseMinutes ?? 0) >= 30 {
-            capacity = .strong
+        if let sleepHours = aggregate.sleepHours, hasActivityEvidence {
+            if sleepHours < 6 {
+                capacity = .reduced
+            } else if sleepHours >= 8,
+                      (aggregate.steps ?? 0) >= 8_000 || (aggregate.exerciseMinutes ?? 0) >= 30 {
+                capacity = .strong
+            } else {
+                capacity = .typical
+            }
         } else {
-            capacity = .typical
+            capacity = .unknown
         }
 
         let recovery: AppleHealthRecovery
@@ -105,14 +109,20 @@ enum AppleWellbeingReducer {
             recovery = .needsRecovery
         } else if let sleepHours = aggregate.sleepHours, sleepHours >= 8 {
             recovery = .recovered
-        } else {
+        } else if aggregate.sleepHours != nil {
             recovery = .typical
+        } else {
+            recovery = .unknown
         }
 
         var evidenceHandles: [String] = []
-        if aggregate.sleepHours != nil { evidenceHandles.append(evidenceHandle("health.sleep.window")) }
-        if aggregate.steps != nil { evidenceHandles.append(evidenceHandle("health.steps.window")) }
-        if aggregate.exerciseMinutes != nil { evidenceHandles.append(evidenceHandle("health.exercise.window")) }
+        if capacity != .unknown || recovery != .unknown {
+            if aggregate.sleepHours != nil { evidenceHandles.append(evidenceHandle("health.sleep.window")) }
+            if capacity != .unknown, aggregate.steps != nil { evidenceHandles.append(evidenceHandle("health.steps.window")) }
+            if capacity != .unknown, aggregate.exerciseMinutes != nil { evidenceHandles.append(evidenceHandle("health.exercise.window")) }
+        }
+
+        let confidenceMillis = evidenceHandles.isEmpty ? 0 : min(700, 400 + evidenceHandles.count * 100)
 
         return AppleWellbeingView(
             schemaVersion: 1,
@@ -122,7 +132,7 @@ enum AppleWellbeingReducer {
             expiresAtUnixMs: observedAtUnixMs + freshnessMilliseconds,
             capacity: capacity,
             recovery: recovery,
-            confidenceMillis: min(700, 400 + evidenceHandles.count * 100),
+            confidenceMillis: confidenceMillis,
             evidenceHandles: evidenceHandles
         )
     }

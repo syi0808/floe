@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "view_id": "wellbeing.derived",
+  "source_handle": "wellbeing:apple-fixture",
+  "observed_at_unix_ms": 1789128000000,
+  "expires_at_unix_ms": 1789129800000,
+  "capacity": "strong",
+  "recovery": "recovered",
+  "confidence_millis": 700,
+  "evidence_handles": [
+    "health.sleep.window:apple-fixture",
+    "health.steps.window:apple-fixture",
+    "health.exercise.window:apple-fixture"
+  ]
+}

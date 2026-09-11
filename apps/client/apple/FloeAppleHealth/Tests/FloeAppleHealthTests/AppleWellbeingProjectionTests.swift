@@ -33,16 +33,69 @@ final class AppleWellbeingProjectionTests: XCTestCase {
         }
     }
 
+    func testSerializedFixtureMatchesTheSwiftBoundary() throws {
+        let view = try XCTUnwrap(AppleWellbeingReducer.reduce(
+            aggregate: AppleHealthAggregate(sleepHours: 8.25, steps: 9_100, exerciseMinutes: 35),
+            sourceHandle: "wellbeing:apple-fixture",
+            observedAtUnixMs: 1_789_128_000_000,
+            evidenceHandle: { "\($0):apple-fixture" }
+        ))
+        let fixtureURL = try XCTUnwrap(Bundle.module.url(forResource: "wellbeing_view", withExtension: "json"))
+        let fixtureObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary)
+        let encodedObject = try XCTUnwrap(JSONSerialization.jsonObject(with: view.encodedForBoundary()) as? NSDictionary)
+
+        XCTAssertEqual(fixtureObject, encodedObject)
+    }
+
     func testShortSleepReducesCapacityAndRequestsRecovery() throws {
         let view = try XCTUnwrap(AppleWellbeingReducer.reduce(
-            aggregate: AppleHealthAggregate(sleepHours: 5.5, steps: nil, exerciseMinutes: nil),
+            aggregate: AppleHealthAggregate(sleepHours: 5.5, steps: 1_000, exerciseMinutes: nil),
             sourceHandle: "wellbeing:opaque-device",
             observedAtUnixMs: 100,
             evidenceHandle: { "\($0):opaque" }
         ))
         XCTAssertEqual(view.capacity, .reduced)
         XCTAssertEqual(view.recovery, .needsRecovery)
+        XCTAssertEqual(view.confidenceMillis, 600)
+    }
+
+    func testSleepOnlyLeavesCapacityUnknown() throws {
+        let view = try XCTUnwrap(AppleWellbeingReducer.reduce(
+            aggregate: AppleHealthAggregate(sleepHours: 8.25, steps: nil, exerciseMinutes: nil),
+            sourceHandle: "wellbeing:opaque-device",
+            observedAtUnixMs: 100,
+            evidenceHandle: { "\($0):opaque" }
+        ))
+        XCTAssertEqual(view.capacity, .unknown)
+        XCTAssertEqual(view.recovery, .recovered)
         XCTAssertEqual(view.confidenceMillis, 500)
+        XCTAssertEqual(view.evidenceHandles, ["health.sleep.window:opaque"])
+    }
+
+    func testStepsOnlyLeavesBothDimensionsUnknown() throws {
+        let view = try XCTUnwrap(AppleWellbeingReducer.reduce(
+            aggregate: AppleHealthAggregate(sleepHours: nil, steps: 9_100, exerciseMinutes: nil),
+            sourceHandle: "wellbeing:opaque-device",
+            observedAtUnixMs: 100,
+            evidenceHandle: { "\($0):opaque" }
+        ))
+        XCTAssertEqual(view.capacity, .unknown)
+        XCTAssertEqual(view.recovery, .unknown)
+        XCTAssertEqual(view.confidenceMillis, 0)
+        XCTAssertTrue(view.evidenceHandles.isEmpty)
+    }
+
+    func testExerciseOnlyLeavesBothDimensionsUnknown() throws {
+        let view = try XCTUnwrap(AppleWellbeingReducer.reduce(
+            aggregate: AppleHealthAggregate(sleepHours: nil, steps: nil, exerciseMinutes: 45),
+            sourceHandle: "wellbeing:opaque-device",
+            observedAtUnixMs: 100,
+            evidenceHandle: { "\($0):opaque" }
+        ))
+        XCTAssertEqual(view.capacity, .unknown)
+        XCTAssertEqual(view.recovery, .unknown)
+        XCTAssertEqual(view.confidenceMillis, 0)
+        XCTAssertTrue(view.evidenceHandles.isEmpty)
     }
 
     func testNoSignalsProducesNoView() {
