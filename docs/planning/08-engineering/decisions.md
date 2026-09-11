@@ -511,3 +511,25 @@ history are excluded. S5.5 validates sources on their native hosts; S8 adds auth
 encrypted relay/sync, revocation and physical-device convergence.
 
 See [ADR 0024](../../decisions/0024-device-context-collection-and-convergence.md).
+
+---
+
+## D-046 — Connection authority is independent of observation freshness
+
+**Status:** Proposed — 2026-09-12
+
+Extend the existing Person-owned Connection, DataAccessGrant and ContextObservation contracts
+across data connectors. Source and grant authority epochs, processing/consumer/action policy epochs,
+immutable observation IDs, storage row versions and provider revisions have different meanings.
+Ordinary synchronization must not change consent. Tool-time acquisition exposes only the current
+authorized intersection and pins bounded evidence with dependency lineage and revocation fences.
+
+Core and source execution hosts enforce authorization; UI and Experts cannot expand grants.
+Source-local recovery does not disable general conversation. Act still requires exact-target
+authority, preconditions and durable outcome reconciliation. Migration preserves verified consent
+and revocation records, rejects ambiguous legacy authority and cannot fall back to weaker protocols.
+
+See [ADR 0027](../../decisions/0027-connection-authority-and-observation.md), the
+[semantic contract](../05-integrations/connection-access-and-observation.md) and
+[runtime/migration plan](../09-implementation/connection-authorization-runtime.md).
+Runtime implementation and acceptance evidence remain pending.

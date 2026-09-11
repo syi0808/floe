@@ -1,7 +1,7 @@
 {
   "project": "Floe",
   "version": "planning-v0.8",
-  "document_count": 54,
+  "document_count": 56,
   "structure": [
     "00-overview/product-boundaries.md",
     "00-overview/product-principles.md",
@@ -26,6 +26,7 @@
     "04-platform/apple-platforms.md",
     "04-platform/device-agent.md",
     "05-integrations/assistant-context-portfolio.md",
+    "05-integrations/connection-access-and-observation.md",
     "05-integrations/connector-contract.md",
     "05-integrations/connector-data-policy.md",
     "05-integrations/connector-sources.md",
@@ -43,6 +44,7 @@
     "08-engineering/poc-plan.md",
     "08-engineering/technical-risks.md",
     "09-implementation/client-architecture.md",
+    "09-implementation/connection-authorization-runtime.md",
     "09-implementation/connector-runtime.md",
     "09-implementation/expert-runtime.md",
     "09-implementation/local-ai-runtime.md",

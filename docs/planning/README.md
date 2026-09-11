@@ -64,6 +64,7 @@ floe-planning/
 │   ├── assistant-context-portfolio.md
 │   ├── integration-fabric.md
 │   ├── connector-contract.md
+│   ├── connection-access-and-observation.md
 │   └── connector-sources.md
 │
 ├── 06-security/
@@ -90,6 +91,7 @@ floe-planning/
     ├── server-stack.md
     ├── turso-storage.md
     ├── connector-runtime.md
+    ├── connection-authorization-runtime.md
     ├── local-ai-runtime.md
     ├── performance-design.md
     └── repository-layout.md
@@ -152,6 +154,14 @@ Agent, Memory, connected Expert와 voice slice를 구현하는 경우:
 2. `05-integrations/initial-connector-set.md`
 3. `05-integrations/connector-data-policy.md`
 4. `05-integrations/connector-contract.md`
+
+Connection의 권한·동기화·AI 접근 경계를 구현하는 경우:
+
+1. [공통 의미와 불변 조건](05-integrations/connection-access-and-observation.md)
+2. [런타임 검증·마이그레이션·인수 기준](09-implementation/connection-authorization-runtime.md)
+3. [ADR 0027 — 제안된 설계 결정](../decisions/0027-connection-authority-and-observation.md)
+
+위 설계는 제안 상태이며 현재 런타임에 구현됐다는 의미가 아니다.
 
 ## Runtime Note
 

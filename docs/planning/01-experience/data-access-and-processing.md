@@ -188,6 +188,20 @@ source connection and OS permission
 
 No layer can expand authority granted by another layer.
 
+### Proposed common authority semantics
+
+The Calendar-backed projection above is not yet a generic runtime authority store. The proposed
+[Connection, Access & Observation contract](../05-integrations/connection-access-and-observation.md)
+extends it across connectors without adding a second grant model. Its `access_epoch` represents
+changes to AI authority; storage `row_version`, source authority epoch and observation identity
+are separate. Ordinary synchronization must not change consent or require conversation reload.
+
+Connection scope may be broader than the AI grant. Scope selection remains explicit, resource
+limits produce bounded/partial Views rather than revocation, and new account/device identities
+do not inherit existing grants. Source failures receive capability-local recovery while storage
+and conversation conflicts retain separate recovery paths. This extension is a design proposal,
+not a claim that the generic grant, lease or migration implementation has shipped.
+
 ## Delivery sequence
 
 1. Add the `DataAccessGrant` projection over existing Calendar registry records.

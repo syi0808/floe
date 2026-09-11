@@ -95,15 +95,32 @@ Floe에서는 일반 automation connector보다 다음이 더 중요할 수 있�
 
 외부 서비스 계정 연결은 Floe Account와 구분한다.
 
-개념적으로:
+Person ownership과 execution binding은 ADR 0025를 따른다. 제안된 공통 authority 설계에서
+connection은 실제 source 접근, `DataAccessGrant`는 AI 사용 동의, `ContextObservation`은
+관측된 evidence를 표현한다. 연결됨을 AI 사용 동의로 해석하지 않는다.
+
+개념적으로 (목표 모델이며 기존 wire DTO가 아님):
 
 ```text
 ConnectorConnection {
   personId
+  connectionId
   connectorId
-  credentialRef
+  sourceIdentityRef
+  executionOwner
+  credentialRef?
+  selectedSourceScope
+  sourceEpoch
 }
 ```
+
+정상 sync와 token refresh는 source/grant authority epoch를 증가시키지 않는다. immutable
+observation ID, storage CAS version, provider cursor/revision은 별도로 다룬다. 모든 connector에
+같은 snapshot 저장 방식을 강제하지 않는다.
+
+scope 교집합, 철회, 기능별 recovery와 단계적 전환은
+[Connection, Access & Observation](connection-access-and-observation.md) 및
+[runtime 설계](../09-implementation/connection-authorization-runtime.md)를 따른다.
 
 ## Security
 

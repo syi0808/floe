@@ -114,6 +114,13 @@ Floe Server Domain
 
 The connector lives directly in the Go server/worker codebase unless isolation becomes necessary.
 
+Device and server execution share a proposed
+[connection authorization contract](connection-authorization-runtime.md): exact Person/source
+identity, independently versioned grants and observations, tool-time bounded View acquisition,
+revocation fences, and governed action attempts. The executing host verifies its source authority;
+Flutter presents consent and recovery but does not repair authority by rewriting revisions.
+This contract extends the existing runtimes rather than introducing another connector service.
+
 ## 3. Portable Declarative Connector
 
 Many SaaS integrations are structurally repetitive:
