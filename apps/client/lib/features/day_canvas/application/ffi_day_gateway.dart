@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import '../../../app/local_identity.dart';
@@ -56,6 +58,7 @@ final class FfiDayGateway
       NativeAgentFixtureGateway(_request);
   late final NativeCalendarActionGateway _calendarActionGateway =
       NativeCalendarActionGateway(_request);
+  Future<void> _calendarOperationTail = Future.value();
   late final AgentVaultGateway secureAgent = NativeAgentVaultGateway(
     _vaultRequest,
     resolveRemoteRoute: _remoteRoute,
@@ -344,7 +347,10 @@ final class FfiDayGateway
     return _decodeSnapshot(_asMap(data['snapshot']));
   }
 
-  Future<void> close() => _transport.close();
+  Future<void> close() async {
+    await _calendarOperationTail;
+    await _transport.close();
+  }
 
   @override
   Future<List<CalendarChoice>> calendars() => _calendarAdapter.calendars();
@@ -384,7 +390,10 @@ final class FfiDayGateway
   }
 
   @override
-  Future<DaySnapshot> syncCalendar(DayQuery query) async {
+  Future<DaySnapshot> syncCalendar(DayQuery query) =>
+      _runCalendarOperation(() => _syncCalendar(query));
+
+  Future<DaySnapshot> _syncCalendar(DayQuery query) async {
     final current = await loadDay(query);
     var connection = current.calendar;
     if (connection == null) return current;
@@ -465,14 +474,21 @@ final class FfiDayGateway
       final syncedConnection = snapshot.calendar;
       if (syncedConnection != null) {
         connection = syncedConnection;
-        await _calendarObservationPublisher?.publish(
-          personId: query.personId,
-          connection: syncedConnection,
-          observedAt: _clock().toUtc(),
-          rangeStart: query.startsAt,
-          rangeEnd: query.endsAt,
-          batches: batches,
-        );
+        final permissionRevoked =
+            batches.isNotEmpty &&
+            batches.every((batch) => batch['failure'] == 'permission_denied');
+        if (permissionRevoked) {
+          await _calendarObservationPublisher?.revoke(personId: query.personId);
+        } else {
+          await _calendarObservationPublisher?.publish(
+            personId: query.personId,
+            connection: syncedConnection,
+            observedAt: _clock().toUtc(),
+            rangeStart: query.startsAt,
+            rangeEnd: query.endsAt,
+            batches: batches,
+          );
+        }
       }
       return snapshot;
     } on Object catch (error) {
@@ -495,7 +511,10 @@ final class FfiDayGateway
   }
 
   @override
-  Future<DaySnapshot> disconnectCalendar(DayQuery query) async {
+  Future<DaySnapshot> disconnectCalendar(DayQuery query) =>
+      _runCalendarOperation(() => _disconnectCalendar(query));
+
+  Future<DaySnapshot> _disconnectCalendar(DayQuery query) async {
     final current = await loadDay(query);
     if (current.calendar == null) return current;
     if (_calendarObservationPublisher?.supports(current.calendar!.provider) ??
@@ -510,6 +529,20 @@ final class FfiDayGateway
       }),
     );
     return _decodeSnapshot(_asMap(data['snapshot']));
+  }
+
+  Future<T> _runCalendarOperation<T>(Future<T> Function() operation) {
+    final completer = Completer<T>();
+    _calendarOperationTail = _calendarOperationTail
+        .catchError((Object _) {})
+        .then((_) async {
+          try {
+            completer.complete(await operation());
+          } on Object catch (error, stackTrace) {
+            completer.completeError(error, stackTrace);
+          }
+        });
+    return completer.future;
   }
 
   Future<Map<String, dynamic>> _request(

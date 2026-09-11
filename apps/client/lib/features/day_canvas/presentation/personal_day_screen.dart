@@ -20,6 +20,7 @@ import '../../../app/floe_theme.dart';
 import '../../../app/floe_toast.dart';
 import '../application/day_gateway.dart';
 import '../application/calendar_gateway.dart';
+import '../application/calendar_observation_refresh.dart';
 import '../application/calendar_action_gateway.dart';
 import '../application/calendar_action_controller.dart';
 import 'calendar_action_panel.dart';
@@ -77,8 +78,10 @@ class PersonalDayScreen extends StatefulWidget {
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
 
-class _PersonalDayScreenState extends State<PersonalDayScreen> {
+class _PersonalDayScreenState extends State<PersonalDayScreen>
+    with WidgetsBindingObserver {
   late final PersonalDayController controller;
+  CalendarObservationRefreshCoordinator? calendarObservationRefresh;
   CalendarActionController? actionController;
   AgentController? agentController;
   bool assistantOpen = false;
@@ -95,6 +98,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       gateway: widget.gateway,
       query: widget.query,
     );
+    if (widget.gateway case final CalendarGateway gateway) {
+      calendarObservationRefresh = CalendarObservationRefreshCoordinator(
+        refresh: () async {
+          final snapshot = await gateway.syncCalendar(controller.query);
+          await controller.load();
+          return snapshot;
+        },
+      );
+      WidgetsBinding.instance.addObserver(this);
+    }
     _loadCalendar();
     if (widget.gateway case final CalendarActionGateway gateway) {
       actionController = CalendarActionController(
@@ -109,12 +122,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
       agentController = AgentController(
         gateway: agentGateway,
         personId: widget.query.personId,
+        beforeInvocation: calendarObservationRefresh?.ensureFresh,
       );
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    calendarObservationRefresh?.dispose();
     controller.dispose();
     actionController?.dispose();
     agentController?.dispose();
@@ -124,9 +140,30 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
 
   Future<void> _loadCalendar() async {
     await controller.load();
-    if (mounted && controller.snapshot?.calendar?.provider == 'event_kit') {
-      await controller.refresh();
+    if (!mounted) return;
+    calendarObservationRefresh?.reconcile(controller.snapshot);
+    if (calendarObservationRefresh?.active ?? false) {
+      try {
+        await calendarObservationRefresh!.ensureFresh();
+      } on Object {
+        calendarObservationRefresh?.reconcile(controller.snapshot);
+      }
     }
+  }
+
+  Future<void> _reloadCalendarConnection() async {
+    await controller.load();
+    if (!mounted) return;
+    calendarObservationRefresh?.reconcile(controller.snapshot);
+    if (calendarObservationRefresh?.active ?? false) {
+      await calendarObservationRefresh!.ensureFresh();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    unawaited(calendarObservationRefresh?.ensureFresh());
   }
 
   Future<void> _collectAction(CalendarAction action) async {
@@ -230,7 +267,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen> {
             : null,
         query: controller.query,
         connection: controller.snapshot?.calendar,
-        onChanged: controller.load,
+        onChanged: _reloadCalendarConnection,
         serverClient: widget.serverClient,
         deviceId: widget.serverClient?.deviceId,
       );

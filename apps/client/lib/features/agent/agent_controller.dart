@@ -28,7 +28,13 @@ enum AgentProgress {
 }
 
 final class AgentController extends ChangeNotifier {
-  AgentController({required this.gateway, required this.personId}) {
+  factory AgentController({
+    required AgentFixtureStreamingGateway gateway,
+    required String personId,
+    Future<void> Function()? beforeInvocation,
+  }) => AgentController._(gateway, personId, beforeInvocation);
+
+  AgentController._(this.gateway, this.personId, this._beforeInvocation) {
     registryController = AgentRegistryController(
       gateway: gateway is AgentRegistryGateway
           ? gateway as AgentRegistryGateway
@@ -97,6 +103,7 @@ final class AgentController extends ChangeNotifier {
 
   final AgentFixtureStreamingGateway gateway;
   final String personId;
+  final Future<void> Function()? _beforeInvocation;
   AgentSession? session;
   List<AgentMessage> messages = [];
   AgentProgress progress = AgentProgress.idle;
@@ -448,9 +455,12 @@ final class AgentController extends ChangeNotifier {
     progress = AgentProgress.model;
     _notify();
     var done = false;
+    var started = false;
     try {
+      await _beforeInvocation?.call();
       var update = await (gateway as AgentConversationGateway)
           .beginConversationTurn(request);
+      started = true;
       var sequence = 0;
       while (true) {
         _validateUpdate(original, update, sequence);
@@ -479,7 +489,7 @@ final class AgentController extends ChangeNotifier {
       );
     } finally {
       try {
-        if (!done) {
+        if (!done && started) {
           var update = await (gateway as AgentConversationGateway)
               .stopConversationTurn(request);
           for (var attempt = 0; !update.done && attempt < 25; attempt++) {
@@ -489,7 +499,7 @@ final class AgentController extends ChangeNotifier {
           }
           done = update.done;
         }
-        if (done) {
+        if (done && started) {
           await (gateway as AgentConversationGateway).releaseConversationTurn(
             request,
           );
@@ -517,8 +527,11 @@ final class AgentController extends ChangeNotifier {
     progress = AgentProgress.model;
     _notify();
     var done = false;
+    var started = false;
     try {
+      await _beforeInvocation?.call();
       var update = await gateway.beginAgentFixtureRun(original, prompt);
+      started = true;
       var sequence = 0;
       while (true) {
         _validateUpdate(original, update, sequence);
@@ -546,7 +559,7 @@ final class AgentController extends ChangeNotifier {
       );
     } finally {
       try {
-        if (!done) {
+        if (!done && started) {
           var update = await gateway.stopAgentFixtureRun(original);
           for (var attempt = 0; !update.done && attempt < 25; attempt++) {
             await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -554,7 +567,7 @@ final class AgentController extends ChangeNotifier {
           }
           done = update.done;
         }
-        if (done) await gateway.releaseAgentFixtureRun(original);
+        if (done && started) await gateway.releaseAgentFixtureRun(original);
       } on Object {
         needsReload = true;
         failure ??= 'transport_unavailable';

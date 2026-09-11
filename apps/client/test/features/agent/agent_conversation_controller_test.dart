@@ -13,6 +13,42 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/agent_vault_gateway.dart';
 
 void main() {
+  test('refreshes device context before starting an expert turn', () async {
+    var refreshed = false;
+    final gateway = _ConversationGateway()
+      ..beforeBegin = () => expect(refreshed, isTrue);
+    final controller = AgentController(
+      gateway: gateway,
+      personId: 'person',
+      beforeInvocation: () async => refreshed = true,
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    await controller.sendText('Check my schedule');
+
+    expect(gateway.turns, hasLength(1));
+  });
+
+  test('does not start a turn when device context refresh fails', () async {
+    final gateway = _ConversationGateway();
+    final controller = AgentController(
+      gateway: gateway,
+      personId: 'person',
+      beforeInvocation: () async {
+        throw StateError('calendar unavailable');
+      },
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+    await controller.sendText('Check my schedule');
+
+    expect(gateway.turns, isEmpty);
+    expect(controller.failure, 'transport_unavailable');
+    expect(controller.needsReload, isTrue);
+  });
+
   testWidgets('general conversation accepts free-form messages', (
     tester,
   ) async {
@@ -74,6 +110,7 @@ final class _ConversationGateway extends TestVaultGateway
   }
 
   final turns = <AgentConversationTurnRequest>[];
+  void Function()? beforeBegin;
   AgentConversationTurnRequest? active;
   bool done = false;
 
@@ -120,6 +157,7 @@ final class _ConversationGateway extends TestVaultGateway
   Future<AgentRunUpdate> beginConversationTurn(
     AgentConversationTurnRequest request,
   ) async {
+    beforeBegin?.call();
     active = request;
     turns.add(request);
     done = false;
