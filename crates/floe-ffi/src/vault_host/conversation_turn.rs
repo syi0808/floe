@@ -17,9 +17,9 @@ use floe_agent::{
 };
 use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
 use floe_domain::PersonId;
-use floe_protocol::{
-    AgentConversationTurnRequestDto, AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto,
-};
+#[cfg(test)]
+use floe_protocol::AgentRemoteCalendarConnectionDto;
+use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 
 use crate::local_context::LocalContextStore;
 use crate::{
