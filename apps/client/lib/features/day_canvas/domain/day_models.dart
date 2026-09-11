@@ -173,36 +173,26 @@ final class ConnectedCalendar {
 
 final class CalendarConnection {
   const CalendarConnection({
-    required this.id,
-    required this.name,
     required this.provider,
     required this.revision,
+    required this.calendars,
     this.lastSuccessAt,
     this.error,
     this.rangeStart,
     this.rangeEnd,
-    this.calendarIds = const [],
-    this.calendars = const [],
     this.includeAll = false,
   });
-  final String id;
-  final String name;
   final String provider;
   final int revision;
   final DateTime? lastSuccessAt;
   final String? error;
   final String? rangeStart;
   final String? rangeEnd;
-  final List<String> calendarIds;
   final List<ConnectedCalendar> calendars;
   final bool includeAll;
-  List<ConnectedCalendar> get connectedCalendars =>
-      calendars.isEmpty ? [ConnectedCalendar(id: id, name: name)] : calendars;
-  List<String> get selectedCalendarIds => calendars.isNotEmpty
-      ? calendars.map((calendar) => calendar.id).toList()
-      : calendarIds.isEmpty
-      ? [id]
-      : calendarIds;
+  List<ConnectedCalendar> get connectedCalendars => calendars;
+  List<String> get selectedCalendarIds =>
+      calendars.map((calendar) => calendar.id).toList();
 }
 
 final class CaptureReceipt {

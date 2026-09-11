@@ -70,8 +70,6 @@ void main() {
                   timezoneOffsetSeconds: 0,
                 ),
                 connection: const CalendarConnection(
-                  id: 'home',
-                  name: 'Old aggregate title',
                   provider: 'event_kit',
                   revision: 1,
                   calendars: [
@@ -84,7 +82,7 @@ void main() {
                       id: 'birthdays',
                       name: 'long-account-address@example.com · Home',
                     ),
-                    ConnectedCalendar(id: 'legacy', name: 'Local calendar'),
+                    ConnectedCalendar(id: 'local', name: 'Local calendar'),
                   ],
                 ),
                 onChanged: () async {},
@@ -130,10 +128,9 @@ void main() {
                   timezoneOffsetSeconds: 0,
                 ),
                 connection: const CalendarConnection(
-                  id: 'home',
-                  name: 'Home',
                   provider: 'event_kit',
                   revision: 1,
+                  calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
                 ),
                 onChanged: () async {
                   changes++;

@@ -16,7 +16,6 @@ pub enum CalendarProvider {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarSource {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_modify: bool,
     pub provider: CalendarProvider,
     pub calendar_id: String,
@@ -38,7 +37,6 @@ pub struct CalendarRange {
     pub start_date: NaiveDate,
     pub end_date_exclusive: NaiveDate,
     pub timezone_offset_seconds: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_timezone_offset_seconds: Option<i32>,
 }
 
@@ -90,32 +88,24 @@ pub struct CalendarSelection {
     pub calendar_name: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CalendarScope {
-    #[default]
     Selected,
     All,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarConnection {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disconnected: bool,
-    #[serde(default)]
     pub scope: CalendarScope,
     pub provider: CalendarProvider,
-    pub calendar_id: String,
-    pub calendar_name: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendars: Vec<CalendarSelection>,
     pub revision: u64,
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_statuses: BTreeMap<String, CalendarSyncStatus>,
 }
 
@@ -124,7 +114,6 @@ pub struct CalendarSyncStatus {
     pub last_success_at: Option<DateTime<Utc>>,
     pub last_range: Option<CalendarRange>,
     pub error: Option<CalendarFailure>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_at: Option<DateTime<Utc>>,
 }
 
@@ -133,19 +122,6 @@ pub struct CalendarBatch {
     pub calendar_id: String,
     pub records: Vec<CalendarRecord>,
     pub failure: Option<CalendarFailure>,
-}
-
-impl CalendarConnection {
-    pub fn selected_calendars(&self) -> Vec<CalendarSelection> {
-        if self.calendars.is_empty() {
-            vec![CalendarSelection {
-                calendar_id: self.calendar_id.clone(),
-                calendar_name: self.calendar_name.clone(),
-            }]
-        } else {
-            self.calendars.clone()
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -157,7 +133,7 @@ pub struct CalendarMirror {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CalendarRecord {
     pub can_modify: bool,
-    pub calendar_id: Option<String>,
+    pub calendar_id: String,
     pub external_id: String,
     pub external_revision: String,
     pub title: String,

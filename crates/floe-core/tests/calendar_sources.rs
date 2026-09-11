@@ -20,7 +20,7 @@ fn batch(calendar: &str, title: &str) -> CalendarBatch {
         calendar_id: calendar.into(),
         records: vec![CalendarRecord {
             can_modify: false,
-            calendar_id: Some(calendar.into()),
+            calendar_id: calendar.into(),
             external_id: "same-provider-id".into(),
             external_revision: title.into(),
             title: title.into(),
@@ -186,7 +186,7 @@ async fn partial_success_commits_only_healthy_source_and_survives_restart() {
 async fn invalid_source_is_preserved_while_healthy_empty_result_deletes_only_its_source() {
     let (_directory, core, person) = setup().await;
     let mut invalid = batch("work", "Invalid");
-    invalid.records[0].calendar_id = Some("home".into());
+    invalid.records[0].calendar_id = "home".into();
     core.import_calendar_sources(
         person,
         2,
@@ -314,7 +314,7 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
     core.set_calendar_scope(
         person,
         CalendarProvider::Fixture,
-        old.selected_calendars(),
+        old.calendars,
         CalendarScope::All,
     )
     .await
@@ -332,7 +332,7 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
         .unwrap();
     let connection = snapshot.calendar.unwrap();
     assert_eq!(connection.scope, CalendarScope::All);
-    assert_eq!(connection.selected_calendars().len(), 3);
+    assert_eq!(connection.calendars.len(), 3);
     assert!(connection.source_statuses["new"].last_success_at.is_none());
     assert_eq!(snapshot.items.len(), 2);
     core.set_calendar_scope(
@@ -349,64 +349,5 @@ async fn only_explicit_all_scope_discovers_new_sources_and_mode_survives_restart
             .unwrap_err()
             .code,
         ErrorCode::Conflict
-    );
-}
-
-#[tokio::test]
-async fn nonrecurring_eventkit_identity_migrates_and_follows_a_move_outside_the_old_range() {
-    let directory = tempfile::tempdir().unwrap();
-    let core = FloeCore::open(directory.path().join("identity.db"))
-        .await
-        .unwrap();
-    let person = PersonId::new();
-    core.select_calendar(
-        person,
-        CalendarProvider::EventKit,
-        "home".into(),
-        "Home".into(),
-    )
-    .await
-    .unwrap();
-    let mut record = batch("home", "Moving").records.remove(0);
-    record.external_id = "native-item|2026-09-05T01:00:00.000Z".into();
-    core.import_calendar(person, 1, range(), vec![record.clone()], now())
-        .await
-        .unwrap();
-    let previous = core
-        .day_snapshot(person, now().date_naive(), 0, now())
-        .await
-        .unwrap();
-    let TimelineItem::Event(previous) = &previous.items[0] else {
-        panic!()
-    };
-    record.external_id = "native-item|".into();
-    record.schedule = EventSchedule::Timed(
-        TimedSchedule::new(
-            now() + Duration::days(1),
-            now() + Duration::days(1) + Duration::hours(1),
-            "UTC",
-        )
-        .unwrap(),
-    );
-    let mut next_range = range();
-    next_range.start_date += Duration::days(1);
-    next_range.end_date_exclusive += Duration::days(1);
-    core.import_calendar(person, 2, next_range.clone(), vec![record], now())
-        .await
-        .unwrap();
-    let next = core
-        .day_snapshot(person, next_range.start_date, 0, now())
-        .await
-        .unwrap();
-    let TimelineItem::Event(updated) = &next.items[0] else {
-        panic!()
-    };
-    assert_eq!(previous.id, updated.id);
-    assert!(
-        core.day_snapshot(person, range().start_date, 0, now())
-            .await
-            .unwrap()
-            .items
-            .is_empty()
     );
 }

@@ -69,10 +69,11 @@ void main() {
         generatedAt: DateTime(2026, 9, 8, 10),
         timezoneOffsetSeconds: date.timeZoneOffset.inSeconds,
         calendar: CalendarConnection(
-          id: 'calendar',
-          name: 'Personal',
           provider: 'fixture',
           revision: 1,
+          calendars: const [
+            ConnectedCalendar(id: 'calendar', name: 'Personal'),
+          ],
           lastSuccessAt: DateTime(2026, 9, 8, 9),
         ),
         items: const [],

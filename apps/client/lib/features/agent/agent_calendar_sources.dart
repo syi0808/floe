@@ -9,15 +9,11 @@ final class AgentCalendarSources {
   }) : provider = connection.provider,
        revision = connection.revision,
        calendars = List.unmodifiable(
-         connection.selectedCalendarIds.map((identifier) {
-           final calendar = connection.calendars
-               .where((entry) => entry.id == identifier)
-               .singleOrNull;
+         connection.calendars.map((calendar) {
            return AgentCalendarSource(
-             identifier,
-             calendar?.name ??
-                 (identifier == connection.id ? connection.name : identifier),
-             calendar == null ? connection.error : calendar.error,
+             calendar.id,
+             calendar.name,
+             calendar.error,
            );
          }),
        );

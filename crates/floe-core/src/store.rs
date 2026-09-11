@@ -21,7 +21,7 @@ impl TursoStore {
             .await
             .map_err(storage_error)?;
         let store = Self { database };
-        store.migrate().await?;
+        store.initialize().await?;
         Ok(store)
     }
 
@@ -29,15 +29,8 @@ impl TursoStore {
         self.database.connect().map_err(storage_error)
     }
 
-    async fn migrate(&self) -> Result<(), CoreError> {
+    async fn initialize(&self) -> Result<(), CoreError> {
         let connection = self.connection().await?;
-        connection
-            .execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
         for table in [
             "captures",
             "events",
@@ -60,59 +53,6 @@ impl TursoStore {
                 .await
                 .map_err(storage_error)?;
         }
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (1)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute("DROP TABLE IF EXISTS focus_preferences", ())
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)",
-                (),
-            )
-            .await
-            .map_err(storage_error)?;
         Ok(())
     }
 
@@ -591,95 +531,4 @@ impl TimelineRepository for TursoStore {
 
 fn storage_error(error: impl std::fmt::Display) -> CoreError {
     CoreError::new(ErrorCode::Storage, error.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn legacy_calendar_defaults_can_update_without_weakening_stale_cas() {
-        let directory = tempfile::tempdir().unwrap();
-        let core = crate::FloeCore::open(directory.path().join("legacy-mirror.db"))
-            .await
-            .unwrap();
-        let person = PersonId::new();
-        core.select_calendar(
-            person,
-            floe_domain::CalendarProvider::Fixture,
-            "target".into(),
-            "Target".into(),
-        )
-        .await
-        .unwrap();
-        let previous = core.store.calendar_mirror(person).await.unwrap().unwrap();
-        let mut legacy = serde_json::to_value(&previous).unwrap();
-        legacy["connection"]
-            .as_object_mut()
-            .unwrap()
-            .remove("scope");
-        core.store
-            .connection()
-            .await
-            .unwrap()
-            .execute(
-                "UPDATE calendar_mirrors SET payload = ? WHERE id = ?",
-                (legacy.to_string(), person.to_string()),
-            )
-            .await
-            .unwrap();
-        let mut updated = previous.clone();
-        updated.connection.revision += 1;
-        core.store
-            .put_calendar_mirror(person, &updated, Some(&previous))
-            .await
-            .unwrap();
-        assert_eq!(
-            core.store.calendar_mirror(person).await.unwrap().unwrap(),
-            updated
-        );
-        assert_eq!(
-            core.store
-                .put_calendar_mirror(person, &updated, Some(&previous))
-                .await
-                .unwrap_err()
-                .code,
-            ErrorCode::Conflict
-        );
-    }
-
-    #[tokio::test]
-    async fn migration_removes_legacy_focus_preferences() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("legacy.db");
-        let database = Builder::new_local(path.to_string_lossy().as_ref())
-            .build()
-            .await
-            .unwrap();
-        let connection = database.connect().unwrap();
-        connection
-            .execute(
-                "CREATE TABLE focus_preferences (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, payload TEXT NOT NULL)",
-                (),
-            )
-            .await
-            .unwrap();
-        drop(connection);
-        drop(database);
-
-        let store = TursoStore::open(&path).await.unwrap();
-        let mut rows = store
-            .connection()
-            .await
-            .unwrap()
-            .query(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'focus_preferences'",
-                (),
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let count: i64 = row.get(0).unwrap();
-        assert_eq!(count, 0);
-    }
 }

@@ -15,6 +15,7 @@ class FixtureCalendarAdapter implements CalendarAdapter {
   List<Map<String, dynamic>> records = [
     {
       'external_id': 'fixture-1',
+      'can_modify': false,
       'external_revision': '1',
       'title': '외부 일정',
       'schedule': {
@@ -26,6 +27,7 @@ class FixtureCalendarAdapter implements CalendarAdapter {
     },
     {
       'external_id': 'fixture-2',
+      'can_modify': false,
       'external_revision': '1',
       'title': '종일 일정',
       'schedule': {

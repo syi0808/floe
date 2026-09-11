@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 pub struct DayQueryDto {
     pub date: String,
     pub timezone_offset_seconds: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_timezone_offset_seconds: Option<i32>,
     pub now: String,
 }
@@ -27,7 +26,6 @@ pub struct DaySnapshotDto {
     pub next_event_id: Option<String>,
     pub overdue_task_count: u32,
     pub items: Vec<TimelineItemDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<floe_domain::CalendarConnection>,
 }
 
@@ -72,7 +70,6 @@ pub enum SourceRefDto {
     Manual,
     Capture { capture_id: String },
     Calendar { source: floe_domain::CalendarSource },
-    External { source: floe_domain::ExternalSource },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -159,10 +156,8 @@ pub struct CommandRequestDto {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CalendarRecordDto {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_modify: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calendar_id: Option<String>,
+    pub calendar_id: String,
     pub external_id: String,
     pub external_revision: String,
     pub title: String,

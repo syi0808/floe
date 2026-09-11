@@ -42,13 +42,6 @@ fn calendar_expert_setup_transport_is_typed_and_never_accepts_ambient_grants_or_
     });
     let parsed: AgentVaultActionDto = serde_json::from_value(view_change.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), view_change);
-    let legacy = serde_json::json!({
-        "request_id": "00000000-0000-4000-8000-000000000001", "events": [],
-        "next_sequence": 0, "done": true, "state": "ready", "session": null, "failure": null
-    });
-    let result: AgentVaultResultDto = serde_json::from_value(legacy.clone()).unwrap();
-    assert!(result.calendar_experts.is_none());
-    assert_eq!(serde_json::to_value(result).unwrap(), legacy);
 }
 
 #[test]
@@ -214,21 +207,6 @@ fn id(value: &str) -> Uuid {
 }
 
 #[test]
-fn legacy_external_provenance_round_trips_without_assuming_a_calendar_selection() {
-    let stored = json!({"External": {
-        "connection_id": "legacy", "provider": "fixture", "resource_type": "calendar_event",
-        "external_id": "event", "external_revision": "revision"
-    }});
-    let source: SourceRef = serde_json::from_value(stored.clone()).unwrap();
-    let dto: SourceRefDto = source.into();
-    let wire = serde_json::to_value(&dto).unwrap();
-    assert_eq!(wire["kind"], "external");
-    assert_eq!(wire["source"]["connection_id"], "legacy");
-    let restored: SourceRef = dto.try_into().unwrap();
-    assert_eq!(serde_json::to_value(restored).unwrap(), stored);
-}
-
-#[test]
 fn snapshot_has_a_versioned_stable_wire_shape() {
     let snapshot = DaySnapshotDto {
         calendar: None,
@@ -265,6 +243,7 @@ fn snapshot_has_a_versioned_stable_wire_shape() {
             "now_event_id": "00000000-0000-0000-0000-000000000002",
             "next_event_id": null,
             "overdue_task_count": 2,
+            "calendar": null,
             "items": [{
                 "kind": "note",
                 "id": "00000000-0000-0000-0000-000000000003",
@@ -317,6 +296,7 @@ fn command_and_nested_union_tags_are_stable() {
             "day": {
                 "date": "2026-09-02",
                 "timezone_offset_seconds": 32400,
+                "end_timezone_offset_seconds": null,
                 "now": "2026-09-02T10:30:00Z"
             },
             "command": {
@@ -360,6 +340,7 @@ fn load_day_request_has_a_stable_wire_shape() {
             "day": {
                 "date": "2026-09-02",
                 "timezone_offset_seconds": 32400,
+                "end_timezone_offset_seconds": null,
                 "now": "2026-09-02T10:30:00Z"
             }
         })

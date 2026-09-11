@@ -318,10 +318,7 @@ fn ensure_revision(actual: Revision, expected: Revision) -> Result<(), CoreError
 }
 
 fn ensure_local_event(event: &Event) -> Result<(), CoreError> {
-    if matches!(
-        event.source,
-        SourceRef::Calendar(_) | SourceRef::External(_)
-    ) {
+    if matches!(event.source, SourceRef::Calendar(_)) {
         return Err(CoreError::new(
             ErrorCode::Validation,
             "external calendar events are read-only",

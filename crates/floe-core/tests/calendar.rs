@@ -18,7 +18,7 @@ fn range(day: i64) -> CalendarRange {
 fn record(identifier: &str, day: i64) -> CalendarRecord {
     CalendarRecord {
         can_modify: false,
-        calendar_id: None,
+        calendar_id: "calendar-1".into(),
         external_id: identifier.into(),
         external_revision: "v1".into(),
         title: "Fixture event".into(),
@@ -82,17 +82,15 @@ async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
     let selected = snapshot(&core, person, 0).await;
     let revision = selected.calendar.as_ref().unwrap().revision;
     let mut unknown = record("event", 0);
-    unknown.calendar_id = Some("unknown".into());
-    for invalid in [record("ambiguous", 0), unknown] {
-        assert_eq!(
-            core.import_calendar(person, revision, range(0), vec![invalid], now())
-                .await
-                .unwrap_err()
-                .code,
-            ErrorCode::Validation
-        );
-        assert_eq!(snapshot(&core, person, 0).await, selected);
-    }
+    unknown.calendar_id = "unknown".into();
+    assert_eq!(
+        core.import_calendar(person, revision, range(0), vec![unknown], now())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Validation
+    );
+    assert_eq!(snapshot(&core, person, 0).await, selected);
     core.select_calendars(
         person,
         CalendarProvider::Fixture,
@@ -107,18 +105,6 @@ async fn multiple_selection_rejects_invalid_sources_and_stale_reads() {
             .unwrap_err()
             .code,
         ErrorCode::Conflict
-    );
-    let legacy: CalendarConnection = serde_json::from_value(serde_json::json!({
-        "provider": "event_kit", "calendar_id": "legacy", "calendar_name": "Legacy",
-        "revision": 1, "last_success_at": null, "last_range": null, "error": null
-    }))
-    .unwrap();
-    assert_eq!(legacy.selected_calendars()[0].calendar_id, "legacy");
-    assert!(
-        serde_json::to_value(&legacy)
-            .unwrap()
-            .get("calendars")
-            .is_none()
     );
     drop(core);
     let _ = std::fs::remove_file(path);

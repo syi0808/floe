@@ -206,7 +206,7 @@ async fn direct_mutations_capture_original_and_reject_read_only_or_missing_targe
     };
     let records = vec![CalendarRecord {
         can_modify: true,
-        calendar_id: Some(proposal.calendar_id.clone()),
+        calendar_id: proposal.calendar_id.clone(),
         external_id: "external-1".into(),
         external_revision: "original".into(),
         title: proposal.title.clone(),
@@ -388,7 +388,7 @@ async fn success_is_durable_and_receipt_can_be_reimported() {
     };
     let records = vec![CalendarRecord {
         can_modify: true,
-        calendar_id: Some(receipt.calendar_id),
+        calendar_id: receipt.calendar_id,
         external_id: receipt.external_id,
         external_revision: "1".into(),
         title: receipt.title,

@@ -24,8 +24,6 @@ AgentCalendarSources sources({
 }) => AgentCalendarSources(
   personId: person,
   connection: CalendarConnection(
-    id: 'connection',
-    name: 'Apple Calendar',
     provider: 'event_kit',
     revision: revision,
     includeAll: true,
@@ -94,15 +92,16 @@ Future<void> installHome(WidgetTester tester) async {
 }
 
 void main() {
-  test('source projection remains exact and never widens legacy metadata', () {
+  test('source projection remains exact', () {
     final projected = AgentCalendarSources(
       personId: registryPerson,
       connection: const CalendarConnection(
-        id: 'home',
-        name: 'Personal home',
         provider: 'event_kit',
         revision: 2,
-        calendarIds: ['home', 'work'],
+        calendars: [
+          ConnectedCalendar(id: 'home', name: 'Personal home'),
+          ConnectedCalendar(id: 'work', name: 'Work'),
+        ],
         includeAll: true,
       ),
     );

@@ -62,10 +62,11 @@ CalendarAction action({
 
 CalendarConnection connection({int revision = 3, String? error}) =>
     CalendarConnection(
-      id: 'calendar',
-      name: 'Personal calendar',
       provider: 'fixture',
       revision: revision,
+      calendars: const [
+        ConnectedCalendar(id: 'calendar', name: 'Personal calendar'),
+      ],
       lastSuccessAt: DateTime.now(),
       error: error,
     );

@@ -68,7 +68,7 @@ impl FloeCore {
             mirror.connection.provider == provider
                 && !mirror.connection.disconnected
                 && mirror.connection.scope == scope
-                && mirror.connection.selected_calendars() == calendars
+                && mirror.connection.calendars == calendars
         }) {
             return Ok(());
         }
@@ -88,8 +88,6 @@ impl FloeCore {
                         disconnected: false,
                         scope,
                         provider,
-                        calendar_id: calendars[0].calendar_id.clone(),
-                        calendar_name: calendars[0].calendar_name.clone(),
                         calendars,
                         revision,
                         last_success_at: None,
@@ -131,8 +129,6 @@ impl FloeCore {
         mirror.connection.disconnected = true;
         mirror.connection.revision += 1;
         mirror.connection.calendars.clear();
-        mirror.connection.calendar_id.clear();
-        mirror.connection.calendar_name.clear();
         mirror.connection.source_statuses.clear();
         mirror.connection.last_success_at = None;
         mirror.connection.last_range = None;
@@ -161,8 +157,9 @@ impl FloeCore {
         let mut seen = HashSet::new();
         let mut included: std::collections::BTreeMap<_, _> = mirror
             .connection
-            .selected_calendars()
-            .into_iter()
+            .calendars
+            .iter()
+            .cloned()
             .map(|calendar| (calendar.calendar_id.clone(), calendar))
             .collect();
         for calendar in calendars {
@@ -186,7 +183,7 @@ impl FloeCore {
             included.insert(calendar.calendar_id.clone(), calendar);
         }
         mirror.connection.calendars = included.into_values().collect();
-        if mirror.connection.calendars == previous.connection.selected_calendars() {
+        if mirror.connection.calendars == previous.connection.calendars {
             return Ok(());
         }
         mirror.connection.revision += 1;
@@ -208,11 +205,11 @@ impl FloeCore {
         let previous = mirror.clone();
         mirror.connection.error = Some(failure);
         mirror.connection.error_at = Some(now);
-        for calendar in mirror.connection.selected_calendars() {
+        for calendar in &mirror.connection.calendars {
             let status = mirror
                 .connection
                 .source_statuses
-                .entry(calendar.calendar_id)
+                .entry(calendar.calendar_id.clone())
                 .or_insert(CalendarSyncStatus {
                     last_success_at: mirror.connection.last_success_at,
                     last_range: mirror.connection.last_range.clone(),
@@ -248,9 +245,9 @@ impl FloeCore {
         mirror.connection.last_range = Some(range.clone());
         mirror.connection.error = None;
         mirror.connection.error_at = None;
-        for calendar in mirror.connection.selected_calendars() {
+        for calendar in &mirror.connection.calendars {
             mirror.connection.source_statuses.insert(
-                calendar.calendar_id,
+                calendar.calendar_id.clone(),
                 CalendarSyncStatus {
                     last_success_at: Some(now),
                     last_range: Some(range.clone()),
@@ -286,7 +283,7 @@ impl FloeCore {
             .calendar_at_revision(person_id, expected_revision)
             .await?;
         let previous = mirror.clone();
-        let calendars = mirror.connection.selected_calendars();
+        let calendars = mirror.connection.calendars.clone();
         let expected: HashSet<_> = calendars
             .iter()
             .map(|calendar| calendar.calendar_id.as_str())
@@ -396,13 +393,9 @@ fn reconcile_records(
 ) -> Result<Vec<Event>, CoreError> {
     let mut seen = HashSet::new();
     let mut imported = Vec::new();
-    let calendars = mirror.connection.selected_calendars();
+    let calendars = &mirror.connection.calendars;
     for record in records {
-        let calendar_id = record
-            .calendar_id
-            .as_deref()
-            .or_else(|| (calendars.len() == 1).then_some(calendars[0].calendar_id.as_str()))
-            .ok_or_else(|| validation("calendar identity is required"))?;
+        let calendar_id = record.calendar_id.as_str();
         let calendar = calendars
             .iter()
             .find(|calendar| calendar.calendar_id == calendar_id)
@@ -433,16 +426,10 @@ fn reconcile_records(
             external_revision: record.external_revision,
         });
         let mut event = Event::new(person_id, record.title, record.schedule, source, now)?;
-        let matches: Vec<_> = mirror.events.iter().filter(|event| {
+        if let Some(previous) = mirror.events.iter().find(|event| {
             matches!(&event.source, SourceRef::Calendar(source) if source.calendar_id == calendar_id
-                && (source.external_id == record.external_id
-                    || (source.provider == CalendarProvider::EventKit && record.external_id.ends_with('|')
-                        && source.external_id.starts_with(&record.external_id))))
-        }).collect();
-        if matches.len() > 1 {
-            return Err(validation("ambiguous legacy occurrence identity"));
-        }
-        if let Some(previous) = matches.first() {
+                && source.external_id == record.external_id)
+        }) {
             event.id = previous.id;
             event.created_at = previous.created_at;
             event.revision = previous.revision;

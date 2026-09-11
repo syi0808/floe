@@ -145,7 +145,7 @@ class CalendarEventDetails extends StatelessWidget {
                   children: [
                     for (final entry in <String, String>{
                       AppLocalizations.of(context).connectionPerson:
-                          '${snapshot.calendar?.id ?? '—'} / ${snapshot.personId}',
+                          '${event.calendarId ?? '—'} / ${snapshot.personId}',
                       AppLocalizations.of(context).externalOccurrenceId:
                           event.externalId!,
                       AppLocalizations.of(context).revision:

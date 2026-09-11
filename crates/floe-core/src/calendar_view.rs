@@ -250,7 +250,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         {
             return Err(AgentFailure::StaleContext);
         }
-        let selected = connection.selected_calendars();
+        let selected = connection.calendars.clone();
         let mut expiry = self.grant.expires_at;
         for identifier in &self.grant.calendar_ids {
             if !selected
@@ -506,7 +506,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                 });
             }
             for record in batch.records {
-                if record.calendar_id.as_deref() != Some(batch.calendar_id.as_str())
+                if record.calendar_id != batch.calendar_id
                     || record.external_id.trim().is_empty()
                     || record.external_revision.trim().is_empty()
                 {

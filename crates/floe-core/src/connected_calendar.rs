@@ -47,11 +47,11 @@ fn project_calendar_connector(
     let now_unix_ms = milliseconds(now)?;
     let statuses = if connection.source_statuses.is_empty() && !connection.disconnected {
         connection
-            .selected_calendars()
-            .into_iter()
+            .calendars
+            .iter()
             .map(|calendar| {
                 (
-                    calendar.calendar_id,
+                    calendar.calendar_id.clone(),
                     CalendarSyncStatus {
                         last_success_at: connection.last_success_at,
                         last_range: connection.last_range.clone(),

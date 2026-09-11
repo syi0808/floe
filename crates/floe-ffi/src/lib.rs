@@ -364,9 +364,9 @@ pub fn calendar_actions(
                 .as_ref()
                 .map(|connection| {
                     connection
-                        .selected_calendars()
-                        .into_iter()
-                        .map(|calendar| calendar.calendar_id)
+                        .calendars
+                        .iter()
+                        .map(|calendar| calendar.calendar_id.clone())
                         .collect()
                 })
                 .unwrap_or_default();

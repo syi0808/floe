@@ -603,7 +603,7 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
   final schedule = _asMap(json['schedule']);
   final isAllDay = schedule['kind'] == 'all_day';
   final provenance = _asMap(json['source']);
-  final source = ['calendar', 'external'].contains(provenance['kind'])
+  final source = provenance['kind'] == 'calendar'
       ? _asMap(provenance['source'])
       : null;
   return EventItem(
@@ -619,44 +619,33 @@ EventItem _decodeEvent(Map<String, dynamic> json, DateTime createdAt) {
           as String,
     ),
     isAllDay: isAllDay,
-    calendarId: source?['calendar_id'] as String?,
-    calendarName: source == null
-        ? null
-        : source['calendar_name'] as String? ?? 'Previous calendar connection',
-    externalId: source?['external_id'] as String?,
-    canModify: source?['can_modify'] as bool? ?? false,
-    provider: source?['provider'] as String?,
+    calendarId: source == null ? null : source['calendar_id'] as String,
+    calendarName: source == null ? null : source['calendar_name'] as String,
+    externalId: source == null ? null : source['external_id'] as String,
+    canModify: source == null ? false : source['can_modify'] as bool,
+    provider: source == null ? null : source['provider'] as String,
     timezone: schedule['timezone'] as String?,
   );
 }
 
 CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
     CalendarConnection(
-      id: json['calendar_id']! as String,
-      name: json['calendar_name']! as String,
-      calendarIds:
-          (json['calendars'] as List?)
-              ?.map((calendar) => calendar['calendar_id'] as String)
-              .toList() ??
-          const [],
-      calendars:
-          (json['calendars'] as List?)
-              ?.map(
-                (calendar) => ConnectedCalendar(
-                  id: calendar['calendar_id'] as String,
-                  name: calendar['calendar_name'] as String,
-                  error:
-                      (json['source_statuses']
-                              as Map?)?[calendar['calendar_id']]?['error']
-                          as String?,
-                  lastSuccessAt: _optionalTimestamp(
-                    (json['source_statuses']
-                        as Map?)?[calendar['calendar_id']]?['last_success_at'],
-                  ),
-                ),
-              )
-              .toList() ??
-          const [],
+      calendars: (json['calendars']! as List)
+          .map(
+            (calendar) => ConnectedCalendar(
+              id: calendar['calendar_id'] as String,
+              name: calendar['calendar_name'] as String,
+              error:
+                  (json['source_statuses']
+                          as Map?)?[calendar['calendar_id']]?['error']
+                      as String?,
+              lastSuccessAt: _optionalTimestamp(
+                (json['source_statuses']
+                    as Map?)?[calendar['calendar_id']]?['last_success_at'],
+              ),
+            ),
+          )
+          .toList(),
       provider: json['provider']! as String,
       includeAll: json['scope'] == 'all',
       revision: json['revision']! as int,

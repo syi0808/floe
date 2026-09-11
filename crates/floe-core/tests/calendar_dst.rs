@@ -37,7 +37,7 @@ async fn dst_days_import_and_project_the_exact_23_or_25_hour_interval() {
             range.clone(),
             vec![CalendarRecord {
                 can_modify: false,
-                calendar_id: Some("dst".into()),
+                calendar_id: "dst".into(),
                 external_id: "last-quarter".into(),
                 external_revision: "1".into(),
                 title: "Last quarter hour".into(),

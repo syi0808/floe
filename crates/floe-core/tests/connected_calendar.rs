@@ -27,7 +27,7 @@ fn batch(calendar_id: &str, title: &str) -> CalendarBatch {
         calendar_id: calendar_id.into(),
         records: vec![CalendarRecord {
             can_modify: false,
-            calendar_id: Some(calendar_id.into()),
+            calendar_id: calendar_id.into(),
             external_id: format!("{calendar_id}-event"),
             external_revision: "1".into(),
             title: title.into(),

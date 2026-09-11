@@ -106,7 +106,6 @@ impl From<SourceRef> for SourceRefDto {
         match value {
             SourceRef::Manual => Self::Manual,
             SourceRef::Calendar(source) => Self::Calendar { source },
-            SourceRef::External(source) => Self::External { source },
             SourceRef::Capture(id) => Self::Capture {
                 capture_id: id.to_string(),
             },
@@ -121,7 +120,6 @@ impl TryFrom<SourceRefDto> for SourceRef {
         match value {
             SourceRefDto::Manual => Ok(Self::Manual),
             SourceRefDto::Calendar { source } => Ok(Self::Calendar(source)),
-            SourceRefDto::External { source } => Ok(Self::External(source)),
             SourceRefDto::Capture { capture_id } => {
                 Ok(Self::Capture(parse_capture_id(&capture_id, "capture_id")?))
             }

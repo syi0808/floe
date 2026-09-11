@@ -162,7 +162,7 @@ impl FloeCore {
             .ok_or_else(|| CoreError::new(ErrorCode::NotFound, "connect a calendar first"))?;
         let calendar = mirror
             .connection
-            .selected_calendars()
+            .calendars
             .into_iter()
             .find(|calendar| calendar.calendar_id == calendar_id)
             .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
@@ -240,7 +240,7 @@ impl FloeCore {
         };
         let calendar = mirror
             .connection
-            .selected_calendars()
+            .calendars
             .into_iter()
             .find(|calendar| calendar.calendar_id == calendar_id)
             .ok_or_else(|| CoreError::new(ErrorCode::Validation, "calendar is not connected"))?;
@@ -466,7 +466,7 @@ impl FloeCore {
                 || mirror.connection.error.is_some()
                 || !mirror
                     .connection
-                    .selected_calendars()
+                    .calendars
                     .iter()
                     .any(|calendar| calendar.calendar_id == action.calendar_id)
         }) {

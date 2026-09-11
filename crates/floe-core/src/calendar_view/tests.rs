@@ -22,7 +22,7 @@ fn day() -> CalendarRange {
 fn record(calendar: &str, identifier: &str, title: &str, start: i64, end: i64) -> CalendarRecord {
     CalendarRecord {
         can_modify: false,
-        calendar_id: Some(calendar.into()),
+        calendar_id: calendar.into(),
         external_id: identifier.into(),
         external_revision: "private-external-revision".into(),
         title: title.into(),
@@ -351,7 +351,7 @@ async fn projection_reads_events_across_a_bounded_multi_day_range() {
                 ),
                 CalendarRecord {
                     can_modify: false,
-                    calendar_id: Some("home-secret-id".into()),
+                    calendar_id: "home-secret-id".into(),
                     external_id: "third-day-all-day".into(),
                     external_revision: "1".into(),
                     title: "Third day all day".into(),
