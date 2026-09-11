@@ -498,11 +498,33 @@ func TestPairedClientReadsConnectorSnapshots(test *testing.T) {
 	if value["person_id"] != fixturePersonID || value["device_id"] != fixtureDeviceID || connection["person_id"] != fixturePersonID || !strings.HasPrefix(connection["connection_id"].(string), "gmail.fixture.") {
 		test.Fatalf("unbound connection: %#v", value)
 	}
+	connectionID := connection["connection_id"].(string)
+	if stored := fixture.console.state.Connections[connectionID]; stored.PersonID != fixturePersonID || stored.ConnectorID != "gmail.fixture" {
+		test.Fatalf("connection owner was not persisted: %#v", stored)
+	}
 	if response := fixture.call(http.MethodPost, "/v1/connections", map[string]any{}, token); response.Code != http.StatusNotFound {
 		test.Fatalf("write endpoint accepted: %d", response.Code)
 	}
 	if response := fixture.call(http.MethodGet, "/v1/connections", nil, ""); response.Code != http.StatusUnauthorized {
 		test.Fatalf("unpaired read accepted: %d", response.Code)
+	}
+}
+
+func TestDeviceConnectionMustMatchPairedDevice(test *testing.T) {
+	fixture := setup(test)
+	_, token := fixture.pair()
+	snapshot := map[string]any{
+		"descriptor": map[string]any{
+			"id":        "calendar.apple",
+			"execution": map[string]any{"kind": "device", "device_id": "another-device"},
+		},
+		"connection": map[string]any{"connector_id": "calendar.apple", "state": "ready"},
+		"views":      []any{},
+	}
+	fixture.console.SetGmailAuth(&fakeConnectorRuntime{snapshot: snapshot})
+	response := fixture.call(http.MethodGet, "/v1/connections", nil, token)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "connection_scope_unavailable") {
+		test.Fatalf("foreign device connection accepted: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -603,7 +625,7 @@ func TestCommunicationRouteFallsBackToMicrosoftMail(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	view := map[string]any{"schema_version": 1, "view_id": "mail.communication", "source_handle": "mail:microsoft", "items": []any{}}
-	microsoft := &fakeCommunicationRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "microsoft"}}, view: view}
+	microsoft := &fakeCommunicationRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "microsoft.mail", "provider": "microsoft", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "microsoft.mail"}}, view: view}
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("gmail unavailable")})
 	fixture.console.SetMicrosoftMail(&fakeMicrosoftAuth{}, microsoft)
 
@@ -622,8 +644,8 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	now := time.Now().UnixMilli()
-	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "github"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
-	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"provider": "home_assistant"}}, view: map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": "home:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
+	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "github.repository", "provider": "github", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "github.repository"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
+	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "home_assistant.selected", "provider": "home_assistant", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "home_assistant.selected"}}, view: map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": "home:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 
 	for path, viewID := range map[string]string{
 		"/v1/views/work.context":   "work.context",

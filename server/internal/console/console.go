@@ -25,26 +25,83 @@ var connectionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 func validPersonID(value string) bool { return personIDPattern.MatchString(value) }
 func validDeviceID(value string) bool { return deviceIDPattern.MatchString(value) }
 
-func bindConnectionOwner(snapshot any, scope clientScope) any {
+func connectionSnapshotMetadata(snapshot any) (map[string]any, string, string, bool) {
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
-		return snapshot
+		return nil, "", "", false
 	}
 	var value map[string]any
 	if json.Unmarshal(encoded, &value) != nil {
-		return snapshot
+		return nil, "", "", false
 	}
 	connection, ok := value["connection"].(map[string]any)
 	if !ok {
-		return snapshot
+		return nil, "", "", false
 	}
 	connectorID, ok := connection["connector_id"].(string)
 	if !ok || connectorID == "" {
-		return snapshot
+		return nil, "", "", false
 	}
-	connection["person_id"] = scope.PersonID
-	connection["connection_id"] = connectorID + "." + digest(scope.PersonID + "\x00" + connectorID)[:16]
-	return value
+	deviceID := ""
+	if descriptor, ok := value["descriptor"].(map[string]any); ok {
+		if execution, ok := descriptor["execution"].(map[string]any); ok && execution["kind"] == "device" {
+			deviceID, _ = execution["device_id"].(string)
+		}
+	}
+	return value, connectorID, deviceID, true
+}
+
+func (console *Console) bindConnectionOwners(snapshots []any, scope clientScope) ([]any, error) {
+	console.mu.Lock()
+	defer console.mu.Unlock()
+	next := cloneState(console.state)
+	changed := false
+	bound := make([]any, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		value, connectorID, deviceID, ok := connectionSnapshotMetadata(snapshot)
+		if !ok || deviceID != "" && deviceID != scope.DeviceID {
+			return nil, errors.New("invalid connection ownership")
+		}
+		var record connectionRecord
+		for _, candidate := range next.Connections {
+			if candidate.ConnectorID == connectorID {
+				if candidate.PersonID != scope.PersonID {
+					return nil, errors.New("connection belongs to another person")
+				}
+				record = candidate
+				break
+			}
+		}
+		if record.ConnectionID == "" {
+			record = connectionRecord{
+				ConnectionID: connectorID + "." + digest(scope.PersonID + "\x00" + connectorID)[:16],
+				ConnectorID:  connectorID,
+				PersonID:     scope.PersonID,
+			}
+			if deviceID != "" {
+				record.Device = &deviceBinding{DeviceID: deviceID}
+			}
+			next.Connections[record.ConnectionID] = record
+			changed = true
+		}
+		if record.Device != nil && record.Device.DeviceID != deviceID || record.Device == nil && deviceID != "" {
+			return nil, errors.New("connection device binding mismatch")
+		}
+		connection := value["connection"].(map[string]any)
+		connection["person_id"] = record.PersonID
+		connection["connection_id"] = record.ConnectionID
+		if record.Device != nil {
+			connection["device_binding"] = map[string]any{"device_id": record.Device.DeviceID}
+		}
+		bound = append(bound, value)
+	}
+	if changed {
+		if err := console.save(next); err != nil {
+			return nil, err
+		}
+		console.state = next
+	}
+	return bound, nil
 }
 
 //go:embed web/*
@@ -462,8 +519,11 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 			connections = append(connections, snapshot)
 		}
 		if !scope.Legacy {
-			for index, snapshot := range connections {
-				connections[index] = bindConnectionOwner(snapshot, scope)
+			var err error
+			connections, err = console.bindConnectionOwners(connections, scope)
+			if err != nil {
+				failure(writer, 503, "connection_scope_unavailable")
+				return
 			}
 		}
 		reply(writer, 200, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "legacy_unscoped": scope.Legacy, "connections": connections})
