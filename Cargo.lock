@@ -851,7 +851,6 @@ name = "floe-protocol"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-agent",
  "floe-domain",
  "serde",
  "serde_json",

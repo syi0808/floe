@@ -7,16 +7,18 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 pub use agent::{
     ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentConversationTurnRequestDto,
-    AgentFixtureOperationDto, AgentFixturePromptDto, AgentFixtureRequestDto, AgentFixtureResultDto,
-    AgentFixtureRunDto, AgentFixtureRunOperationDto, AgentFixtureRunRequestDto,
-    AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionDto,
-    AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto, AgentMemorySummaryDto,
-    AgentProposalActionDto, AgentProposalInspectionDto, AgentProposalStatusDto,
-    AgentRemoteRouteDto, AgentVaultActionDto, AgentVaultOperationDto, AgentVaultRequestDto,
-    AgentVaultResultDto, AgentVaultStateDto, CalendarAccessChangeDto,
-    CalendarAccessConfigurationDto, CalendarActionDecisionDto, CalendarActionOperationDto,
-    CalendarActionRequestDto, CalendarExpertSetupDto, RegistryConfigurationDto,
-    RegistryConfigurationTargetDto,
+    AgentEventDto, AgentFailureDto, AgentFixtureOperationDto, AgentFixturePromptDto,
+    AgentFixtureRequestDto, AgentFixtureResultDto, AgentFixtureRunDto, AgentFixtureRunOperationDto,
+    AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,
+    AgentMemoryReviewDecisionDto, AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto,
+    AgentMemorySummaryDto, AgentProposalActionDto, AgentProposalInspectionDto,
+    AgentProposalStatusDto, AgentRemoteRouteDto, AgentSessionDto, AgentVaultActionDto,
+    AgentVaultOperationDto, AgentVaultRequestDto, AgentVaultResultDto, AgentVaultStateDto,
+    CalendarAccessChangeDto, CalendarAccessConfigurationDto, CalendarActionDecisionDto,
+    CalendarActionOperationDto, CalendarActionRequestDto, CalendarExpertOverviewDto,
+    CalendarExpertSetupDto, ConnectorSnapshotDto, EpistemicStatusDto, KnowledgeCandidateDto,
+    KnowledgeDecisionResultDto, PersonalMemoryKindDto, RegistryConfigurationDto,
+    RegistryConfigurationTargetDto, RegistryOverviewDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,

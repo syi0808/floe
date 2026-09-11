@@ -11,7 +11,10 @@ use floe_protocol::*;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use super::{BridgeResult, FloeHandle, agent_failure, check_version, parse_id, parse_person};
+use super::{
+    BridgeResult, FloeHandle, agent_failure, check_version, parse_id, parse_person,
+    protocol_payload,
+};
 
 #[derive(Default)]
 pub(crate) struct AgentRuns(RefCell<Option<AgentRun>>);
@@ -159,19 +162,24 @@ fn snapshot(run: &AgentRun, after_sequence: usize) -> BridgeResult<AgentFixtureR
     Ok(AgentFixtureRunDto {
         session_id: run.session_id.to_string(),
         expected_revision: run.expected_revision,
-        events: events[after_sequence..].to_vec(),
+        events: events[after_sequence..]
+            .iter()
+            .map(protocol_payload)
+            .collect::<Result<Vec<_>, _>>()?,
         next_sequence: events.len(),
         done: run.result.is_some(),
         session: run
             .result
             .as_ref()
             .and_then(|result| result.as_ref().ok())
-            .cloned(),
+            .map(protocol_payload)
+            .transpose()?,
         failure: run
             .result
             .as_ref()
             .and_then(|result| result.as_ref().err())
-            .copied(),
+            .map(protocol_payload)
+            .transpose()?,
     })
 }
 

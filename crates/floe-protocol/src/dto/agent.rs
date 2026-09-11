@@ -1,5 +1,25 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
+
+macro_rules! response_payload {
+    ($name:ident) => {
+        #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(pub Value);
+    };
+}
+
+response_payload!(AgentEventDto);
+response_payload!(AgentFailureDto);
+response_payload!(AgentSessionDto);
+response_payload!(CalendarExpertOverviewDto);
+response_payload!(ConnectorSnapshotDto);
+response_payload!(EpistemicStatusDto);
+response_payload!(KnowledgeCandidateDto);
+response_payload!(KnowledgeDecisionResultDto);
+response_payload!(PersonalMemoryKindDto);
+response_payload!(RegistryOverviewDto);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -48,63 +68,6 @@ pub enum CalendarAccessChangeDto {
         calendar_ids: Vec<String>,
     },
     Remove {},
-}
-
-impl From<floe_agent::RegistryConfiguration> for RegistryConfigurationDto {
-    fn from(value: floe_agent::RegistryConfiguration) -> Self {
-        Self {
-            instance_id: value.instance_id,
-            expected_revision: value.expected_revision,
-            target: match value.target {
-                floe_agent::RegistryConfigurationTarget::Installation { id, enabled } => {
-                    RegistryConfigurationTargetDto::Installation { id, enabled }
-                }
-                floe_agent::RegistryConfigurationTarget::Assignment { id, enabled } => {
-                    RegistryConfigurationTargetDto::Assignment { id, enabled }
-                }
-                floe_agent::RegistryConfigurationTarget::CalendarView { id, enabled } => {
-                    RegistryConfigurationTargetDto::CalendarView { id, enabled }
-                }
-            },
-        }
-    }
-}
-
-impl From<floe_agent::CalendarExpertSetup> for CalendarExpertSetupDto {
-    fn from(value: floe_agent::CalendarExpertSetup) -> Self {
-        Self {
-            instance_id: value.instance_id,
-            expected_revision: value.expected_revision,
-            setup_id: value.setup_id,
-            provider: value.provider,
-            calendar_ids: value.calendar_ids,
-        }
-    }
-}
-
-impl From<floe_agent::CalendarAccessConfiguration> for CalendarAccessConfigurationDto {
-    fn from(value: floe_agent::CalendarAccessConfiguration) -> Self {
-        Self {
-            instance_id: value.instance_id,
-            expected_revision: value.expected_revision,
-            setup_id: value.setup_id,
-            change: match value.change {
-                floe_agent::CalendarAccessChange::SetEnabled { enabled } => {
-                    CalendarAccessChangeDto::SetEnabled { enabled }
-                }
-                floe_agent::CalendarAccessChange::SetScope {
-                    replacement_setup_id,
-                    provider,
-                    calendar_ids,
-                } => CalendarAccessChangeDto::SetScope {
-                    replacement_setup_id,
-                    provider,
-                    calendar_ids,
-                },
-                floe_agent::CalendarAccessChange::Remove {} => CalendarAccessChangeDto::Remove {},
-            },
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -240,9 +203,9 @@ pub struct AgentProposalInspectionDto {
 pub struct AgentMemoryReviewOverviewDto {
     pub schema_version: u32,
     pub person_id: String,
-    pub candidates: Vec<floe_agent::KnowledgeCandidate>,
+    pub candidates: Vec<KnowledgeCandidateDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision: Option<floe_agent::KnowledgeDecisionResult>,
+    pub decision: Option<KnowledgeDecisionResultDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -261,8 +224,8 @@ pub struct AgentMemorySummaryDto {
     pub target_id: String,
     pub revision: u64,
     pub statement: String,
-    pub memory_kind: floe_agent::PersonalMemoryKind,
-    pub epistemic_status: floe_agent::EpistemicStatus,
+    pub memory_kind: PersonalMemoryKindDto,
+    pub epistemic_status: EpistemicStatusDto,
     pub confidence_millis: u16,
     pub source_count: usize,
     pub origin: AgentMemoryOriginDto,
@@ -314,15 +277,15 @@ pub enum AgentVaultStateDto {
 #[serde(deny_unknown_fields)]
 pub struct AgentVaultResultDto {
     pub request_id: String,
-    pub events: Vec<floe_agent::AgentEvent>,
+    pub events: Vec<AgentEventDto>,
     pub next_sequence: usize,
     pub done: bool,
     pub state: Option<AgentVaultStateDto>,
-    pub session: Option<floe_agent::AgentSession>,
+    pub session: Option<AgentSessionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<floe_agent::RegistryOverview>,
+    pub registry: Option<RegistryOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    pub calendar_experts: Option<CalendarExpertOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<AgentProposalInspectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -330,8 +293,8 @@ pub struct AgentVaultResultDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<AgentMemoryOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
-    pub failure: Option<floe_agent::AgentFailure>,
+    pub connections: Option<Vec<ConnectorSnapshotDto>>,
+    pub failure: Option<AgentFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -394,18 +357,18 @@ pub enum AgentFixtureRunOperationDto {
 pub struct AgentFixtureRunDto {
     pub session_id: String,
     pub expected_revision: u64,
-    pub events: Vec<floe_agent::AgentEvent>,
+    pub events: Vec<AgentEventDto>,
     pub next_sequence: usize,
     pub done: bool,
-    pub session: Option<floe_agent::AgentSession>,
-    pub failure: Option<floe_agent::AgentFailure>,
+    pub session: Option<AgentSessionDto>,
+    pub failure: Option<AgentFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentFixtureResultDto {
-    pub session: floe_agent::AgentSession,
-    pub events: Vec<floe_agent::AgentEvent>,
+    pub session: AgentSessionDto,
+    pub events: Vec<AgentEventDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

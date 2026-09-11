@@ -81,6 +81,7 @@ impl VaultBridge {
             .as_ref()
             .unwrap()
             .request(person, id, request.operation)
+            .and_then(VaultJobResult::into_protocol)
             .map_err(agent_failure)
     }
 }
@@ -114,6 +115,47 @@ struct Progress {
     memory: Option<AgentMemoryOverviewDto>,
     connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     failure: Option<AgentFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VaultJobResult {
+    request_id: String,
+    events: Vec<AgentEvent>,
+    next_sequence: usize,
+    done: bool,
+    state: Option<AgentVaultStateDto>,
+    session: Option<AgentSession>,
+    registry: Option<floe_agent::RegistryOverview>,
+    calendar_experts: Option<floe_agent::CalendarExpertOverview>,
+    proposal: Option<AgentProposalInspectionDto>,
+    memory_review: Option<AgentMemoryReviewOverviewDto>,
+    memory: Option<AgentMemoryOverviewDto>,
+    connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
+    failure: Option<AgentFailure>,
+}
+
+impl VaultJobResult {
+    fn into_protocol(self) -> Result<AgentVaultResultDto, AgentFailure> {
+        Ok(AgentVaultResultDto {
+            request_id: self.request_id,
+            events: encode_contracts(self.events)?,
+            next_sequence: self.next_sequence,
+            done: self.done,
+            state: self.state,
+            session: self.session.as_ref().map(encode_contract).transpose()?,
+            registry: self.registry.as_ref().map(encode_contract).transpose()?,
+            calendar_experts: self
+                .calendar_experts
+                .as_ref()
+                .map(encode_contract)
+                .transpose()?,
+            proposal: self.proposal,
+            memory_review: self.memory_review,
+            memory: self.memory,
+            connections: self.connections.map(encode_contracts).transpose()?,
+            failure: self.failure.as_ref().map(encode_contract).transpose()?,
+        })
+    }
 }
 
 impl Worker {
@@ -261,7 +303,7 @@ impl Worker {
         person: PersonId,
         id: Uuid,
         operation: AgentVaultOperationDto,
-    ) -> Result<AgentVaultResultDto, AgentFailure> {
+    ) -> Result<VaultJobResult, AgentFailure> {
         let mut active = self.active.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let AgentVaultOperationDto::Submit { ref action } = operation {
             if let Some(job) = active.as_ref() {
@@ -304,7 +346,7 @@ impl Worker {
         if after_sequence > progress.events.len() {
             return Err(AgentFailure::InvalidInput);
         }
-        let response = AgentVaultResultDto {
+        let response = VaultJobResult {
             request_id: id.to_string(),
             events: progress.events[after_sequence..].to_vec(),
             next_sequence: progress.events.len(),
@@ -679,7 +721,9 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             }
             .into_iter()
             .filter(|candidate| candidate.kind == KnowledgeKind::Memory)
-            .collect();
+            .map(|candidate| encode_contract(&candidate))
+            .collect::<Result<Vec<_>, _>>()?;
+            let decision = decision.as_ref().map(encode_contract).transpose()?;
             Ok(VaultExecutionResult {
                 memory_review: Some(AgentMemoryReviewOverviewDto {
                     schema_version: PROTOCOL_VERSION,
@@ -710,8 +754,8 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         target_id: revision.target_id.to_string(),
                         revision: revision.revision,
                         statement: value.statement,
-                        memory_kind: value.kind,
-                        epistemic_status: value.epistemic_status,
+                        memory_kind: encode_contract(&value.kind)?,
+                        epistemic_status: encode_contract(&value.epistemic_status)?,
                         confidence_millis: value.confidence_millis,
                         source_count: revision.source_refs.len(),
                         origin: match revision.created_by {
@@ -923,6 +967,19 @@ fn decode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, Age
         .map_err(|_| AgentFailure::InvalidInput)
 }
 
+fn encode_contracts<Input: Serialize, Output: DeserializeOwned>(
+    values: Vec<Input>,
+) -> Result<Vec<Output>, AgentFailure> {
+    values
+        .iter()
+        .map(decode_contract)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn encode_contract<T: DeserializeOwned>(value: &impl Serialize) -> Result<T, AgentFailure> {
+    decode_contract(value)
+}
+
 async fn sample_session(
     store: &impl SessionStore,
     person: PersonId,
@@ -1005,7 +1062,7 @@ mod tests {
         }
     }
 
-    fn wait(worker: &Worker, person: PersonId, id: Uuid) -> AgentVaultResultDto {
+    fn wait(worker: &Worker, person: PersonId, id: Uuid) -> VaultJobResult {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let result = worker
@@ -1023,11 +1080,7 @@ mod tests {
         }
     }
 
-    fn perform(
-        worker: &Worker,
-        person: PersonId,
-        action: AgentVaultActionDto,
-    ) -> AgentVaultResultDto {
+    fn perform(worker: &Worker, person: PersonId, action: AgentVaultActionDto) -> VaultJobResult {
         let id = Uuid::new_v4();
         worker
             .request(person, id, AgentVaultOperationDto::Submit { action })
@@ -1177,15 +1230,15 @@ mod tests {
             .unwrap();
         let action = AgentVaultActionDto::Registry {
             change: Some(
-                RegistryConfiguration {
+                encode_contract(&RegistryConfiguration {
                     instance_id: before.instance_id,
                     expected_revision: before.revision,
                     target: RegistryConfigurationTarget::Assignment {
                         id: assignment.id,
                         enabled: false,
                     },
-                }
-                .into(),
+                })
+                .unwrap(),
             ),
         };
         let id = Uuid::new_v4();

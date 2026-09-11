@@ -19,7 +19,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use floe_core::{Classification, CoreError, ErrorCode, FloeCore};
 use floe_domain::{DomainRef, PersonId, Revision, TimelineItem};
 use floe_protocol::*;
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio::runtime::{Builder, Runtime};
 use uuid::Uuid;
@@ -168,6 +168,17 @@ fn guarded<T: Serialize>(operation: impl FnOnce() -> BridgeResult<T>) -> *mut c_
     }
 }
 
+fn protocol_payload<Output: DeserializeOwned>(value: &impl Serialize) -> BridgeResult<Output> {
+    serde_json::to_value(value)
+        .and_then(serde_json::from_value)
+        .map_err(|_| {
+            error(
+                ErrorCodeDto::Internal,
+                "protocol response conversion failed",
+            )
+        })
+}
+
 fn handle<'a>(value: *mut FloeHandle) -> BridgeResult<&'a FloeHandle> {
     unsafe { value.as_ref() }.ok_or_else(|| invalid("handle", "must not be null"))
 }
@@ -247,14 +258,18 @@ pub fn agent_fixture(
                 ))
                 .map_err(agent_failure)?;
             return Ok(AgentFixtureResultDto {
-                session: result.session,
-                events: result.events,
+                session: protocol_payload(&result.session)?,
+                events: result
+                    .events
+                    .iter()
+                    .map(protocol_payload)
+                    .collect::<Result<Vec<_>, _>>()?,
             });
         }
     }
     .map_err(agent_failure)?;
     Ok(AgentFixtureResultDto {
-        session,
+        session: protocol_payload(&session)?,
         events: vec![],
     })
 }

@@ -38,7 +38,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         calendar_ids: vec!["explicit-native-setup-canary".into()],
     };
     let action = AgentVaultActionDto::CalendarExperts {
-        setup: Some(setup.clone().into()),
+        setup: Some(encode_contract(&setup).unwrap()),
     };
     let id = Uuid::new_v4();
     worker
@@ -100,7 +100,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             &worker,
             person,
             AgentVaultActionDto::CalendarExperts {
-                setup: Some(changed.into())
+                setup: Some(encode_contract(&changed).unwrap())
             }
         )
         .failure,
@@ -115,15 +115,15 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
             person,
             AgentVaultActionDto::Registry {
                 change: Some(
-                    RegistryConfiguration {
+                    encode_contract(&RegistryConfiguration {
                         instance_id: current.registry.instance_id,
                         expected_revision: current.registry.revision,
                         target: RegistryConfigurationTarget::CalendarView {
                             id: installed.views[0].handle,
                             enabled,
                         },
-                    }
-                    .into(),
+                    })
+                    .unwrap(),
                 ),
             },
         );
@@ -182,7 +182,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
             id,
             AgentVaultOperationDto::Submit {
                 action: AgentVaultActionDto::CalendarExperts {
-                    setup: Some(request.clone().into()),
+                    setup: Some(encode_contract(&request).unwrap()),
                 },
             },
         )
@@ -228,7 +228,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         &worker,
         person,
         AgentVaultActionDto::CalendarExperts {
-            setup: Some(request.into()),
+            setup: Some(encode_contract(&request).unwrap()),
         },
     );
     assert_eq!(retry.calendar_experts.unwrap().registry.revision, 1);

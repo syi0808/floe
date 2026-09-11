@@ -347,15 +347,15 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         person,
         AgentVaultActionDto::Registry {
             change: Some(
-                RegistryConfiguration {
+                encode_contract(&RegistryConfiguration {
                     instance_id: overview.instance_id,
                     expected_revision: overview.revision,
                     target: RegistryConfigurationTarget::Assignment {
                         id: evidence.assignment_id,
                         enabled: false,
                     },
-                }
-                .into(),
+                })
+                .unwrap(),
             ),
         },
     );
