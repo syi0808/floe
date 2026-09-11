@@ -4,6 +4,19 @@
 >
 > Purpose: 구현 진행현황만 추적한다. 제품 정의와 기술 설계는 `docs/planning/` 및 ADR을 따른다.
 
+### S5.5 implementation increments 1–7 checkpoint — 2026-09-11
+
+- The bounded Gmail logistics projection and selected Home Assistant source now complete increment
+  7's implementation path through the merged authenticated `life.logistics` View and isolated,
+  capability-free Life Logistics Expert. Increment 6 is likewise product-wired through the shared
+  Work Context route, including Microsoft Teams.
+- Focused Go connector/console race tests and vet, Rust context/Expert conformance tests and the FFI
+  fresh-View delegation integration test pass. The planned implementation order is complete through
+  item 7.
+- This does not promote S5.5 acceptance: live Microsoft Teams and Home Assistant provider evidence,
+  durable registry assignment and increment 8's failure/privacy scenarios remain. The slice stays
+  **0/14**. [Evidence and limits](docs/validation/s5-5-work-logistics-foundation.md).
+
 ### S5.5 Microsoft Teams product route — 2026-09-11
 
 - Added an isolated Microsoft PKCE OAuth profile and Keychain credential requesting exactly

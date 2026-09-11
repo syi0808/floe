@@ -106,9 +106,17 @@ The focused View/privacy and Expert contract tests pass, including both cross-la
 fixtures. A paired synthetic HTTP integration test proves both Work Context and Life Logistics
 delegations fetch fresh Views and return source-linked typed A2A artifacts.
 
+## Implementation increment checkpoint
+
+Implementation increment 7 is connected end to end: bounded Gmail logistics candidates and the
+selected Home Assistant adapter merge through the authenticated `life.logistics` route, and the
+runtime delegates the fresh strict View to the capability-free Life Logistics Expert. Home
+Assistant satisfies the increment's travel/delivery/home adapter choice in code; this statement is
+an implementation checkpoint, not live S5.5-C5 acceptance.
+
 ## Remaining gate
 
 No live provider evidence was used. The Agent path is stateless rather than a durable registry
-assignment. Microsoft Teams still needs a real tenant/admin-consent run, and a dedicated live
-travel/delivery provider adapter remains. Broader cross-domain scenarios and live evidence are also
-required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
+assignment. Microsoft Teams still needs a real tenant/admin-consent run, and Home Assistant needs a
+real selected-source run to satisfy the live travel/delivery/home gate. Broader cross-domain
+scenarios and live evidence are also required. S5.5-C4/C5 and S5.5-E7/E8 remain pending.
