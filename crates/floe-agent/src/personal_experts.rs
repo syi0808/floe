@@ -4,12 +4,54 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AttentionView,
-    InferencePolicyDecision, ModelRequest, ModelRunner, ModelStep, PeopleView, PromptAssembly,
-    SessionProtection, UsageLedger, WellbeingView, focus_expert_prompt, generate_with_recovery,
+    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AttentionView, CalendarContextView,
+    ContextEvidence, DataClass, InferencePolicyDecision, ModelRequest, ModelRunner, ModelStep,
+    PeopleView, PromptAssembly, SessionProtection, UsageLedger, WellbeingView, WorkContextView,
+    calendar_context_evidence, focus_expert_prompt, generate_with_recovery,
     personal_context_evidence, relationships_expert_prompt, validate_attention_view,
-    validate_people_view, validate_wellbeing_view, wellbeing_expert_prompt,
+    validate_calendar_context_view, validate_people_view, validate_wellbeing_view,
+    validate_work_context_view, wellbeing_expert_prompt, work_context_evidence,
 };
+
+pub const CONFIRMED_INTERACTION_VIEW_ID: &str = "relationships.confirmed_interactions";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedInteraction {
+    pub identity_handle: String,
+    pub evidence_handle: String,
+    pub occurred_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedInteractionView {
+    pub schema_version: u32,
+    pub view_id: String,
+    pub source_handle: String,
+    pub observed_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+    pub interactions: Vec<ConfirmedInteraction>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RelationshipsContextViews {
+    pub people: PeopleView,
+    pub confirmed_interactions: Vec<ConfirmedInteractionView>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FocusContextViews {
+    pub attention: AttentionView,
+    pub calendars: Vec<CalendarContextView>,
+    pub active_work: Vec<WorkContextView>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WellbeingContextViews {
+    pub wellbeing: WellbeingView,
+    pub calendars: Vec<CalendarContextView>,
+}
 
 pub struct PersonalExpertInvocation {
     pub usage: UsageLedger,
@@ -40,6 +82,8 @@ pub struct RelationshipsExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
     pub source_handle: String,
+    #[serde(default)]
+    pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
     pub summary: String,
     pub follow_ups: Vec<RelationshipFollowUp>,
@@ -59,6 +103,8 @@ pub struct FocusExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
     pub source_handle: String,
+    #[serde(default)]
+    pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
     pub summary: String,
     pub recommendation: FocusRecommendation,
@@ -81,6 +127,8 @@ pub struct WellbeingExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
     pub source_handle: String,
+    #[serde(default)]
+    pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
     pub summary: String,
     pub schedule_impact: ScheduleImpact,
@@ -119,12 +167,70 @@ pub async fn run_relationships_expert<Model: ModelRunner>(
     invocation: PersonalExpertInvocation,
     view: PeopleView,
 ) -> Result<RelationshipsExpertResult, AgentFailure> {
-    validate_people_view(&view, invocation.current_time_unix_ms)?;
+    run_relationships_expert_with_views(
+        model,
+        policy,
+        invocation,
+        RelationshipsContextViews {
+            people: view,
+            confirmed_interactions: vec![],
+        },
+    )
+    .await
+}
+
+pub async fn run_relationships_expert_with_views<Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: PersonalExpertInvocation,
+    views: RelationshipsContextViews,
+) -> Result<RelationshipsExpertResult, AgentFailure> {
+    validate_people_view(&views.people, invocation.current_time_unix_ms)?;
+    let mut evidence = vec![personal_context_evidence(&views.people)?];
+    let mut source_handles = vec![views.people.source_handle.clone()];
+    let mut expires_at_unix_ms = views.people.expires_at_unix_ms;
+    let mut support_by_identity = std::collections::HashMap::<String, Vec<String>>::new();
+    for view in &views.confirmed_interactions {
+        validate_confirmed_interaction_view(view, &views.people, invocation.current_time_unix_ms)?;
+        ensure_unique_source(&source_handles, &view.source_handle)?;
+        for interaction in &view.interactions {
+            support_by_identity
+                .entry(interaction.identity_handle.clone())
+                .or_default()
+                .push(interaction.evidence_handle.clone());
+        }
+        source_handles.push(view.source_handle.clone());
+        expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
+        evidence.push(confirmed_interaction_evidence(view)?);
+    }
+    let memory_links = relationship_memory_links(&invocation.context, &views.people)?;
+    if !memory_links.is_empty() {
+        const MEMORY_SOURCE: &str = "relationships:confirmed-memory";
+        ensure_unique_source(&source_handles, MEMORY_SOURCE)?;
+        for link in &memory_links {
+            support_by_identity
+                .entry(link.identity_handle.clone())
+                .or_default()
+                .push(link.evidence_handle.clone());
+            if let Some(valid_until) = link.valid_until_unix_ms {
+                expires_at_unix_ms = expires_at_unix_ms.min(valid_until);
+            }
+        }
+        source_handles.push(MEMORY_SOURCE.into());
+        evidence.push(ContextEvidence {
+            source_handle: MEMORY_SOURCE.into(),
+            data_class: DataClass::Personal,
+            untrusted_text: serde_json::to_string(&memory_links)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+            expires_at_unix_ms: u64::try_from(expires_at_unix_ms)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        });
+    }
     let output: RelationshipsOutput = run_personal_model(
         model,
         policy,
         &invocation,
-        personal_context_evidence(&view)?,
+        evidence,
         relationships_expert_prompt(),
     )
     .await?;
@@ -133,23 +239,31 @@ pub async fn run_relationships_expert<Model: ModelRunner>(
         return Err(AgentFailure::BudgetExceeded);
     }
     for (index, follow_up) in output.follow_ups.iter().enumerate() {
-        let Some(identity) = view
+        let Some(identity) = views
+            .people
             .identities
             .iter()
             .find(|identity| identity.identity_handle == follow_up.identity_handle)
         else {
             return Err(AgentFailure::InvalidModelOutput);
         };
+        let supporting = support_by_identity
+            .get(&follow_up.identity_handle)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if follow_up.reason.trim().is_empty()
             || follow_up.reason.len() > 512
             || follow_up.confidence_millis == 0
             || follow_up.confidence_millis > 1000
             || follow_up.evidence_handles.is_empty()
             || follow_up.evidence_handles.len() > 16
-            || follow_up
+            || !follow_up
                 .evidence_handles
                 .iter()
-                .any(|handle| !identity.evidence_handles.contains(handle))
+                .any(|handle| supporting.contains(handle))
+            || follow_up.evidence_handles.iter().any(|handle| {
+                !identity.evidence_handles.contains(handle) && !supporting.contains(handle)
+            })
             || output.follow_ups[..index]
                 .iter()
                 .any(|other| other.identity_handle == follow_up.identity_handle)
@@ -160,8 +274,9 @@ pub async fn run_relationships_expert<Model: ModelRunner>(
     Ok(RelationshipsExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
-        source_handle: view.source_handle,
-        expires_at_unix_ms: view.expires_at_unix_ms,
+        source_handle: views.people.source_handle,
+        source_handles,
+        expires_at_unix_ms,
         summary: output.summary,
         follow_ups: output.follow_ups,
     })
@@ -173,27 +288,64 @@ pub async fn run_focus_expert<Model: ModelRunner>(
     invocation: PersonalExpertInvocation,
     view: AttentionView,
 ) -> Result<FocusExpertResult, AgentFailure> {
-    validate_attention_view(&view, invocation.current_time_unix_ms)?;
-    let output: FocusOutput = run_personal_model(
+    run_focus_expert_with_views(
         model,
         policy,
-        &invocation,
-        personal_context_evidence(&view)?,
-        focus_expert_prompt(),
+        invocation,
+        FocusContextViews {
+            attention: view,
+            calendars: vec![],
+            active_work: vec![],
+        },
     )
-    .await?;
+    .await
+}
+
+pub async fn run_focus_expert_with_views<Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: PersonalExpertInvocation,
+    views: FocusContextViews,
+) -> Result<FocusExpertResult, AgentFailure> {
+    validate_attention_view(&views.attention, invocation.current_time_unix_ms)?;
+    let mut evidence = vec![personal_context_evidence(&views.attention)?];
+    let mut available = views.attention.evidence_handles.clone();
+    let mut source_handles = vec![views.attention.source_handle.clone()];
+    let mut expires_at_unix_ms = views.attention.expires_at_unix_ms;
+    add_schedule_views(
+        &views.calendars,
+        invocation.current_time_unix_ms,
+        &mut evidence,
+        &mut available,
+        &mut source_handles,
+        &mut expires_at_unix_ms,
+    )?;
+    for view in &views.active_work {
+        validate_work_context_view(view, invocation.current_time_unix_ms)?;
+        ensure_unique_source(&source_handles, &view.source_handle)?;
+        extend_unique_handles(
+            &mut available,
+            view.items.iter().map(|item| &item.evidence_handle),
+        )?;
+        source_handles.push(view.source_handle.clone());
+        expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
+        evidence.push(work_context_evidence(view)?);
+    }
+    let output: FocusOutput =
+        run_personal_model(model, policy, &invocation, evidence, focus_expert_prompt()).await?;
     validate_judgment(
         &output.summary,
         &output.rationale,
         &output.evidence_handles,
-        &view.evidence_handles,
+        &available,
         matches!(output.recommendation, FocusRecommendation::NoConclusion),
     )?;
     Ok(FocusExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
-        source_handle: view.source_handle,
-        expires_at_unix_ms: view.expires_at_unix_ms,
+        source_handle: views.attention.source_handle,
+        source_handles,
+        expires_at_unix_ms,
         summary: output.summary,
         recommendation: output.recommendation,
         rationale: output.rationale,
@@ -207,12 +359,42 @@ pub async fn run_wellbeing_expert<Model: ModelRunner>(
     invocation: PersonalExpertInvocation,
     view: WellbeingView,
 ) -> Result<WellbeingExpertResult, AgentFailure> {
-    validate_wellbeing_view(&view, invocation.current_time_unix_ms)?;
+    run_wellbeing_expert_with_views(
+        model,
+        policy,
+        invocation,
+        WellbeingContextViews {
+            wellbeing: view,
+            calendars: vec![],
+        },
+    )
+    .await
+}
+
+pub async fn run_wellbeing_expert_with_views<Model: ModelRunner>(
+    model: &Model,
+    policy: &InferencePolicyDecision,
+    invocation: PersonalExpertInvocation,
+    views: WellbeingContextViews,
+) -> Result<WellbeingExpertResult, AgentFailure> {
+    validate_wellbeing_view(&views.wellbeing, invocation.current_time_unix_ms)?;
+    let mut evidence = vec![personal_context_evidence(&views.wellbeing)?];
+    let mut available = views.wellbeing.evidence_handles.clone();
+    let mut source_handles = vec![views.wellbeing.source_handle.clone()];
+    let mut expires_at_unix_ms = views.wellbeing.expires_at_unix_ms;
+    add_schedule_views(
+        &views.calendars,
+        invocation.current_time_unix_ms,
+        &mut evidence,
+        &mut available,
+        &mut source_handles,
+        &mut expires_at_unix_ms,
+    )?;
     let output: WellbeingOutput = run_personal_model(
         model,
         policy,
         &invocation,
-        personal_context_evidence(&view)?,
+        evidence,
         wellbeing_expert_prompt(),
     )
     .await?;
@@ -220,14 +402,15 @@ pub async fn run_wellbeing_expert<Model: ModelRunner>(
         &output.summary,
         &output.rationale,
         &output.evidence_handles,
-        &view.evidence_handles,
+        &available,
         matches!(output.schedule_impact, ScheduleImpact::NoConclusion),
     )?;
     Ok(WellbeingExpertResult {
         schema_version: AGENT_VERSION,
         invocation_id: invocation.invocation_id,
-        source_handle: view.source_handle,
-        expires_at_unix_ms: view.expires_at_unix_ms,
+        source_handle: views.wellbeing.source_handle,
+        source_handles,
+        expires_at_unix_ms,
         summary: output.summary,
         schedule_impact: output.schedule_impact,
         rationale: output.rationale,
@@ -235,11 +418,151 @@ pub async fn run_wellbeing_expert<Model: ModelRunner>(
     })
 }
 
+#[derive(Serialize)]
+struct RelationshipMemoryLink {
+    identity_handle: String,
+    evidence_handle: String,
+    target_id: Uuid,
+    revision: u64,
+    valid_until_unix_ms: Option<i64>,
+}
+
+fn validate_confirmed_interaction_view(
+    view: &ConfirmedInteractionView,
+    people: &PeopleView,
+    now_unix_ms: i64,
+) -> Result<(), AgentFailure> {
+    if view.schema_version != AGENT_VERSION
+        || view.view_id != CONFIRMED_INTERACTION_VIEW_ID
+        || !valid_handle(&view.source_handle)
+        || view.observed_at_unix_ms > now_unix_ms
+        || view.expires_at_unix_ms <= now_unix_ms
+        || view.expires_at_unix_ms <= view.observed_at_unix_ms
+        || view.expires_at_unix_ms - view.observed_at_unix_ms > 300_000
+        || view.interactions.len() > 64
+        || serde_json::to_vec(view)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len()
+            > crate::MAX_PERSONAL_CONTEXT_BYTES
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    for (index, interaction) in view.interactions.iter().enumerate() {
+        if !valid_handle(&interaction.identity_handle)
+            || !valid_handle(&interaction.evidence_handle)
+            || interaction.occurred_at_unix_ms < 0
+            || interaction.occurred_at_unix_ms > view.observed_at_unix_ms
+            || !people
+                .identities
+                .iter()
+                .any(|identity| identity.identity_handle == interaction.identity_handle)
+            || view.interactions[..index]
+                .iter()
+                .any(|other| other.evidence_handle == interaction.evidence_handle)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
+fn confirmed_interaction_evidence(
+    view: &ConfirmedInteractionView,
+) -> Result<ContextEvidence, AgentFailure> {
+    Ok(ContextEvidence {
+        source_handle: view.source_handle.clone(),
+        data_class: DataClass::Personal,
+        untrusted_text: serde_json::to_string(&view.interactions)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        expires_at_unix_ms: u64::try_from(view.expires_at_unix_ms)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    })
+}
+
+fn relationship_memory_links(
+    context: &AgentContext,
+    people: &PeopleView,
+) -> Result<Vec<RelationshipMemoryLink>, AgentFailure> {
+    let mut links = vec![];
+    for memory in &context.memories {
+        let target = memory.target_id.to_string();
+        let Some(identity) = people.identities.iter().find(|identity| {
+            identity.identity_handle == target
+                || identity.identity_handle == format!("person:{target}")
+        }) else {
+            continue;
+        };
+        let evidence_handle = format!("memory:{}:{}", memory.target_id, memory.revision);
+        if !valid_handle(&evidence_handle)
+            || links
+                .iter()
+                .any(|link: &RelationshipMemoryLink| link.evidence_handle == evidence_handle)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        links.push(RelationshipMemoryLink {
+            identity_handle: identity.identity_handle.clone(),
+            evidence_handle,
+            target_id: memory.target_id,
+            revision: memory.revision,
+            valid_until_unix_ms: memory.valid_until_unix_ms,
+        });
+    }
+    Ok(links)
+}
+
+fn add_schedule_views(
+    calendars: &[CalendarContextView],
+    now_unix_ms: i64,
+    evidence: &mut Vec<ContextEvidence>,
+    available: &mut Vec<String>,
+    source_handles: &mut Vec<String>,
+    expires_at_unix_ms: &mut i64,
+) -> Result<(), AgentFailure> {
+    for view in calendars {
+        validate_calendar_context_view(view, now_unix_ms)?;
+        ensure_unique_source(source_handles, &view.source_handle)?;
+        extend_unique_handles(
+            available,
+            view.items.iter().map(|item| &item.evidence_handle),
+        )?;
+        source_handles.push(view.source_handle.clone());
+        *expires_at_unix_ms = (*expires_at_unix_ms).min(view.expires_at_unix_ms);
+        evidence.push(calendar_context_evidence(view)?);
+    }
+    Ok(())
+}
+
+fn ensure_unique_source(source_handles: &[String], source: &str) -> Result<(), AgentFailure> {
+    if source_handles.iter().any(|value| value == source) {
+        Err(AgentFailure::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
+fn extend_unique_handles<'a>(
+    available: &mut Vec<String>,
+    handles: impl Iterator<Item = &'a String>,
+) -> Result<(), AgentFailure> {
+    for handle in handles {
+        if available.contains(handle) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        available.push(handle.clone());
+    }
+    Ok(())
+}
+
+fn valid_handle(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 128
+}
+
 async fn run_personal_model<Output: DeserializeOwned, Model: ModelRunner>(
     model: &Model,
     policy: &InferencePolicyDecision,
     invocation: &PersonalExpertInvocation,
-    evidence: crate::ContextEvidence,
+    evidence: Vec<ContextEvidence>,
     prompt: PromptAssembly,
 ) -> Result<Output, AgentFailure> {
     if invocation.assignment.trim().is_empty()
@@ -252,7 +575,7 @@ async fn run_personal_model<Output: DeserializeOwned, Model: ModelRunner>(
         return Err(AgentFailure::InvalidInput);
     }
     let mut context = invocation.context.clone();
-    context.evidence.push(evidence);
+    context.evidence.extend(evidence);
     policy.authorize(
         model.placement(),
         SessionProtection::Encrypted,
