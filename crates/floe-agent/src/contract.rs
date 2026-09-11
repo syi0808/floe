@@ -4,7 +4,7 @@ use floe_domain::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{InferencePolicyDecision, ModelPlacement};
+use crate::{AgentFailure, InferencePolicyDecision, ModelPlacement, SessionProtection};
 
 pub const AGENT_VERSION: u32 = 1;
 
@@ -236,37 +236,6 @@ pub struct SessionRecoveryPointer {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentFailure {
-    UnsupportedVersion,
-    InvalidInput,
-    NotFound,
-    Conflict,
-    StorageUnavailable,
-    VaultUnavailable,
-    PolicyDenied,
-    ConsentRequired,
-    ModelUnavailable,
-    LocalModelUnavailable,
-    ServerModelUnavailable,
-    ServerModelTimeout,
-    ServerModelRequestRejected,
-    CredentialExpired,
-    QuotaExceeded,
-    InvalidModelOutput,
-    LocalModelInvalidOutput,
-    ServerModelInvalidOutput,
-    CapabilityDenied,
-    CapabilityUnavailable,
-    StaleContext,
-    BudgetExceeded,
-    Stalled,
-    Cancelled,
-    DeadlineExceeded,
-    Interrupted,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentOutcome {
     Completed,
@@ -309,13 +278,6 @@ pub enum AgentEventKind {
         outcome: AgentOutcome,
         revision: u64,
     },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionProtection {
-    SyntheticOnly,
-    Encrypted,
-    KeyUnavailable,
 }
 
 pub trait SessionStore {

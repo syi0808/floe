@@ -3,9 +3,8 @@ mod agent_run;
 
 pub use abi::*;
 mod local_context;
-pub mod local_model;
-mod native_calendar;
-mod remote_model;
+pub use floe_infra::local_model;
+use floe_infra::{native_calendar, remote_model};
 #[cfg(unix)]
 mod vault_host;
 

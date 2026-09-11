@@ -34,7 +34,7 @@ impl FoundationModelRunner {
         }
     }
 
-    pub(crate) const fn encrypted() -> Self {
+    pub const fn encrypted() -> Self {
         Self {
             protection: SessionProtection::Encrypted,
         }

@@ -2,38 +2,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    AgentFailure, EpistemicStatus, LearningEvidenceRef, PersonalMemoryKind, SessionProtection,
+    AgentFailure, DataClass, EpistemicStatus, LearningEvidenceRef, ModelPlacement,
+    PersonalMemoryKind, SessionProtection, TransferConsent,
 };
 
 pub const MAX_CONTEXT_MEMORIES: usize = 32;
 pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
 pub const MAX_CONTEXT_EVIDENCE: usize = 64;
 pub const MAX_CONTEXT_EVIDENCE_BYTES: usize = 32 * 1024;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DataClass {
-    Synthetic,
-    Personal,
-    TemporaryAiContext,
-    HighlySensitive,
-    DeviceOnlyRaw,
-    Credential,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelPlacement {
-    DeviceLocal,
-    Remote,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TransferConsent {
-    NotGranted,
-    Granted,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

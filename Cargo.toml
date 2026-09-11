@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/floe-agent", "crates/floe-core", "crates/floe-domain", "crates/floe-ffi", "crates/floe-protocol"]
+members = ["crates/floe-agent", "crates/floe-agent-contract", "crates/floe-core", "crates/floe-domain", "crates/floe-ffi", "crates/floe-infra", "crates/floe-protocol"]
 resolver = "3"
 
 [workspace.package]

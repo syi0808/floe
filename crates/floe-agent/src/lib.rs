@@ -23,6 +23,10 @@ mod prompts;
 mod registry;
 mod runtime;
 
+pub use floe_agent_contract::{
+    AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent,
+};
+
 pub use a2a::{
     A2A_PROTOCOL_VERSION, A2AArtifact, A2AHost, A2AMessage, A2AMessageRole, A2APart, A2ARouter,
     A2ASendMessageRequest, A2ATask, A2ATaskRequest, A2ATaskState, AgentCard,
@@ -53,13 +57,13 @@ pub use context_routing::{
 };
 pub use contract::{
     AGENT_VERSION, AgentBudget, AgentCardManifestEntry, AgentCommand, AgentContinuation,
-    AgentEvent, AgentEventKind, AgentFailure, AgentMessage, AgentOutcome, AgentSession,
-    AgentSessionScope, AgentUsage, CapabilityDescriptor, CapabilityExecution,
-    CapabilityExecutionState, CapabilityHost, CapabilityInvocation, ContextEnvelope,
-    ContextManifest, ContextualData, ConversationContext, DelegationExecution,
-    DelegationExecutionState, EvidenceManifestEntry, MemoryManifestEntry, ModelReplay,
-    ModelRequest, ModelResponse, ModelRunner, ModelStep, PromptManifestEntry, ProviderReplay,
-    RuntimeContext, ScopedInstructions, SessionProtection, SessionRecoveryPointer, SessionStore,
+    AgentEvent, AgentEventKind, AgentMessage, AgentOutcome, AgentSession, AgentSessionScope,
+    AgentUsage, CapabilityDescriptor, CapabilityExecution, CapabilityExecutionState,
+    CapabilityHost, CapabilityInvocation, ContextEnvelope, ContextManifest, ContextualData,
+    ConversationContext, DelegationExecution, DelegationExecutionState, EvidenceManifestEntry,
+    MemoryManifestEntry, ModelReplay, ModelRequest, ModelResponse, ModelRunner, ModelStep,
+    PromptManifestEntry, ProviderReplay, RuntimeContext, ScopedInstructions,
+    SessionRecoveryPointer, SessionStore,
 };
 pub use expert::{
     ExpertBudget, ExpertFocusProposal, ExpertHost, ExpertInput, ExpertInsight, ExpertInvocation,
@@ -115,9 +119,8 @@ pub use playbook::{
     PlaybookRegistry, PlaybookSession,
 };
 pub use policy::{
-    AgentContext, ContextEvidence, ContextMemory, DataClass, InferencePolicyDecision,
-    MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, ModelPlacement, TransferConsent,
+    AgentContext, ContextEvidence, ContextMemory, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
+    MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
 };
 pub use portfolio_context::{
     LOGISTICS_VIEW_ID, LogisticsItem, LogisticsItemKind, LogisticsView, MAX_PORTFOLIO_VIEW_BYTES,

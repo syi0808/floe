@@ -764,12 +764,20 @@ name = "floe-agent"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-agent-contract",
  "floe-domain",
  "jsonschema",
  "serde",
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "floe-agent-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -813,11 +821,27 @@ dependencies = [
  "floe-agent",
  "floe-core",
  "floe-domain",
+ "floe-infra",
+ "floe-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "floe-infra"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-agent",
+ "floe-core",
+ "floe-domain",
  "floe-protocol",
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "uuid",
 ]
