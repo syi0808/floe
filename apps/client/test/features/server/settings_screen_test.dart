@@ -54,10 +54,7 @@ void main() {
       tester.widget<Text>(find.text('On this device')).style?.fontWeight,
       FontWeight.w500,
     );
-    expect(
-      find.text('No connected data sources are available yet.'),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('android-data-sources')), findsNothing);
     expect(find.text('Schedule planning'), findsNothing);
   });
 

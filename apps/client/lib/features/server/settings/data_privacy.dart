@@ -326,13 +326,14 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             'Control what Floe may use and where assisted processing may happen.',
             style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
-          const SizedBox(height: FloeSpace.lg),
-          FloeSquircle(
-            padding: const EdgeInsets.all(FloeSpace.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_androidContext != null && deviceConnections != null)
+          if (_androidContext != null && deviceConnections != null) ...[
+            const SizedBox(height: FloeSpace.lg),
+            FloeSquircle(
+              key: const ValueKey('android-data-sources'),
+              padding: const EdgeInsets.all(FloeSpace.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                   AgentConnectionSettings(
                     connections: deviceConnections,
                     loading: androidConnectionLoading,
@@ -341,129 +342,128 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                         androidCalendarFailure != null,
                     onRefresh: _load,
                   ),
-                if (androidCalendarConnection != null) ...[
-                  const SizedBox(height: FloeSpace.base),
-                  Text(
-                    'Choose up to four Android calendars. Selection stays on this device and reads never change Calendar.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
+                  if (androidCalendarConnection != null) ...[
+                    const SizedBox(height: FloeSpace.base),
+                    Text(
+                      'Choose up to four Android calendars. Selection stays on this device and reads never change Calendar.',
+                      style: FloeType.bodySmall.copyWith(
+                        color: FloePalette.neutral600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  if (androidCalendarConnection.state ==
-                      AgentConnectionState.revoked)
+                    const SizedBox(height: FloeSpace.xs),
+                    if (androidCalendarConnection.state ==
+                        AgentConnectionState.revoked)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FloeButton.outlined(
+                          key: const ValueKey('android-calendar-allow'),
+                          onPressed: () =>
+                              _allowAndroidCalendar(androidCalendarConnection!),
+                          loading: androidCalendarBusy,
+                          child: const Text('Allow Android Calendar'),
+                        ),
+                      )
+                    else if (androidCalendars case final calendars?)
+                      if (calendars.isEmpty)
+                        const Text(
+                          'No readable Android calendars are available.',
+                        )
+                      else
+                        Wrap(
+                          spacing: FloeSpace.xs,
+                          runSpacing: FloeSpace.xs,
+                          children: [
+                            for (final calendar in calendars)
+                              if (androidSelectedCalendars.contains(
+                                calendar.id,
+                              ))
+                                FloeButton.filled(
+                                  key: ValueKey(
+                                    'android-calendar-${calendar.id}',
+                                  ),
+                                  size: FloeButtonSize.compact,
+                                  onPressed: androidCalendarBusy
+                                      ? null
+                                      : () => _toggleAndroidCalendar(calendar),
+                                  child: Text(calendar.displayName),
+                                )
+                              else
+                                FloeButton.outlined(
+                                  key: ValueKey(
+                                    'android-calendar-${calendar.id}',
+                                  ),
+                                  size: FloeButtonSize.compact,
+                                  onPressed:
+                                      androidCalendarBusy ||
+                                          androidSelectedCalendars.length == 4
+                                      ? null
+                                      : () => _toggleAndroidCalendar(calendar),
+                                  child: Text(calendar.displayName),
+                                ),
+                          ],
+                        ),
+                  ],
+                  if (healthConnection != null) ...[
+                    const SizedBox(height: FloeSpace.sm),
+                    Text(
+                      'Health records stay on this device. Floe receives only a short-lived capacity and recovery summary.',
+                      style: FloeType.bodySmall.copyWith(
+                        color: FloePalette.neutral600,
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.xs),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: FloeButton.outlined(
-                        key: const ValueKey('android-calendar-allow'),
-                        onPressed: () =>
-                            _allowAndroidCalendar(androidCalendarConnection!),
-                        loading: androidCalendarBusy,
-                        child: const Text('Allow Android Calendar'),
+                        key: const ValueKey('android-health-refresh'),
+                        onPressed:
+                            healthConnection.state ==
+                                AgentConnectionState.unsupported
+                            ? null
+                            : () => _refreshAndroidWellbeing(healthConnection!),
+                        loading: androidHealthBusy,
+                        child: Text(
+                          healthConnection.state == AgentConnectionState.revoked
+                              ? 'Allow Health Connect'
+                              : 'Refresh wellbeing',
+                        ),
                       ),
-                    )
-                  else if (androidCalendars case final calendars?)
-                    if (calendars.isEmpty)
-                      const Text('No readable Android calendars are available.')
-                    else
-                      Wrap(
-                        spacing: FloeSpace.xs,
-                        runSpacing: FloeSpace.xs,
-                        children: [
-                          for (final calendar in calendars)
-                            if (androidSelectedCalendars.contains(calendar.id))
-                              FloeButton.filled(
-                                key: ValueKey(
-                                  'android-calendar-${calendar.id}',
-                                ),
-                                size: FloeButtonSize.compact,
-                                onPressed: androidCalendarBusy
-                                    ? null
-                                    : () => _toggleAndroidCalendar(calendar),
-                                child: Text(calendar.displayName),
-                              )
-                            else
-                              FloeButton.outlined(
-                                key: ValueKey(
-                                  'android-calendar-${calendar.id}',
-                                ),
-                                size: FloeButtonSize.compact,
-                                onPressed:
-                                    androidCalendarBusy ||
-                                        androidSelectedCalendars.length == 4
-                                    ? null
-                                    : () => _toggleAndroidCalendar(calendar),
-                                child: Text(calendar.displayName),
+                    ),
+                  ],
+                  if (androidContactsConnection != null) ...[
+                    const SizedBox(height: FloeSpace.sm),
+                    Text(
+                      'Android Contacts stay on this device. Floe exposes only bounded identity handles and selected aliases.',
+                      style: FloeType.bodySmall.copyWith(
+                        color: FloePalette.neutral600,
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.xs),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FloeButton.outlined(
+                        key: const ValueKey('android-contacts-refresh'),
+                        onPressed:
+                            androidContactsConnection.state ==
+                                AgentConnectionState.unsupported
+                            ? null
+                            : () => _refreshAndroidContacts(
+                                androidContactsConnection!,
                               ),
-                        ],
-                      ),
-                ],
-                if (healthConnection != null) ...[
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    'Health records stay on this device. Floe receives only a short-lived capacity and recovery summary.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FloeButton.outlined(
-                      key: const ValueKey('android-health-refresh'),
-                      onPressed:
-                          healthConnection.state ==
-                              AgentConnectionState.unsupported
-                          ? null
-                          : () => _refreshAndroidWellbeing(healthConnection!),
-                      loading: androidHealthBusy,
-                      child: Text(
-                        healthConnection.state == AgentConnectionState.revoked
-                            ? 'Allow Health Connect'
-                            : 'Refresh wellbeing',
-                      ),
-                    ),
-                  ),
-                ],
-                if (androidContactsConnection != null) ...[
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    'Android Contacts stay on this device. Floe exposes only bounded identity handles and selected aliases.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FloeButton.outlined(
-                      key: const ValueKey('android-contacts-refresh'),
-                      onPressed:
+                        loading: androidContactsBusy,
+                        child: Text(
                           androidContactsConnection.state ==
-                              AgentConnectionState.unsupported
-                          ? null
-                          : () => _refreshAndroidContacts(
-                              androidContactsConnection!,
-                            ),
-                      loading: androidContactsBusy,
-                      child: Text(
-                        androidContactsConnection.state ==
-                                AgentConnectionState.revoked
-                            ? 'Allow Android Contacts'
-                            : 'Refresh contacts',
+                                  AgentConnectionState.revoked
+                              ? 'Allow Android Contacts'
+                              : 'Refresh contacts',
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
-                if (!controller.hasConnections &&
-                    widget.serverClient == null &&
-                    _androidContext == null &&
-                    widget.appleContext == null &&
-                    !controller.hasCalendarExpertManagement)
-                  const Text('No connected data sources are available yet.'),
-              ],
+              ),
             ),
-          ),
+          ],
           if (controller.hasMemory) ...[
             const SizedBox(height: FloeSpace.lg),
             AgentMemorySettingsCard(
