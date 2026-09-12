@@ -6,15 +6,16 @@ require separate explicit consent and disposable resources; synthetic tests do n
 
 | Production path | Reviewed implementation | Outstanding acceptance gate |
 | --- | --- | --- |
-| Native Calendar consent | Exact reviewed Core source stamp, finite subset, durable consumer epoch and scoped commit tests | Persist actual OS subject fingerprint in explicit consent; broader non-Calendar policy adoption |
-| Native Calendar admission | Encrypted grant and atomic registry mapping; lazy source admission | Immutable invocation/query-bound lease; cleanup worker |
-| macOS native read | Bounded direct EventKit adapter wired at tool invocation, cancellation and generation fixtures | Pinned immutable lease and real OS validation |
-| iOS/Android native read | Existing platform publication remains | Tool-time acquisition broker, disposal/late-callback protocol and lifecycle tests |
+| Native Calendar consent | Core source stamp, finite subset, consumer epoch; durable OS subject mapping implemented under review | Actual selected-subset host preview and Flutter confirmation; mobile review binding |
+| Native Calendar admission | Encrypted grant/mapping; invocation/query leases implemented under review | Result-transaction permission regression; production mobile hook |
+| macOS native read | Bounded direct EventKit adapter; expected subject checked before event query; root synthetic suite 13/13 | Complete consent preview integration and real OS validation |
+| iOS/Android native read | Native bounded readers and application-lifetime broker implemented; root broker 12/12, Android Kotlin build passed | Actual Calendar tool/review hook; iOS SDK build unavailable |
 | General conversation | Governed store CAS/projection; monotonic unknown; restored-turn filtering | Positive production source resolvers; opaque replay optimization disabled |
-| Calendar history/private state | Conservative history filtering remains | Real consumed-view dependencies in result/session/private-state transaction |
+| Calendar history/private state | Consumed lease coverage implemented in scoped result transaction; private state is metadata-only | Positive persisted-history resolver; result-transaction permission regression |
+| Revocation cleanup | Durable bounded scan/outbox and merge-before-sanitize accepted in `afaa9fb`; root cleanup 6/6, integration 18/18 | Worker idle integration and final combined-tree regression suite |
 | Compaction and learning | Transactional coverage union and independent evidence gates; positive/negative tests | Source-learning consent/retention policy; no implicit Read-to-Learning permission |
-| Remote issuer enrollment | Durable console approval, proof of possession, revocation and quarantine | Producer pinning, encrypted owner signer and explicit client review flow |
-| Remote Calendar route | Existing exact connection and mirror revision checks | Online owner admission/release, authoritative provider subject and source epoch adoption |
+| Remote issuer enrollment | Durable console approval; producer identity `2214b16`, encrypted owner signer `9450d72`; FFI/UI implemented and focused tests passed | Integrated host/client commit and final route adoption |
+| Remote Calendar route | Provider-authoritative Google/Microsoft subjects and cached source fence accepted in `5488c8e` | Existing read route still needs explicit remote consent and online owner admission/read/release |
 | Remote Mail route | Existing Person ownership checks | Exact source selection; remove Gmail-to-Microsoft fallback; owner admission/release |
 | Remote Work route | Existing Person-owned runtime aggregation | One exact authorized source per request, explicit Core aggregation and coverage |
 | Remote Logistics route | Existing owned runtime/Gmail aggregation | Exact selected source, authorization and bounded partial-coverage parity |
@@ -51,5 +52,18 @@ The native subject audit found a remaining cross-conversation gap: a lease's Eve
 fingerprint is invocation-local, while the durable grant currently records only Core's mirror source
 authority. A native account/source replacement preserving the selected calendar IDs can therefore
 escape that durable comparison. Required correction: persist the explicitly reviewed host fingerprint
-in the encrypted grant mapping and compare fresh host evidence before acquisition. First-read pinning
-is not consent. The P2 Core source-authority milestone does not close this OS identity gate.
+in the encrypted grant mapping and compare fresh host evidence before acquisition. That backend
+correction is now implemented, but the actual selected-subset preview and user confirmation path is
+still pending. First-read pinning is not consent. The P2 Core source-authority milestone does not
+close this OS identity gate by itself.
+
+Provider identity checkpoint `5488c8e` verifies Google subject and Microsoft signed tenant/subject
+evidence rather than email labels. Source consume holds a cache-only fence, not a token-network lock;
+credential binding/generation, logout/persistence failure and late-load replacement are tested.
+Persisted verified identities hydrate as unverified audit state and require fresh provider preflight.
+Root full Go and Google/Microsoft/authorization/console race suites passed. This foundation does not
+protect the pre-existing Calendar/Mail/Work/Logistics read endpoints by itself.
+
+iOS Calendar source passes Swift syntax parsing. The installed Xcode lacks the required iOS 26.2
+SDK/destination, so this is not a successful iOS build. Android Kotlin compilation succeeded after
+removing only regenerable Rust incremental build artifacts to recover disk space.
