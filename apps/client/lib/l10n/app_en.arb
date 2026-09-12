@@ -228,6 +228,7 @@
   "connections": "Connections",
   "manageTheServicesThatBringContextTo": "Manage the services that bring context to your day.",
   "availableServices": "Available services",
+  "unavailableServices": "Unavailable services",
   "bringEventsFromYourMacIntoYour": "Bring events from your Mac into your day.",
   "loadingCalendar": "Loading calendar",
   "dismissDialog": "Dismiss dialog",

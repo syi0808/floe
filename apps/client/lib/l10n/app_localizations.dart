@@ -1414,6 +1414,12 @@ abstract class AppLocalizations {
   /// **'Available services'**
   String get availableServices;
 
+  /// No description provided for @unavailableServices.
+  ///
+  /// In en, this message translates to:
+  /// **'Unavailable services'**
+  String get unavailableServices;
+
   /// No description provided for @bringEventsFromYourMacIntoYour.
   ///
   /// In en, this message translates to:

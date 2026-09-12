@@ -752,6 +752,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get availableServices => 'Available services';
 
   @override
+  String get unavailableServices => 'Unavailable services';
+
+  @override
   String get bringEventsFromYourMacIntoYour =>
       'Bring events from your Mac into your day.';
 

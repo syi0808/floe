@@ -318,35 +318,45 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 deviceCalendarStatus == ServerConnectorStatus.connected
             ? 1
             : 0);
-    final cards = <Widget>[
+    final cards = <({ServerConnectorStatus status, Widget card})>[
       if (supportsDeviceCalendar)
-        _ConnectorCard(
-          key: Key(
-            effectivePlatform == TargetPlatform.android
-                ? 'connector-calendar-android'
-                : 'connector-calendar-apple',
-          ),
-          icon: LucideIcons.calendarDays,
-          name: _deviceCalendarName(strings, effectivePlatform),
-          description: _deviceCalendarDescription(strings, effectivePlatform),
+        (
           status: deviceCalendarStatus,
-          binding: widget.deviceId == null
-              ? null
-              : 'Bound to this device · ${widget.deviceId}',
-          onPressed: () => setState(() => deviceCalendarDetail = true),
+          card: _ConnectorCard(
+            key: Key(
+              effectivePlatform == TargetPlatform.android
+                  ? 'connector-calendar-android'
+                  : 'connector-calendar-apple',
+            ),
+            icon: LucideIcons.calendarDays,
+            name: _deviceCalendarName(strings, effectivePlatform),
+            description: _deviceCalendarDescription(strings, effectivePlatform),
+            status: deviceCalendarStatus,
+            onPressed: () => setState(() => deviceCalendarDetail = true),
+          ),
         ),
       for (final connector in serverConnectors)
-        _ConnectorCard(
-          key: Key('connector-${connector.id}'),
-          icon: _connectorIcon(connector.id),
-          name: connector.name,
-          description: _connectorDescription(connector),
+        (
           status: connector.status,
-          binding: 'Floe server · Person-owned',
-          onPressed: () =>
-              setState(() => selectedServerConnectorId = connector.id),
+          card: _ConnectorCard(
+            key: Key('connector-${connector.id}'),
+            icon: _connectorIcon(connector.id),
+            name: connector.name,
+            description: _connectorDescription(connector),
+            status: connector.status,
+            onPressed: () =>
+                setState(() => selectedServerConnectorId = connector.id),
+          ),
         ),
     ];
+    final availableCards = cards
+        .where((item) => item.status != ServerConnectorStatus.unavailable)
+        .map((item) => item.card)
+        .toList(growable: false);
+    final unavailableCards = cards
+        .where((item) => item.status == ServerConnectorStatus.unavailable)
+        .map((item) => item.card)
+        .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -381,23 +391,14 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             padding: EdgeInsets.all(FloeSpace.lg),
             child: Text('No connector providers are available on this device.'),
           )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth < 620
-                  ? constraints.maxWidth
-                  : constraints.maxWidth < 930
-                  ? (constraints.maxWidth - FloeSpace.lg) / 2
-                  : (constraints.maxWidth - FloeSpace.lg * 2) / 3;
-              return Wrap(
-                spacing: FloeSpace.lg,
-                runSpacing: FloeSpace.lg,
-                children: [
-                  for (final card in cards) SizedBox(width: width, child: card),
-                ],
-              );
-            },
-          ),
+        else if (availableCards.isNotEmpty)
+          _ConnectorCardGrid(cards: availableCards),
+        if (unavailableCards.isNotEmpty) ...[
+          SizedBox(height: 36),
+          Text(strings.unavailableServices, style: FloeType.title),
+          SizedBox(height: FloeSpace.base),
+          _ConnectorCardGrid(cards: unavailableCards),
+        ],
         if (loadingCatalog) ...[
           SizedBox(height: FloeSpace.lg),
           const LinearProgressIndicator(key: Key('connector-catalog-loading')),
@@ -598,14 +599,12 @@ class _ConnectorCard extends StatelessWidget {
     required this.description,
     required this.status,
     required this.onPressed,
-    this.binding,
   });
 
   final IconData icon;
   final String name;
   final String description;
   final ServerConnectorStatus status;
-  final String? binding;
   final VoidCallback onPressed;
 
   @override
@@ -649,18 +648,33 @@ class _ConnectorCard extends StatelessWidget {
               color: FloePalette.neutral600,
             ),
           ),
-          if (binding != null) ...[
-            SizedBox(height: FloeSpace.base),
-            Text(
-              binding!,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: FloeType.micro.copyWith(color: FloePalette.neutral500),
-            ),
-          ],
         ],
       ),
     ),
+  );
+}
+
+class _ConnectorCardGrid extends StatelessWidget {
+  const _ConnectorCardGrid({required this.cards});
+
+  final List<Widget> cards;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth < 620
+          ? constraints.maxWidth
+          : constraints.maxWidth < 930
+          ? (constraints.maxWidth - FloeSpace.lg) / 2
+          : (constraints.maxWidth - FloeSpace.lg * 2) / 3;
+      return Wrap(
+        spacing: FloeSpace.lg,
+        runSpacing: FloeSpace.lg,
+        children: [
+          for (final card in cards) SizedBox(width: width, child: card),
+        ],
+      );
+    },
   );
 }
 

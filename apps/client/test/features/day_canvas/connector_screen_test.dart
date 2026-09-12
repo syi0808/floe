@@ -71,7 +71,7 @@ void main() {
     expect(serviceShape.side.width, 1);
     expect(find.text(strings.macosCalendar), findsOneWidget);
     expect(find.text(strings.appleCalendar), findsNothing);
-    expect(find.textContaining('local-test-device'), findsOneWidget);
+    expect(find.textContaining('Bound to this device'), findsNothing);
     await tester.tap(find.text(strings.macosCalendar));
     await tester.pumpAndSettle();
     expect(find.text(strings.backToConnections), findsOneWidget);
@@ -190,6 +190,13 @@ void main() {
     expect(find.text('Gmail'), findsOneWidget);
     expect(find.text('Unavailable'), findsNWidgets(2));
     expect(find.text('macOS Calendar'), findsOneWidget);
+    expect(find.text('Unavailable services'), findsOneWidget);
+    expect(find.textContaining('Bound to this device'), findsNothing);
+    expect(find.textContaining('Floe server ·'), findsNothing);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('connector-github.issues'))).dy,
+      lessThan(tester.getTopLeft(find.byKey(const Key('connector-gmail'))).dy),
+    );
   });
 
   for (final testCase
