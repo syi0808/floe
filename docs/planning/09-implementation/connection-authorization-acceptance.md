@@ -4,6 +4,57 @@ This ledger records implemented paths, not just available types. Last reviewed 2
 P7 is incomplete while required production paths below remain pending. Live OS/provider checks
 require separate explicit consent and disposable resources; synthetic tests do not replace them.
 
+## Active development checkpoint
+
+The feature-first workflow in `AGENTS.md` supersedes the exhaustive test matrices in older planning
+notes. Complete a usable path, exercise it directly, and keep focused regressions for actual bugs
+and essential authorization invariants. Counts below older checkpoints are historical evidence,
+not a requirement to recreate every test before implementing the next feature.
+
+- Calendar history now revalidates revoked dependencies at dependent commit while retaining prior
+  user-visible history. The current Calendar integration group passes 37 tests.
+- Agent action approval, policy, admission and uncertain-result recovery are owned by the encrypted
+  vault. The Core row is a projection. The native EventKit adapter checks the reviewed subject at
+  preflight and again before saving; ordinary mirror revision changes do not invalidate consent.
+- A connected `/focus` command requests a proposal against exactly one reviewed EventKit calendar;
+  it does not dispatch writes. Inspect/review/execute first consult the unlocked vault, not the
+  potentially stale Core projection. Native source matching was exercised through the existing
+  dylib fixture; live provider writes have not been performed.
+- Attention uses a trusted host broker and final-save liveness validation. Contacts now has native
+  selected-identity inspection, explicit review and encrypted selected-handle persistence; the
+  generic display publication remains insufficient to authorize a model read.
+- Wellbeing and Feasibility remain explicitly unavailable in governed native acquisition. Mobile
+  encrypted-vault key storage is also not implemented by the current macOS-only keyring adapter.
+  These are implementation gaps, not tests that can be waived by using a synthetic provider.
+- Contacts capability and Relationships expert now resolve the unique active reviewed grant,
+  reload the saved selection, acquire through the broker and record the dependency for model/CAS
+  validation. Mobile secure-key support still gates a real device run.
+- Mail/Work/Logistics now have settings Inspect → Review → Pause controls and Vault worker
+  handlers. Review binds the frozen signed source, provider identity, revision and producer;
+  model authorization checks fresh source and consumer policy. The approved processing recipient
+  is the pinned producer audience, not an arbitrary external inference provider.
+- Direct macOS smoke check: rebuilt and launched the app with fresh disposable Floe person data
+  after the old schema failed to decode. Calendar startup and Settings navigation work. Locked
+  Vault action permissions show explicit unlock guidance rather than a save/provider error.
+- The direct check exposed a Keychain read blocking the main thread. Credential work now runs
+  off-main, and reads time out without deleting credentials. Remote server settings visibly
+  exit loading with a credential-store error on this machine; actual pairing remains unverified.
+- Focused UI regressions pass: 13 action-review and 17 settings/server checks. The action-review
+  scrollbar-only golden was removed; narrow-layout readability and overflow checks remain.
+- The stable Core integration checkpoint passes 169 tests and FFI passes 66. Positive remote
+  expert artifact checks use an injected reader, not a claim of end-to-end signed authorization.
+  The signed Calendar fixture uses a bounded 10-second socket timeout to tolerate suite contention.
+  The Go server suite passes;
+  native source fixture checks and signed Calendar exchange are synthetic checks, separate
+  from the direct macOS startup/settings exercise and unperformed external provider writes.
+- Next implementation order: mobile secure-key provider, governed Feasibility acquisition,
+  then governed Wellbeing acquisition. These are usable-path work, not additional test matrices.
+
+## Historical checkpoints
+
+The following table and audit notes describe earlier reviews; the active checkpoint above records
+newer integration work. Old pending items are not automatically current blockers.
+
 | Production path | Reviewed implementation | Outstanding acceptance gate |
 | --- | --- | --- |
 | Native Calendar consent | Durable OS subject mapping and selected-subset preview-before-confirm implemented; root Flutter 26/26 | Final combined-tree review and native platform validation |
@@ -23,18 +74,16 @@ require separate explicit consent and disposable resources; synthetic tests do n
 | Action proposals and execution | Existing approval, durable attempts and uncertain-outcome reconciliation | Current dependency/action-policy admission and revoke/dispatch race tests |
 | Recovery UI | Strict stage-aware failure envelope, session-preserving source review and generic stale context guidance | Exact affected-source attribution, eligible read-retry producers, final route/action matrix |
 
-## Required final evidence
+## Validation approach
 
-- Rust workspace tests, focused encrypted rollback/reopen tests, and rebuilt C ABI tests.
-- Go full suites and authorization/console race tests, plus shared signed protocol vectors.
-- Flutter analyze and tests, separating independently reproduced baseline failures from regressions.
-- Native package and synthetic acquisition/action suites, including default-parallel execution.
-- Every protected route has an exact-source positive test and a pre-read denial test; unavailable
-  stubs are explicitly pending, never counted as adopted providers.
-- Source A revocation preserves independent conversation and source B; revoked data cannot re-enter
-  through summaries, provider replay, accepted memory, private state, archives or proposals.
-- Existing remote routes are not claimed to use the new owner engine until wired. New enrollment
-  APIs or signed fixtures alone do not protect the pre-existing read endpoints.
+- Build the affected application and exercise the changed user flow before expanding tests.
+- Run the relevant existing regression group once the path is stable. Use broader suites at a
+  coherent integration checkpoint, not repeatedly during each agent's partial edits.
+- Preserve regressions for authorization bypass, revoked data release, data loss and duplicate
+  effects. Consolidate redundant serialization/implementation-detail tests rather than growing
+  a complete scenario matrix for each new helper.
+- Report direct checks separately from synthetic fixtures and unavailable platform/provider paths.
+  Enrollment helpers and signed fixtures alone are not remote-route adoption.
 
 See [delivery plan](connection-authorization-delivery.md) for reviewed commits and validation counts,
 and [runtime design](connection-authorization-runtime.md) for the complete scenario matrix.

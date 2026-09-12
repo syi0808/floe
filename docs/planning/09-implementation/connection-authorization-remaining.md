@@ -3,6 +3,10 @@
 Implementation instructions for the next Luna/high assignments. These are acceptance requirements,
 not claims that the production paths already meet them. No backward compatibility is required.
 
+The active-development workflow in `AGENTS.md` takes precedence over the historical exhaustive
+test lists below: implement the end-to-end feature, exercise it, and retain only useful regression
+coverage. Disposable Floe-owned local test data may be reset; connected provider data is excluded.
+
 ## Ordering and shared files
 
 Finish and review P3b/P4c Calendar lineage and P4d cleanup before generalizing their resolver.
@@ -181,6 +185,6 @@ dependency resolver and dispatch admission are wired end to end.
 
 Only mark complete after all rows in the acceptance ledger have production positive and negative
 tests or are explicitly excluded by the user. Unsupported implementations are not environment-only
-gates. Real OS/provider tests remain separately consented; do not reset a user database or mutate a
-live provider to obtain acceptance evidence. Run final suites on a stable tree, with no concurrent
+gates. Real OS/provider tests remain separately consented; do not mutate a live provider to obtain
+acceptance evidence. Run relevant final checks on a stable tree, with no concurrent
 build deleting artifacts used by rustdoc or the Flutter FFI loader.
