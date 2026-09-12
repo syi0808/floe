@@ -79,7 +79,7 @@ Extend existing `calendar_action.rs`, `action_authority.rs`, `agent_action.rs` a
    provider idempotency/reconciliation must use that same identifier.
 4. Crash/timeout after send remains unknown, not failed-and-retryable. Reconcile the same attempt,
    never blindly create another action. Revocation after admitted dispatch cannot recall bytes or
-   undo an already successful provider mutation; retain an honest uncertain outcome.
+undo an already successful provider mutation; retain an honest uncertain outcome.
 5. Keep the P7 failure envelope source-local: review for missing consent, reconciliation for unknown
    execution, and no automatic action replay. Ordinary conversation CAS conflicts remain separate.
 
@@ -87,6 +87,43 @@ Required barrier/fault tests: revoke/cancel before and after dispatch admission;
 versus unrelated item change; payload/target tampering; restart after provider success before local
 settlement; duplicate completion; reconciliation without duplicate effects; and expired proposal
 dependencies that remain inspectable but cannot authorize publication.
+
+### P6b authoritative owner decision
+
+For agent-origin actions, make the encrypted vault the authoritative owner of approval, action
+policy, cancellation and dispatch admission, alongside the grants and consumer policies it already
+owns. The Core calendar action row becomes a reconstructible display projection of that same
+action and execution identifier, not a second authority. No compatibility migration is required.
+Do not add a parallel retry machine: retain the existing action states and execution identifier,
+moving the authoritative agent-action transitions behind vault methods. Direct user calendar
+actions remain a distinct Core-owned operation and must not accept an agent-origin bypass.
+
+1. Store the immutable approved envelope and its canonical digest in the vault: exact Person,
+   source authority, destination, operation, payload, target-specific precondition, originating
+   dependency coverage and explicit write approval. Validate the envelope when projecting it into
+   Core; a projection edit cannot change the authoritative dispatch payload.
+2. Move agent action-policy updates and cancellation into this owner. Source/grant revocation,
+   consumer disablement and source replacement already mutate this owner and must invalidate
+   dependent pending approvals in the same transaction. Publish Core/UI projections afterward;
+   projection failure cannot preserve authority. Audit every FFI setter and dispatch entry point.
+3. Run provider preflight outside the transaction. Require an exact target/resource precondition,
+   not the whole mirror revision. In one short immediate transaction, validate current authority,
+   live dependency evidence, approval digest, cancellation, deadline and preflight binding, then
+   CAS Approved to Executing using the original execution identifier. This is the documented
+   dispatch linearization point. Never hold a database transaction across provider I/O.
+4. Dispatch only the returned immutable admitted envelope. A pause committed before admission
+   prevents dispatch; a pause committed afterward cannot promise to recall an admitted effect.
+   Provider adapters must enforce target preconditions at mutation time where supported. A
+   preflight-only equality check cannot promise protection against a concurrent provider edit;
+   unsupported conditional operations need an explicit restricted capability, not a false claim.
+5. Settle the same authoritative attempt, then update its display projection. After restart,
+   Executing is uncertain and reconciles through lookup with the same identifier, including a
+   crash after admission but before send. Failure to find an effect is not proof that replay is
+   safe unless the provider's idempotency contract establishes that fact.
+
+Acceptance must exercise the production FFI setter-to-dispatch path, stale/tampered Core
+projections, faulted projection writes, reopen after provider success, and a barrier at the vault
+admission transaction. An in-memory mutex alone is not the durable cross-database solution.
 
 ### Audited action integration gaps
 
