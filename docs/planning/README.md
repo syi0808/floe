@@ -161,6 +161,7 @@ Connection의 권한·동기화·AI 접근 경계를 구현하는 경우:
 2. [런타임 검증·마이그레이션·인수 기준](09-implementation/connection-authorization-runtime.md)
 3. [ADR 0027 — 제안된 설계 결정](../decisions/0027-connection-authority-and-observation.md)
 4. [ADR 0028 — 페어링과 connection별 permission UX](../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
+5. [ADR 0028 구현 계획](09-implementation/pairing-and-connection-permissions.md)
 
 위 설계는 제안 상태이며 현재 런타임에 구현됐다는 의미가 아니다.
 
