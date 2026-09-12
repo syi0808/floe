@@ -8,16 +8,58 @@ use floe_infra::native_calendar::NativeCalendarReadAccess;
 use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString},
+    fs::{File, OpenOptions},
+    os::fd::AsRawFd,
     process::Command,
 };
 use tokio::time::Instant;
 
 const PERSON: &str = "00000000-0000-4000-8000-000000000001";
 
+struct FixtureLock {
+    file: File,
+}
+
+impl FixtureLock {
+    fn acquire() -> Self {
+        if std::env::var_os("FLOE_NATIVE_FIXTURE_CHILD").is_some() {
+            panic!("fixture child must not acquire the parent fixture lock");
+        }
+        let path = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("native-calendar-fixture.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        const LOCK_EX: i32 = 2;
+        unsafe extern "C" {
+            fn flock(fd: i32, operation: i32) -> i32;
+        }
+        assert_eq!(unsafe { flock(file.as_raw_fd(), LOCK_EX) }, 0);
+        Self { file }
+    }
+}
+
+impl Drop for FixtureLock {
+    fn drop(&mut self) {
+        const LOCK_UN: i32 = 8;
+        unsafe extern "C" {
+            fn flock(fd: i32, operation: i32) -> i32;
+        }
+        assert_eq!(unsafe { flock(self.file.as_raw_fd(), LOCK_UN) }, 0);
+    }
+}
+
 fn run_read_fixture_child(test_name: &str, mode: &str) -> bool {
     if std::env::var_os("FLOE_NATIVE_FIXTURE_CHILD").is_some() {
         return false;
     }
+    let _lock = FixtureLock::acquire();
     let directory = tempfile::tempdir().unwrap();
     let executable = directory.path().join("Contents/MacOS/test-host");
     let frameworks = directory.path().join("Contents/Frameworks");
@@ -144,6 +186,7 @@ fn data(response: Value) -> Value {
 #[test]
 fn native_executor_uses_rust_ledger_and_lookup_only_after_response_loss() {
     if std::env::var_os("FLOE_NATIVE_FIXTURE_CHILD").is_none() {
+        let _lock = FixtureLock::acquire();
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("Contents/MacOS/test-host");
         let frameworks = directory.path().join("Contents/Frameworks");
