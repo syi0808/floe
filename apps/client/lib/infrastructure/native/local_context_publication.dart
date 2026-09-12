@@ -40,7 +40,8 @@ final class PublishingAppleContextGateway
     implements
         AppleContextApi,
         AppleContextSubjectApi,
-        AppleFeasibilitySubjectApi {
+        AppleFeasibilitySubjectApi,
+        AppleHealthSubjectApi {
   factory PublishingAppleContextGateway({
     required AppleContextApi gateway,
     required LocalContextTransport transport,
@@ -144,6 +145,27 @@ final class PublishingAppleContextGateway
     final granted = await (gateway as AppleFeasibilitySubjectApi)
         .requestFeasibilityPermission();
     if (!granted) await _revoke(_feasibilityViewId);
+    return granted;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectWellbeingSubject() {
+    final gateway = _gateway;
+    if (gateway is! AppleHealthSubjectApi) {
+      throw UnsupportedError('Health subject inspection is unavailable.');
+    }
+    return (gateway as AppleHealthSubjectApi).inspectWellbeingSubject();
+  }
+
+  @override
+  Future<bool> requestWellbeingPermission() async {
+    final gateway = _gateway;
+    if (gateway is! AppleHealthSubjectApi) {
+      throw UnsupportedError('Health permission is unavailable.');
+    }
+    final granted = await (gateway as AppleHealthSubjectApi)
+        .requestWellbeingPermission();
+    if (!granted) await _revoke(_wellbeingViewId);
     return granted;
   }
 

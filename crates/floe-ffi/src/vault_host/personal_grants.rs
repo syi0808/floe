@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin};
 use chrono::{DateTime, Utc};
 use floe_agent::{
     AgentFailure, AttentionState, AttentionView, ModelPlacement, ModelRequest, PeopleView,
-    validate_people_view,
+    WellbeingView, validate_people_view, validate_wellbeing_view,
 };
 use floe_core::{
     EncryptedAgentVault, FeasibilityGrantQuery, GovernedDependencyLiveness,
@@ -31,6 +31,9 @@ const PEOPLE_RESOURCE: &str = "people.identity";
 const FEASIBILITY_CONNECTOR: &str = "feasibility.apple";
 const FEASIBILITY_CONNECTION: &str = "feasibility.apple.local";
 const FEASIBILITY_RESOURCE: &str = "schedule.feasibility";
+const WELLBEING_CONNECTOR: &str = "health.apple";
+const WELLBEING_CONNECTION: &str = "health.apple.local";
+const WELLBEING_RESOURCE: &str = "wellbeing.derived";
 pub(crate) const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
 pub(crate) const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
 
@@ -310,6 +313,158 @@ pub(crate) async fn read_feasibility<Keys: VaultKeyProvider>(
     Ok((view, dependency))
 }
 
+pub(crate) async fn read_wellbeing<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    device_id: &str,
+    consumer_name: &str,
+    lease_invocation_id: Uuid,
+    deadline: tokio::time::Instant,
+    cancellation: &floe_agent::Cancellation,
+) -> Result<(WellbeingView, ContextDependency), AgentFailure> {
+    check_read_window(deadline, cancellation)?;
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    if consumer.identifier() != ATTENTION_ASSISTANT_CONSUMER {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let source = wellbeing_source(person_id, device_id)?;
+    let grants = vault.list_data_access_grants(128).await?;
+    let grant = active_wellbeing_grant(&grants, &source, &consumer)?;
+    let reviewed_subject = vault.personal_grant_subject_fingerprint(grant.id()).await?;
+    let result = local_context
+        .acquire_personal(
+            wellbeing_acquisition_request(
+                person_id,
+                device_id,
+                local_context.personal_acquisition_host_epoch(person_id)?,
+                reviewed_subject.clone(),
+                deadline,
+            )?,
+            cancellation.clone(),
+        )
+        .await?;
+    check_read_window(deadline, cancellation)?;
+    if result.native_subject_fingerprint_before != reviewed_subject
+        || result.native_subject_fingerprint_after != reviewed_subject
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let view: WellbeingView = serde_json::from_value(
+        result
+            .view
+            .ok_or(AgentFailure::CapabilityUnavailable)?,
+    )
+    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    validate_wellbeing_view(&view, Utc::now().timestamp_millis())
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    let current = active_wellbeing_grant(
+        &vault.list_data_access_grants(128).await?,
+        &source,
+        &consumer,
+    )?;
+    if current.id() != grant.id()
+        || current.authority() != grant.authority()
+        || current.source() != grant.source()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let observed = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    let expires = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    let process = local_context.process_incarnation();
+    let observation_id = Uuid::new_v4();
+    let dependency_fingerprint = wellbeing_query_fingerprint(
+        &view,
+        &reviewed_subject,
+        observation_id,
+        process,
+    );
+    let dependency = ContextDependency::try_new(
+        person_id,
+        current.id(),
+        current.authority(),
+        current.source().clone(),
+        vec![ResourceHandle::try_new(WELLBEING_RESOURCE)
+            .map_err(|_| AgentFailure::InvalidInput)?],
+        vec![GrantDataCategory::Derived],
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        vault.personal_grant_consumer_policy(current.id()).await?,
+        observation_id,
+        dependency_fingerprint.clone(),
+        lease_invocation_id,
+        process,
+        observed,
+        expires,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    local_context.commit_trusted_personal_observation(
+        person_id,
+        device_id,
+        observation_id,
+        process,
+        &reviewed_subject,
+        view.observed_at_unix_ms,
+        view.expires_at_unix_ms,
+        dependency_fingerprint,
+    )?;
+    Ok((view, dependency))
+}
+
+fn wellbeing_acquisition_request(
+    person_id: PersonId,
+    device_id: &str,
+    host_epoch: String,
+    expected_native_subject_fingerprint: String,
+    deadline: tokio::time::Instant,
+) -> Result<LocalContextPersonalAcquisitionRequestDto, AgentFailure> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    Ok(LocalContextPersonalAcquisitionRequestDto {
+        request_id: Uuid::new_v4().to_string(),
+        host_epoch,
+        person_id: person_id.to_string(),
+        device_id: device_id.to_owned(),
+        domain: LocalContextPersonalDomainDto::Wellbeing,
+        selected_handles: Vec::new(),
+        event_handle: None,
+        evidence_handles: Vec::new(),
+        destination_latitude: None,
+        destination_longitude: None,
+        event_start_unix_ms: None,
+        event_end_unix_ms: None,
+        travel_mode: None,
+        deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(
+            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
+        ),
+        expected_native_subject_fingerprint: Some(expected_native_subject_fingerprint),
+    })
+}
+
+fn wellbeing_query_fingerprint(
+    view: &WellbeingView,
+    native_subject_fingerprint: &str,
+    observation: Uuid,
+    process: Uuid,
+) -> Vec<u8> {
+    sha2::Sha256::digest(
+        format!(
+            "wellbeing.query\0{}\0{}\0{}\0{}\0{}\0{}",
+            view.source_handle,
+            native_subject_fingerprint,
+            observation,
+            process,
+            view.observed_at_unix_ms,
+            view.expires_at_unix_ms,
+        )
+        .as_bytes(),
+    )
+    .to_vec()
+}
+
 fn feasibility_acquisition_request(
     person_id: PersonId,
     device_id: &str,
@@ -401,6 +556,44 @@ fn active_feasibility_grant(
 }
 
 fn feasibility_source_matches(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
+    let binding = grant.source();
+    binding.person_id() == source.person_id()
+        && binding.connector() == source.connector()
+        && binding.connection_id() == source.connection_id()
+        && binding.execution_owner() == source.execution_owner()
+}
+
+fn active_wellbeing_grant(
+    grants: &[DataAccessGrant],
+    source: &GrantSourceBinding,
+    consumer: &GrantConsumer,
+) -> Result<DataAccessGrant, AgentFailure> {
+    let mut matches = grants
+        .iter()
+        .filter(|grant| wellbeing_source_matches(grant, source) && grant.state() != GrantState::Revoked);
+    let grant = matches.next().ok_or(AgentFailure::AccessReviewRequired)?;
+    if matches.next().is_some() {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    if grant.state() != GrantState::Active
+        || grant.review_required()
+        || !grant
+            .scope()
+            .resources()
+            .iter()
+            .any(|resource| resource.as_str() == WELLBEING_RESOURCE)
+        || !grant.scope().categories().contains(&GrantDataCategory::Derived)
+        || !grant.scope().operations().contains(&GrantOperation::Read)
+        || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(consumer)
+        || grant.scope().processing() != &ProcessingRestriction::LocalOnly
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(grant.clone())
+}
+
+fn wellbeing_source_matches(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
     let binding = grant.source();
     binding.person_id() == source.person_id()
         && binding.connector() == source.connector()
@@ -700,6 +893,36 @@ impl GovernedDependencyLiveness for PersonalDependencyLiveness<'_> {
             }
             return Ok(());
         }
+        if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
+            if dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
+                || dependency.source().execution_owner().as_str()
+                    != format!("apple:{}", self.device_id)
+                || dependency.consumer().identifier() != ATTENTION_ASSISTANT_CONSUMER
+                || dependency.operation() != GrantOperation::Read
+                || dependency.purpose() != GrantPurpose::Assistant
+                || dependency.processing() != &ProcessingRestriction::LocalOnly
+                || dependency.resources()
+                    != [ResourceHandle::try_new(WELLBEING_RESOURCE)
+                        .map_err(|_| AgentFailure::PolicyDenied)?]
+                || dependency.categories() != [GrantDataCategory::Derived]
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let observation = self.local_context.trusted_personal_observation(
+                self.person_id,
+                self.device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )?;
+            if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+                || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+                || dependency.query_fingerprint() != observation.query_fingerprint
+                || observation.native_subject_fingerprint.is_empty()
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            return Ok(());
+        }
         if !matches!(
             dependency.source().connector().as_str(),
             "contacts.apple" | "contacts.android"
@@ -870,6 +1093,55 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for PersonalDependencyRe
                 }
                 return Ok(());
             }
+            if dependency.source().connector().as_str() == WELLBEING_CONNECTOR {
+                if request.policy.allowed_placements != [ModelPlacement::DeviceLocal]
+                    || dependency.source().connection_id().as_str() != WELLBEING_CONNECTION
+                    || dependency.source().execution_owner().as_str()
+                        != format!("apple:{}", self.device_id)
+                    || dependency.consumer().identifier() != ATTENTION_ASSISTANT_CONSUMER
+                    || dependency.operation() != GrantOperation::Read
+                    || dependency.purpose() != GrantPurpose::Assistant
+                    || dependency.processing() != &ProcessingRestriction::LocalOnly
+                    || dependency.resources()
+                        != [ResourceHandle::try_new(WELLBEING_RESOURCE)
+                            .map_err(|_| AgentFailure::PolicyDenied)?]
+                    || dependency.categories() != [GrantDataCategory::Derived]
+                    || dependency.lease_invocation_id().is_nil()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let grants = self.vault.list_data_access_grants(128).await?;
+                let grant = active_wellbeing_grant(&grants, dependency.source(), dependency.consumer())?;
+                if dependency.grant_id() != grant.id()
+                    || dependency.grant_authority() != grant.authority()
+                    || dependency.source() != grant.source()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let observation = self
+                    .local_context
+                    .trusted_personal_observation(
+                        self.person_id,
+                        self.device_id,
+                        dependency.observation_id(),
+                        dependency.process_incarnation_id(),
+                    )
+                    .map_err(|_| AgentFailure::PolicyDenied)?;
+                if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+                    || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+                    || dependency.query_fingerprint() != observation.query_fingerprint
+                    || observation.native_subject_fingerprint
+                        != self.vault.personal_grant_subject_fingerprint(grant.id()).await?
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                if dependency.consumer_policy()
+                    != self.vault.personal_grant_consumer_policy(grant.id()).await?
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                return Ok(());
+            }
             if request.policy.allowed_placements != [ModelPlacement::DeviceLocal]
                 || dependency.person_id() != self.person_id
                 || dependency.source().person_id() != self.person_id
@@ -984,6 +1256,9 @@ pub(crate) async fn apply<Keys: VaultKeyProvider>(
     validate_request(&request)?;
     if request.connector == FEASIBILITY_CONNECTOR {
         return apply_feasibility(vault, local_context, person_id, request, cancellation).await;
+    }
+    if request.connector == WELLBEING_CONNECTOR {
+        return apply_wellbeing(vault, local_context, person_id, request, cancellation).await;
     }
     if request.connector != ATTENTION_CONNECTOR {
         return Err(AgentFailure::CapabilityUnavailable);
@@ -1300,6 +1575,129 @@ async fn apply_feasibility<Keys: VaultKeyProvider>(
     }
 }
 
+async fn apply_wellbeing<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    request: PersonalAccessConfigurationDto,
+    cancellation: floe_agent::Cancellation,
+) -> Result<PersonalAccessOverviewDto, AgentFailure> {
+    let source = wellbeing_source(person_id, &request.device_id)?;
+    let grants = vault.list_data_access_grants(128).await?;
+    let mut existing_matches = grants.iter().filter(|grant| {
+        wellbeing_source_matches(grant, &source) && grant.state() != GrantState::Revoked
+    });
+    let existing = match (existing_matches.next(), existing_matches.next()) {
+        (Some(_), Some(_)) => return Err(AgentFailure::AccessReviewRequired),
+        (Some(grant), None) => Some(grant.clone()),
+        (None, None) => None,
+        (None, Some(_)) => unreachable!(),
+    };
+    match request.change {
+        PersonalAccessChangeDto::Inspect {} => Ok(wellbeing_overview(
+            person_id,
+            &request.device_id,
+            existing.as_ref(),
+            None,
+        )),
+        PersonalAccessChangeDto::Review {
+            expected_native_subject_fingerprint,
+            consumers,
+            feasibility_query: None,
+            expected_grant_id,
+            expected_grant_authority,
+        } => {
+            let expected = match (expected_grant_id, expected_grant_authority) {
+                (Some(id), Some(authority)) => Some((id, authority)),
+                (None, None) => None,
+                _ => return Err(AgentFailure::InvalidInput),
+            };
+            if consumers != [ATTENTION_ASSISTANT_CONSUMER] {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let inspected = acquire_wellbeing(
+                local_context,
+                person_id,
+                &request.device_id,
+                Some(expected_native_subject_fingerprint.clone()),
+                cancellation,
+            )
+            .await?;
+            if inspected.native_subject_fingerprint_before != expected_native_subject_fingerprint
+                || inspected.native_subject_fingerprint_after != expected_native_subject_fingerprint
+            {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let authority = existing
+                .as_ref()
+                .map(|grant| grant.source().source_authority())
+                .unwrap_or_else(SourceAuthority::new);
+            let source = wellbeing_source_with_authority(person_id, &request.device_id, authority)?;
+            let scope = wellbeing_scope()?;
+            let grant = vault
+                .review_personal_grant(
+                    source,
+                    scope,
+                    &expected_native_subject_fingerprint,
+                    expected,
+                )
+                .await?;
+            Ok(wellbeing_overview(
+                person_id,
+                &request.device_id,
+                Some(&grant),
+                Some(expected_native_subject_fingerprint),
+            ))
+        }
+        PersonalAccessChangeDto::Review { .. } => Err(AgentFailure::InvalidInput),
+        PersonalAccessChangeDto::SetEnabled { enabled } => {
+            let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
+            if !enabled {
+                let grant = vault.pause_personal_grant(grant.id(), grant.authority()).await?;
+                return Ok(wellbeing_overview(
+                    person_id,
+                    &request.device_id,
+                    Some(&grant),
+                    None,
+                ));
+            }
+            let fingerprint = vault.personal_grant_subject_fingerprint(grant.id()).await?;
+            let inspected = acquire_wellbeing(
+                local_context,
+                person_id,
+                &request.device_id,
+                Some(fingerprint.clone()),
+                cancellation,
+            )
+            .await?;
+            if inspected.native_subject_fingerprint_before != fingerprint
+                || inspected.native_subject_fingerprint_after != fingerprint
+            {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let source = wellbeing_source_with_authority(
+                person_id,
+                &request.device_id,
+                grant.source().source_authority(),
+            )?;
+            let grant = vault
+                .review_personal_grant(
+                    source,
+                    wellbeing_scope()?,
+                    &fingerprint,
+                    Some((grant.id(), grant.authority())),
+                )
+                .await?;
+            Ok(wellbeing_overview(
+                person_id,
+                &request.device_id,
+                Some(&grant),
+                Some(fingerprint),
+            ))
+        }
+    }
+}
+
 pub(crate) async fn apply_contacts<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     local_context: &crate::local_context::LocalContextStore,
@@ -1558,6 +1956,38 @@ async fn acquire_feasibility(
         .await
 }
 
+async fn acquire_wellbeing(
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    device_id: &str,
+    expected_native_subject_fingerprint: Option<String>,
+    cancellation: floe_agent::Cancellation,
+) -> Result<LocalContextPersonalAcquisitionResultDto, AgentFailure> {
+    let host_epoch = local_context.personal_acquisition_host_epoch(person_id)?;
+    local_context
+        .acquire_personal(
+            LocalContextPersonalAcquisitionRequestDto {
+                request_id: Uuid::new_v4().to_string(),
+                host_epoch,
+                person_id: person_id.to_string(),
+                device_id: device_id.to_owned(),
+                domain: LocalContextPersonalDomainDto::Wellbeing,
+                selected_handles: Vec::new(),
+                event_handle: None,
+                evidence_handles: Vec::new(),
+                destination_latitude: None,
+                destination_longitude: None,
+                event_start_unix_ms: None,
+                event_end_unix_ms: None,
+                travel_mode: None,
+                deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(30_000),
+                expected_native_subject_fingerprint,
+            },
+            cancellation,
+        )
+        .await
+}
+
 fn feasibility_source(
     person_id: PersonId,
     device_id: &str,
@@ -1579,6 +2009,84 @@ fn feasibility_source_with_authority(
         authority,
     )
     .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn wellbeing_source(
+    person_id: PersonId,
+    device_id: &str,
+) -> Result<GrantSourceBinding, AgentFailure> {
+    wellbeing_source_with_authority(person_id, device_id, SourceAuthority::new())
+}
+
+fn wellbeing_source_with_authority(
+    person_id: PersonId,
+    device_id: &str,
+    authority: SourceAuthority,
+) -> Result<GrantSourceBinding, AgentFailure> {
+    GrantSourceBinding::try_new(
+        person_id,
+        ConnectionId::try_new(WELLBEING_CONNECTION)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        ConnectorId::try_new(WELLBEING_CONNECTOR).map_err(|_| AgentFailure::InvalidInput)?,
+        ExecutionOwnerId::try_new(format!("apple:{device_id}"))
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        authority,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn wellbeing_scope() -> Result<GrantScope, AgentFailure> {
+    GrantScope::try_new(
+        vec![ResourceHandle::try_new(WELLBEING_RESOURCE)
+            .map_err(|_| AgentFailure::InvalidInput)?],
+        vec![GrantDataCategory::Derived],
+        vec![GrantOperation::Read],
+        vec![GrantPurpose::Assistant],
+        vec![GrantConsumer::builtin(ATTENTION_ASSISTANT_CONSUMER)
+            .map_err(|_| AgentFailure::InvalidInput)?],
+        ProcessingRestriction::LocalOnly,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn wellbeing_overview(
+    person_id: PersonId,
+    device_id: &str,
+    grant: Option<&DataAccessGrant>,
+    native_subject_fingerprint: Option<String>,
+) -> PersonalAccessOverviewDto {
+    PersonalAccessOverviewDto {
+        schema_version: 1,
+        person_id: person_id.to_string(),
+        connector: WELLBEING_CONNECTOR.into(),
+        device_id: device_id.into(),
+        connection_id: WELLBEING_CONNECTION.into(),
+        source_authority: grant.map(|value| value.source().source_authority()),
+        grant_id: grant.map(DataAccessGrant::id),
+        grant_authority: grant.map(DataAccessGrant::authority),
+        state: grant.map_or_else(
+            || "needs_review".into(),
+            |grant| match grant.state() {
+                GrantState::Paused => "paused".into(),
+                GrantState::Active => "active".into(),
+                GrantState::Revoked => "revoked".into(),
+            },
+        ),
+        review_required: grant.is_none_or(DataAccessGrant::review_required),
+        presence_available: false,
+        consumers: grant
+            .map(|value| {
+                value
+                    .scope()
+                    .consumers()
+                    .iter()
+                    .map(|consumer| consumer.identifier().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        native_subject_fingerprint,
+        process_incarnation: None,
+    }
 }
 
 fn feasibility_scope(consumer_names: Vec<String>) -> Result<GrantScope, AgentFailure> {
@@ -1782,7 +2290,7 @@ pub(crate) fn validate_request(
 ) -> Result<(), AgentFailure> {
     if !matches!(
         request.connector.as_str(),
-        ATTENTION_CONNECTOR | FEASIBILITY_CONNECTOR
+        ATTENTION_CONNECTOR | FEASIBILITY_CONNECTOR | WELLBEING_CONNECTOR
     ) || request.device_id.is_empty()
         || request.device_id.len() > 128
         || request.device_id.chars().any(char::is_whitespace)

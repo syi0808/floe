@@ -12,6 +12,8 @@ import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
+import 'package:floe_client/infrastructure/native/local_context_publication.dart';
+import 'package:floe_client/infrastructure/native/native_transport.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -255,8 +257,106 @@ void main() {
       reviewedQuery?['event_start_unix_ms'],
       event.startsAt.millisecondsSinceEpoch,
     );
-    expect(reviewedQuery?['event_end_unix_ms'], event.endsAt.millisecondsSinceEpoch);
+    expect(
+      reviewedQuery?['event_end_unix_ms'],
+      event.endsAt.millisecondsSinceEpoch,
+    );
     expect(reviewedQuery?['travel_mode'], 'transit');
+  });
+
+  testWidgets('Apple Wellbeing review requests permission and can pause', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestRegistryGateway(),
+      personId: registryPerson,
+    );
+    final appleContext = _AppleContext()..exposeHealthConnection = true;
+    var enabled = false;
+    var paused = false;
+    final personalGateway = NativeAgentVaultGateway((request) async {
+      final operation = request['operation']! as Map;
+      if (operation['kind'] == 'submit') {
+        final action = operation['action']! as Map;
+        final change = action['change']! as Map;
+        final personalChange = change['change']! as Map;
+        final kind = personalChange['kind'];
+        if (kind == 'review') {
+          enabled = true;
+          paused = false;
+        }
+        if (kind == 'set_enabled') {
+          enabled = personalChange['enabled'] == true;
+          paused = !enabled;
+        }
+        return {
+          'request_id': request['request_id'],
+          'done': true,
+          'events': const <Object?>[],
+          'next_sequence': 0,
+          'state': 'ready',
+          'personal_access': _personalAccessOverview(
+            connector: 'health.apple',
+            connectionId: 'health.apple.local',
+            state: paused
+                ? 'paused'
+                : enabled
+                ? 'active'
+                : 'needs_review',
+            reviewRequired: !enabled && !paused,
+            grantId: enabled ? 'wellbeing-grant' : null,
+          ),
+        };
+      }
+      return {
+        'request_id': request['request_id'],
+        'done': true,
+        'events': const <Object?>[],
+        'next_sequence': 0,
+      };
+    }, deviceId: 'apple-test');
+    final publishing = PublishingAppleContextGateway(
+      gateway: appleContext,
+      transport: _NoopLocalContextTransport(),
+      personId: registryPerson,
+      deviceId: 'apple-test',
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(
+              client: null,
+              agentController: controller,
+              appleContext: publishing,
+              agentVaultGateway: personalGateway,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Wellbeing access'), findsOneWidget);
+    expect(appleContext.wellbeingPermissionRequests, 0);
+
+    final review = find.byKey(const ValueKey('personal-wellbeing-review'));
+    await tester.ensureVisible(review);
+    await tester.tap(review);
+    await tester.pumpAndSettle();
+    expect(appleContext.wellbeingPermissionRequests, 1);
+
+    final pause = find.byKey(const ValueKey('personal-wellbeing-pause'));
+    await tester.ensureVisible(pause);
+    await tester.tap(pause);
+    await tester.pumpAndSettle();
+    expect(find.text('Paused.'), findsOneWidget);
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -681,13 +781,19 @@ final class _AndroidContext implements AndroidContextApi {
 }
 
 final class _AppleContext
-    implements AppleContextApi, AppleFeasibilitySubjectApi {
+    implements
+        AppleContextApi,
+        AppleFeasibilitySubjectApi,
+        AppleHealthSubjectApi {
   AppleFeasibilityQuery? query;
   int feasibilityPermissionRequests = 0;
+  bool exposeHealthConnection = false;
+  int wellbeingPermissionRequests = 0;
 
   @override
   Future<List<Map<String, dynamic>>> connections() async => [
-    _appleFeasibilityConnection(),
+    if (exposeHealthConnection) _appleHealthConnection(),
+    if (!exposeHealthConnection) _appleFeasibilityConnection(),
   ];
 
   @override
@@ -712,6 +818,19 @@ final class _AppleContext
   }
 
   @override
+  Future<Map<String, dynamic>> inspectWellbeingSubject() async => {
+    'schema_version': 1,
+    'subject_fingerprint': 'b' * 64,
+    'permission_class': 'pending',
+  };
+
+  @override
+  Future<bool> requestWellbeingPermission() async {
+    wellbeingPermissionRequests += 1;
+    return true;
+  }
+
+  @override
   Future<bool> requestPermission(AppleContextSource source) async => true;
 
   @override
@@ -731,12 +850,14 @@ Map<String, dynamic> _personalAccessOverview({
   required String state,
   required bool reviewRequired,
   required String? grantId,
+  String connector = 'feasibility.apple',
+  String connectionId = 'feasibility.apple.local',
 }) => {
   'schema_version': 1,
   'person_id': registryPerson,
-  'connector': 'feasibility.apple',
+  'connector': connector,
   'device_id': 'apple-test',
-  'connection_id': 'feasibility.apple.local',
+  'connection_id': connectionId,
   'source_authority': null,
   'grant_id': grantId,
   'grant_authority': grantId == null
@@ -879,6 +1000,47 @@ Map<String, dynamic> _androidCalendarConnection({
       : <Object?>[],
 };
 
+Map<String, dynamic> _appleHealthConnection() => {
+  'descriptor': {
+    'schema_version': 1,
+    'id': 'health.apple',
+    'version': '1.0.0',
+    'provider': 'apple_health',
+    'execution': {'kind': 'device', 'device_id': 'apple-test'},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': 'health.derived.read',
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': ['HKHealthStore.derived.read'],
+        'output_view_id': 'wellbeing.derived',
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': 'wellbeing.derived',
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'derived_only',
+        'freshness_ttl_ms': 1800000,
+        'max_items': 1,
+        'max_bytes': 8192,
+        'provenance_required': true,
+      },
+    ],
+  },
+  'connection': {
+    'schema_version': 1,
+    'connector_id': 'health.apple',
+    'state': 'pending',
+    'granted_scopes': ['HKHealthStore.derived.read'],
+    'observed_at_unix_ms': 2000,
+  },
+  'views': <Object>[],
+};
+
 Map<String, dynamic> _appleFeasibilityConnection() => {
   'descriptor': {
     'schema_version': 1,
@@ -919,6 +1081,13 @@ Map<String, dynamic> _appleFeasibilityConnection() => {
   },
   'views': <Object>[],
 };
+
+final class _NoopLocalContextTransport implements LocalContextTransport {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw StateError(
+    'Unexpected context transport call: ${invocation.memberName}',
+  );
+}
 
 final class _SettingsServerClient extends LocalServerClient {
   _SettingsServerClient(

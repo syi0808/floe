@@ -310,6 +310,25 @@ PersonalAcquisitionReader _applePersonalReader(
       'apple_feasibility',
     );
   }
+  if (request['domain'] == 'wellbeing' && request['device_id'] == deviceId) {
+    final before = await native.inspectWellbeingSubject();
+    final expected = request['expected_native_subject_fingerprint'];
+    if (expected != null && before['subject_fingerprint'] != expected) {
+      throw PlatformException(code: 'permission_denied');
+    }
+    final view = await native.readWellbeing();
+    final after = await native.inspectWellbeingSubject();
+    if (after['subject_fingerprint'] != before['subject_fingerprint']) {
+      throw PlatformException(code: 'permission_denied');
+    }
+    return _personalPeopleResult(
+      request,
+      before,
+      after,
+      view,
+      'apple_health',
+    );
+  }
   final selected = request['selected_handles'];
   if (request['domain'] != 'people' ||
       request['device_id'] != deviceId ||

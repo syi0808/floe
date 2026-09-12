@@ -20,6 +20,16 @@ abstract interface class AgentPersonalAccessGateway {
     String personId,
     bool enabled,
   );
+  Future<PersonalAccessOverview> inspectPersonalWellbeing(String personId);
+  Future<PersonalAccessOverview> reviewPersonalWellbeing(
+    String personId, {
+    required PersonalAccessOverview reviewedPreview,
+    required String nativeSubjectFingerprint,
+  });
+  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
+    String personId,
+    bool enabled,
+  );
   Future<PersonalAccessOverview> inspectPersonalContacts(
     String personId,
     List<String> selectedHandles,

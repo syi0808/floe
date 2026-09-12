@@ -87,6 +87,13 @@ final class AppleContextChannel {
         }
         let authorization = CLLocationManager().authorizationStatus
         result(authorization == .authorizedAlways || authorization == .authorizedWhenInUse)
+      case "inspectWellbeingSubject":
+        try requireExactKeys(arguments, ["device_id"])
+        result(try await inspectWellbeingSubject(deviceID: deviceID))
+      case "requestWellbeingPermission":
+        try requireExactKeys(arguments, ["device_id"])
+        let lifecycle = try await health.requestReadAuthorization()
+        result(lifecycle.state != .unsupported && lifecycle.state != .permissionRequired)
       case "readWellbeing":
         try requireExactKeys(arguments, ["device_id"])
         result(try await readWellbeing())
@@ -225,6 +232,28 @@ final class AppleContextChannel {
     healthLastView = value
     healthLastSuccess = value["observed_at_unix_ms"] as? Int64
     return value
+  }
+
+  private func inspectWellbeingSubject(deviceID: String) async throws -> [String: Any] {
+    let lifecycle = await health.lifecycle()
+    guard lifecycle.state != .unsupported else { throw ChannelFailure.unsupported }
+    let identity = [
+      "floe.wellbeing.subject.v1",
+      deviceID,
+      "sleep_analysis",
+      "step_count",
+      "apple_exercise_time",
+      "window:36h",
+      "derived:v1",
+    ]
+    let data = try JSONSerialization.data(withJSONObject: identity)
+    let fingerprint = HMAC<SHA256>.authenticationCode(for: data, using: nativeSubjectKey)
+      .map { String(format: "%02x", $0) }.joined()
+    return [
+      "schema_version": 1,
+      "subject_fingerprint": fingerprint,
+      "permission_class": lifecycle.state.rawValue,
+    ]
   }
 
   private func screenTimeCapability() throws -> [String: Any] {
@@ -455,5 +484,6 @@ private struct ChannelFailure: Error {
   let message: String
 
   static let invalidInput = ChannelFailure(code: "invalid_input", message: "Apple context arguments are invalid.")
+  static let unsupported = ChannelFailure(code: "unsupported", message: "Apple Health is unsupported on this device.")
   static let unavailable = ChannelFailure(code: "unavailable", message: "Apple context source is unavailable.")
 }

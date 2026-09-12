@@ -160,6 +160,11 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         local_context,
         device_id: &request.device_id,
     };
+    let wellbeing_reader = PersonalWellbeingReader {
+        vault,
+        local_context,
+        device_id: &request.device_id,
+    };
     let result_recorder = StoreResultRecorder {
         store: &governed_store,
     };
@@ -183,6 +188,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         attention: Some(&attention_reader),
         people_reader: Some(&people_reader),
         feasibility_reader: Some(&feasibility_reader),
+        wellbeing_reader: Some(&wellbeing_reader),
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
@@ -196,6 +202,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         attention: Some(&attention_reader),
         people_reader: Some(&people_reader),
         feasibility_reader: Some(&feasibility_reader),
+        wellbeing_reader: Some(&wellbeing_reader),
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
@@ -420,6 +427,7 @@ struct PersonalViewSource<'a> {
     person_id: PersonId,
     people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
     feasibility_reader: Option<&'a dyn PersonalFeasibilityReaderApi>,
+    wellbeing_reader: Option<&'a dyn PersonalWellbeingReaderApi>,
     remote_reader: Option<&'a dyn RemoteViewReaderApi>,
     recorder: Option<&'a dyn ResultRecorder>,
     dependency_turn_id: Uuid,
@@ -490,8 +498,26 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<WellbeingView, AgentFailure> {
-        let _ = (deadline, cancellation);
-        Err(AgentFailure::CapabilityUnavailable)
+        let reader = self
+            .wellbeing_reader
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let (view, dependency) = reader
+            .read(
+                self.person_id,
+                self.consumer_name,
+                self.dependency_result_id,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+            recorder.record(
+                self.dependency_turn_id,
+                self.dependency_result_id,
+                dependency,
+            )?;
+        }
+        Ok(view)
     }
 
     async fn calendar_views(
@@ -624,6 +650,7 @@ struct ConversationCapabilities<'model> {
     attention: Option<&'model dyn PersonalAttentionReaderApi>,
     people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
     feasibility_reader: Option<&'model dyn PersonalFeasibilityReaderApi>,
+    wellbeing_reader: Option<&'model dyn PersonalWellbeingReaderApi>,
     recorder: Option<&'model dyn ResultRecorder>,
     remote_reader: Option<&'model dyn RemoteViewReaderApi>,
 }
@@ -709,6 +736,24 @@ trait PersonalFeasibilityReaderApi: Send + Sync {
     >;
 }
 
+trait PersonalWellbeingReaderApi: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        call_id: Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<(WellbeingView, floe_domain::ContextDependency), AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
 struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextStore,
@@ -769,6 +814,12 @@ struct PersonalFeasibilityReader<'a, Keys: VaultKeyProvider> {
     device_id: &'a str,
 }
 
+struct PersonalWellbeingReader<'a, Keys: VaultKeyProvider> {
+    vault: &'a EncryptedAgentVault<Keys>,
+    local_context: &'a LocalContextStore,
+    device_id: &'a str,
+}
+
 impl<Keys: VaultKeyProvider> PersonalFeasibilityReaderApi for PersonalFeasibilityReader<'_, Keys> {
     fn read<'a>(
         &'a self,
@@ -789,6 +840,35 @@ impl<Keys: VaultKeyProvider> PersonalFeasibilityReaderApi for PersonalFeasibilit
         >,
     > {
         Box::pin(personal_grants::read_feasibility(
+            self.vault,
+            self.local_context,
+            person_id,
+            self.device_id,
+            consumer,
+            call_id,
+            deadline,
+            cancellation,
+        ))
+    }
+}
+
+impl<Keys: VaultKeyProvider> PersonalWellbeingReaderApi for PersonalWellbeingReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        call_id: Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<(WellbeingView, floe_domain::ContextDependency), AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(personal_grants::read_wellbeing(
             self.vault,
             self.local_context,
             person_id,
@@ -876,7 +956,10 @@ impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_
 fn is_local_personal_connector(connector: &str) -> bool {
     connector == personal_grants::ATTENTION_CONNECTOR
         || connector.starts_with("calendar.")
-        || matches!(connector, "contacts.apple" | "contacts.android")
+        || matches!(
+            connector,
+            "contacts.apple" | "contacts.android" | "health.apple"
+        )
 }
 
 fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
@@ -971,6 +1054,7 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                     person_id: invocation.person_id,
                     people_reader: self.people_reader,
                     feasibility_reader: self.feasibility_reader,
+                    wellbeing_reader: self.wellbeing_reader,
                     remote_reader: self.remote_reader,
                     recorder: self.recorder,
                     dependency_turn_id: invocation.turn_id,
@@ -1639,6 +1723,7 @@ mod tests {
             attention: Some(&reader),
             people_reader: None,
             feasibility_reader: None,
+            wellbeing_reader: None,
             recorder: Some(&recorder),
             remote_reader: None,
         };
@@ -1822,6 +1907,7 @@ mod tests {
             attention: None,
             people_reader: None,
             feasibility_reader: None,
+            wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],
@@ -1888,6 +1974,7 @@ mod tests {
             attention: None,
             people_reader: None,
             feasibility_reader: None,
+            wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
         };
@@ -1931,6 +2018,7 @@ mod tests {
             attention: None,
             people_reader: None,
             feasibility_reader: None,
+            wellbeing_reader: None,
             recorder: None,
             remote_reader: None,
         };
@@ -1974,6 +2062,7 @@ mod tests {
             feasibility_reader: None,
             recorder: None,
             remote_reader: None,
+            wellbeing_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2011,6 +2100,7 @@ mod tests {
             feasibility_reader: None,
             recorder: None,
             remote_reader: None,
+            wellbeing_reader: None,
             task_views: &[],
             cards: vec![],
             builtin_setup: None,
@@ -2063,6 +2153,7 @@ mod tests {
             feasibility_reader: None,
             recorder: None,
             remote_reader: None,
+            wellbeing_reader: None,
         };
         let result = capabilities
             .invoke(CapabilityInvocation {
@@ -2199,6 +2290,7 @@ mod tests {
             feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
+            wellbeing_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2411,6 +2503,7 @@ mod tests {
             feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
+            wellbeing_reader: None,
             task_views: &tasks,
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2598,6 +2691,7 @@ mod tests {
             feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
+            wellbeing_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2861,6 +2955,7 @@ mod tests {
             feasibility_reader: None,
             recorder: None,
             remote_reader: None,
+            wellbeing_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -2925,6 +3020,7 @@ mod tests {
             feasibility_reader: None,
             recorder: None,
             remote_reader: None,
+            wellbeing_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,

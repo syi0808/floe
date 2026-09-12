@@ -1012,6 +1012,49 @@ final class NativeAgentVaultGateway
   }
 
   @override
+  Future<PersonalAccessOverview> inspectPersonalWellbeing(
+    String personId,
+  ) async {
+    return _personalAccess(personId, {'kind': 'inspect'}, connector: 'health.apple');
+  }
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalWellbeing(
+    String personId, {
+    required PersonalAccessOverview reviewedPreview,
+    required String nativeSubjectFingerprint,
+  }) async {
+    if (reviewedPreview.personId != personId ||
+        reviewedPreview.deviceId != deviceId ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(nativeSubjectFingerprint)) {
+      throw const FormatException('Wellbeing review scope changed');
+    }
+    return _personalAccess(
+      personId,
+      {
+        'kind': 'review',
+        'expected_native_subject_fingerprint': nativeSubjectFingerprint,
+        'consumers': const ['assistant'],
+        'expected_grant_id': reviewedPreview.grantId,
+        'expected_grant_authority': reviewedPreview.grantAuthority,
+      },
+      connector: 'health.apple',
+    );
+  }
+
+  @override
+  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
+    String personId,
+    bool enabled,
+  ) async {
+    return _personalAccess(
+      personId,
+      {'kind': 'set_enabled', 'enabled': enabled},
+      connector: 'health.apple',
+    );
+  }
+
+  @override
   Future<PersonalAccessOverview> inspectPersonalContacts(
     String personId,
     List<String> selectedHandles,

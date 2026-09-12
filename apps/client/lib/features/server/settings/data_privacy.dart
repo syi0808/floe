@@ -40,7 +40,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool androidHealthBusy = false;
   bool androidContactsBusy = false;
   bool appleContactsBusy = false;
-  bool appleHealthBusy = false;
   bool androidCalendarBusy = false;
   List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
@@ -378,33 +377,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
-  Future<void> _refreshAppleWellbeing(AgentConnection connection) async {
-    final gateway = widget.appleContext;
-    if (gateway == null || appleHealthBusy) return;
-    setState(() {
-      appleHealthBusy = true;
-      appleConnectionFailure = null;
-    });
-    try {
-      if (connection.state == AgentConnectionState.revoked) {
-        final granted = await gateway.requestPermission(
-          AppleContextSource.health,
-        );
-        if (!granted) throw StateError('Apple Health access was not granted.');
-      }
-      await gateway.readWellbeing();
-    } on Object catch (error) {
-      appleConnectionFailure = error;
-    } finally {
-      appleConnectionsRequested = false;
-      try {
-        await _load();
-      } finally {
-        if (mounted) setState(() => appleHealthBusy = false);
-      }
-    }
-  }
-
   Future<AppleFeasibilityQuery?> _feasibilityQuery(EventItem event) async {
     return showFloeDialog<AppleFeasibilityQuery>(
       context,
@@ -672,35 +644,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
-                if (appleHealthConnection != null) ...[
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    'Apple Health records stay on this device. Floe receives only a short-lived capacity and recovery summary.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FloeButton.outlined(
-                      key: const ValueKey('apple-health-refresh'),
-                      onPressed:
-                          appleHealthConnection.state ==
-                              AgentConnectionState.unsupported
-                          ? null
-                          : () =>
-                                _refreshAppleWellbeing(appleHealthConnection!),
-                      loading: appleHealthBusy,
-                      child: Text(
-                        appleHealthConnection.state ==
-                                AgentConnectionState.revoked
-                            ? 'Allow Apple Health'
-                            : 'Refresh wellbeing',
-                      ),
-                    ),
-                  ),
-                ],
                 if ((controller.hasConnections ||
                         widget.serverClient != null ||
                         widget.androidContext != null ||
@@ -761,6 +704,20 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                       inspectSubject: () =>
                           (widget.appleContext! as AppleFeasibilitySubjectApi)
                               .inspectFeasibilitySubject(),
+                    ),
+                  ],
+                  if (appleHealthConnection != null &&
+                      widget.appleContext is AppleHealthSubjectApi) ...[
+                    const SizedBox(height: FloeSpace.lg),
+                    PersonalWellbeingAccessCard(
+                      gateway: widget.personalAccessGateway!,
+                      personId: controller.personId,
+                      requestPermission: () =>
+                          (widget.appleContext! as AppleHealthSubjectApi)
+                              .requestWellbeingPermission(),
+                      inspectSubject: () =>
+                          (widget.appleContext! as AppleHealthSubjectApi)
+                              .inspectWellbeingSubject(),
                     ),
                   ],
                 ],

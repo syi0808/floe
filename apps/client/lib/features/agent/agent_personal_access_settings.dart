@@ -344,6 +344,164 @@ final class _PersonalFeasibilityAccessCardState
   }
 }
 
+final class PersonalWellbeingAccessCard extends StatefulWidget {
+  const PersonalWellbeingAccessCard({
+    super.key,
+    required this.gateway,
+    required this.personId,
+    required this.requestPermission,
+    required this.inspectSubject,
+  });
+
+  final AgentPersonalAccessGateway gateway;
+  final String personId;
+  final Future<bool> Function() requestPermission;
+  final Future<Map<String, dynamic>> Function() inspectSubject;
+
+  @override
+  State<PersonalWellbeingAccessCard> createState() =>
+      _PersonalWellbeingAccessCardState();
+}
+
+final class _PersonalWellbeingAccessCardState
+    extends State<PersonalWellbeingAccessCard> {
+  PersonalAccessOverview? overview;
+  Object? failure;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _inspect();
+  }
+
+  Future<void> _inspect() async {
+    try {
+      final value = await widget.gateway.inspectPersonalWellbeing(
+        widget.personId,
+      );
+      if (mounted) setState(() => overview = value);
+    } on Object catch (error) {
+      if (mounted) setState(() => failure = error);
+    }
+  }
+
+  Future<void> _review() async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      failure = null;
+    });
+    try {
+      if (!await widget.requestPermission()) {
+        throw const FormatException(
+          'Health authorization review could not be completed.',
+        );
+      }
+      final subject = await widget.inspectSubject();
+      final fingerprint = subject['subject_fingerprint'];
+      if (fingerprint is! String ||
+          !RegExp(r'^[0-9a-f]{64}$').hasMatch(fingerprint)) {
+        throw const FormatException('Health subject is unavailable.');
+      }
+      final inspected = await widget.gateway.inspectPersonalWellbeing(
+        widget.personId,
+      );
+      final value = await widget.gateway.reviewPersonalWellbeing(
+        widget.personId,
+        reviewedPreview: inspected,
+        nativeSubjectFingerprint: fingerprint,
+      );
+      if (mounted) setState(() => overview = value);
+    } on Object catch (error) {
+      if (mounted) setState(() => failure = error);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _setEnabled(bool enabled) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      failure = null;
+    });
+    try {
+      final value = await widget.gateway.setPersonalWellbeingEnabled(
+        widget.personId,
+        enabled,
+      );
+      if (mounted) setState(() => overview = value);
+    } on Object catch (error) {
+      if (mounted) setState(() => failure = error);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = overview;
+    final enabled = current?.state == 'active' && !current!.reviewRequired;
+    final paused = current?.state == 'paused';
+    return FloeSquircle(
+      padding: const EdgeInsets.all(FloeSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Wellbeing access', style: FloeType.title),
+          const SizedBox(height: FloeSpace.xs),
+          Text(
+            'Review access to a short-lived derived capacity and recovery summary from the last 36 hours of Apple Health sleep, steps, and exercise data. Raw health samples stay on this device; only the derived summary is available to the device-local assistant.',
+            style: FloeType.body,
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          Text(
+            current == null
+                ? failure == null
+                      ? 'Checking availability…'
+                      : 'Wellbeing is unavailable on this device.'
+                : enabled
+                ? 'Enabled for device-local wellbeing summaries.'
+                : paused
+                ? 'Paused.'
+                : 'Review required.',
+            style: FloeType.bodySmall,
+          ),
+          if (failure != null)
+            Text('Review could not be completed.', style: FloeType.bodySmall),
+          const SizedBox(height: FloeSpace.sm),
+          Row(
+            children: [
+              if (paused)
+                FloeButton.outlined(
+                  onPressed: busy ? null : () => _setEnabled(true),
+                  loading: busy,
+                  child: const Text('Re-enable'),
+                )
+              else
+                FloeButton.outlined(
+                  key: const ValueKey('personal-wellbeing-review'),
+                  onPressed: busy ? null : _review,
+                  loading: busy,
+                  child: Text(enabled ? 'Review again' : 'Review and enable'),
+                ),
+              if (enabled) ...[
+                const SizedBox(width: FloeSpace.sm),
+                FloeButton.outlined(
+                  key: const ValueKey('personal-wellbeing-pause'),
+                  onPressed: busy ? null : () => _setEnabled(false),
+                  child: const Text('Pause'),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 final class _PersonalContactsAccessCardState
     extends State<PersonalContactsAccessCard> {
   List<Map<String, String>> identities = const [];

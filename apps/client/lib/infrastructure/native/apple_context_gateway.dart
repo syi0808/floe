@@ -28,6 +28,11 @@ abstract interface class AppleFeasibilitySubjectApi {
   Future<bool> requestFeasibilityPermission();
 }
 
+abstract interface class AppleHealthSubjectApi {
+  Future<Map<String, dynamic>> inspectWellbeingSubject();
+  Future<bool> requestWellbeingPermission();
+}
+
 enum AppleContextSource { contacts, health }
 
 final class AppleFeasibilityQuery {
@@ -60,7 +65,8 @@ final class AppleContextGateway
     implements
         AppleContextApi,
         AppleContextSubjectApi,
-        AppleFeasibilitySubjectApi {
+        AppleFeasibilitySubjectApi,
+        AppleHealthSubjectApi {
   AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
     validateAppleDeviceId(deviceId);
   }
@@ -216,6 +222,44 @@ final class AppleContextGateway
       appleNativeArguments(_deviceId, const {}),
     );
     return value == true;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectWellbeingSubject() async {
+    _requireAppleMobile();
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectWellbeingSubject',
+        appleNativeArguments(_deviceId, const {}),
+      ),
+    );
+    const fields = {'schema_version', 'subject_fingerprint', 'permission_class'};
+    if (value.keys.toSet().difference(fields).isNotEmpty ||
+        !value.keys.toSet().containsAll(fields) ||
+        value['schema_version'] != 1 ||
+        value['subject_fingerprint'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['subject_fingerprint'] as String) ||
+        value['permission_class'] is! String) {
+      throw const FormatException('Invalid Apple Health subject.');
+    }
+    return value;
+  }
+
+  @override
+  Future<bool> requestWellbeingPermission() async {
+    _requireAppleMobile();
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>('requestPermission', {
+        'device_id': _deviceId,
+        'source': AppleContextSource.health.name,
+      }),
+    );
+    if (value.keys.toSet().difference({'granted'}).isNotEmpty ||
+        value['granted'] is! bool) {
+      throw const FormatException('Invalid Apple Health permission response.');
+    }
+    return value['granted']! as bool;
   }
 
   @override
