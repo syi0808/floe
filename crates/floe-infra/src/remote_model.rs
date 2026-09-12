@@ -1,5 +1,8 @@
 use std::time::{Duration, SystemTime};
 
+use crate::remote_authorization::{
+    RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
+};
 use floe_agent::{
     AGENT_VERSION, AgentFailure, AttentionView, CalendarContextView, CommunicationView,
     ConfirmedInteractionView, LogisticsView, MAX_CALENDAR_CONTEXT_BYTES, MAX_COMMUNICATION_BYTES,
@@ -9,6 +12,7 @@ use floe_agent::{
     validate_communication_view, validate_confirmed_interaction_view, validate_logistics_view,
     validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
+use floe_core::{EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, VaultKeyProvider};
 use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -37,6 +41,14 @@ fn valid_connection_id(value: &str) -> bool {
                 .to_string()
                 .eq_ignore_ascii_case(value)
     })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl ServerModelRunner {
@@ -85,6 +97,93 @@ impl ServerModelRunner {
 
     pub fn calendar_connections(&self) -> &[AgentRemoteCalendarConnectionDto] {
         &self.route.calendar_connections
+    }
+
+    pub fn authorization_client(&self) -> Result<RemoteAuthorizationClient, AgentFailure> {
+        RemoteAuthorizationClient::new(&self.route)
+    }
+
+    pub async fn read_authorized_view<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        request: RemoteViewAuthorizationRequest<'_>,
+        mut expected: RemoteCalendarAuthorizationExpectation,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<serde_json::Value, AgentFailure> {
+        if !request.path.ends_with("/admit") {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let consumer = request.consumer;
+        let read_path = format!("{}/read", request.path.trim_end_matches("/admit"));
+        let release_path = format!("{}/release", request.path.trim_end_matches("/admit"));
+        let client = RemoteAuthorizationClient::new(&self.route)?;
+        let query_bytes =
+            serde_json::to_vec(&request.query).map_err(|_| AgentFailure::InvalidInput)?;
+        let query_digest = sha256_hex(&query_bytes);
+        let challenge = client
+            .begin_view_admission(request, deadline, cancellation)
+            .await?;
+        let parts = parse_calendar_challenge(&challenge.challenge_b64url)?;
+        if parts.operation != "admission"
+            || parts.query_sha256 != query_digest
+            || parts.source.connector_id != expected.source_connector
+            || parts.source.connection_id != expected.source_connection
+            || parts.resources != expected.resources
+            || parts.consumer != consumer
+            || parts.max_items != expected.max_items
+            || parts.max_bytes != expected.max_bytes
+            || self.route.pairing.as_ref().is_some_and(|pairing| {
+                parts.client_id != pairing.client_id || parts.device_id != pairing.device_id
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        expected.operation = "admission".into();
+        expected.challenge_id = parts.challenge_id.clone();
+        expected.query_sha256 = query_digest;
+        expected.admission_id.clear();
+        expected.result_sha256.clear();
+        let release = client
+            .read_view_admission(
+                vault,
+                &expected,
+                &challenge,
+                &read_path,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        let release_parts = parse_calendar_challenge(&release.challenge_b64url)?;
+        if release_parts.operation != "release"
+            || release_parts.admission_id != parts.challenge_id
+            || release_parts.query_sha256 != expected.query_sha256
+            || release_parts.resources != expected.resources
+            || release_parts.max_items != expected.max_items
+            || release_parts.max_bytes != expected.max_bytes
+            || release_parts.consumer != parts.consumer
+            || release_parts.result_sha256.len() != 64
+            || !release_parts
+                .result_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        expected.operation = "release".into();
+        expected.challenge_id = release_parts.challenge_id;
+        expected.admission_id = parts.challenge_id;
+        expected.result_sha256 = release_parts.result_sha256;
+        client
+            .release_view(
+                vault,
+                &expected,
+                &release,
+                &release_path,
+                deadline,
+                cancellation,
+            )
+            .await
     }
 
     pub async fn read_communication_view(
@@ -846,6 +945,7 @@ mod tests {
             external: true,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         }
     }
 

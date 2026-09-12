@@ -10,6 +10,7 @@ public final class AppleContactsProvider {
     private let store: AppleContactsStore
     private let handleKey: SymmetricKey
     private let now: () -> Date
+    private var nativeIdentifiersByHandle: [String: String] = [:]
 
     public convenience init(handleSecret: Data, now: @escaping () -> Date = Date.init) throws {
         try self.init(
@@ -61,10 +62,12 @@ public final class AppleContactsProvider {
             throw AppleContactsProviderError.permissionRequired(authorization)
         }
         let selectedHandles: Set<String>?
+        let selectedIdentifiers: Set<String>?
         let scanLimit: Int
         switch selection {
         case .allAuthorized:
             selectedHandles = nil
+            selectedIdentifiers = nil
             scanLimit = limit
         case let .identityHandles(handles):
             guard !handles.isEmpty,
@@ -73,14 +76,22 @@ public final class AppleContactsProvider {
             else {
                 throw AppleContactsProviderError.invalidSelection
             }
+            guard handles.allSatisfy({ nativeIdentifiersByHandle[$0] != nil }) else {
+                throw AppleContactsProviderError.selectionUnresolved
+            }
             selectedHandles = handles
+            selectedIdentifiers = Set(handles.compactMap { nativeIdentifiersByHandle[$0] })
             scanLimit = Self.maximumScanCount
         }
         let batch: AppleContactBatch
         do {
-            batch = try store.fetchContacts(limit: scanLimit)
+            batch = try store.fetchContacts(limit: scanLimit, identifiers: selectedIdentifiers)
         } catch {
             throw AppleContactsProviderError.storeReadFailed
+        }
+        let authorizationAfterRead = store.authorizationState()
+        guard authorizationAfterRead == .authorized || authorizationAfterRead == .limited else {
+            throw AppleContactsProviderError.permissionRequired(authorizationAfterRead)
         }
         var identities = batch.records.compactMap(project)
         if let selectedHandles {
@@ -107,6 +118,44 @@ public final class AppleContactsProvider {
             expiresAtUnixMilliseconds: observedAt + Self.freshnessMilliseconds,
             requestedCoverageComplete: coverageComplete,
             identities: identities
+        )
+    }
+
+    public func inspectSelectedSubject(_ handles: [String]) throws -> AppleContactsSubject {
+        guard !handles.isEmpty,
+              handles.count <= Self.maximumIdentityCount,
+              Set(handles).count == handles.count,
+              handles.allSatisfy(Self.validHandle),
+              let identifiers = Optional(handles.compactMap { nativeIdentifiersByHandle[$0] }),
+              identifiers.count == handles.count
+        else { throw AppleContactsProviderError.selectionUnresolved }
+        let authorization = store.authorizationState()
+        guard authorization == .authorized || authorization == .limited else {
+            throw AppleContactsProviderError.permissionRequired(authorization)
+        }
+        let batch: AppleContactBatch
+        do {
+            batch = try store.fetchContacts(limit: handles.count, identifiers: Set(identifiers))
+        } catch {
+            throw AppleContactsProviderError.storeReadFailed
+        }
+        guard store.authorizationState() == authorization else {
+            throw AppleContactsProviderError.permissionRequired(store.authorizationState())
+        }
+        let resolved = Set(batch.records.map(\.identifier))
+        guard resolved == Set(identifiers) else {
+            throw AppleContactsProviderError.selectionUnresolved
+        }
+        let canonicalIdentifiers = identifiers.sorted().joined(separator: "\u{0}")
+        let authentication = HMAC<SHA256>.authenticationCode(
+            for: Data("contacts.subject\u{0}\(authorization.rawValue)\u{0}\(canonicalIdentifiers)".utf8),
+            using: handleKey
+        )
+        let fingerprint = Data(authentication).map { String(format: "%02x", $0) }.joined()
+        return AppleContactsSubject(
+            fingerprint: fingerprint,
+            permissionClass: authorization.rawValue,
+            resolvedHandles: handles.sorted()
         )
     }
 
@@ -161,6 +210,7 @@ public final class AppleContactsProvider {
             Self.appendAlias(Self.normalizedPhone(phone), prefix: "phone", to: &aliases)
         }
         let identityHandle = opaqueHandle(prefix: "person.identity", value: record.identifier)
+        nativeIdentifiersByHandle[identityHandle] = record.identifier
         let evidenceHandle = opaqueHandle(prefix: "contact.evidence", value: record.identifier)
         return AppleContactIdentity(
             identityHandle: identityHandle,

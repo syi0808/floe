@@ -1,4 +1,12 @@
-use std::{collections::HashSet, future::Future, sync::Mutex, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
@@ -7,13 +15,18 @@ use floe_agent::{
     TimelineViewRead,
 };
 use floe_domain::{
-    CalendarMirror, CalendarProvider, CalendarRange, EventSchedule, PersonId, SourceRef,
+    CalendarMirror, CalendarProvider, CalendarRange, ConsumerPolicyAuthority, ContextDependency,
+    EventSchedule, GrantAuthority, GrantConsumer, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, PersonId, ProcessingRestriction, SourceRef,
 };
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::FloeCore;
+use crate::calendar_lease::{
+    CalendarLeaseDependencies, CalendarLeaseEntry, CalendarLeaseKey, MAX_LEASE_BYTES,
+};
 
 #[derive(Clone)]
 pub struct CalendarTimelineGrant {
@@ -68,11 +81,13 @@ impl CalendarTimelineGrant {
     }
 }
 
+#[derive(Clone)]
 pub struct CalendarReadAccessRequest {
     pub person_id: PersonId,
     pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
+    pub expected_native_subject_fingerprint: Option<String>,
     pub deadline: Instant,
     pub cancellation: Cancellation,
 }
@@ -82,6 +97,7 @@ pub struct CalendarObserveRequest {
     pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
+    pub expected_native_subject_fingerprint: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub deadline: Instant,
@@ -125,7 +141,64 @@ pub struct CalendarReadAccessStamp {
     pub device_id: String,
     pub provider: CalendarProvider,
     pub calendar_ids: Vec<String>,
+    pub native_subject_fingerprint: String,
     pub generation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CalendarReadAccessAdmission {
+    pub(crate) person_id: PersonId,
+    pub(crate) grant_id: GrantId,
+    pub(crate) grant_authority: GrantAuthority,
+    pub(crate) source: GrantSourceBinding,
+    pub(crate) scope: GrantScope,
+    pub(crate) consumer_policy: ConsumerPolicyAuthority,
+    pub(crate) operation: GrantOperation,
+    pub(crate) purpose: GrantPurpose,
+    pub(crate) consumer: GrantConsumer,
+    pub(crate) processing: ProcessingRestriction,
+}
+
+impl CalendarReadAccessAdmission {
+    pub fn remote(
+        person_id: PersonId,
+        grant_id: GrantId,
+        grant_authority: GrantAuthority,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+        consumer_policy: ConsumerPolicyAuthority,
+        consumer: GrantConsumer,
+        processing: ProcessingRestriction,
+    ) -> Self {
+        Self {
+            person_id,
+            grant_id,
+            grant_authority,
+            source,
+            scope,
+            consumer_policy,
+            operation: GrantOperation::Read,
+            purpose: GrantPurpose::Assistant,
+            consumer,
+            processing,
+        }
+    }
+
+    pub fn person_id(&self) -> PersonId {
+        self.person_id
+    }
+
+    pub fn grant_id(&self) -> GrantId {
+        self.grant_id
+    }
+
+    pub fn source(&self) -> &GrantSourceBinding {
+        &self.source
+    }
+
+    pub fn processing(&self) -> &ProcessingRestriction {
+        &self.processing
+    }
 }
 
 pub trait CalendarReadAccess: Sync {
@@ -133,6 +206,23 @@ pub trait CalendarReadAccess: Sync {
         &self,
         request: CalendarReadAccessRequest,
     ) -> impl Future<Output = Result<CalendarReadAccessStamp, AgentFailure>> + Send;
+
+    fn admission(
+        &self,
+        _: &CalendarReadAccessRequest,
+    ) -> impl Future<Output = Result<Option<CalendarReadAccessAdmission>, AgentFailure>> + Send
+    {
+        async { Ok(None) }
+    }
+
+    fn admission_after_check(
+        &self,
+        request: &CalendarReadAccessRequest,
+        _: &CalendarReadAccessStamp,
+    ) -> impl Future<Output = Result<Option<CalendarReadAccessAdmission>, AgentFailure>> + Send
+    {
+        self.admission(request)
+    }
 
     fn observe(
         &self,
@@ -157,6 +247,78 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     grant: CalendarTimelineGrant,
     stamp: Mutex<Option<CalendarReadAccessStamp>>,
     live_observation_expires_at: Mutex<Option<DateTime<Utc>>>,
+    invocation_id: Uuid,
+    process_incarnation: Uuid,
+    leases: Mutex<HashMap<CalendarLeaseKey, Arc<CalendarLeaseEntry>>>,
+    consumed: Mutex<Vec<CalendarLeaseDependencies>>,
+    consumed_deadlines: Mutex<HashMap<Uuid, Instant>>,
+    acquisition: tokio::sync::Mutex<()>,
+    source_observed: AtomicBool,
+    authorized_once: AtomicBool,
+    fatal_source_denial: AtomicBool,
+}
+
+pub(crate) struct GovernedDependencyResolver<'views, 'host, Access, Clock> {
+    views: &'views CalendarTimelineViews<'host, Access, Clock>,
+}
+
+impl<'views, 'host, Access, Clock> GovernedDependencyResolver<'views, 'host, Access, Clock> {
+    pub(crate) fn new(views: &'views CalendarTimelineViews<'host, Access, Clock>) -> Self {
+        Self { views }
+    }
+}
+
+impl<'views, 'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
+    GovernedDependencyResolver<'views, 'host, Access, Clock>
+{
+    pub(crate) async fn resolve(
+        &self,
+        dependency: &ContextDependency,
+        deadline: Instant,
+        cancellation: Cancellation,
+    ) -> Result<(), AgentFailure> {
+        self.views
+            .resolve_dependency(dependency, deadline, cancellation)
+            .await
+    }
+}
+
+struct AuthorizedRead {
+    stamp: CalendarReadAccessStamp,
+    admission: Option<CalendarReadAccessAdmission>,
+}
+
+fn admission_matches(
+    admission: &CalendarReadAccessAdmission,
+    dependency: &CalendarLeaseDependencies,
+) -> bool {
+    admission.person_id == dependency.person_id
+        && admission.grant_id == dependency.grant_id
+        && admission.grant_authority == dependency.grant_authority
+        && admission.source == dependency.source
+        && admission.scope == dependency.scope
+        && admission.consumer_policy == dependency.consumer_policy
+        && admission.operation == dependency.operation
+        && admission.purpose == dependency.purpose
+        && admission.consumer == dependency.consumer
+        && admission.processing == dependency.processing
+}
+
+fn admission_matches_dependency(
+    admission: &CalendarReadAccessAdmission,
+    dependency: &ContextDependency,
+) -> bool {
+    admission.person_id == dependency.person_id()
+        && admission.grant_id == dependency.grant_id()
+        && admission.grant_authority == dependency.grant_authority()
+        && admission.source == dependency.source().clone()
+        && admission.scope.resources() == dependency.resources()
+        && admission.scope.categories() == dependency.categories()
+        && admission.consumer_policy == dependency.consumer_policy()
+        && admission.operation == dependency.operation()
+        && admission.purpose == dependency.purpose()
+        && admission.consumer == dependency.consumer().clone()
+        && admission.processing == dependency.processing().clone()
 }
 
 impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
@@ -176,6 +338,15 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             grant,
             stamp: Mutex::new(None),
             live_observation_expires_at: Mutex::new(None),
+            invocation_id: Uuid::new_v4(),
+            process_incarnation: core.lease_registry.process_incarnation(),
+            leases: Mutex::new(HashMap::new()),
+            consumed: Mutex::new(Vec::new()),
+            consumed_deadlines: Mutex::new(HashMap::new()),
+            acquisition: tokio::sync::Mutex::new(()),
+            source_observed: AtomicBool::new(false),
+            authorized_once: AtomicBool::new(false),
+            fatal_source_denial: AtomicBool::new(false),
         })
     }
 
@@ -187,23 +358,295 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         (self.clock)()
     }
 
+    pub fn consumed_dependencies(&self) -> Result<Vec<CalendarLeaseDependencies>, AgentFailure> {
+        Ok(self
+            .consumed
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .clone())
+    }
+
+    pub fn consumed_context_dependencies(&self) -> Result<Vec<ContextDependency>, AgentFailure> {
+        Ok(self
+            .consumed_dependencies()?
+            .into_iter()
+            .map(|dependency| dependency.dependency)
+            .collect())
+    }
+
+    pub fn source_was_observed(&self) -> bool {
+        self.source_observed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn validate_dependency_liveness(
+        &self,
+        dependency: &ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        if dependency.person_id() != self.grant.person_id
+            || dependency.process_incarnation_id() != self.process_incarnation
+            || dependency.expires_at() <= (self.clock)()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let (evidence, _) = self.core.lease_registry.observation(dependency)?;
+        if evidence.dependency != *dependency {
+            return Err(AgentFailure::StaleContext);
+        }
+        Ok(())
+    }
+
+    pub fn source_denial_requires_halt(&self) -> bool {
+        self.fatal_source_denial.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn resolve_dependency(
+        &self,
+        dependency: &ContextDependency,
+        deadline: Instant,
+        cancellation: Cancellation,
+    ) -> Result<(), AgentFailure> {
+        if dependency.person_id() != self.grant.person_id
+            || dependency.process_incarnation_id() != self.process_incarnation
+            || dependency.expires_at() <= (self.clock)()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let (evidence, subject) = self.core.lease_registry.observation(dependency)?;
+        if evidence.dependency != *dependency {
+            return Err(AgentFailure::StaleContext);
+        }
+        check_running(deadline, &cancellation)?;
+        let calendar_ids = dependency
+            .resources()
+            .iter()
+            .map(|resource| resource.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let request = CalendarReadAccessRequest {
+            person_id: self.grant.person_id,
+            device_id: self.grant.device_id.clone(),
+            provider: self.grant.provider,
+            calendar_ids,
+            expected_native_subject_fingerprint: Some(subject.clone()),
+            deadline,
+            cancellation: cancellation.clone(),
+        };
+        let stamp = self.access.check(request.clone()).await?;
+        if stamp.native_subject_fingerprint != subject {
+            return Err(AgentFailure::StaleContext);
+        }
+        let admission = self.access.admission_after_check(&request, &stamp).await?;
+        let Some(admission) = admission else {
+            return Err(AgentFailure::StaleContext);
+        };
+        if !admission_matches_dependency(&admission, dependency) {
+            return Err(AgentFailure::StaleContext);
+        }
+        check_running(deadline, &cancellation)
+    }
+
+    fn lease_key(
+        &self,
+        request: &TimelineViewRead,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> Result<CalendarLeaseKey, AgentFailure> {
+        Ok(CalendarLeaseKey {
+            invocation_id: self.invocation_id,
+            person_id: self.grant.person_id,
+            handle: self.grant.handle,
+            device_id: self.grant.device_id.clone(),
+            calendar_ids: {
+                let mut calendar_ids = self.grant.calendar_ids.clone();
+                calendar_ids.sort();
+                calendar_ids
+            },
+            range_start_unix_ms: range_start.timestamp_millis(),
+            range_end_unix_ms: range_end.timestamp_millis(),
+            timezone_offset_seconds: self.grant.day.timezone_offset_seconds,
+            end_timezone_offset_seconds: self.grant.day.end_timezone_offset_seconds,
+            max_items: request.max_items.min(MAX_TIMELINE_VIEW_ITEMS),
+            max_bytes: request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES),
+        })
+    }
+
+    fn cached_lease(
+        &self,
+        key: &CalendarLeaseKey,
+    ) -> Result<Option<Arc<CalendarLeaseEntry>>, AgentFailure> {
+        let mut leases = self
+            .leases
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        leases.retain(|_, lease| lease.is_fresh());
+        let Some(lease) = leases.get(key).cloned() else {
+            return Ok(None);
+        };
+        Ok(Some(lease))
+    }
+
+    fn validate_live_leases(
+        &self,
+        admission: Option<&CalendarReadAccessAdmission>,
+    ) -> Result<(), AgentFailure> {
+        let leases = self
+            .leases
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        for lease in leases.values() {
+            if !lease.is_fresh() {
+                return Err(AgentFailure::StaleContext);
+            }
+            let Some(admission) = admission else {
+                return Err(AgentFailure::StaleContext);
+            };
+            if !admission_matches(admission, &lease.dependencies) {
+                return Err(AgentFailure::StaleContext);
+            }
+        }
+        let consumed = self
+            .consumed
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        let consumed_deadlines = self
+            .consumed_deadlines
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        let now = (self.clock)();
+        for dependency in consumed.iter() {
+            if dependency.expires_at <= now
+                || consumed_deadlines
+                    .get(&dependency.observation_id)
+                    .is_some_and(|deadline| *deadline <= Instant::now())
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            let Some(admission) = admission else {
+                return Err(AgentFailure::StaleContext);
+            };
+            if !admission_matches(admission, dependency) {
+                return Err(AgentFailure::StaleContext);
+            }
+        }
+        Ok(())
+    }
+
+    async fn finish_lease(
+        &self,
+        key: CalendarLeaseKey,
+        before: AuthorizedRead,
+        after: AuthorizedRead,
+        mut view: ExpertTimelineView,
+        reservation: Option<crate::calendar_lease::LeaseReservation>,
+        observed_at: DateTime<Utc>,
+        acquisition_wall: DateTime<Utc>,
+        acquisition_mono: Instant,
+        deadline: Instant,
+    ) -> Result<ExpertTimelineView, AgentFailure> {
+        if before.stamp != after.stamp || before.admission != after.admission {
+            return Err(AgentFailure::StaleContext);
+        }
+        let Some(admission) = before.admission else {
+            let mut saved = self
+                .stamp
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            if saved
+                .as_ref()
+                .is_some_and(|previous| previous != &before.stamp)
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            *saved = Some(before.stamp);
+            self.source_observed.store(true, Ordering::Release);
+            return Ok(view);
+        };
+        let expires_at = DateTime::from_timestamp_millis(
+            i64::try_from(view.expires_at_unix_ms).map_err(|_| AgentFailure::InvalidInput)?,
+        )
+        .ok_or(AgentFailure::InvalidInput)?;
+        let completion_wall = (self.clock)();
+        if completion_wall < acquisition_wall || expires_at <= completion_wall {
+            return Err(AgentFailure::StaleContext);
+        }
+        let duration = (expires_at - acquisition_wall)
+            .to_std()
+            .map_err(|_| AgentFailure::StaleContext)?;
+        let expires_at_monotonic = acquisition_mono
+            .checked_add(duration)
+            .ok_or(AgentFailure::BudgetExceeded)?
+            .min(deadline);
+        if expires_at_monotonic <= Instant::now() {
+            return Err(AgentFailure::StaleContext);
+        }
+        let observation_id = Uuid::new_v4();
+        view.source_handle = format!("calendar.lease:{observation_id}");
+        let bytes = serde_json::to_vec(&view)
+            .map_err(|_| AgentFailure::InvalidInput)?
+            .len();
+        if bytes == 0 || bytes > MAX_LEASE_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let dependency = CalendarLeaseDependencies::from_admission(
+            self.invocation_id,
+            self.process_incarnation,
+            observation_id,
+            &admission,
+            &key,
+            observed_at,
+            expires_at,
+        )?;
+        let reservation = reservation.ok_or(AgentFailure::CapabilityUnavailable)?;
+        let lease = Arc::new(CalendarLeaseEntry {
+            _key: key.clone(),
+            dependencies: dependency.clone(),
+            view: view.clone(),
+            expires_at: expires_at_monotonic,
+            _reservation: reservation,
+        });
+        self.core.lease_registry.retain_observation(
+            dependency.clone(),
+            before.stamp.native_subject_fingerprint.clone(),
+            expires_at_monotonic,
+        )?;
+        self.leases
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .insert(key, lease);
+        self.consumed
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .push(dependency);
+        self.consumed_deadlines
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .insert(observation_id, expires_at_monotonic);
+        let mut saved = self
+            .stamp
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        *saved = Some(after.stamp);
+        self.source_observed.store(true, Ordering::Release);
+        Ok(view)
+    }
+
     async fn authorized(
         &self,
         deadline: Instant,
         cancellation: Cancellation,
-    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        allow_generation_change: bool,
+    ) -> Result<AuthorizedRead, AgentFailure> {
         check_running(deadline, &cancellation)?;
-        let mut actual = self
-            .access
-            .check(CalendarReadAccessRequest {
-                person_id: self.grant.person_id,
-                device_id: self.grant.device_id.clone(),
-                provider: self.grant.provider,
-                calendar_ids: self.grant.calendar_ids.clone(),
-                deadline,
-                cancellation: cancellation.clone(),
-            })
-            .await?;
+        let request = CalendarReadAccessRequest {
+            person_id: self.grant.person_id,
+            device_id: self.grant.device_id.clone(),
+            provider: self.grant.provider,
+            calendar_ids: self.grant.calendar_ids.clone(),
+            expected_native_subject_fingerprint: None,
+            deadline,
+            cancellation: cancellation.clone(),
+        };
+        let mut actual = self.access.check(request.clone()).await?;
+        let admission = self.access.admission_after_check(&request, &actual).await?;
         check_running(deadline, &cancellation)?;
         actual.calendar_ids.sort();
         let mut expected = self.grant.calendar_ids.clone();
@@ -213,6 +656,12 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             || actual.device_id != self.grant.device_id
             || actual.provider != self.grant.provider
             || actual.calendar_ids != expected
+            || actual.native_subject_fingerprint.trim().is_empty()
+            || actual.native_subject_fingerprint.len() != 64
+            || actual
+                .native_subject_fingerprint
+                .bytes()
+                .any(|byte| !byte.is_ascii_hexdigit())
             || actual.generation.is_empty()
             || actual.generation.len() > 128
         {
@@ -223,11 +672,18 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .as_ref()
-            .is_some_and(|previous| previous != &actual)
+            .is_some_and(|previous| {
+                previous.native_subject_fingerprint != actual.native_subject_fingerprint
+                    || (!allow_generation_change && previous.generation != actual.generation)
+            })
         {
             return Err(AgentFailure::StaleContext);
         }
-        Ok(actual)
+        self.authorized_once.store(true, Ordering::Release);
+        Ok(AuthorizedRead {
+            stamp: actual,
+            admission,
+        })
     }
 
     pub async fn revalidate(
@@ -236,11 +692,17 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         cancellation: Cancellation,
     ) -> Result<(), AgentFailure> {
         check_running(deadline, &cancellation)?;
-        if self
-            .stamp
+        let has_leases = !self
+            .leases
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .is_none()
+            .is_empty();
+        if !has_leases
+            && self
+                .stamp
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?
+                .is_none()
         {
             return Ok(());
         }
@@ -252,7 +714,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
             _ = tokio::time::sleep_until(deadline) => Err(AgentFailure::DeadlineExceeded),
             result = async {
-                self.authorized(deadline, child.clone()).await?;
+                let current = self.authorized(deadline, child.clone(), true).await?;
+                self.validate_live_leases(current.admission.as_ref())?;
                 let live_observation_expires_at = {
                     *self
                         .live_observation_expires_at
@@ -263,12 +726,12 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                     if expires_at <= (self.clock)() {
                         return Err(AgentFailure::StaleContext);
                     }
-                    self.authorized(deadline, child.clone()).await?;
+                    self.authorized(deadline, child.clone(), true).await?;
                     return Ok(());
                 }
                 let mirror = self.core.store.bounded_calendar_mirror(self.grant.person_id).await?;
                 self.validate_mirror(&mirror, (self.clock)())?;
-                self.authorized(deadline, child.clone()).await?;
+                self.authorized(deadline, child.clone(), true).await?;
                 Ok(())
             } => result,
         };
@@ -354,58 +817,137 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         }
         self.grant.validate((self.clock)())?;
         let (range_start, range_end) = requested_range(request, &self.grant)?;
+        let key = self.lease_key(request, range_start, range_end)?;
+        let _acquisition = tokio::select! {
+            biased;
+            _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure::DeadlineExceeded),
+            lock = self.acquisition.lock() => lock,
+        };
+        check_running(deadline, &request.cancellation)?;
+        let cached = self.cached_lease(&key)?;
+        let has_native_lease = !self
+            .leases
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .is_empty();
         let before = self
-            .authorized(deadline, request.cancellation.clone())
+            .authorized(
+                deadline,
+                request.cancellation.clone(),
+                cached.is_some() || has_native_lease,
+            )
             .await?;
-        if let Some(observation) = self
+        if let Some(lease) = cached {
+            let Some(admission) = before.admission.as_ref() else {
+                return Err(AgentFailure::StaleContext);
+            };
+            if admission_matches(admission, &lease.dependencies) {
+                return Ok(lease.view.clone());
+            }
+            self.leases
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?
+                .remove(&key);
+        }
+        let reservation = before
+            .admission
+            .as_ref()
+            .map(|_| {
+                self.core.lease_registry.reserve(
+                    self.grant.person_id,
+                    request.max_bytes.min(MAX_TIMELINE_VIEW_BYTES),
+                )
+            })
+            .transpose()?;
+        let acquisition_wall = (self.clock)();
+        let acquisition_mono = Instant::now();
+        let projected = self
             .access
             .observe_projected(CalendarObserveRequest {
                 person_id: self.grant.person_id,
                 device_id: self.grant.device_id.clone(),
                 provider: self.grant.provider,
                 calendar_ids: self.grant.calendar_ids.clone(),
+                expected_native_subject_fingerprint: before
+                    .stamp
+                    .native_subject_fingerprint
+                    .clone()
+                    .into(),
                 starts_at: range_start,
                 ends_at: range_end,
                 deadline,
                 cancellation: request.cancellation.clone(),
             })
-            .await?
-        {
+            .await;
+        let projected = match projected {
+            Err(AgentFailure::CapabilityDenied) if self.authorized_once.load(Ordering::Acquire) => {
+                self.fatal_source_denial.store(true, Ordering::Release);
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            Err(failure) => return Err(failure),
+            Ok(value) => value,
+        };
+        if let Some(observation) = projected {
             return self
                 .project_projected_observation(
                     request,
                     range_start,
                     range_end,
                     before,
+                    key.clone(),
+                    reservation,
                     observation,
+                    acquisition_wall,
+                    acquisition_mono,
                     deadline,
                 )
                 .await;
         }
-        if let Some(observation) = self
+        let observed = self
             .access
             .observe(CalendarObserveRequest {
                 person_id: self.grant.person_id,
                 device_id: self.grant.device_id.clone(),
                 provider: self.grant.provider,
                 calendar_ids: self.grant.calendar_ids.clone(),
+                expected_native_subject_fingerprint: before
+                    .stamp
+                    .native_subject_fingerprint
+                    .clone()
+                    .into(),
                 starts_at: range_start,
                 ends_at: range_end,
                 deadline,
                 cancellation: request.cancellation.clone(),
             })
-            .await?
-        {
+            .await;
+        let observed = match observed {
+            Err(AgentFailure::CapabilityDenied) if self.authorized_once.load(Ordering::Acquire) => {
+                self.fatal_source_denial.store(true, Ordering::Release);
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            Err(failure) => return Err(failure),
+            Ok(value) => value,
+        };
+        if let Some(observation) = observed {
             return self
                 .project_observation(
                     request,
                     range_start,
                     range_end,
                     before,
+                    key.clone(),
+                    reservation,
                     observation,
+                    acquisition_wall,
+                    acquisition_mono,
                     deadline,
                 )
                 .await;
+        }
+        if self.grant.provider != CalendarProvider::Fixture {
+            return Err(AgentFailure::CapabilityUnavailable);
         }
         let mirror = self
             .core
@@ -508,9 +1050,13 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::BudgetExceeded);
         }
         let after = self
-            .authorized(deadline, request.cancellation.clone())
+            .authorized(
+                deadline,
+                request.cancellation.clone(),
+                before.admission.is_some(),
+            )
             .await?;
-        if before != after {
+        if before.stamp != after.stamp || before.admission != after.admission {
             return Err(AgentFailure::StaleContext);
         }
         let latest = self
@@ -527,10 +1073,13 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .stamp
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if saved.as_ref().is_some_and(|previous| previous != &before) {
+        if saved
+            .as_ref()
+            .is_some_and(|previous| previous != &before.stamp)
+        {
             return Err(AgentFailure::StaleContext);
         }
-        *saved = Some(before);
+        *saved = Some(before.stamp);
         Ok(view)
     }
 
@@ -539,14 +1088,19 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         request: &TimelineViewRead,
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
-        before: CalendarReadAccessStamp,
+        before: AuthorizedRead,
+        key: CalendarLeaseKey,
+        reservation: Option<crate::calendar_lease::LeaseReservation>,
         mut observation: CalendarObservation,
+        acquisition_wall: DateTime<Utc>,
+        acquisition_mono: Instant,
         deadline: Instant,
     ) -> Result<ExpertTimelineView, AgentFailure> {
+        let observed_at = observation.observed_at;
         observation.stamp.calendar_ids.sort();
-        if observation.stamp != before
-            || observation.observed_at > (self.clock)()
-            || (self.clock)() - observation.observed_at > chrono::Duration::minutes(5)
+        if observation.stamp != before.stamp
+            || observed_at > (self.clock)()
+            || (self.clock)() - observed_at > chrono::Duration::minutes(5)
         {
             return Err(AgentFailure::StaleContext);
         }
@@ -619,7 +1173,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         let expires = self
             .grant
             .expires_at
-            .min(observation.observed_at + chrono::Duration::minutes(5));
+            .min(observed_at + chrono::Duration::minutes(5));
         let view = ExpertTimelineView {
             schema_version: 1,
             handle: self.grant.handle,
@@ -644,20 +1198,24 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::BudgetExceeded);
         }
         let after = self
-            .authorized(deadline, request.cancellation.clone())
+            .authorized(
+                deadline,
+                request.cancellation.clone(),
+                before.admission.is_some(),
+            )
             .await?;
-        if before != after {
-            return Err(AgentFailure::StaleContext);
-        }
-        *self
-            .stamp
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(before);
-        *self
-            .live_observation_expires_at
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(expires);
-        Ok(view)
+        self.finish_lease(
+            key,
+            before,
+            after,
+            view,
+            reservation,
+            observed_at,
+            acquisition_wall,
+            acquisition_mono,
+            deadline,
+        )
+        .await
     }
 
     async fn project_projected_observation(
@@ -665,15 +1223,20 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         request: &TimelineViewRead,
         range_start: DateTime<Utc>,
         range_end: DateTime<Utc>,
-        before: CalendarReadAccessStamp,
+        before: AuthorizedRead,
+        key: CalendarLeaseKey,
+        reservation: Option<crate::calendar_lease::LeaseReservation>,
         mut observation: ProjectedCalendarObservation,
+        acquisition_wall: DateTime<Utc>,
+        acquisition_mono: Instant,
         deadline: Instant,
     ) -> Result<ExpertTimelineView, AgentFailure> {
+        let observed_at = observation.observed_at;
         observation.stamp.calendar_ids.sort();
         let now = (self.clock)();
-        if observation.stamp != before
-            || observation.observed_at > now
-            || now - observation.observed_at > chrono::Duration::minutes(5)
+        if observation.stamp != before.stamp
+            || observed_at > now
+            || now - observed_at > chrono::Duration::minutes(5)
             || observation.expires_at <= now
             || observation.range_start > range_start
             || observation.range_end < range_end
@@ -751,20 +1314,24 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::BudgetExceeded);
         }
         let after = self
-            .authorized(deadline, request.cancellation.clone())
+            .authorized(
+                deadline,
+                request.cancellation.clone(),
+                before.admission.is_some(),
+            )
             .await?;
-        if before != after {
-            return Err(AgentFailure::StaleContext);
-        }
-        *self
-            .stamp
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(before);
-        *self
-            .live_observation_expires_at
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)? = Some(observation.expires_at);
-        Ok(view)
+        self.finish_lease(
+            key,
+            before,
+            after,
+            view,
+            reservation,
+            observed_at,
+            acquisition_wall,
+            acquisition_mono,
+            deadline,
+        )
+        .await
     }
 }
 

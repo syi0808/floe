@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/features/agent/agent_calendar_experts.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +10,17 @@ import '../../support/agent_registry.dart';
 
 void main() {
   const connectionId = '00000000-0000-4000-8000-000000000010';
+  CalendarSubjectPreview previewFor(List<String> calendarIds) =>
+      CalendarSubjectPreview(
+        provider: 'event_kit',
+        deviceId: 'test-device',
+        connectionId: connectionId,
+        calendarIds: [...calendarIds]..sort(),
+        connectionScope: 'selected',
+        connectionRevision: 1,
+        sourceAuthority: calendarSourceAuthority,
+        nativeSubjectFingerprint: 'a' * 64,
+      );
   test('controller serializes setup with chat and waits for confirmed installation', () async {
     final gateway = TestCalendarExpertGateway();
     final controller = AgentController(
@@ -27,6 +39,7 @@ void main() {
       connectionScope: 'selected',
       connectionRevision: 1,
       sourceAuthority: calendarSourceAuthority,
+      reviewedPreview: previewFor(['work', 'home']),
     );
     expect(controller.busy, true);
     expect(controller.canSend, false);
@@ -45,6 +58,7 @@ void main() {
     expect(gateway.requests, hasLength(1));
     gateway.gate!.complete();
     await operation;
+    expect(gateway.requests, hasLength(1));
     expect(controller.calendarExperts!.views.single.enabled, false);
     expect(
       controller.calendarExperts!.accessEnabled(
@@ -79,6 +93,7 @@ void main() {
         connectionScope: 'selected',
         connectionRevision: 1,
         sourceAuthority: calendarSourceAuthority,
+        reviewedPreview: previewFor(['home', 'work']),
       );
       final pending = controller.pendingCalendarSetup;
       expect(pending, isNotNull);
@@ -93,6 +108,7 @@ void main() {
         connectionScope: 'selected',
         connectionRevision: 1,
         sourceAuthority: calendarSourceAuthority,
+        reviewedPreview: previewFor(['home', 'work']),
       );
       expect(gateway.requests, hasLength(1));
       if (retry) {
@@ -130,6 +146,7 @@ void main() {
       connectionScope: 'selected',
       connectionRevision: 1,
       sourceAuthority: calendarSourceAuthority,
+      reviewedPreview: previewFor(['home', 'work']),
     );
     controller.discardUncommittedCalendarSetup();
     expect(controller.pendingCalendarSetup, isNotNull);
@@ -160,6 +177,7 @@ void main() {
         connectionScope: 'selected',
         connectionRevision: 1,
         sourceAuthority: calendarSourceAuthority,
+        reviewedPreview: previewFor(['home', 'work']),
       );
       final setupId = controller.calendarExperts!.setups.single.setupId;
       await controller.setCalendarAccessEnabled(setupId, true);
@@ -203,6 +221,7 @@ void main() {
           connectionScope: 'selected',
           connectionRevision: 1,
           sourceAuthority: calendarSourceAuthority,
+          reviewedPreview: previewFor(['home', 'work']),
         );
       }
       final setupId = operationKind == 'configure'
@@ -219,6 +238,7 @@ void main() {
           connectionScope: 'selected',
           connectionRevision: 1,
           sourceAuthority: calendarSourceAuthority,
+          reviewedPreview: previewFor(['home', 'work']),
         ),
         _ => controller.setCalendarAccessEnabled(setupId!, false),
       };
@@ -255,6 +275,7 @@ void main() {
       connectionScope: 'selected',
       connectionRevision: 1,
       sourceAuthority: calendarSourceAuthority,
+      reviewedPreview: previewFor(['home', 'work']),
     );
     expect(controller.vaultState, AgentVaultState.unavailable);
     expect(controller.session, isNull);

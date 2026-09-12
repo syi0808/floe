@@ -85,6 +85,18 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
         .toList();
   }
 
+  Future<Map<String, dynamic>> readAcquisition(
+    Map<String, dynamic> request,
+  ) async {
+    final response = await _channel.invokeMapMethod<Object?, Object?>(
+      'readAcquisition',
+      _arguments(Map<String, Object>.from(request)),
+    );
+    if (response == null)
+      throw const FormatException('Missing EventKit acquisition result.');
+    return Map<String, dynamic>.from(response);
+  }
+
   @override
   Future<void> openSettings() =>
       _channel.invokeMethod<void>('settings', _arguments());

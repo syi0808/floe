@@ -76,9 +76,9 @@ func TestPairedClientConnectsDisconnectedCatalogAndReadsView(test *testing.T) {
 	if connected.Code != http.StatusCreated {
 		test.Fatal(connected.Body.String())
 	}
-	view := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
-	if view["view"].(map[string]any)["view_id"] != "life.logistics" {
-		test.Fatalf("view not connected: %#v", view)
+	view := fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token)
+	if view.Code != http.StatusBadRequest || !strings.Contains(view.Body.String(), "admission_required") {
+		test.Fatalf("legacy route was not denied: %d %s", view.Code, view.Body.String())
 	}
 }
 
@@ -93,13 +93,13 @@ func TestForeignPersonCannotExecuteOwnedConnectorRuntime(test *testing.T) {
 	fixture.console.state.Clients["foreign"] = pairedClient{TokenHash: digest("foreign-token"), PersonID: otherFixturePersonID, DeviceID: "foreign-device"}
 	fixture.console.mu.Unlock()
 
-	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, "foreign-token"); response.Code != http.StatusNotFound {
+	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, "foreign-token"); response.Code != http.StatusBadRequest {
 		test.Fatalf("foreign Person executed connector: %d %s", response.Code, response.Body.String())
 	}
 	if runtime.reads.Load() != 0 {
 		test.Fatalf("foreign Person reached runtime %d times", runtime.reads.Load())
 	}
-	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, ownerToken); response.Code != http.StatusOK {
+	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, ownerToken); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "admission_required") {
 		test.Fatalf("owner could not execute connector: %d %s", response.Code, response.Body.String())
 	}
 }
@@ -140,7 +140,7 @@ func TestRevokingLastClientRemovesPersonConnectorLifecycle(test *testing.T) {
 	fixture.value(fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{"id": started["id"]}, ""))
 	other := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]string{"proof": proof}, ""))
 	otherToken := other["token"].(string)
-	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, otherToken); response.Code != http.StatusNotFound {
+	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, otherToken); response.Code != http.StatusBadRequest {
 		test.Fatalf("re-paired Person read revoked owner's view: %d %s", response.Code, response.Body.String())
 	}
 }

@@ -319,6 +319,41 @@ void main() {
   });
 
   testWidgets(
+    'same-source mirror refreshes do not invalidate a reviewed scope',
+    (tester) async {
+      final (controller, gateway, source) = await open(tester);
+      await tapKey(tester, 'calendar-access-setup');
+      await tapKey(tester, 'calendar-choice-home');
+
+      source.value = sources(ids: ['home', 'work'], revision: 100);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Your Calendar connection changed'),
+        findsNothing,
+      );
+      await tapKey(tester, 'calendar-access-save');
+      expect(gateway.transport.installations, 1);
+      expect(controller.calendarExperts, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'a subject replacement between preview and confirmation is rejected',
+    (tester) async {
+      final (controller, gateway, _) = await open(tester);
+      await tapKey(tester, 'calendar-access-setup');
+      await tapKey(tester, 'calendar-choice-home');
+
+      gateway.transport.previewFingerprint = 'b' * 64;
+      await tapKey(tester, 'calendar-access-save');
+
+      expect(gateway.transport.installations, 0);
+      expect(controller.calendarExpertFailure, 'access_review_required');
+    },
+  );
+
+  testWidgets(
     'missing source blocks new grants but existing access is removable',
     (tester) async {
       final (controller, _, source) = await open(tester);

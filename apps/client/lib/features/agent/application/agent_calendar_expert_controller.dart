@@ -36,6 +36,49 @@ final class AgentCalendarExpertController extends ChangeNotifier {
   Future<void> load() =>
       _operation(() => gateway!.readCalendarExperts(personId));
 
+  Future<CalendarSubjectPreview?> previewCalendarSubject({
+    required String provider,
+    required String deviceId,
+    required String connectionId,
+    required List<String> calendarIds,
+    required String connectionScope,
+    required int connectionRevision,
+    required CalendarSourceAuthority sourceAuthority,
+  }) async {
+    if (!canManage || !_nativeProvider(provider)) return null;
+    try {
+      final preview = await gateway!.previewCalendarSubject(
+        CalendarSubjectPreviewRequest(
+          personId: personId,
+          provider: provider,
+          deviceId: deviceId,
+          connectionId: connectionId,
+          calendarIds: calendarIds,
+          connectionScope: connectionScope,
+          connectionRevision: connectionRevision,
+          sourceAuthority: sourceAuthority,
+        ),
+      );
+      if (!_previewMatches(
+        preview,
+        provider: provider,
+        deviceId: deviceId,
+        calendarIds: calendarIds,
+        connectionScope: connectionScope,
+        sourceAuthority: sourceAuthority,
+      )) {
+        throw const FormatException('Calendar preview scope mismatch');
+      }
+      return preview;
+    } on Object catch (error) {
+      failure = error is AgentVaultException
+          ? error.failure
+          : 'storage_unavailable';
+      notifyListeners();
+      return null;
+    }
+  }
+
   Future<void> install({
     required String setupId,
     required String provider,
@@ -44,10 +87,57 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     required String connectionScope,
     required int connectionRevision,
     required CalendarSourceAuthority sourceAuthority,
+    CalendarSubjectPreview? reviewedPreview,
   }) async {
     final current = experts;
     if (!canManage || current == null || _pendingSetup != null) {
       return;
+    }
+    CalendarSubjectPreview? preview = reviewedPreview;
+    busy = true;
+    failure = null;
+    notifyListeners();
+    if (_nativeProvider(provider)) {
+      try {
+        _pendingSetup = AgentCalendarSetup(
+          personId: personId,
+          instanceId: current.registry.instanceId,
+          expectedRevision: current.registry.revision,
+          setupId: setupId,
+          provider: provider,
+          deviceId: deviceId,
+          calendarIds: calendarIds,
+          connectionScope: connectionScope,
+          connectionRevision: connectionRevision,
+          sourceAuthority: sourceAuthority,
+        );
+      } on FormatException {
+        busy = false;
+        failure = 'invalid_input';
+        notifyListeners();
+        return;
+      }
+      if (preview == null ||
+          !_previewMatches(
+            preview,
+            provider: provider,
+            deviceId: deviceId,
+            calendarIds: calendarIds,
+            connectionScope: connectionScope,
+            sourceAuthority: sourceAuthority,
+          )) {
+        _pendingSetup = null;
+        busy = false;
+        failure = 'access_review_required';
+        notifyListeners();
+        return;
+      }
+      if (!canOperate()) {
+        _pendingSetup = null;
+        busy = false;
+        notifyListeners();
+        return;
+      }
     }
     try {
       _pendingSetup = AgentCalendarSetup(
@@ -59,14 +149,17 @@ final class AgentCalendarExpertController extends ChangeNotifier {
         deviceId: deviceId,
         calendarIds: calendarIds,
         connectionScope: connectionScope,
-        connectionRevision: connectionRevision,
-        sourceAuthority: sourceAuthority,
+        connectionRevision: preview?.connectionRevision ?? connectionRevision,
+        sourceAuthority: preview?.sourceAuthority ?? sourceAuthority,
+        reviewedNativeSubjectFingerprint: preview?.nativeSubjectFingerprint,
       );
     } on FormatException {
+      busy = false;
       failure = 'invalid_input';
       notifyListeners();
       return;
     }
+    busy = false;
     await retrySetup();
   }
 
@@ -142,6 +235,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     required String connectionScope,
     required int connectionRevision,
     required CalendarSourceAuthority sourceAuthority,
+    CalendarSubjectPreview? reviewedPreview,
   }) async {
     await _configureCalendarAccess(
       setupId,
@@ -152,6 +246,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       connectionScope: connectionScope,
       connectionRevision: connectionRevision,
       sourceAuthority: sourceAuthority,
+      reviewedPreview: reviewedPreview,
     );
   }
 
@@ -170,6 +265,7 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     String? connectionScope,
     int? connectionRevision,
     CalendarSourceAuthority? sourceAuthority,
+    CalendarSubjectPreview? reviewedPreview,
   }) async {
     final current = experts;
     if (current == null ||
@@ -177,21 +273,38 @@ final class AgentCalendarExpertController extends ChangeNotifier {
         !current.setups.any((entry) => entry.setupId == setupId)) {
       return;
     }
-    final request = AgentCalendarAccessRequest(
-      personId: personId,
-      instanceId: current.registry.instanceId,
-      expectedRevision: current.registry.revision,
-      setupId: setupId,
-      operation: operation,
-      enabled: enabled,
-      provider: provider,
-      deviceId: deviceId,
-      sourceAuthority: sourceAuthority,
-      calendarIds: calendarIds,
-      connectionScope: connectionScope,
-      connectionRevision: connectionRevision,
-    );
     await _operation(() async {
+      CalendarSubjectPreview? preview;
+      if (operation == AgentCalendarAccessOperation.setScope &&
+          _nativeProvider(provider!)) {
+        preview = reviewedPreview;
+        if (preview == null ||
+            !_previewMatches(
+              preview,
+              provider: provider,
+              deviceId: deviceId!,
+              calendarIds: calendarIds!,
+              connectionScope: connectionScope!,
+              sourceAuthority: sourceAuthority!,
+            )) {
+          throw const AgentVaultException('access_review_required');
+        }
+      }
+      final request = AgentCalendarAccessRequest(
+        personId: personId,
+        instanceId: current.registry.instanceId,
+        expectedRevision: current.registry.revision,
+        setupId: setupId,
+        operation: operation,
+        enabled: enabled,
+        provider: provider,
+        deviceId: deviceId,
+        sourceAuthority: preview?.sourceAuthority ?? sourceAuthority,
+        reviewedNativeSubjectFingerprint: preview?.nativeSubjectFingerprint,
+        calendarIds: calendarIds,
+        connectionScope: connectionScope,
+        connectionRevision: preview?.connectionRevision ?? connectionRevision,
+      );
       final next = await gateway!.configureCalendarAccess(request);
       if (next.registry.instanceId != current.registry.instanceId ||
           next.registry.revision != current.registry.revision + 1) {
@@ -214,12 +327,18 @@ final class AgentCalendarExpertController extends ChangeNotifier {
           if (view == null ||
               view.provider != provider ||
               view.deviceId != deviceId ||
-              view.sourceAuthority != sourceAuthority ||
+              view.sourceAuthority !=
+                  (preview?.sourceAuthority ?? sourceAuthority) ||
               view.connectionScope != connectionScope ||
-              view.connectionRevision != connectionRevision ||
+              view.connectionRevision !=
+                  (preview?.connectionRevision ?? connectionRevision) ||
               setup!.connectionScope != connectionScope ||
-              setup.connectionRevision != connectionRevision ||
-              setup.sourceAuthority != sourceAuthority ||
+              setup.connectionRevision !=
+                  (preview?.connectionRevision ?? connectionRevision) ||
+              setup.sourceAuthority !=
+                  (preview?.sourceAuthority ?? sourceAuthority) ||
+              setup.reviewedNativeSubjectFingerprint !=
+                  preview?.nativeSubjectFingerprint ||
               !listEquals(view.calendarIds, [...calendarIds!]..sort())) {
             throw const FormatException('Calendar access scope mismatch');
           }
@@ -230,6 +349,25 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       }
       return next;
     });
+  }
+
+  bool _nativeProvider(String? provider) =>
+      provider == 'event_kit' || provider == 'android';
+
+  bool _previewMatches(
+    CalendarSubjectPreview preview, {
+    required String provider,
+    required String deviceId,
+    required List<String> calendarIds,
+    required String connectionScope,
+    required CalendarSourceAuthority sourceAuthority,
+  }) {
+    final expectedIds = [...calendarIds]..sort();
+    return preview.provider == provider &&
+        preview.deviceId == deviceId &&
+        listEquals(preview.calendarIds, expectedIds) &&
+        preview.connectionScope == connectionScope &&
+        preview.sourceAuthority == sourceAuthority;
   }
 
   Future<void> _operation(

@@ -889,6 +889,7 @@ func (engine *Engine) StageResult(admissionID string, principal Principal, reque
 		return Release{}, err
 	}
 	parsed.ResultDigest = hex.EncodeToString(digest[:])
+	parsed.AdmissionID = admissionID
 	parsedBytes, err := json.Marshal(parsed)
 	if err != nil {
 		return Release{}, err
@@ -1162,6 +1163,7 @@ type challengeWire struct {
 	MaxItems        uint32      `json:"max_items,omitempty"`
 	MaxBytes        uint32      `json:"max_bytes,omitempty"`
 	ResultDigest    string      `json:"result_sha256,omitempty"`
+	AdmissionID     string      `json:"admission_id,omitempty"`
 	IssuedAtUnixMS  int64       `json:"issued_at_unix_ms"`
 	ExpiresAtUnixMS int64       `json:"expires_at_unix_ms"`
 }
@@ -1261,7 +1263,7 @@ func validateWire(wire challengeWire) error {
 		return fmt.Errorf("%w: timestamps", ErrInvalid)
 	}
 	if wire.Operation == string(OperationEnrollment) {
-		if wire.Policy != nil || wire.Source != nil || wire.Grant != nil || len(wire.Resources) != 0 || wire.QueryDigest != "" || wire.MaxItems != 0 || wire.MaxBytes != 0 || wire.ResultDigest != "" {
+		if wire.Policy != nil || wire.Source != nil || wire.Grant != nil || len(wire.Resources) != 0 || wire.QueryDigest != "" || wire.MaxItems != 0 || wire.MaxBytes != 0 || wire.ResultDigest != "" || wire.AdmissionID != "" {
 			return fmt.Errorf("%w: enrollment fields", ErrInvalid)
 		}
 		return nil
@@ -1298,10 +1300,13 @@ func validateWire(wire challengeWire) error {
 		return fmt.Errorf("%w: budget", ErrInvalid)
 	}
 	if wire.Operation == string(OperationRelease) {
+		if err := validateUUID(wire.AdmissionID); err != nil {
+			return fmt.Errorf("%w: admission id", ErrInvalid)
+		}
 		if _, err := decodeHexDigest(wire.ResultDigest); err != nil {
 			return fmt.Errorf("%w: result digest", ErrInvalid)
 		}
-	} else if wire.ResultDigest != "" {
+	} else if wire.ResultDigest != "" || wire.AdmissionID != "" {
 		return fmt.Errorf("%w: result digest", ErrInvalid)
 	}
 	return nil

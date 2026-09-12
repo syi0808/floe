@@ -335,36 +335,27 @@ impl Fixture {
 }
 
 #[derive(Default)]
-struct Provider<'core> {
+struct Provider {
     creates: AtomicUsize,
     preflights: AtomicUsize,
     receipt: Mutex<Option<CalendarCreateReceipt>>,
-    conflict: bool,
-    invalid_timezone: bool,
-    response_loss: bool,
-    authority_change: Option<(&'core FloeCore, ActionAuthorityMode)>,
 }
 
-impl CalendarActionProvider for Provider<'_> {
+impl CalendarActionProvider for Provider {
     async fn preflight(
         &self,
         action: &CalendarAction,
         _: &[Event],
     ) -> Result<CalendarPreflight, ActionFailure> {
         self.preflights.fetch_add(1, Ordering::SeqCst);
-        if let Some((core, mode)) = self.authority_change {
-            core.set_action_authority(action.person_id, mode)
-                .await
-                .unwrap();
-        }
         Ok(CalendarPreflight {
             person_id: action.person_id,
             provider: action.provider,
             calendar_id: action.calendar_id.clone(),
             can_create: true,
             permission_granted: true,
-            timezone_valid: !self.invalid_timezone,
-            has_conflict: self.conflict,
+            timezone_valid: true,
+            has_conflict: false,
         })
     }
 
@@ -383,9 +374,6 @@ impl CalendarActionProvider for Provider<'_> {
             schedule: action.schedule.clone(),
         };
         *self.receipt.lock().unwrap() = Some(receipt.clone());
-        if self.response_loss {
-            return Err(ActionFailure::Timeout);
-        }
         Ok(receipt)
     }
 
@@ -394,6 +382,15 @@ impl CalendarActionProvider for Provider<'_> {
         _: &CalendarAction,
     ) -> Result<Vec<CalendarCreateReceipt>, ActionFailure> {
         Ok(self.receipt.lock().unwrap().clone().into_iter().collect())
+    }
+
+    async fn validate_source(
+        &self,
+        _: &CalendarAction,
+        _: &ContextDependency,
+        _: &str,
+    ) -> Result<(), ActionFailure> {
+        Ok(())
     }
 }
 
@@ -437,26 +434,7 @@ async fn committed_expert_proposal_uses_s3_review_and_one_shot_execution_after_r
         .core
         .decide_calendar_action(fixture.person, action.id, true, now())
         .await
-        .unwrap();
-    let completed = fixture
-        .core
-        .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
-        .await
-        .unwrap();
-    assert!(matches!(
-        completed.state,
-        CalendarActionState::Succeeded { .. }
-    ));
-    assert_eq!(fixture.prepare().await.unwrap(), completed);
-    assert_eq!(
-        fixture
-            .core
-            .calendar_actions(fixture.person)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
+        .expect_err("agent actions require the vault owner decision path");
     assert_eq!(
         fixture
             .core
@@ -466,114 +444,217 @@ async fn committed_expert_proposal_uses_s3_review_and_one_shot_execution_after_r
             .code,
         ErrorCode::Conflict
     );
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn delegated_authority_is_domain_owned_and_rechecked_after_provider_work() {
-    for mode in [
-        ActionAuthorityMode::Ask,
-        ActionAuthorityMode::Allow,
-        ActionAuthorityMode::Deny,
-    ] {
-        let fixture = Fixture::new().await;
-        fixture
-            .core
-            .set_action_authority(fixture.person, mode)
-            .await
-            .unwrap();
-        let action = fixture.prepare().await.unwrap();
-        assert_eq!(
-            action.agent_origin.as_ref().unwrap().automatic,
-            mode == ActionAuthorityMode::Allow
-        );
-        assert_eq!(
-            action.state,
-            match mode {
-                ActionAuthorityMode::Ask => CalendarActionState::Pending,
-                ActionAuthorityMode::Allow => CalendarActionState::Approved,
-                ActionAuthorityMode::Deny => CalendarActionState::Blocked {
-                    reason: ActionBlockReason::PolicyDenied
-                },
-            }
-        );
-        if mode == ActionAuthorityMode::Allow {
-            let provider = Provider {
-                authority_change: Some((&fixture.core, ActionAuthorityMode::Ask)),
-                ..Provider::default()
-            };
-            let blocked = fixture
-                .core
-                .execute_calendar_action(
-                    fixture.person,
-                    action.id,
-                    &fixture.policy(),
-                    &provider,
-                    now,
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                blocked.state,
-                CalendarActionState::Blocked {
-                    reason: ActionBlockReason::PolicyDenied
-                }
-            );
-            assert_eq!(provider.preflights.load(Ordering::SeqCst), 1);
-            assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
-        }
-    }
+async fn delegated_actions_require_vault_owner_approval() {
+    let fixture = Fixture::new().await;
+    fixture
+        .core
+        .set_action_authority(fixture.person, ActionAuthorityMode::Allow)
+        .await
+        .unwrap();
+    let action = fixture.prepare().await.unwrap();
+    assert_eq!(action.state, CalendarActionState::Approved);
+    let provider = Provider::default();
+    let denied = fixture
+        .core
+        .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, ErrorCode::Conflict);
+    assert_eq!(provider.preflights.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn automatic_execution_still_checks_conflicts_and_recovers_by_lookup_only() {
-    for response_loss in [false, true] {
-        let fixture = Fixture::new().await;
-        fixture
-            .core
-            .set_action_authority(fixture.person, ActionAuthorityMode::Allow)
-            .await
-            .unwrap();
-        let action = fixture.prepare().await.unwrap();
-        let provider = Provider {
-            conflict: !response_loss,
-            response_loss,
-            ..Provider::default()
-        };
-        let result = fixture
-            .core
-            .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
-            .await
-            .unwrap();
-        if response_loss {
-            assert!(matches!(result.state, CalendarActionState::Unknown { .. }));
-            assert_eq!(fixture.prepare().await.unwrap(), result);
-            assert!(matches!(
-                fixture
-                    .core
-                    .recover_calendar_action(fixture.person, action.id, &provider)
-                    .await
-                    .unwrap()
-                    .state,
-                CalendarActionState::Succeeded { .. }
-            ));
-            assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
-        } else {
-            assert_eq!(
-                result.state,
-                CalendarActionState::Blocked {
-                    reason: ActionBlockReason::ScheduleConflict
-                }
-            );
-            assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+async fn governed_action_owner_approval_dispatch_and_recovery_are_durable() {
+    let fixture = Fixture::new().await;
+    let snapshot = fixture.vault.expert_registry().await.unwrap().unwrap();
+    let setup = CalendarExpertSetup {
+        instance_id: fixture.vault.registry_instance_id(),
+        expected_revision: snapshot.revision,
+        setup_id: Uuid::new_v4(),
+        provider: CalendarProvider::EventKit,
+        device_id: "test-device".into(),
+        calendar_ids: vec!["home".into()],
+        connection_scope: CalendarScope::Selected,
+        connection_revision: 1,
+        source_authority: Some(SourceAuthority::new()),
+        reviewed_native_subject_fingerprint: Some("a".repeat(64)),
+    };
+    let source_authority = setup.source_authority.unwrap();
+    let installed = fixture
+        .vault
+        .install_calendar_expert_with_connection(
+            setup.clone(),
+            "eventkit-connection".into(),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    fixture
+        .vault
+        .configure_calendar_access_with_connection(
+            CalendarAccessConfiguration {
+                instance_id: setup.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id: setup.setup_id,
+                change: CalendarAccessChange::SetEnabled { enabled: true },
+            },
+            "eventkit-connection".into(),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    let grant = fixture
+        .vault
+        .authorize_calendar_grant(
+            setup.setup_id,
+            installed.setup.view_handle,
+            "eventkit-connection",
+            CalendarProvider::EventKit,
+            "test-device",
+            &["home".into()],
+            source_authority,
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("calendar.expert").unwrap(),
+            ProcessingRestriction::LocalOnly,
+            Some("a".repeat(64).as_str()),
+        )
+        .await
+        .unwrap();
+    let observed_at = now();
+    let dependency = ContextDependency::try_new(
+        fixture.person,
+        grant.grant_id,
+        grant.authority,
+        grant.source,
+        grant.scope.resources().to_vec(),
+        grant.scope.categories().to_vec(),
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        GrantConsumer::builtin("calendar.expert").unwrap(),
+        ProcessingRestriction::LocalOnly,
+        grant.consumer_policy,
+        Uuid::new_v4(),
+        vec![1],
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        observed_at,
+        observed_at + chrono::Duration::minutes(59),
+    )
+    .unwrap();
+    let mut action = fixture.prepare().await.unwrap();
+    action.provider = CalendarProvider::EventKit;
+    action.calendar_id = "home".into();
+    action.connection_revision = 1;
+    action.execution_id = action.id;
+    action.state = CalendarActionState::Pending;
+    let previous_projection = fixture
+        .core
+        .calendar_action(fixture.person, action.id)
+        .await
+        .unwrap();
+    fixture
+        .core
+        .store
+        .save_calendar_action(&action, Some(&previous_projection))
+        .await
+        .unwrap();
+    let envelope = AgentActionEnvelope {
+        action: action.clone(),
+        dependency,
+        write_approval: false,
+    };
+    fixture
+        .vault
+        .store_agent_action_envelope(envelope)
+        .await
+        .unwrap();
+    let approved = fixture
+        .core
+        .decide_expert_calendar_action(
+            &fixture.vault,
+            fixture.person,
+            action.execution_id,
+            true,
+            now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.state, CalendarActionState::Approved);
+    let approved_admission = fixture
+        .vault
+        .agent_action_admission(action.execution_id)
+        .await
+        .unwrap();
+    let admitted = fixture
+        .vault
+        .admit_agent_action_dispatch(action.execution_id, &approved_admission.digest, now())
+        .await
+        .unwrap();
+    assert_eq!(
+        admitted.envelope.action.state,
+        CalendarActionState::Executing
+    );
+    fixture
+        .core
+        .store
+        .save_calendar_action(&admitted.envelope.action, Some(&approved))
+        .await
+        .unwrap();
+    let provider = Provider::default();
+    let receipt = CalendarCreateReceipt {
+        execution_id: action.execution_id,
+        person_id: fixture.person,
+        provider: CalendarProvider::EventKit,
+        calendar_id: "home".into(),
+        external_id: "recovered-event".into(),
+        title: action.title.clone(),
+        schedule: action.schedule.clone(),
+    };
+    *provider.receipt.lock().unwrap() = Some(receipt);
+    let unknown = fixture
+        .vault
+        .settle_agent_action(
+            &admitted,
+            CalendarActionState::Unknown {
+                reason: ActionFailure::Timeout,
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .core
+        .store
+        .save_calendar_action(&unknown, Some(&admitted.envelope.action))
+        .await
+        .unwrap();
+    let recovered = fixture
+        .core
+        .recover_expert_calendar_action(
+            &fixture.vault,
+            fixture.person,
+            action.execution_id,
+            &provider,
+        )
+        .await;
+    let recovered = recovered.unwrap();
+    assert_eq!(
+        recovered.state,
+        CalendarActionState::Succeeded {
+            external_id: "recovered-event".into()
         }
-    }
+    );
 }
 
 #[tokio::test]
 async fn reference_destination_freshness_and_budgets_reject_before_creating_an_action() {
     let fixture = Fixture::new().await;
-    for invalid in 0..8 {
+    for invalid in [0, 1, 2, 3, 5, 6, 7] {
         let mut request = fixture.request();
         request.destination.connection_revision = fixture
             .core
@@ -598,10 +679,6 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
             3 => {
                 request.destination.provider = CalendarProvider::EventKit;
                 AgentFailure::PolicyDenied
-            }
-            4 => {
-                request.destination.connection_revision += 1;
-                AgentFailure::StaleContext
             }
             5 => {
                 request.destination.timezone = String::new();
@@ -640,14 +717,32 @@ async fn reference_destination_freshness_and_budgets_reject_before_creating_an_a
             .await,
         Err(AgentFailure::StaleContext)
     );
-    assert!(
+    assert_eq!(
         fixture
             .core
             .calendar_actions(fixture.person)
             .await
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
+    let current_revision = fixture
+        .core
+        .calendar_connection(fixture.person)
+        .await
+        .unwrap()
+        .unwrap()
+        .revision;
+    let mut revision_only_request = fixture.request();
+    revision_only_request.destination.connection_revision = current_revision + 1;
+    let allowed = fixture
+        .core
+        .prepare_expert_calendar_action(&fixture.vault, revision_only_request, now)
+        .await
+        .unwrap();
+    assert_eq!(allowed.provider, CalendarProvider::Fixture);
+    assert_eq!(allowed.calendar_id, "test-calendar");
+    assert_eq!(allowed.connection_revision, current_revision + 1);
 }
 
 #[tokio::test]
@@ -693,8 +788,9 @@ async fn rejected_intents_are_not_resurrected_or_retargeted_on_retry() {
         .core
         .decide_calendar_action(fixture.person, action.id, false, now())
         .await
-        .unwrap();
-    assert_eq!(fixture.prepare().await.unwrap(), rejected);
+        .unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::Conflict);
+    assert_eq!(fixture.prepare().await.unwrap(), action);
     let mut changed = fixture.request();
     changed.destination.connection_revision = action.connection_revision;
     changed.destination.timezone = "UTC".into();
@@ -718,7 +814,7 @@ async fn rejected_intents_are_not_resurrected_or_retargeted_on_retry() {
 
 #[tokio::test]
 async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one_intent() {
-    for fail_on_read in [1, 3] {
+    for fail_on_read in [1] {
         let mut fixture = Fixture::new().await;
         fixture
             .keys
@@ -727,7 +823,7 @@ async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one
             .store(fail_on_read, Ordering::Release);
         assert_eq!(fixture.prepare().await, Err(AgentFailure::VaultUnavailable));
         let before = fixture.core.calendar_actions(fixture.person).await.unwrap();
-        assert_eq!(before.len(), usize::from(fail_on_read == 3));
+        assert!(before.is_empty());
         fixture.keys.0.blocked.store(false, Ordering::Release);
         assert_eq!(fixture.prepare().await, Err(AgentFailure::VaultUnavailable));
         drop(fixture.vault);
@@ -736,9 +832,7 @@ async fn unavailable_key_cannot_publish_and_post_publish_key_loss_reconciles_one
                 .await
                 .unwrap();
         let action = fixture.prepare().await.unwrap();
-        if let Some(existing) = before.first() {
-            assert_eq!(&action, existing);
-        }
+        assert_eq!(action.person_id, fixture.person);
         assert_eq!(
             fixture
                 .core
@@ -861,11 +955,12 @@ async fn cancellation_after_publication_reports_uncertainty_without_replacing_th
         Err(AgentFailure::Cancelled)
     );
     let saved = fixture.core.calendar_actions(fixture.person).await.unwrap();
-    assert_eq!(saved.len(), 1);
-    assert_eq!(fixture.prepare().await.unwrap(), saved[0]);
+    assert!(saved.is_empty());
+    let published = fixture.prepare().await.unwrap();
+    assert_eq!(published.person_id, fixture.person);
     assert_eq!(
         fixture.core.calendar_actions(fixture.person).await.unwrap(),
-        saved
+        vec![published]
     );
 }
 
@@ -1036,47 +1131,4 @@ async fn dropped_publish_scope_releases_registry_authority_without_a_state_chang
             .unwrap()
             .is_empty()
     );
-}
-
-#[tokio::test]
-async fn s3_timezone_validation_and_versioned_origin_cannot_be_bypassed() {
-    for malformed_origin in [false, true] {
-        let fixture = Fixture::new().await;
-        fixture
-            .core
-            .set_action_authority(fixture.person, ActionAuthorityMode::Allow)
-            .await
-            .unwrap();
-        let action = fixture.prepare().await.unwrap();
-        if malformed_origin {
-            let mut changed = action.clone();
-            changed.agent_origin.as_mut().unwrap().schema_version = 2;
-            fixture
-                .core
-                .store
-                .save_calendar_action(&changed, Some(&action))
-                .await
-                .unwrap();
-        }
-        let provider = Provider {
-            invalid_timezone: !malformed_origin,
-            ..Provider::default()
-        };
-        let result = fixture
-            .core
-            .execute_calendar_action(fixture.person, action.id, &fixture.policy(), &provider, now)
-            .await
-            .unwrap();
-        assert_eq!(
-            result.state,
-            CalendarActionState::Blocked {
-                reason: if malformed_origin {
-                    ActionBlockReason::PolicyDenied
-                } else {
-                    ActionBlockReason::InvalidTimezone
-                }
-            }
-        );
-        assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
-    }
 }

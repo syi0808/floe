@@ -1,3 +1,4 @@
+use super::remote_views::RemoteViewReaderApi;
 use super::*;
 
 mod schedule;
@@ -8,12 +9,17 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
     cancellation: floe_agent::Cancellation,
     mut emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
-    if let Some(session) =
-        schedule::try_run(inputs, context.clone(), cancellation.clone(), &mut emit).await?
+    if let Some(session) = Box::pin(schedule::try_run(
+        inputs,
+        context.clone(),
+        cancellation.clone(),
+        &mut emit,
+    ))
+    .await?
     {
         return Ok(session);
     }
-    run_general_turn(inputs, context, cancellation, emit).await
+    Box::pin(run_general_turn(inputs, context, cancellation, emit)).await
 }
 
 pub(super) struct ConversationExperts<'model> {
@@ -21,6 +27,10 @@ pub(super) struct ConversationExperts<'model> {
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
     pub(super) local_context: &'model LocalContextStore,
+    pub(super) attention: Option<&'model dyn super::PersonalAttentionReaderApi>,
+    pub(super) people_reader: Option<&'model dyn super::PersonalPeopleReaderApi>,
+    pub(super) recorder: Option<&'model dyn super::ResultRecorder>,
+    pub(super) remote_reader: Option<&'model dyn RemoteViewReaderApi>,
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
     pub(super) builtin_setup: Option<BuiltinExpertSetupReceipt>,
@@ -50,6 +60,25 @@ impl ConversationExperts<'_> {
         self.source_granted(agent_id, source)
             .then_some(())
             .ok_or(AgentFailure::CapabilityDenied)
+    }
+
+    async fn read_remote(
+        &self,
+        view_id: &str,
+        consumer: &str,
+        query: serde_json::Value,
+        request: &A2ASendMessageRequest,
+    ) -> Result<(serde_json::Value, floe_domain::ContextDependency), AgentFailure> {
+        self.remote_reader
+            .ok_or(AgentFailure::CapabilityUnavailable)?
+            .read(
+                view_id,
+                consumer,
+                query,
+                request.deadline,
+                &request.cancellation,
+            )
+            .await
     }
 }
 
@@ -145,24 +174,37 @@ impl InProcessAgent for ConversationExperts<'_> {
         let personal_views = PersonalViewSource {
             model: self.model,
             policy: self.policy,
-            local_context: self.local_context,
             person_id: request.person_id,
+            people_reader: self.people_reader,
+            remote_reader: self.remote_reader,
+            recorder: self.recorder,
+            dependency_turn_id: invocation_id,
+            dependency_result_id: invocation_id,
+            consumer_name: if expert == BuiltinExpertKind::Relationships {
+                "contacts.expert"
+            } else {
+                "assistant"
+            },
         };
         let (summary, data) = match expert {
             BuiltinExpertKind::Schedule => return Err(AgentFailure::CapabilityDenied),
             BuiltinExpertKind::Commitments => {
+                let (view, dependency) = self
+                    .read_remote(
+                        "mail.communication",
+                        &request.agent_id,
+                        serde_json::json!({"schema_version": AGENT_VERSION, "query": "", "cursor": 0, "limit": default_communication_limit()}),
+                        &request,
+                    )
+                    .await?;
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation_id, invocation_id, dependency)?;
+                let view: floe_agent::CommunicationView = serde_json::from_value(view)
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
-                let view = model
-                    .read_communication_view(
-                        "",
-                        0,
-                        default_communication_limit(),
-                        request.deadline,
-                        &request.cancellation,
-                    )
-                    .await?;
                 let calendars =
                     if self.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
                         personal_views
@@ -196,15 +238,19 @@ impl InProcessAgent for ConversationExperts<'_> {
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
-                let view = model
-                    .read_communication_view(
-                        "",
-                        0,
-                        default_communication_limit(),
-                        request.deadline,
-                        &request.cancellation,
+                let (view, dependency) = self
+                    .read_remote(
+                        "mail.communication",
+                        &request.agent_id,
+                        serde_json::json!({"schema_version": AGENT_VERSION, "query": "", "cursor": 0, "limit": default_communication_limit()}),
+                        &request,
                     )
                     .await?;
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation_id, invocation_id, dependency)?;
+                let view: floe_agent::CommunicationView = serde_json::from_value(view)
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let result: CommunicationExpertResult =
                     run_communication_expert(model, self.policy, mail_invocation(view)).await?;
                 (
@@ -213,12 +259,22 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             BuiltinExpertKind::WorkContext => {
+                let (view, dependency) = self
+                    .read_remote(
+                        "work.context",
+                        &request.agent_id,
+                        serde_json::json!({"schema_version": AGENT_VERSION}),
+                        &request,
+                    )
+                    .await?;
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation_id, invocation_id, dependency)?;
+                let view: floe_agent::WorkContextView = serde_json::from_value(view)
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
-                let view = model
-                    .read_work_context_view(request.deadline, &request.cancellation)
-                    .await?;
                 let result: WorkContextExpertResult =
                     run_work_context_expert(model, self.policy, portfolio_invocation(), view)
                         .await?;
@@ -228,12 +284,22 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             BuiltinExpertKind::LifeLogistics => {
+                let (view, dependency) = self
+                    .read_remote(
+                        "life.logistics",
+                        &request.agent_id,
+                        serde_json::json!({"schema_version": AGENT_VERSION}),
+                        &request,
+                    )
+                    .await?;
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation_id, invocation_id, dependency)?;
+                let view: floe_agent::LogisticsView = serde_json::from_value(view)
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 let Model::Server(model) = self.model else {
                     return Err(AgentFailure::CapabilityUnavailable);
                 };
-                let view = model
-                    .read_logistics_view(request.deadline, &request.cancellation)
-                    .await?;
                 let result: LifeLogisticsExpertResult =
                     run_life_logistics_expert(model, self.policy, portfolio_invocation(), view)
                         .await?;
@@ -276,9 +342,25 @@ impl InProcessAgent for ConversationExperts<'_> {
                 )
             }
             BuiltinExpertKind::FocusAttention => {
-                let attention = personal_views
-                    .attention_view(request.deadline, &request.cancellation)
-                    .await?;
+                let (attention, dependency) = {
+                    if !matches!(self.model, Model::Foundation(_)) {
+                        return Err(AgentFailure::CapabilityUnavailable);
+                    }
+                    self.attention
+                        .ok_or(AgentFailure::CapabilityUnavailable)?
+                        .read(
+                            request.person_id,
+                            personal_grants::ATTENTION_EXPERT_CONSUMER,
+                            invocation_id,
+                            invocation_id,
+                            request.deadline,
+                            &request.cancellation,
+                        )
+                        .await?
+                };
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation_id, invocation_id, dependency)?;
                 let calendars =
                     if self.source_granted(&request.agent_id, BuiltinContextSource::Calendar) {
                         personal_views

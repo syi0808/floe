@@ -22,6 +22,7 @@ impl CalendarReadAccess for Access {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "f".repeat(64),
             generation: "synthetic-generation".into(),
         })
     }
@@ -128,6 +129,7 @@ async fn seed(
                 connection_scope: floe_domain::CalendarScope::Selected,
                 connection_revision: 1,
                 source_authority: None,
+                reviewed_native_subject_fingerprint: None,
             },
             Cancellation::default(),
         )
@@ -317,7 +319,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
             .is_empty()
     );
     perform(&worker, person, AgentVaultActionDto::Lock {});
-    let action = runtime.block_on(async {
+    let publication = runtime.block_on(async {
         let vault = EncryptedAgentVault::open(&root, person, keys.clone())
             .await
             .unwrap();
@@ -338,8 +340,8 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
             fixture_now,
         )
         .await
-        .unwrap()
     });
+    assert_eq!(publication, Err(AgentFailure::PolicyDenied));
     perform(&worker, person, AgentVaultActionDto::Unlock {});
     let overview = perform(
         &worker,
@@ -375,20 +377,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     assert!(result.failure.is_none() && result.events.is_empty() && result.session.is_none());
     let projection = result.proposal.unwrap();
     assert_eq!(projection.session_id, session.id.to_string());
-    let linked = projection.action.unwrap();
-    assert_eq!(linked.action_id, action.id.to_string());
-    assert_eq!(linked.execution_id, action.execution_id.to_string());
-    assert_eq!(linked.status, AgentProposalStatusDto::Pending);
-    let wire = serde_json::to_string(&linked).unwrap();
-    for private in [
-        "calendar_id",
-        "source_handle",
-        "Synthetic",
-        "private_state",
-        "external_id",
-    ] {
-        assert!(!wire.contains(private));
-    }
+    assert!(projection.action.is_none());
     worker
         .request(person, id, AgentVaultOperationDto::Release {})
         .unwrap();
@@ -420,7 +409,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
     assert_eq!(saved, session);
     assert_eq!(
         runtime.block_on(core.calendar_actions(person)).unwrap(),
-        vec![action]
+        Vec::<floe_core::CalendarAction>::new()
     );
     keys.0.unavailable.store(true, Ordering::Release);
     let unavailable = perform(&worker, person, inspect);

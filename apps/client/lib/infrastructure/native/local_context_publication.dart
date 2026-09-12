@@ -36,7 +36,8 @@ final class LocalDeviceIdentity {
   }
 }
 
-final class PublishingAppleContextGateway implements AppleContextApi {
+final class PublishingAppleContextGateway
+    implements AppleContextApi, AppleContextSubjectApi {
   factory PublishingAppleContextGateway({
     required AppleContextApi gateway,
     required LocalContextTransport transport,
@@ -97,12 +98,29 @@ final class PublishingAppleContextGateway implements AppleContextApi {
   }
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async {
     final view = await _readNative(
       _peopleViewId,
-      () => _gateway.readContacts(limit: limit),
+      () =>
+          _gateway.readContacts(limit: limit, selectedHandles: selectedHandles),
     );
     return _publishValidated(view, _peopleViewId, validateApplePeopleView);
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  ) {
+    final gateway = _gateway;
+    if (gateway is! AppleContextSubjectApi) {
+      throw UnsupportedError('Contacts subject inspection is unavailable.');
+    }
+    return (gateway as AppleContextSubjectApi).inspectContactsSubject(
+      selectedHandles,
+    );
   }
 
   @override
@@ -232,7 +250,8 @@ final class PublishingAppleContextGateway implements AppleContextApi {
   }
 }
 
-final class PublishingAndroidContextGateway implements AndroidContextApi {
+final class PublishingAndroidContextGateway
+    implements AndroidContextApi, AndroidContextSubjectApi {
   factory PublishingAndroidContextGateway({
     required AndroidContextApi gateway,
     required LocalContextTransport transport,
@@ -321,12 +340,33 @@ final class PublishingAndroidContextGateway implements AndroidContextApi {
   );
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
+  Future<Map<String, dynamic>> readAcquisition(Map<String, dynamic> request) =>
+      _gateway.readAcquisition(request);
+
+  @override
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async {
     final view = await _readNative(
       _peopleViewId,
-      () => _gateway.readContacts(limit: limit),
+      () =>
+          _gateway.readContacts(limit: limit, selectedHandles: selectedHandles),
     );
     return _publishValidated(view, _peopleViewId, validateAndroidPeopleView);
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  ) {
+    final gateway = _gateway;
+    if (gateway is! AndroidContextSubjectApi) {
+      throw UnsupportedError('Contacts subject inspection is unavailable.');
+    }
+    return (gateway as AndroidContextSubjectApi).inspectContactsSubject(
+      selectedHandles,
+    );
   }
 
   @override

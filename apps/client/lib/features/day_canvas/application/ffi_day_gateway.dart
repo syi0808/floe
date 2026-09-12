@@ -106,6 +106,11 @@ final class FfiDayGateway
         'purpose': InferencePurpose.everydayAssistance.wireName,
         'external': route.requiresExternalConsent,
         'allow_external': consentCoversRoute,
+        'pairing': {
+          'client_id': connection.clientId,
+          'person_id': connection.personId,
+          'device_id': connection.deviceId,
+        },
         'calendar_connections': calendarConnections,
       };
     } on ServerConnectionException {

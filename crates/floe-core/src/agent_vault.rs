@@ -23,21 +23,30 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 mod access_grants;
+mod agent_actions;
 mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
 mod expert_actions;
 mod keyring;
 mod learning;
+mod personal_grants;
 mod registry;
 mod remote_authority;
+mod remote_calendar_grants;
+mod remote_view_grants;
 mod session_archive;
 pub use access_grants::AccessGrantCleanup;
+pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use keyring::KeyringVaultKeys;
 pub use remote_authority::{
+    RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
     RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemoteProducerIdentity,
+    RemoteViewSourceReference,
 };
+pub use remote_calendar_grants::RemoteCalendarGrantBinding;
+pub use remote_view_grants::RemoteViewGrantBinding;
 pub use session_archive::*;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
@@ -94,6 +103,7 @@ pub struct GovernedAgentSessionStore<'vault, Keys> {
     session_id: Uuid,
     coverage: Mutex<HashMap<Uuid, floe_domain::CoverageAccumulator>>,
     result_coverage: Mutex<HashMap<(Uuid, Uuid), floe_domain::CoverageAccumulator>>,
+    liveness: Option<&'vault dyn GovernedDependencyLiveness>,
 }
 
 impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
@@ -178,6 +188,50 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         request: &mut floe_agent::ModelRequest,
         resolver: Option<&dyn GovernedDependencyResolver>,
     ) -> Result<(), AgentFailure> {
+        self.project_model_request_with_coverage(request, resolver)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn revalidate_current_coverage(
+        &self,
+        request: &floe_agent::ModelRequest,
+        resolver: &dyn GovernedDependencyResolver,
+    ) -> Result<(), AgentFailure> {
+        if request.session_id != self.session_id {
+            return Err(AgentFailure::Conflict);
+        }
+        let coverage = self
+            .coverage
+            .lock()
+            .map_err(|_| AgentFailure::VaultUnavailable)?
+            .get(&request.turn_id)
+            .map(|value| value.coverage());
+        let coverage = match coverage {
+            Some(value) => value,
+            None => {
+                self.vault
+                    .read_turn_coverage(self.session_id, request.turn_id)
+                    .await?
+            }
+        };
+        match coverage {
+            DependencyCoverage::Independent => Ok(()),
+            DependencyCoverage::Unknown => Err(AgentFailure::PolicyDenied),
+            DependencyCoverage::Dependent { dependencies } => {
+                for dependency in dependencies {
+                    resolver.authorize(&dependency, request).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn project_model_request_with_coverage(
+        &self,
+        request: &mut floe_agent::ModelRequest,
+        resolver: Option<&dyn GovernedDependencyResolver>,
+    ) -> Result<bool, AgentFailure> {
         if request.session_id != self.session_id {
             return Err(AgentFailure::Conflict);
         }
@@ -244,7 +298,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         if filtered || !request.replay.is_empty() {
             request.replay.clear();
         }
-        Ok(())
+        Ok(filtered)
     }
 }
 
@@ -350,7 +404,13 @@ impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys
                 .collect::<BTreeMap<_, _>>()
         };
         self.vault
-            .compare_and_swap_checked(session, previous_revision, &snapshot)
+            .compare_and_swap_checked_with_liveness(
+                session,
+                previous_revision,
+                &snapshot,
+                self.liveness,
+                true,
+            )
             .await
     }
 }
@@ -361,6 +421,10 @@ pub trait GovernedDependencyResolver: Send + Sync {
         dependency: &'a ContextDependency,
         request: &'a floe_agent::ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>;
+}
+
+pub trait GovernedDependencyLiveness: Send + Sync {
+    fn validate(&self, dependency: &ContextDependency) -> Result<(), AgentFailure>;
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -429,7 +493,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
+        vault.initialize_agent_action_store().await?;
+        vault.initialize_personal_grant_store(true).await?;
         vault.initialize_calendar_grant_store().await?;
+        vault.initialize_remote_calendar_grant_store(true).await?;
+        vault.initialize_remote_view_grant_store(true).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_context_cleanup(true).await?;
         vault.initialize_remote_authority_store(true).await?;
@@ -507,7 +575,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
+        vault.initialize_agent_action_store().await?;
+        vault.initialize_personal_grant_store(false).await?;
         vault.initialize_calendar_grant_store().await?;
+        vault.initialize_remote_calendar_grant_store(false).await?;
+        vault.initialize_remote_view_grant_store(false).await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_context_cleanup(false).await?;
         vault.initialize_remote_authority_store(false).await?;
@@ -525,10 +597,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             session_id,
             coverage: Mutex::new(HashMap::new()),
             result_coverage: Mutex::new(HashMap::new()),
+            liveness: None,
         }
     }
 
-    async fn read_turn_coverage(
+    pub fn governed_general_store_with_liveness<'vault>(
+        &'vault self,
+        session_id: Uuid,
+        liveness: &'vault dyn GovernedDependencyLiveness,
+    ) -> GovernedAgentSessionStore<'vault, Keys> {
+        let mut store = self.governed_general_store(session_id);
+        store.liveness = Some(liveness);
+        store
+    }
+
+    pub(crate) async fn read_turn_coverage(
         &self,
         session_id: Uuid,
         turn_id: Uuid,
@@ -736,6 +819,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         previous_revision: u64,
         coverage: &BTreeMap<Uuid, DependencyCoverage>,
     ) -> Result<(), AgentFailure> {
+        self.compare_and_swap_checked_with_liveness(
+            session,
+            previous_revision,
+            coverage,
+            None,
+            false,
+        )
+        .await
+    }
+
+    async fn compare_and_swap_checked_with_liveness(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        coverage: &BTreeMap<Uuid, DependencyCoverage>,
+        liveness: Option<&dyn GovernedDependencyLiveness>,
+        authorize_release: bool,
+    ) -> Result<(), AgentFailure> {
         if previous_revision.checked_add(1) != Some(session.revision) {
             return Err(AgentFailure::Conflict);
         }
@@ -774,6 +875,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .get(&message.turn_id())
                         .cloned()
                         .unwrap_or(DependencyCoverage::Unknown);
+                    if authorize_release {
+                        self.validate_context_dependency_coverage_in_transaction(
+                            &transaction,
+                            &turn_coverage,
+                        )
+                        .await?;
+                    }
                     context_dependencies::merge_context_dependency_coverage(
                         &transaction,
                         candidate.person_id,
@@ -787,6 +895,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
                 .await?;
             let payload = self.payload(&candidate)?;
+            if let Some(liveness) = liveness {
+                for turn_id in turns {
+                    if let Some(DependencyCoverage::Dependent { dependencies }) =
+                        coverage.get(&turn_id)
+                    {
+                        for dependency in dependencies {
+                            liveness.validate(dependency)?;
+                        }
+                    }
+                }
+            }
             let changed = transaction
                 .execute(
                     "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",

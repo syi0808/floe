@@ -1,7 +1,9 @@
 use std::future::Future;
 
 use floe_agent::{AgentMessage, AgentRegistry, EXPERT_RESULT_MEDIA_TYPE, ExpertResult};
+use floe_domain::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
+use uuid::Uuid;
 
 use super::*;
 use crate::ExpertProposalReference;
@@ -12,6 +14,36 @@ enum ProposalUse {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(crate) async fn expert_proposal_dependency(
+        &self,
+        reference: &ExpertProposalReference,
+    ) -> Result<floe_domain::ContextDependency, AgentFailure> {
+        if reference.person_id != self.person_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let session = self.load(self.person_id, reference.session_id).await?;
+        let turn_id = session
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                AgentMessage::Delegation { task, .. } if task.id == reference.invocation_id => {
+                    Some(message.turn_id())
+                }
+                _ => None,
+            })
+            .ok_or(AgentFailure::NotFound)?;
+        let coverage = self
+            .read_turn_coverage(reference.session_id, turn_id)
+            .await?;
+        let DependencyCoverage::Dependent { dependencies } = coverage else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        let [dependency] = dependencies.as_slice() else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        Ok(dependency.clone())
+    }
+
     pub(crate) async fn with_expert_proposal<ResultValue, Publish>(
         &self,
         reference: &ExpertProposalReference,
@@ -106,8 +138,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let registry = AgentRegistry::restore(snapshot, self.vault_id)?;
             match usage {
                 ProposalUse::Publish => {
-                    if evidence.source_handle.starts_with("calendar.timeline:")
-                        && registry.calendar_view(evidence.person_id, evidence.view_handle)?.data_class() != evidence.data_class
+                    let calendar_source = if evidence.source_handle.starts_with("calendar.timeline:") {
+                        true
+                    } else if let Some(observation_id) = evidence.source_handle.strip_prefix("calendar.lease:") {
+                        Uuid::parse_str(observation_id).map_err(|_| AgentFailure::InvalidInput)?;
+                        true
+                    } else {
+                        false
+                    };
+                    if calendar_source
+                        && registry.calendar_view(evidence.person_id, evidence.view_handle)?.data_class()
+                            != evidence.data_class
                     {
                         return Err(AgentFailure::PolicyDenied);
                     }

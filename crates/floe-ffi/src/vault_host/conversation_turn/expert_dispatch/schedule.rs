@@ -1,24 +1,29 @@
+use std::{future::Future, pin::Pin};
+
 use floe_agent::{
     AgentBudget, AgentEvent, AgentFailure, DataClass, InferencePolicyDecision, ModelPlacement,
     ModelRequest, ModelResponse, ModelRunner, SessionStore, TransferConsent,
 };
 use floe_core::{
-    CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessRequest,
-    CalendarReadAccessStamp, CalendarTimelineGrant, ProjectedCalendarItem,
-    ProjectedCalendarObservation, VaultKeyProvider,
+    CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessAdmission,
+    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarTimelineGrant,
+    ProjectedCalendarItem, ProjectedCalendarObservation, RemoteCalendarGrantBinding,
+    VaultKeyProvider,
 };
-use floe_domain::{
-    CalendarConnection, CalendarProvider, GrantAuthority, GrantConsumer, GrantPurpose, PersonId,
-    ProcessingRestriction,
+use floe_domain::{CalendarBatch, CalendarConnection, CalendarProvider, CalendarRecord, PersonId};
+use floe_infra::{
+    RemoteAuthorizationClient, calendar_query_sha256, native_calendar::NativeCalendarReadAccess,
+    parse_calendar_challenge,
 };
-use floe_infra::native_calendar::NativeCalendarReadAccess;
-use floe_protocol::PROTOCOL_VERSION;
+use floe_protocol::{
+    CalendarBatchDto, LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
+    LocalContextAcquisitionResultDto, PROTOCOL_VERSION,
+};
 use uuid::Uuid;
 
 use crate::{
-    local_context::LocalContextStore,
-    local_model::FoundationModelRunner,
-    remote_model::{CalendarContextRequest, ServerModelRunner},
+    local_context::LocalContextStore, local_model::FoundationModelRunner,
+    remote_model::ServerModelRunner,
 };
 
 use super::super::super::session_uuid;
@@ -38,6 +43,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     let local_context = inputs.local_context;
     let person_id = inputs.person_id;
     let request = inputs.request;
+    let propose_focus = request.text.trim() == "/focus";
     let session_id = session_uuid(&request.session_id)?;
     let session = vault.load(person_id, session_id).await?;
     if session.scope.is_some()
@@ -77,6 +83,9 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         })
         .collect();
     if active_setups.is_empty() {
+        if propose_focus {
+            return Err(AgentFailure::ConsentRequired);
+        }
         return Ok(None);
     }
     let candidates: Vec<_> = active_setups
@@ -86,6 +95,12 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         .collect();
     let ambiguous = candidates.len() != 1;
     let (setup, binding) = candidates.first().copied().unwrap_or(active_setups[0]);
+    if propose_focus && (ambiguous || binding.calendar_ids.len() != 1) {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    if propose_focus && binding.provider != CalendarProvider::EventKit {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
     let local = chrono::Local::now();
     let offset = local.offset().local_minus_utc();
     let range = floe_domain::CalendarRange {
@@ -94,25 +109,43 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         timezone_offset_seconds: offset,
         end_timezone_offset_seconds: None,
     };
-    let (starts_at, ends_at) = range_bounds(&range)?;
+    let (mut starts_at, ends_at) = range_bounds(&range)?;
     let now = chrono::Utc::now();
-    let model = Model::conversation(request.remote_route.clone())?;
-    let placement = model.placement();
-    let external_consent = if request
-        .remote_route
-        .as_ref()
-        .is_some_and(|route| route.external && route.allow_external)
-    {
-        TransferConsent::Granted
+    if propose_focus {
+        starts_at = starts_at.max(now + chrono::Duration::minutes(1));
+        if starts_at >= ends_at {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+    }
+    let remote_acquisition = request.remote_route.is_some()
+        && matches!(
+            binding.provider,
+            CalendarProvider::Google | CalendarProvider::Microsoft
+        );
+    let model = if remote_acquisition {
+        Model::Foundation(FoundationModelRunner::encrypted())
     } else {
-        TransferConsent::NotGranted
+        Model::conversation(request.remote_route.clone())?
     };
-    let result = core
-        .run_calendar_agent_turn(
+    let placement = model.placement();
+    let external_consent = TransferConsent::NotGranted;
+    let remote_backend = match request.remote_route.as_ref() {
+        Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
+            vault,
+            core,
+            route,
+            person_id,
+            binding.provider,
+            binding.calendar_ids.clone(),
+            binding.connection_revision,
+        )?),
+        _ => None,
+    };
+    let result = Box::pin(
+        core.run_calendar_agent_turn(
             vault,
             &BoundAccess {
                 core,
-                vault,
                 setup,
                 binding,
                 request_device_id: &request.device_id,
@@ -129,9 +162,10 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     local_context,
                     core,
                     binding.source_authority,
+                    remote_backend
+                        .as_ref()
+                        .map(|backend| backend as &dyn RemoteCalendarBackend),
                 ),
-                grant_pin: std::sync::Mutex::new(None),
-                grant_candidate: std::sync::Mutex::new(None),
             },
             &model,
             CalendarAgentTurnRequest {
@@ -140,7 +174,11 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     person_id,
                     session_id,
                     expected_revision: request.expected_revision,
-                    text: request.text.trim().to_owned(),
+                    text: if propose_focus {
+                        "Ask the schedule expert to propose a 60-minute focus block today for my review. Do not execute it.".into()
+                    } else {
+                        request.text.trim().to_owned()
+                    },
                 },
                 context,
                 policy: InferencePolicyDecision {
@@ -166,35 +204,37 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     expires_at: now + chrono::Duration::minutes(2),
                 },
                 assignment_id: setup.expert_assignment_id,
-                feasibility: optional_local_view(local_context.feasibility(person_id))?,
-                wellbeing: optional_local_view(local_context.wellbeing(person_id))?,
-                destination: None,
-                propose_focus: false,
+                feasibility: None,
+                wellbeing: None,
+                destination: propose_focus.then(|| floe_core::ExpertCalendarDestination {
+                    provider: binding.provider,
+                    calendar_id: binding.calendar_ids[0].clone(),
+                    connection_revision: binding.connection_revision,
+                    timezone: "UTC".into(),
+                }),
+                propose_focus,
                 cancellation,
                 continuation: request.continuation,
             },
             chrono::Utc::now,
             emit,
-        )
-        .await?;
+        ),
+    )
+    .await?;
     Ok(Some(result.session))
 }
 
-struct BoundAccess<'host, Keys: VaultKeyProvider> {
+struct BoundAccess<'host> {
     core: &'host floe_core::FloeCore,
-    vault: &'host floe_core::EncryptedAgentVault<Keys>,
     setup: &'host floe_agent::CalendarExpertSetupReceipt,
     binding: &'host floe_agent::CalendarViewBinding,
     request_device_id: &'host str,
     remote_route: Option<&'host floe_protocol::AgentRemoteRouteDto>,
     ambiguous: bool,
     access: Access<'host>,
-    grant_pin: std::sync::Mutex<Option<(GrantAuthority, floe_domain::ConsumerPolicyAuthority)>>,
-    grant_candidate:
-        std::sync::Mutex<Option<(GrantAuthority, floe_domain::ConsumerPolicyAuthority)>>,
 }
 
-impl<Keys: VaultKeyProvider> BoundAccess<'_, Keys> {
+impl BoundAccess<'_> {
     async fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
         if person_id != self.setup.person_id || person_id != self.binding.person_id {
             return Err(AgentFailure::CapabilityDenied);
@@ -215,78 +255,11 @@ impl<Keys: VaultKeyProvider> BoundAccess<'_, Keys> {
             self.request_device_id,
             self.remote_route,
         )?;
-        if matches!(
-            self.binding.provider,
-            CalendarProvider::EventKit | CalendarProvider::Android
-        ) {
-            if self.remote_route.is_some() {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let authority = self
-                .binding
-                .source_authority
-                .ok_or(AgentFailure::AccessReviewRequired)?;
-            let consumer = GrantConsumer::builtin("calendar.expert")
-                .map_err(|_| AgentFailure::CapabilityDenied)?;
-            let admission = self
-                .vault
-                .authorize_calendar_grant(
-                    self.setup.setup_id,
-                    self.binding.handle,
-                    &connection.connection_id,
-                    self.binding.provider,
-                    self.request_device_id,
-                    &self.binding.calendar_ids,
-                    authority,
-                    floe_domain::GrantOperation::Read,
-                    GrantPurpose::Assistant,
-                    consumer,
-                    ProcessingRestriction::LocalOnly,
-                )
-                .await?;
-            let grant_pin = self
-                .grant_pin
-                .lock()
-                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-            if let Some((previous_authority, previous_policy)) = *grant_pin {
-                if previous_authority != admission.authority
-                    || previous_policy != admission.consumer_policy
-                {
-                    return Err(AgentFailure::StaleContext);
-                }
-            }
-            drop(grant_pin);
-            *self
-                .grant_candidate
-                .lock()
-                .map_err(|_| AgentFailure::CapabilityUnavailable)? =
-                Some((admission.authority, admission.consumer_policy));
-        }
-        Ok(())
-    }
-
-    fn pin_candidate(&self) -> Result<(), AgentFailure> {
-        let candidate = self
-            .grant_candidate
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?
-            .take();
-        let Some(candidate) = candidate else {
-            return Ok(());
-        };
-        let mut grant_pin = self
-            .grant_pin
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if grant_pin.is_some_and(|pin| pin != candidate) {
-            return Err(AgentFailure::StaleContext);
-        }
-        *grant_pin = Some(candidate);
         Ok(())
     }
 }
 
-impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
+impl CalendarReadAccess for BoundAccess<'_> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -300,11 +273,7 @@ impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<floe_core::CalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
-        let observed = self.access.observe(request).await?;
-        if observed.is_some() {
-            self.pin_candidate()?;
-        }
-        Ok(observed)
+        self.access.observe(request).await
     }
 
     async fn observe_projected(
@@ -312,11 +281,7 @@ impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
-        let observed = self.access.observe_projected(request).await?;
-        if observed.is_some() {
-            self.pin_candidate()?;
-        }
-        Ok(observed)
+        self.access.observe_projected(request).await
     }
 }
 
@@ -402,14 +367,6 @@ fn validate_active_connection(
     Ok(())
 }
 
-fn optional_local_view<T>(result: Result<T, AgentFailure>) -> Result<Option<T>, AgentFailure> {
-    match result {
-        Ok(view) => Ok(Some(view)),
-        Err(AgentFailure::CapabilityUnavailable | AgentFailure::StaleContext) => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 fn range_bounds(
     range: &floe_domain::CalendarRange,
 ) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>), AgentFailure> {
@@ -454,6 +411,7 @@ impl<'model> Access<'model> {
         local_context: &'model LocalContextStore,
         core: &'model floe_core::FloeCore,
         source_authority: Option<floe_domain::SourceAuthority>,
+        remote_backend: Option<&'model dyn RemoteCalendarBackend>,
     ) -> Self {
         match provider {
             CalendarProvider::Fixture => Self::Fixture(FixtureAccess {
@@ -478,17 +436,18 @@ impl<'model> Access<'model> {
                         core,
                         connection_id,
                         source_authority,
-                        pinned: std::sync::Mutex::new(None),
                         local_context,
                         provider,
                         device_id,
                         calendar_ids,
+                        connection_revision,
                     })
                 }
             }
             CalendarProvider::Google | CalendarProvider::Microsoft => match model {
                 Model::Server(model) => Self::Remote(RemoteCalendarAccess {
                     model: Some(model),
+                    backend: remote_backend,
                     provider,
                     device_id,
                     calendar_ids,
@@ -497,6 +456,7 @@ impl<'model> Access<'model> {
                 }),
                 Model::Foundation(_) => Self::Remote(RemoteCalendarAccess {
                     model: None,
+                    backend: remote_backend,
                     provider,
                     device_id,
                     calendar_ids,
@@ -508,11 +468,11 @@ impl<'model> Access<'model> {
                 core,
                 connection_id,
                 source_authority,
-                pinned: std::sync::Mutex::new(None),
                 local_context,
                 provider,
                 device_id,
                 calendar_ids,
+                connection_revision,
             }),
         }
     }
@@ -559,18 +519,15 @@ struct DeviceCalendarAccess<'store> {
     core: &'store floe_core::FloeCore,
     connection_id: String,
     source_authority: Option<floe_domain::SourceAuthority>,
-    pinned: std::sync::Mutex<Option<crate::local_context::PublishedCalendarObservation>>,
     local_context: &'store LocalContextStore,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
+    connection_revision: u64,
 }
 
 impl DeviceCalendarAccess<'_> {
-    async fn observation(
-        &self,
-        person_id: PersonId,
-    ) -> Result<crate::local_context::PublishedCalendarObservation, AgentFailure> {
+    async fn connection(&self, person_id: PersonId) -> Result<CalendarConnection, AgentFailure> {
         let connection = self
             .core
             .calendar_connection(person_id)
@@ -605,17 +562,50 @@ impl DeviceCalendarAccess<'_> {
         }) {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let current = self.local_context.authorized_calendar_observation(
-            person_id,
-            &connection,
-            &self.calendar_ids,
-        )?;
-        let mut pinned = self.pinned.lock().map_err(|_| AgentFailure::Interrupted)?;
-        let observation = pinned.get_or_insert(current);
-        if observation.expires_at_unix_ms <= chrono::Utc::now().timestamp_millis() {
+        Ok(connection)
+    }
+
+    async fn acquire(
+        &self,
+        person_id: PersonId,
+        mode: LocalContextAcquisitionModeDto,
+        starts_at: chrono::DateTime<chrono::Utc>,
+        ends_at: chrono::DateTime<chrono::Utc>,
+        expected_native_subject_fingerprint: Option<String>,
+        deadline: tokio::time::Instant,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<LocalContextAcquisitionResultDto, AgentFailure> {
+        let connection = self.connection(person_id).await?;
+        let host_epoch = self.local_context.acquisition_host_epoch(person_id)?;
+        let result = self
+            .local_context
+            .acquire_calendar(
+                LocalContextAcquisitionRequestDto {
+                    request_id: Uuid::new_v4().to_string(),
+                    host_epoch,
+                    person_id: person_id.to_string(),
+                    device_id: self.device_id.clone(),
+                    connection_id: connection.connection_id,
+                    connection_revision: connection.revision,
+                    provider: self.provider,
+                    mode,
+                    calendar_ids: self.calendar_ids.clone(),
+                    range_start_unix_ms: starts_at.timestamp_millis(),
+                    range_end_unix_ms: ends_at.timestamp_millis(),
+                    deadline_unix_ms: chrono::Utc::now().timestamp_millis()
+                        + deadline
+                            .saturating_duration_since(tokio::time::Instant::now())
+                            .as_millis()
+                            .min(30_000) as i64,
+                    expected_native_subject_fingerprint,
+                },
+                cancellation,
+            )
+            .await?;
+        if result.native_subject_fingerprint_before != result.native_subject_fingerprint_after {
             return Err(AgentFailure::StaleContext);
         }
-        Ok(observation.clone())
+        Ok(result)
     }
 }
 
@@ -636,20 +626,36 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        match self.observation(request.person_id).await {
-            Ok(observation) => Ok(CalendarReadAccessStamp {
-                schema_version: PROTOCOL_VERSION,
-                person_id: request.person_id,
-                device_id: request.device_id,
-                provider: request.provider,
-                calendar_ids: request.calendar_ids,
-                generation: format!(
-                    "device-{}-{}-{}",
-                    observation.device_id,
-                    observation.connection_revision,
-                    observation.observed_at_unix_ms
-                ),
-            }),
+        let expected_fingerprint = request.expected_native_subject_fingerprint.clone();
+        match self
+            .acquire(
+                request.person_id,
+                LocalContextAcquisitionModeDto::InspectSubject,
+                chrono::Utc::now(),
+                chrono::Utc::now() + chrono::Duration::days(1),
+                None,
+                request.deadline,
+                request.cancellation,
+            )
+            .await
+        {
+            Ok(result) => {
+                if expected_fingerprint
+                    .as_deref()
+                    .is_some_and(|expected| expected != result.native_subject_fingerprint_before)
+                {
+                    return Err(AgentFailure::AccessReviewRequired);
+                }
+                Ok(CalendarReadAccessStamp {
+                    schema_version: PROTOCOL_VERSION,
+                    person_id: request.person_id,
+                    device_id: request.device_id,
+                    provider: request.provider,
+                    calendar_ids: request.calendar_ids,
+                    native_subject_fingerprint: result.native_subject_fingerprint_before,
+                    generation: format!("device-{}", result.connection_revision),
+                })
+            }
             Err(error) => Err(error),
         }
     }
@@ -664,16 +670,24 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        match self.observation(request.person_id).await {
-            Ok(observation) => {
-                if request.starts_at.timestamp_millis() < observation.range_start_unix_ms
-                    || request.ends_at.timestamp_millis() > observation.range_end_unix_ms
-                {
-                    return Err(AgentFailure::StaleContext);
-                }
-                let observed_at =
-                    chrono::DateTime::from_timestamp_millis(observation.observed_at_unix_ms)
-                        .ok_or(AgentFailure::InvalidInput)?;
+        match self
+            .acquire(
+                request.person_id,
+                LocalContextAcquisitionModeDto::ReadEvents,
+                request.starts_at,
+                request.ends_at,
+                request.expected_native_subject_fingerprint.clone(),
+                request.deadline,
+                request.cancellation,
+            )
+            .await
+        {
+            Ok(result) => {
+                let batches = result
+                    .batches
+                    .into_iter()
+                    .map(calendar_batch_from_dto)
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Some(floe_core::CalendarObservation {
                     stamp: CalendarReadAccessStamp {
                         schema_version: PROTOCOL_VERSION,
@@ -681,15 +695,11 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
                         device_id: request.device_id,
                         provider: request.provider,
                         calendar_ids: request.calendar_ids,
-                        generation: format!(
-                            "device-{}-{}-{}",
-                            observation.device_id,
-                            observation.connection_revision,
-                            observation.observed_at_unix_ms
-                        ),
+                        native_subject_fingerprint: result.native_subject_fingerprint_before,
+                        generation: format!("device-{}", result.connection_revision),
                     },
-                    observed_at,
-                    batches: observation.batches,
+                    observed_at: chrono::Utc::now(),
+                    batches,
                 }))
             }
             Err(error) => Err(error),
@@ -697,8 +707,384 @@ impl CalendarReadAccess for DeviceCalendarAccess<'_> {
     }
 }
 
+fn calendar_batch_from_dto(batch: CalendarBatchDto) -> Result<CalendarBatch, AgentFailure> {
+    let records = batch
+        .records
+        .into_iter()
+        .map(|record| {
+            Ok(CalendarRecord {
+                can_modify: record.can_modify,
+                calendar_id: record.calendar_id,
+                external_id: record.external_id,
+                external_revision: record.external_revision,
+                title: record.title,
+                schedule: record
+                    .schedule
+                    .try_into()
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            })
+        })
+        .collect::<Result<Vec<_>, AgentFailure>>()?;
+    Ok(CalendarBatch {
+        calendar_id: batch.calendar_id,
+        records,
+        failure: batch.failure,
+    })
+}
+
+trait RemoteCalendarBackend: Sync {
+    fn admission<'future>(
+        &'future self,
+        request: &'future CalendarReadAccessRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<CalendarReadAccessAdmission, AgentFailure>> + Send + 'future,
+        >,
+    >;
+
+    fn read<'future>(
+        &'future self,
+        request: &'future floe_core::CalendarObserveRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<floe_agent::CalendarContextView, AgentFailure>>
+                + Send
+                + 'future,
+        >,
+    >;
+}
+
+struct VaultRemoteCalendarBackend<'host, Keys> {
+    vault: &'host floe_core::EncryptedAgentVault<Keys>,
+    core: &'host floe_core::FloeCore,
+    client: RemoteAuthorizationClient,
+    person_id: PersonId,
+    provider: CalendarProvider,
+    calendar_ids: Vec<String>,
+    connection_revision: u64,
+    pairing: floe_protocol::AgentRemotePairingDto,
+}
+
+impl<'host, Keys: VaultKeyProvider> VaultRemoteCalendarBackend<'host, Keys> {
+    fn new(
+        vault: &'host floe_core::EncryptedAgentVault<Keys>,
+        core: &'host floe_core::FloeCore,
+        route: &floe_protocol::AgentRemoteRouteDto,
+        person_id: PersonId,
+        provider: CalendarProvider,
+        calendar_ids: Vec<String>,
+        connection_revision: u64,
+    ) -> Result<Self, AgentFailure> {
+        let pairing = route
+            .pairing
+            .clone()
+            .ok_or(AgentFailure::CapabilityDenied)?;
+        if pairing.person_id != person_id.to_string() || pairing.device_id.is_empty() {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        Ok(Self {
+            vault,
+            core,
+            client: RemoteAuthorizationClient::new(route)?,
+            person_id,
+            provider,
+            calendar_ids,
+            connection_revision,
+            pairing,
+        })
+    }
+
+    async fn binding(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<RemoteCalendarGrantBinding, AgentFailure> {
+        let connection = self
+            .core
+            .calendar_connection(self.person_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        if connection.provider != self.provider || connection.disconnected {
+            return Err(AgentFailure::StaleContext);
+        }
+        if self.calendar_ids.is_empty()
+            || self.calendar_ids.iter().any(|calendar_id| {
+                !connection
+                    .calendars
+                    .iter()
+                    .any(|calendar| calendar.calendar_id == *calendar_id)
+            })
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let connector = match self.provider {
+            CalendarProvider::Google => "calendar.google",
+            CalendarProvider::Microsoft => "calendar.microsoft",
+            _ => return Err(AgentFailure::CapabilityDenied),
+        };
+        let preview = self
+            .client
+            .calendar_source_preview(
+                connector,
+                &connection.connection_id,
+                self.calendar_ids
+                    .first()
+                    .ok_or(AgentFailure::InvalidInput)?,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        let source = self
+            .vault
+            .verify_remote_calendar_source_preview(
+                &preview.descriptor_b64url,
+                &preview.producer_signature,
+                &self.pairing.person_id,
+                &self.pairing.client_id,
+                &self.pairing.device_id,
+                connector,
+                &connection.connection_id,
+                self.calendar_ids
+                    .first()
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+            .await?;
+        if source.person_id != self.person_id.to_string()
+            || source.connector_id != connector
+            || source.connection_id != connection.connection_id
+            || source.client_id != self.pairing.client_id
+            || source.device_id != self.pairing.device_id
+            || source.execution_owner.is_empty()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        self.vault
+            .remote_calendar_grant_binding(
+                connector,
+                &connection.connection_id,
+                source.source_authority,
+                self.calendar_ids
+                    .first()
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+            .await
+    }
+
+    fn expectation(
+        &self,
+        binding: &RemoteCalendarGrantBinding,
+        challenge_id: String,
+        admission_id: String,
+        query_sha256: String,
+        result_sha256: String,
+    ) -> floe_core::RemoteCalendarAuthorizationExpectation {
+        floe_core::RemoteCalendarAuthorizationExpectation {
+            operation: if admission_id.is_empty() {
+                "admission".into()
+            } else {
+                "release".into()
+            },
+            client_id: self.pairing.client_id.clone(),
+            device_id: self.pairing.device_id.clone(),
+            challenge_id,
+            admission_id,
+            query_sha256,
+            result_sha256,
+            grant_id: binding.grant.id().as_uuid().to_string(),
+            grant_incarnation: binding.grant.authority().incarnation().to_string(),
+            grant_epoch: binding.grant.authority().access_epoch().get(),
+            source_connector: binding.grant.source().connector().as_str().into(),
+            source_connection: binding.grant.source().connection_id().as_str().into(),
+            source_execution_owner: binding.grant.source().execution_owner().as_str().into(),
+            source_incarnation: binding
+                .grant
+                .source()
+                .source_authority()
+                .incarnation()
+                .to_string(),
+            source_epoch: binding.grant.source().source_authority().epoch().get(),
+            resources: binding
+                .grant
+                .scope()
+                .resources()
+                .iter()
+                .map(|resource| resource.as_str().to_owned())
+                .collect(),
+            max_items: floe_agent::MAX_CALENDAR_CONTEXT_ITEMS as u32,
+            max_bytes: floe_agent::MAX_CALENDAR_CONTEXT_BYTES as u32,
+        }
+    }
+}
+
+impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBackend<'_, Keys> {
+    fn admission<'future>(
+        &'future self,
+        request: &'future CalendarReadAccessRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<CalendarReadAccessAdmission, AgentFailure>> + Send + 'future,
+        >,
+    > {
+        Box::pin(async move {
+            if request.person_id != self.person_id
+                || request.provider != self.provider
+                || request.device_id != self.pairing.device_id
+                || request.calendar_ids != self.calendar_ids
+                || request.calendar_ids.len() != 1
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let binding = self
+                .binding(request.deadline, &request.cancellation)
+                .await?;
+            let consumer = floe_domain::GrantConsumer::builtin("calendar.expert")
+                .map_err(|_| AgentFailure::CapabilityDenied)?;
+            Ok(CalendarReadAccessAdmission::remote(
+                self.person_id,
+                binding.grant.id(),
+                binding.grant.authority(),
+                binding.grant.source().clone(),
+                binding.grant.scope().clone(),
+                binding.consumer_policy,
+                consumer,
+                binding.grant.scope().processing().clone(),
+            ))
+        })
+    }
+
+    fn read<'future>(
+        &'future self,
+        request: &'future floe_core::CalendarObserveRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<floe_agent::CalendarContextView, AgentFailure>>
+                + Send
+                + 'future,
+        >,
+    > {
+        Box::pin(async move {
+            let binding = self
+                .binding(request.deadline, &request.cancellation)
+                .await?;
+            let connector = match self.provider {
+                CalendarProvider::Google => "calendar.google",
+                CalendarProvider::Microsoft => "calendar.microsoft",
+                _ => return Err(AgentFailure::CapabilityDenied),
+            };
+            let consumer = floe_domain::GrantConsumer::builtin("calendar.expert")
+                .map_err(|_| AgentFailure::CapabilityDenied)?;
+            let challenge = self
+                .client
+                .begin_calendar_admission(
+                    connector,
+                    binding.grant.source().connection_id().as_str(),
+                    self.connection_revision,
+                    self.calendar_ids
+                        .first()
+                        .ok_or(AgentFailure::InvalidInput)?,
+                    &binding.consumer_policy.incarnation().to_string(),
+                    binding.consumer_policy.epoch().get(),
+                    &binding.grant.id().as_uuid().to_string(),
+                    &binding.grant.authority().incarnation().to_string(),
+                    binding.grant.authority().access_epoch().get(),
+                    "everyday_assistance",
+                    consumer.identifier(),
+                    floe_agent::MAX_CALENDAR_CONTEXT_ITEMS as u32,
+                    floe_agent::MAX_CALENDAR_CONTEXT_BYTES as u32,
+                    request.starts_at.timestamp_millis(),
+                    request.ends_at.timestamp_millis(),
+                    "",
+                    floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
+                    request.deadline,
+                    &request.cancellation,
+                )
+                .await?;
+            let admission_parts = parse_calendar_challenge(&challenge.challenge_b64url)?;
+            if admission_parts.person_id != self.person_id.to_string()
+                || admission_parts.client_id != self.pairing.client_id
+                || admission_parts.device_id != self.pairing.device_id
+                || admission_parts.operation != "admission"
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let query_sha256 = calendar_query_sha256(
+                request.starts_at.timestamp_millis(),
+                request.ends_at.timestamp_millis(),
+                "",
+                floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
+            )?;
+            let admission_expected = self.expectation(
+                &binding,
+                admission_parts.challenge_id.clone(),
+                String::new(),
+                query_sha256.clone(),
+                String::new(),
+            );
+            if admission_parts.query_sha256 != admission_expected.query_sha256
+                || admission_parts.resources != admission_expected.resources
+                || admission_parts.max_items != admission_expected.max_items
+                || admission_parts.max_bytes != admission_expected.max_bytes
+                || admission_parts.consumer != consumer.identifier()
+                || admission_parts.purpose != "everyday_assistance"
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let release = self
+                .client
+                .read_calendar_admission(
+                    self.vault,
+                    &admission_expected,
+                    &challenge,
+                    request.deadline,
+                    &request.cancellation,
+                )
+                .await?;
+            let release_parts = parse_calendar_challenge(&release.challenge_b64url)?;
+            if release_parts.person_id != self.person_id.to_string()
+                || release_parts.client_id != self.pairing.client_id
+                || release_parts.device_id != self.pairing.device_id
+                || release_parts.operation != "release"
+                || release_parts.admission_id != admission_parts.challenge_id
+                || release_parts.query_sha256 != admission_expected.query_sha256
+                || release_parts.resources != admission_expected.resources
+                || release_parts.max_items != admission_expected.max_items
+                || release_parts.max_bytes != admission_expected.max_bytes
+                || release_parts.consumer != consumer.identifier()
+                || release_parts.purpose != "everyday_assistance"
+                || release_parts.result_sha256.len() != 64
+                || !release_parts
+                    .result_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let release_expected = self.expectation(
+                &binding,
+                release_parts.challenge_id.clone(),
+                admission_parts.challenge_id,
+                query_sha256,
+                release_parts.result_sha256.clone(),
+            );
+            let view = self
+                .client
+                .release_calendar(
+                    self.vault,
+                    &release_expected,
+                    &release,
+                    request.deadline,
+                    &request.cancellation,
+                )
+                .await?;
+            serde_json::from_value(view).map_err(|_| AgentFailure::CapabilityUnavailable)
+        })
+    }
+}
+
 struct RemoteCalendarAccess<'model> {
     model: Option<&'model ServerModelRunner>,
+    backend: Option<&'model dyn RemoteCalendarBackend>,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
@@ -723,10 +1109,17 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        if self.model.is_none() {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        Ok(self.stamp(request.person_id))
+        let backend = self.backend.ok_or(AgentFailure::CapabilityUnavailable)?;
+        let admission = backend.admission(&request).await?;
+        Ok(self.stamp(request.person_id, &admission))
+    }
+
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        let backend = self.backend.ok_or(AgentFailure::CapabilityUnavailable)?;
+        Ok(Some(backend.admission(request).await?))
     }
 
     async fn observe_projected(
@@ -739,26 +1132,14 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
         {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let model = self.model.ok_or(AgentFailure::CapabilityUnavailable)?;
-        let view = model
-            .read_calendar_context_view(
-                CalendarContextRequest {
-                    connector_id: match self.provider {
-                        CalendarProvider::Google => "calendar.google",
-                        CalendarProvider::Microsoft => "calendar.microsoft",
-                        _ => return Err(AgentFailure::CapabilityDenied),
-                    },
-                    connection_id: &self.connection_id,
-                    connection_revision: self.connection_revision,
-                    range_start_unix_ms: request.starts_at.timestamp_millis(),
-                    range_end_unix_ms: request.ends_at.timestamp_millis(),
-                    cursor: "",
-                    limit: floe_agent::MAX_CALENDAR_CONTEXT_ITEMS,
-                },
-                request.deadline,
-                &request.cancellation,
-            )
-            .await?;
+        let backend = self.backend.ok_or(AgentFailure::CapabilityUnavailable)?;
+        let view = backend.read(&request).await?;
+        floe_agent::validate_calendar_context_view(&view, chrono::Utc::now().timestamp_millis())?;
+        if view.range_start_unix_ms != request.starts_at.timestamp_millis()
+            || view.range_end_unix_ms != request.ends_at.timestamp_millis()
+        {
+            return Err(AgentFailure::StaleContext);
+        }
         let observed_at = chrono::DateTime::from_timestamp_millis(view.observed_at_unix_ms)
             .ok_or(AgentFailure::InvalidInput)?;
         let expires_at = chrono::DateTime::from_timestamp_millis(view.expires_at_unix_ms)
@@ -782,7 +1163,20 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
             })
             .collect::<Result<Vec<_>, AgentFailure>>()?;
         Ok(Some(ProjectedCalendarObservation {
-            stamp: self.stamp(request.person_id),
+            stamp: self.stamp(
+                request.person_id,
+                &backend
+                    .admission(&CalendarReadAccessRequest {
+                        person_id: request.person_id,
+                        device_id: request.device_id.clone(),
+                        provider: request.provider,
+                        calendar_ids: request.calendar_ids.clone(),
+                        expected_native_subject_fingerprint: None,
+                        deadline: request.deadline,
+                        cancellation: request.cancellation.clone(),
+                    })
+                    .await?,
+            ),
             source_handle: view.source_handle,
             observed_at,
             expires_at,
@@ -796,14 +1190,27 @@ impl CalendarReadAccess for RemoteCalendarAccess<'_> {
 }
 
 impl RemoteCalendarAccess<'_> {
-    fn stamp(&self, person_id: PersonId) -> CalendarReadAccessStamp {
+    fn stamp(
+        &self,
+        person_id: PersonId,
+        admission: &CalendarReadAccessAdmission,
+    ) -> CalendarReadAccessStamp {
         CalendarReadAccessStamp {
             schema_version: PROTOCOL_VERSION,
             person_id,
             device_id: self.device_id.clone(),
             provider: self.provider,
             calendar_ids: self.calendar_ids.clone(),
-            generation: format!("server-{}", self.connection_revision),
+            native_subject_fingerprint: format!(
+                "remote:{}:{}",
+                admission.source().source_authority().incarnation(),
+                admission.source().source_authority().epoch().get()
+            ),
+            generation: format!(
+                "remote:{}:{}",
+                admission.source().source_authority().incarnation(),
+                admission.source().source_authority().epoch().get()
+            ),
         }
     }
 }
@@ -836,6 +1243,7 @@ impl CalendarReadAccess for FixtureAccess {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "e".repeat(64),
             generation: "bounded-fixture".into(),
         })
     }
@@ -876,11 +1284,384 @@ impl ModelRunner for Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use floe_core::FloeCore;
-    use floe_domain::{CalendarScope, CalendarSelection, CalendarSyncStatus};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use floe_core::{EncryptedAgentVault, FloeCore, VaultKey, VaultKeyProvider};
+    use floe_domain::{
+        CalendarScope, CalendarSelection, CalendarSyncStatus, ConnectorId, ExecutionOwnerId,
+        GrantConsumer, GrantDataCategory, GrantOperation, GrantPurpose, GrantScope,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle,
+    };
     use floe_protocol::{CalendarBatchDto, LocalContextOperationDto};
-    use std::collections::BTreeMap;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    use sha2::{Digest, Sha256};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        fs,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        os::unix::fs::PermissionsExt,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[derive(Clone, Default)]
+    struct RemoteCircuitKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for RemoteCircuitKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> Result<(String, Vec<u8>), String> {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        let (header_end, content_length) = loop {
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                return Err("producer closed before request".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                if bytes.len() > 64 * 1024 {
+                    return Err("request headers too large".into());
+                }
+                continue;
+            };
+            let headers = String::from_utf8(bytes[..header_end].to_vec())
+                .map_err(|_| "invalid request headers".to_owned())?;
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            break (header_end, content_length);
+        };
+        while bytes.len() < header_end + 4 + content_length {
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                return Err("producer closed during request".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        let headers = String::from_utf8(bytes[..header_end].to_vec())
+            .map_err(|_| "invalid request headers".to_owned())?;
+        let path = headers
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .ok_or_else(|| "missing request path".to_owned())?
+            .to_owned();
+        Ok((
+            path,
+            bytes[header_end + 4..header_end + 4 + content_length].to_vec(),
+        ))
+    }
+
+    fn write_http_response(stream: &mut TcpStream, body: Vec<u8>) -> Result<(), String> {
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+        stream.write_all(&body).map_err(|error| error.to_string())
+    }
+
+    fn verify_owner_proof(
+        body: &[u8],
+        challenge: &[u8],
+        expected_key_id: &str,
+        owner_public_key: &str,
+    ) -> Result<(), String> {
+        let request: serde_json::Value =
+            serde_json::from_slice(body).map_err(|error| error.to_string())?;
+        let proof = request
+            .get("proof")
+            .ok_or_else(|| "missing owner proof".to_owned())?;
+        let key_id = proof
+            .get("key_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "missing owner key id".to_owned())?;
+        if key_id != expected_key_id {
+            return Err("empty owner key id".into());
+        }
+        let signature = proof
+            .get("signature")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "missing owner signature".to_owned())?;
+        let public_key = URL_SAFE_NO_PAD
+            .decode(owner_public_key)
+            .map_err(|_| "invalid owner public key".to_owned())?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(signature)
+            .map_err(|_| "invalid owner signature".to_owned())?;
+        let mut signed = Vec::from(b"floe.remote.authorization.v1\0".as_slice());
+        signed.extend_from_slice(challenge);
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key)
+            .verify(&signed, &signature)
+            .map_err(|_| "invalid owner proof".to_owned())
+    }
+
+    fn accept_with_timeout(
+        listener: &TcpListener,
+    ) -> Result<(TcpStream, std::net::SocketAddr), String> {
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| error.to_string())?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok(connection) => return Ok(connection),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err("producer accept timeout".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+    }
+
+    fn serve_signed_calendar_fixture(
+        listener: TcpListener,
+        producer_pkcs8: Vec<u8>,
+        producer_instance: String,
+        execution_owner: String,
+        owner_key_id: String,
+        person_id: PersonId,
+        connection_id: String,
+        source_authority: floe_domain::SourceAuthority,
+        provider: CalendarProvider,
+        grant: RemoteCalendarGrantBinding,
+        owner_public_key: String,
+        request_count: Arc<AtomicUsize>,
+        request_time: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), String> {
+        let producer = Ed25519KeyPair::from_pkcs8(&producer_pkcs8).map_err(|_| "producer key")?;
+        let connector = match provider {
+            CalendarProvider::Google => "calendar.google",
+            CalendarProvider::Microsoft => "calendar.microsoft",
+            _ => return Err("unsupported fixture provider".into()),
+        };
+        let audience = format!("floe.server:{producer_instance}");
+        let key_id = "00000000-0000-4000-8000-000000000299";
+        let public_key = URL_SAFE_NO_PAD.encode(producer.public_key().as_ref());
+        let fingerprint = Sha256::digest(producer.public_key().as_ref())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut admission_id = String::new();
+        let mut query_digest = String::new();
+        let mut admission_challenge = Vec::new();
+        let mut release_challenge = Vec::new();
+        let view = serde_json::json!({
+            "schema_version": 1,
+            "view_id": "calendar.timeline",
+            "source_handle": "calendar.timeline:fixture",
+            "observed_at_unix_ms": request_time.timestamp_millis(),
+            "expires_at_unix_ms": (request_time + chrono::Duration::minutes(2)).timestamp_millis(),
+            "range_start_unix_ms": request_time.timestamp_millis(),
+            "range_end_unix_ms": (request_time + chrono::Duration::hours(1)).timestamp_millis(),
+            "coverage_complete": true,
+            "items": [],
+        });
+        let view_bytes = serde_json::to_vec(&view).map_err(|error| error.to_string())?;
+        let result_digest = Sha256::digest(&view_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        for request_number in 0..5 {
+            let (mut stream, _) = accept_with_timeout(&listener)?;
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .map_err(|error| error.to_string())?;
+            stream
+                .set_write_timeout(Some(std::time::Duration::from_secs(10)))
+                .map_err(|error| error.to_string())?;
+            let (path, body) = read_http_request(&mut stream)?;
+            request_count.fetch_add(1, Ordering::AcqRel);
+            let now = chrono::Utc::now().timestamp_millis();
+            let response = match (request_number, path.as_str()) {
+                (0 | 4, "/v1/authority/calendar/source") => {
+                    let descriptor = serde_json::json!({
+                        "v": 1,
+                        "operation": "calendar_source_preview",
+                        "challenge_id": Uuid::new_v4().to_string(),
+                        "nonce": URL_SAFE_NO_PAD.encode([8u8; 32]),
+                        "person_id": person_id.to_string(),
+                        "client_id": "fixture-client",
+                        "device_id": "device-a",
+                        "audience": audience,
+                        "connector_id": connector,
+                        "connection_id": connection_id,
+                        "execution_owner": execution_owner,
+                        "incarnation": source_authority.incarnation().to_string(),
+                        "epoch": source_authority.epoch().get(),
+                        "resource": "primary",
+                        "provider_identity": "fixture:subject-a",
+                        "issued_at_unix_ms": now,
+                    });
+                    let descriptor_bytes =
+                        serde_json::to_vec(&descriptor).map_err(|error| error.to_string())?;
+                    let mut signed = Vec::from(b"floe.remote.producer.v1\0".as_slice());
+                    signed.extend_from_slice(&descriptor_bytes);
+                    let signature = producer.sign(&signed);
+                    serde_json::to_vec(&serde_json::json!({
+                        "schema_version": 1,
+                        "instance_id": producer_instance,
+                        "execution_owner": execution_owner,
+                        "audience": audience,
+                        "key_id": key_id,
+                        "public_key": public_key,
+                        "fingerprint": fingerprint,
+                        "descriptor_b64url": URL_SAFE_NO_PAD.encode(descriptor_bytes),
+                        "producer_signature": URL_SAFE_NO_PAD.encode(signature.as_ref()),
+                        "expires_at_unix_ms": now + 30_000,
+                    }))
+                    .map_err(|error| error.to_string())?
+                }
+                (1, "/v1/views/calendar.timeline/admit") => {
+                    let request: serde_json::Value =
+                        serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+                    let query = request
+                        .get("query")
+                        .ok_or_else(|| "missing query".to_owned())?;
+                    let query_bytes =
+                        serde_json::to_vec(query).map_err(|error| error.to_string())?;
+                    query_digest = Sha256::digest(query_bytes)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>();
+                    admission_id = Uuid::new_v4().to_string();
+                    let challenge = serde_json::json!({
+                        "v": 1,
+                        "operation": "admission",
+                        "challenge_id": admission_id,
+                        "nonce": URL_SAFE_NO_PAD.encode([9u8; 32]),
+                        "key_id": owner_key_id,
+                        "person_id": person_id.to_string(),
+                        "client_id": "fixture-client",
+                        "device_id": "device-a",
+                        "audience": audience,
+                        "purpose": "everyday_assistance",
+                        "consumer": "calendar.expert",
+                        "policy": {"incarnation": grant.consumer_policy.incarnation().to_string(), "epoch": grant.consumer_policy.epoch().get()},
+                        "source": {"connector_id": connector, "connection_id": connection_id, "execution_owner": execution_owner, "incarnation": source_authority.incarnation().to_string(), "epoch": source_authority.epoch().get()},
+                        "grant": {"id": grant.grant.id().as_uuid().to_string(), "incarnation": grant.grant.authority().incarnation().to_string(), "epoch": grant.grant.authority().access_epoch().get()},
+                        "resources": ["primary"],
+                        "query_sha256": query_digest.clone(),
+                        "max_items": 128,
+                        "max_bytes": 65536,
+                        "result_sha256": "",
+                        "admission_id": "",
+                        "issued_at_unix_ms": now,
+                        "expires_at_unix_ms": now + 30_000,
+                    });
+                    let challenge_bytes =
+                        serde_json::to_vec(&challenge).map_err(|error| error.to_string())?;
+                    let mut signed = Vec::from(b"floe.remote.producer.v1\0".as_slice());
+                    signed.extend_from_slice(&challenge_bytes);
+                    let signature = producer.sign(&signed);
+                    admission_challenge = challenge_bytes.clone();
+                    serde_json::to_vec(&serde_json::json!({"schema_version": 1, "operation": "admission", "challenge_id": admission_id, "challenge_b64url": URL_SAFE_NO_PAD.encode(&challenge_bytes), "producer_signature": URL_SAFE_NO_PAD.encode(signature.as_ref()), "producer": {"schema_version": 1, "instance_id": producer_instance, "execution_owner": execution_owner, "audience": audience, "key_id": key_id, "public_key": public_key, "fingerprint": fingerprint}, "expires": now + 30_000})).map_err(|error| error.to_string())?
+                }
+                (2, "/v1/views/calendar.timeline/read") => {
+                    verify_owner_proof(
+                        &body,
+                        &admission_challenge,
+                        &owner_key_id,
+                        &owner_public_key,
+                    )?;
+                    let challenge = serde_json::json!({
+                        "v": 1,
+                        "operation": "release",
+                        "challenge_id": Uuid::new_v4().to_string(),
+                        "nonce": URL_SAFE_NO_PAD.encode([10u8; 32]),
+                        "key_id": owner_key_id,
+                        "person_id": person_id.to_string(),
+                        "client_id": "fixture-client",
+                        "device_id": "device-a",
+                        "audience": audience,
+                        "purpose": "everyday_assistance",
+                        "consumer": "calendar.expert",
+                        "policy": {"incarnation": grant.consumer_policy.incarnation().to_string(), "epoch": grant.consumer_policy.epoch().get()},
+                        "source": {"connector_id": connector, "connection_id": connection_id, "execution_owner": execution_owner, "incarnation": source_authority.incarnation().to_string(), "epoch": source_authority.epoch().get()},
+                        "grant": {"id": grant.grant.id().as_uuid().to_string(), "incarnation": grant.grant.authority().incarnation().to_string(), "epoch": grant.grant.authority().access_epoch().get()},
+                        "resources": ["primary"],
+                        "query_sha256": query_digest,
+                        "max_items": 128,
+                        "max_bytes": 65536,
+                        "result_sha256": result_digest,
+                        "admission_id": admission_id,
+                        "issued_at_unix_ms": now,
+                        "expires_at_unix_ms": now + 30_000,
+                    });
+                    let challenge_bytes =
+                        serde_json::to_vec(&challenge).map_err(|error| error.to_string())?;
+                    let mut signed = Vec::from(b"floe.remote.producer.v1\0".as_slice());
+                    signed.extend_from_slice(&challenge_bytes);
+                    let signature = producer.sign(&signed);
+                    release_challenge = challenge_bytes.clone();
+                    serde_json::to_vec(&serde_json::json!({"schema_version": 1, "operation": "release", "challenge_id": challenge["challenge_id"], "challenge_b64url": URL_SAFE_NO_PAD.encode(&challenge_bytes), "producer_signature": URL_SAFE_NO_PAD.encode(signature.as_ref()), "producer": {"schema_version": 1, "instance_id": producer_instance, "execution_owner": execution_owner, "audience": audience, "key_id": key_id, "public_key": public_key, "fingerprint": fingerprint}, "expires": now + 30_000})).map_err(|error| error.to_string())?
+                }
+                (3, "/v1/views/calendar.timeline/release") => {
+                    verify_owner_proof(
+                        &body,
+                        &release_challenge,
+                        &owner_key_id,
+                        &owner_public_key,
+                    )?;
+                    serde_json::to_vec(&serde_json::json!({
+                        "schema_version": 1,
+                        "view": view,
+                    }))
+                    .map_err(|error| error.to_string())?
+                }
+                _ => {
+                    return Err(format!(
+                        "unexpected producer request {request_number} {path}"
+                    ));
+                }
+            };
+            write_http_response(&mut stream, response)?;
+        }
+        Ok(())
+    }
 
     fn active_identity(
         provider: CalendarProvider,
@@ -899,6 +1680,7 @@ mod tests {
             connection_scope: CalendarScope::Selected,
             connection_revision: 7,
             source_authority,
+            reviewed_native_subject_fingerprint: Some("a".repeat(64)),
             view_handle,
             tool_installation_id: Uuid::new_v4(),
             expert_installation_id: Uuid::new_v4(),
@@ -952,6 +1734,197 @@ mod tests {
                 connection_id: connection.connection_id.clone(),
                 connection_revision: connection.revision,
             }],
+            pairing: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_calendar_backend_runs_signed_foundation_exchange_for_both_providers() {
+        for provider in [CalendarProvider::Google, CalendarProvider::Microsoft] {
+            let root = tempdir().unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
+            let person_id = PersonId::new();
+            let connection_id = Uuid::new_v4().to_string();
+            core.set_calendar_scope(
+                person_id,
+                connection_id.clone(),
+                7,
+                "device-a".into(),
+                provider,
+                vec![CalendarSelection {
+                    calendar_id: "primary".into(),
+                    calendar_name: "Primary".into(),
+                }],
+                CalendarScope::Selected,
+            )
+            .await
+            .unwrap();
+            let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
+            let keys = RemoteCircuitKeys::default();
+            let vault = EncryptedAgentVault::create(root.path(), person_id, keys)
+                .await
+                .unwrap_or_else(|error| panic!("vault create failed: {error:?}"));
+            let producer_pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+                .unwrap()
+                .as_ref()
+                .to_vec();
+            let producer = Ed25519KeyPair::from_pkcs8(&producer_pkcs8).unwrap();
+            let producer_instance = if provider == CalendarProvider::Google {
+                "00000000-0000-4000-8000-000000000201"
+            } else {
+                "00000000-0000-4000-8000-000000000202"
+            };
+            let execution_owner = if provider == CalendarProvider::Google {
+                "00000000-0000-4000-8000-000000000211"
+            } else {
+                "00000000-0000-4000-8000-000000000212"
+            };
+            let producer_identity = floe_core::RemoteProducerIdentity {
+                schema_version: 1,
+                instance_id: producer_instance.into(),
+                execution_owner: execution_owner.into(),
+                audience: format!("floe.server:{producer_instance}"),
+                key_id: "00000000-0000-4000-8000-000000000299".into(),
+                public_key: URL_SAFE_NO_PAD.encode(producer.public_key().as_ref()),
+                fingerprint: Sha256::digest(producer.public_key().as_ref())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            };
+            vault.remote_pin_producer(producer_identity).await.unwrap();
+            let producer_source_authority = floe_domain::SourceAuthority::new();
+            assert_ne!(producer_source_authority, connection.source_authority);
+            let source = GrantSourceBinding::try_new(
+                person_id,
+                floe_domain::ConnectionId::try_new(connection_id.clone()).unwrap(),
+                ConnectorId::try_new(match provider {
+                    CalendarProvider::Google => "calendar.google",
+                    CalendarProvider::Microsoft => "calendar.microsoft",
+                    _ => unreachable!(),
+                })
+                .unwrap(),
+                ExecutionOwnerId::try_new(execution_owner).unwrap(),
+                producer_source_authority,
+            )
+            .unwrap();
+            let consumer = GrantConsumer::builtin("calendar.expert").unwrap();
+            let scope = GrantScope::try_new(
+                vec![ResourceHandle::try_new("primary").unwrap()],
+                vec![GrantDataCategory::Content],
+                vec![GrantOperation::Read],
+                vec![GrantPurpose::Assistant],
+                vec![consumer],
+                ProcessingRestriction::LocalOnly,
+            )
+            .unwrap();
+            let grant = vault
+                .review_and_activate_remote_calendar_grant(
+                    floe_domain::GrantId::new(),
+                    None,
+                    source,
+                    scope,
+                    None,
+                )
+                .await
+                .unwrap();
+            let grant_binding = vault
+                .remote_calendar_grant_binding(
+                    match provider {
+                        CalendarProvider::Google => "calendar.google",
+                        CalendarProvider::Microsoft => "calendar.microsoft",
+                        _ => unreachable!(),
+                    },
+                    &connection_id,
+                    producer_source_authority,
+                    "primary",
+                )
+                .await
+                .unwrap();
+            let owner_key = vault.remote_owner_public_key().await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let request_count = Arc::new(AtomicUsize::new(0));
+            let fixture_count = request_count.clone();
+            let owner_key_id = owner_key.key_id.clone();
+            let owner_public_key = owner_key.public_key.clone();
+            let fixture_connection_id = connection_id.clone();
+            let request_time = chrono::Utc::now();
+            let server = std::thread::spawn(move || {
+                serve_signed_calendar_fixture(
+                    listener,
+                    producer_pkcs8,
+                    producer_instance.into(),
+                    execution_owner.into(),
+                    owner_key_id,
+                    person_id,
+                    fixture_connection_id,
+                    producer_source_authority,
+                    provider,
+                    grant_binding,
+                    owner_public_key,
+                    request_count,
+                    request_time,
+                )
+            });
+            let route = floe_protocol::AgentRemoteRouteDto {
+                base_url: format!("http://127.0.0.1:{}/", address.port()),
+                bearer_token: "fixture-token-that-is-long-enough".into(),
+                purpose: "everyday_assistance".into(),
+                external: false,
+                allow_external: false,
+                calendar_connections: vec![],
+                pairing: Some(floe_protocol::AgentRemotePairingDto {
+                    client_id: "fixture-client".into(),
+                    person_id: person_id.to_string(),
+                    device_id: "device-a".into(),
+                }),
+            };
+            let backend = VaultRemoteCalendarBackend::new(
+                &vault,
+                &core,
+                &route,
+                person_id,
+                provider,
+                vec!["primary".into()],
+                7,
+            )
+            .unwrap();
+            let access = RemoteCalendarAccess {
+                model: None,
+                backend: Some(&backend),
+                provider,
+                device_id: "device-a".into(),
+                calendar_ids: vec!["primary".into()],
+                connection_id: connection_id.clone(),
+                connection_revision: 7,
+            };
+            let projection = access
+                .observe_projected(floe_core::CalendarObserveRequest {
+                    person_id,
+                    device_id: "device-a".into(),
+                    provider,
+                    calendar_ids: vec!["primary".into()],
+                    expected_native_subject_fingerprint: None,
+                    starts_at: request_time,
+                    ends_at: request_time + chrono::Duration::hours(1),
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+                    cancellation: floe_agent::Cancellation::default(),
+                })
+                .await;
+            let projection = match projection {
+                Ok(projection) => projection.expect("remote projection"),
+                Err(error) => panic!(
+                    "remote calendar projection failed: {error:?}, requests: {}, producer: {:?}",
+                    fixture_count.load(Ordering::Acquire),
+                    server.join().unwrap(),
+                ),
+            };
+            assert_eq!(projection.source_handle, "calendar.timeline:fixture");
+            assert!(projection.coverage_complete);
+            assert_eq!(fixture_count.load(Ordering::Acquire), 5);
+            server.join().unwrap().unwrap();
+            let _ = grant;
         }
     }
 
@@ -1144,19 +2117,20 @@ mod tests {
                 &store,
                 &core,
                 Some(connection.source_authority),
+                None,
             );
-            let stamp = access
+            let result = access
                 .check(CalendarReadAccessRequest {
                     person_id: setup.person_id,
                     device_id: "device-a".into(),
                     provider,
                     calendar_ids: vec!["primary".into()],
+                    expected_native_subject_fingerprint: None,
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
                     cancellation: floe_agent::Cancellation::default(),
                 })
-                .await
-                .unwrap();
-            assert!(stamp.generation.starts_with("device-device-a-7-"));
+                .await;
+            assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
         }
     }
 
@@ -1314,53 +2288,130 @@ mod tests {
             core: &core,
             connection_id: connection.connection_id.clone(),
             source_authority: Some(connection.source_authority),
-            pinned: std::sync::Mutex::new(None),
             local_context: &store,
             provider: CalendarProvider::EventKit,
             device_id: "iphone".into(),
             calendar_ids: vec!["primary".into()],
+            connection_revision: connection.revision,
         };
         let request = |device_id: &str| CalendarReadAccessRequest {
             person_id,
             device_id: device_id.into(),
             provider: CalendarProvider::EventKit,
             calendar_ids: vec!["primary".into()],
+            expected_native_subject_fingerprint: None,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
             cancellation: floe_agent::Cancellation::default(),
         };
 
-        let stamp = access.check(request("iphone")).await.unwrap();
-        assert_eq!(stamp.device_id, "iphone");
-        assert!(stamp.generation.starts_with("device-iphone-7-"));
+        assert_eq!(
+            access.check(request("iphone")).await,
+            Err(AgentFailure::CapabilityUnavailable)
+        );
         assert_eq!(
             access.check(request("ipad")).await,
             Err(AgentFailure::CapabilityDenied)
         );
-        let range = floe_domain::CalendarRange {
-            start_date: chrono::Utc::now().date_naive(),
-            end_date_exclusive: chrono::Utc::now().date_naive().succ_opt().unwrap(),
-            timezone_offset_seconds: 0,
-            end_timezone_offset_seconds: None,
-        };
-        core.import_calendar(person_id, 7, range, vec![], chrono::Utc::now())
+    }
+
+    #[tokio::test]
+    async fn device_calendar_access_reads_through_the_bound_acquisition_host() {
+        let store = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let directory = tempfile::tempdir().unwrap();
+        let core = FloeCore::open(directory.path().join("calendar.db"))
             .await
             .unwrap();
-        let refreshed = core.calendar_connection(person_id).await.unwrap().unwrap();
-        assert_eq!(refreshed.source_authority, connection.source_authority);
-        publish_device_calendar(&store, person_id, &refreshed, now);
-        assert_eq!(access.check(request("iphone")).await.unwrap(), stamp);
-        core.record_calendar_failure(
+        core.set_calendar_scope(
             person_id,
-            refreshed.revision,
-            floe_domain::CalendarFailure::PermissionDenied,
-            chrono::Utc::now(),
+            Uuid::new_v4().to_string(),
+            7,
+            "android".into(),
+            CalendarProvider::Android,
+            vec![CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            CalendarScope::Selected,
         )
         .await
         .unwrap();
-        assert_eq!(
-            access.check(request("iphone")).await,
-            Err(AgentFailure::AccessReviewRequired)
-        );
+        let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
+        store
+            .request_bound(
+                person_id,
+                LocalContextOperationDto::RegisterAcquisitionHost {
+                    host_epoch: "host-a".into(),
+                },
+                None,
+            )
+            .unwrap();
+        let access = DeviceCalendarAccess {
+            core: &core,
+            connection_id: connection.connection_id.clone(),
+            source_authority: Some(connection.source_authority),
+            local_context: &store,
+            provider: CalendarProvider::Android,
+            device_id: "android".into(),
+            calendar_ids: vec!["primary".into()],
+            connection_revision: connection.revision,
+        };
+        let request = CalendarReadAccessRequest {
+            person_id,
+            device_id: "android".into(),
+            provider: CalendarProvider::Android,
+            calendar_ids: vec!["primary".into()],
+            expected_native_subject_fingerprint: None,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+            cancellation: floe_agent::Cancellation::default(),
+        };
+        let mut check = Box::pin(access.check(request));
+        let result = loop {
+            tokio::select! {
+                result = &mut check => break result,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {
+                    let polled = store
+                        .request_bound(
+                            person_id,
+                            LocalContextOperationDto::PollAcquisitions {
+                                host_epoch: "host-a".into(),
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    if let Some(acquisition) = polled.acquisitions.into_iter().next() {
+                        store
+                            .request_bound(
+                                person_id,
+                                LocalContextOperationDto::CompleteAcquisition {
+                                    host_epoch: "host-a".into(),
+                                    result: LocalContextAcquisitionResultDto {
+                                        request_id: acquisition.request_id,
+                                        host_epoch: acquisition.host_epoch,
+                                        person_id: acquisition.person_id,
+                                        device_id: acquisition.device_id,
+                                        connection_id: acquisition.connection_id,
+                                        connection_revision: acquisition.connection_revision,
+                                        provider: acquisition.provider,
+                                        mode: acquisition.mode,
+                                        calendar_ids: acquisition.calendar_ids,
+                                        range_start_unix_ms: acquisition.range_start_unix_ms,
+                                        range_end_unix_ms: acquisition.range_end_unix_ms,
+                                        native_subject_fingerprint_before: "a".repeat(64),
+                                        native_subject_fingerprint_after: "a".repeat(64),
+                                        available_calendar_ids: vec!["primary".into()],
+                                        permission_class: "full".into(),
+                                        batches: vec![],
+                                    },
+                                },
+                                None,
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        };
+        assert!(result.is_ok());
     }
 
     async fn receive_request(mut socket: tokio::net::TcpStream) -> serde_json::Value {
@@ -1417,7 +2468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_calendar_access_sends_bounded_contract_and_returns_projected_view() {
+    async fn server_calendar_access_without_owner_backend_fails_closed() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -1431,10 +2482,12 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         })
         .unwrap();
         let access = RemoteCalendarAccess {
             model: Some(&model),
+            backend: None,
             provider: CalendarProvider::Google,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
@@ -1447,31 +2500,24 @@ mod tests {
             device_id: "test-device".into(),
             provider: CalendarProvider::Google,
             calendar_ids: vec!["primary".into()],
+            expected_native_subject_fingerprint: None,
             starts_at: now - chrono::Duration::minutes(1),
             ends_at: now + chrono::Duration::minutes(1),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(2),
             cancellation: floe_agent::Cancellation::default(),
         };
-        let observation = access.observe_projected(request).await.unwrap().unwrap();
-        assert_eq!(observation.stamp.generation, "server-9");
-        assert_eq!(observation.source_handle, "calendar.timeline:google");
-        let body = server.await.unwrap();
-        assert_eq!(body["schema_version"], 1);
-        assert_eq!(body["connector_id"], "calendar.google");
         assert_eq!(
-            body["connection_id"],
-            "00000000-0000-4000-8000-000000000009"
+            access.observe_projected(request).await,
+            Err(AgentFailure::CapabilityUnavailable)
         );
-        assert_eq!(body["connection_revision"], 9);
-        assert_eq!(body["cursor"], "");
-        assert_eq!(body["limit"], floe_agent::MAX_CALENDAR_CONTEXT_ITEMS);
-        assert_eq!(body.as_object().unwrap().len(), 8);
+        server.abort();
     }
 
     #[tokio::test]
     async fn device_only_and_wrong_provider_access_keep_distinct_failures() {
         let access = RemoteCalendarAccess {
             model: None,
+            backend: None,
             provider: CalendarProvider::Android,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
@@ -1485,6 +2531,7 @@ mod tests {
                 device_id: "test-device".into(),
                 provider: CalendarProvider::Android,
                 calendar_ids: vec!["primary".into()],
+                expected_native_subject_fingerprint: None,
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
                 cancellation: floe_agent::Cancellation::default(),
             })
@@ -1496,6 +2543,7 @@ mod tests {
                 device_id: "test-device".into(),
                 provider: CalendarProvider::Google,
                 calendar_ids: vec!["primary".into()],
+                expected_native_subject_fingerprint: None,
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
                 cancellation: floe_agent::Cancellation::default(),
             })

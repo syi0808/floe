@@ -820,14 +820,17 @@ dependencies = [
 name = "floe-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "floe-agent",
  "floe-core",
  "floe-domain",
  "floe-infra",
  "floe-protocol",
+ "ring",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
@@ -839,6 +842,7 @@ dependencies = [
 name = "floe-infra"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "floe-agent",
  "floe-core",
@@ -847,6 +851,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
  "uuid",
 ]

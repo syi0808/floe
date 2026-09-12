@@ -13,6 +13,11 @@ fn setup_request(registry: &AgentRegistry, provider: CalendarProvider) -> Calend
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: Some(floe_domain::SourceAuthority::new()),
+        reviewed_native_subject_fingerprint: matches!(
+            provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        )
+        .then(|| "a".repeat(64)),
     }
 }
 
@@ -143,6 +148,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
                     connection_scope: floe_domain::CalendarScope::All,
                     connection_revision: 2,
                     source_authority: Some(floe_domain::SourceAuthority::new()),
+                    reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
             ),
         )
@@ -168,6 +174,7 @@ fn calendar_access_changes_scope_enablement_and_removal_atomically() {
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: 2,
             source_authority: Some(floe_domain::SourceAuthority::new()),
+            reviewed_native_subject_fingerprint: None,
         },
     );
     assert_eq!(

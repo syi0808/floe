@@ -330,7 +330,7 @@ mod tests {
     use floe_domain::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage,
         ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
-        GrantOperation, GrantPurpose, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, MAX_CONTEXT_DEPENDENCIES,
         ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
 
@@ -511,6 +511,56 @@ mod tests {
             Uuid::new_v4(),
             observed_at,
             observed_at + Duration::minutes(5),
+        )
+        .unwrap()
+    }
+
+    async fn authorized_dependency(vault: &Vault, marker: &[u8]) -> ContextDependency {
+        let source = GrantSourceBinding::try_new(
+            vault.person_id,
+            ConnectionId::new(),
+            ConnectorId::try_new("attention.macos").unwrap(),
+            ExecutionOwnerId::try_new("test-host").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap();
+        let consumer = GrantConsumer::builtin("assistant").unwrap();
+        let scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new("attention.coarse").unwrap()],
+            vec![GrantDataCategory::Derived],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![consumer.clone()],
+            ProcessingRestriction::LocalOnly,
+        )
+        .unwrap();
+        let grant = vault
+            .review_personal_grant(source, scope, &"a".repeat(64), None)
+            .await
+            .unwrap();
+        let policy = vault
+            .personal_grant_consumer_policy(grant.id())
+            .await
+            .unwrap();
+        let observed_at = Utc::now();
+        ContextDependency::try_new(
+            vault.person_id,
+            grant.id(),
+            grant.authority(),
+            grant.source().clone(),
+            grant.scope().resources().to_vec(),
+            grant.scope().categories().to_vec(),
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            consumer,
+            ProcessingRestriction::LocalOnly,
+            policy,
+            Uuid::new_v4(),
+            marker.to_vec(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            observed_at,
+            observed_at + Duration::minutes(2),
         )
         .unwrap()
     }
@@ -924,7 +974,7 @@ mod tests {
             .record_result_dependency(
                 second_turn,
                 second_call,
-                dependency(person, b"result-bound"),
+                authorized_dependency(&vault, b"result-bound").await,
             )
             .unwrap();
         governed.compare_and_swap(&second, 0).await.unwrap();
@@ -932,6 +982,62 @@ mod tests {
             read(&vault, person, second.id, second_turn).await.unwrap(),
             DependencyCoverage::Dependent { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn dependent_release_rechecks_live_evidence_inside_final_transaction() {
+        struct Liveness(std::sync::atomic::AtomicBool);
+
+        impl super::super::GovernedDependencyLiveness for Liveness {
+            fn validate(&self, _: &ContextDependency) -> Result<(), AgentFailure> {
+                if self.0.load(std::sync::atomic::Ordering::Acquire) {
+                    Ok(())
+                } else {
+                    Err(AgentFailure::PolicyDenied)
+                }
+            }
+        }
+
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn_id = Uuid::new_v4();
+        let dependency = authorized_dependency(&vault, b"final-fence").await;
+        let liveness = Liveness(std::sync::atomic::AtomicBool::new(true));
+        let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+        store.record_dependency(turn_id, dependency).await.unwrap();
+        session.revision = 1;
+        session.messages.push(AgentMessage::User {
+            turn_id,
+            text: "Question".into(),
+        });
+        store.compare_and_swap(&session, 0).await.unwrap();
+        liveness
+            .0
+            .store(false, std::sync::atomic::Ordering::Release);
+        session.revision = 2;
+        session.messages.push(AgentMessage::Assistant {
+            turn_id,
+            text: "Unreleased answer".into(),
+        });
+        assert_eq!(
+            store.compare_and_swap(&session, 1).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        let saved = vault.load(person, session.id).await.unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.messages.len(), 1);
+        let independent_turn = Uuid::new_v4();
+        let mut independent = saved;
+        independent.revision = 2;
+        independent.messages.push(AgentMessage::User {
+            turn_id: independent_turn,
+            text: "Hello".into(),
+        });
+        store.compare_and_swap(&independent, 1).await.unwrap();
     }
 
     #[tokio::test]
@@ -944,7 +1050,8 @@ mod tests {
         let session = vault.create_session().await.unwrap();
         let historical_turn = Uuid::new_v4();
         let current_turn = Uuid::new_v4();
-        let coverage = DependencyCoverage::dependent(dependency(person, b"history")).unwrap();
+        let coverage =
+            DependencyCoverage::dependent(authorized_dependency(&vault, b"history").await).unwrap();
         merge(&vault, person, session.id, historical_turn, coverage)
             .await
             .unwrap();

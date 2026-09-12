@@ -11,6 +11,7 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: Some(floe_domain::SourceAuthority::new()),
+        reviewed_native_subject_fingerprint: Some("a".repeat(64)),
     }
 }
 
@@ -94,6 +95,7 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
                 connection_scope: floe_domain::CalendarScope::All,
                 connection_revision: 2,
                 source_authority: Some(floe_domain::SourceAuthority::new()),
+                reviewed_native_subject_fingerprint: Some("a".repeat(64)),
             },
         ),
         Cancellation::default(),

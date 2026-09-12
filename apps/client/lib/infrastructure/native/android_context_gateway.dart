@@ -19,11 +19,22 @@ abstract interface class AndroidContextApi {
     String cursor = '',
     int limit = 128,
   });
-  Future<Map<String, dynamic>> readContacts({int limit = 64});
+  Future<Map<String, dynamic>> readAcquisition(Map<String, dynamic> request);
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  });
   Future<Map<String, dynamic>> readWellbeing();
 }
 
-final class AndroidContextGateway implements AndroidContextApi {
+abstract interface class AndroidContextSubjectApi {
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  );
+}
+
+final class AndroidContextGateway
+    implements AndroidContextApi, AndroidContextSubjectApi {
   AndroidContextGateway();
 
   @override
@@ -107,15 +118,72 @@ final class AndroidContextGateway implements AndroidContextApi {
   }
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
+  Future<Map<String, dynamic>> readAcquisition(
+    Map<String, dynamic> request,
+  ) async {
+    _requireAndroid();
+    final response = await _channel.invokeMapMethod<Object?, Object?>(
+      'readAcquisition',
+      request,
+    );
+    if (response == null) {
+      throw const FormatException('Missing Android acquisition result.');
+    }
+    return Map<String, dynamic>.from(response);
+  }
+
+  @override
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async {
     _requireAndroid();
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('readContacts', {
         'limit': limit,
+        if (selectedHandles != null) 'selected_handles': selectedHandles,
       }),
     );
     validateAndroidPeopleView(view);
     return view;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  ) async {
+    _requireAndroid();
+    final canonical = selectedHandles.toSet().toList()..sort();
+    if (canonical.isEmpty ||
+        canonical.length > 64 ||
+        canonical.length != selectedHandles.length) {
+      throw const FormatException('Contact selection is invalid.');
+    }
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectContactsSubject',
+        {'selected_handles': canonical},
+      ),
+    );
+    const fields = {
+      'schema_version',
+      'subject_fingerprint',
+      'permission_class',
+      'resolved_handles',
+    };
+    final resolved = value['resolved_handles'];
+    if (value.keys.toSet().difference(fields).isNotEmpty ||
+        !value.keys.toSet().containsAll(fields) ||
+        value['schema_version'] != 1 ||
+        !_validFingerprint(value['subject_fingerprint']) ||
+        value['permission_class'] is! String ||
+        (value['permission_class']! as String).isEmpty ||
+        resolved is! List ||
+        resolved.length != canonical.length ||
+        resolved.any((item) => item is! String || !canonical.contains(item))) {
+      throw const FormatException('Invalid Android Contacts subject.');
+    }
+    return value;
   }
 
   @override
@@ -134,6 +202,9 @@ final class AndroidContextGateway implements AndroidContextApi {
     }
   }
 }
+
+bool _validFingerprint(Object? value) =>
+    value is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(value);
 
 final class AndroidCalendarAdapter implements CalendarAdapter {
   const AndroidCalendarAdapter(this._gateway);

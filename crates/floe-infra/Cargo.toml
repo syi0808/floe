@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 chrono.workspace = true
 floe-agent = { path = "../floe-agent" }
 floe-core = { path = "../floe-core" }
@@ -14,5 +15,10 @@ floe-protocol = { path = "../floe-protocol" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+base64 = "0.22.1"
+tempfile = "3.23.0"

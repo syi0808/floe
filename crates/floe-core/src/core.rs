@@ -1,11 +1,13 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_domain::*;
+use std::sync::Arc;
 
 use crate::ports::TimelineRepository;
-use crate::{CoreError, ErrorCode, TursoStore};
+use crate::{CoreError, ErrorCode, TursoStore, calendar_lease::CalendarLeaseRegistry};
 
 pub struct FloeCore {
     pub(crate) store: TursoStore,
+    pub(crate) lease_registry: Arc<CalendarLeaseRegistry>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +30,7 @@ impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
         Ok(Self {
             store: TursoStore::open(path).await?,
+            lease_registry: Arc::new(CalendarLeaseRegistry::new()),
         })
     }
 

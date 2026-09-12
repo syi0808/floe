@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin};
+
 use floe_agent::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
     AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent, AgentFailure,
@@ -20,6 +22,7 @@ use floe_domain::PersonId;
 #[cfg(test)]
 use floe_protocol::AgentRemoteCalendarConnectionDto;
 use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
+use uuid::Uuid;
 
 use crate::local_context::LocalContextStore;
 use crate::{
@@ -28,6 +31,8 @@ use crate::{
     remote_model::{CalendarContextRequest, ServerModelRunner},
 };
 
+use super::personal_grants;
+use super::remote_views::{self, RemoteViewReaderApi};
 use super::session_uuid;
 
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
@@ -79,7 +84,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         person_id,
         request,
     };
-    expert_dispatch::run(&inputs, context, cancellation, emit).await
+    Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
 }
 
 async fn run_general_turn<Keys: VaultKeyProvider>(
@@ -95,10 +100,68 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     let request = inputs.request;
     let session_id = session_uuid(&request.session_id)?;
     let model = Model::new(request.remote_route.clone())?;
-    let governed_store = vault.governed_general_store(session_id);
+    let remote_reader = match (&model, request.remote_route.as_ref()) {
+        (Model::Server(model), Some(route)) => {
+            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            if pairing.person_id != person_id.to_string() || pairing.device_id != request.device_id
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            Some(remote_views::RemoteViewReader {
+                vault,
+                model,
+                person_id,
+                client_id: &pairing.client_id,
+                device_id: &pairing.device_id,
+                route,
+            })
+        }
+        _ => None,
+    };
+    let personal_liveness = personal_grants::PersonalDependencyLiveness {
+        local_context,
+        person_id,
+        device_id: &request.device_id,
+    };
+    let personal_resolver = personal_grants::PersonalDependencyResolver {
+        vault,
+        local_context,
+        person_id,
+        device_id: &request.device_id,
+    };
+    let remote_resolver = remote_reader
+        .as_ref()
+        .map(|reader| remote_views::RemoteDependencyResolver { reader });
+    let liveness = CompositeDependencyLiveness {
+        personal: &personal_liveness,
+        remote: remote_resolver
+            .as_ref()
+            .map(|resolver| resolver as &dyn floe_core::GovernedDependencyLiveness),
+    };
+    let governed_store = vault.governed_general_store_with_liveness(session_id, &liveness);
+    let resolver = CompositeDependencyResolver {
+        personal: &personal_resolver,
+        remote: remote_resolver
+            .as_ref()
+            .map(|resolver| resolver as &dyn floe_core::GovernedDependencyResolver),
+    };
+    let attention_reader = PersonalAttentionReader {
+        vault,
+        local_context,
+        device_id: &request.device_id,
+    };
+    let people_reader = PersonalPeopleReader {
+        vault,
+        local_context,
+        device_id: &request.device_id,
+    };
+    let result_recorder = StoreResultRecorder {
+        store: &governed_store,
+    };
     let governed_model = GovernedModel {
         model: &model,
         store: &governed_store,
+        resolver: &resolver,
     };
     let policy = policy(&model, request.remote_route.as_ref());
     let task_views = optional_task_views(core, person_id).await?;
@@ -112,12 +175,24 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         model: &model,
         policy: &policy,
         local_context,
+        attention: Some(&attention_reader),
+        people_reader: Some(&people_reader),
+        recorder: Some(&result_recorder),
+        remote_reader: remote_reader
+            .as_ref()
+            .map(|reader| reader as &dyn RemoteViewReaderApi),
     };
     let experts = ConversationExperts {
         model: &model,
         policy: &policy,
         context: &context,
         local_context,
+        attention: Some(&attention_reader),
+        people_reader: Some(&people_reader),
+        recorder: Some(&result_recorder),
+        remote_reader: remote_reader
+            .as_ref()
+            .map(|reader| reader as &dyn RemoteViewReaderApi),
         task_views: &task_views,
         cards: expert_cards,
         builtin_setup: Some(builtin_setup),
@@ -268,27 +343,80 @@ impl ModelRunner for Model {
     }
 }
 
-struct GovernedModel<'a, Keys> {
-    model: &'a Model,
+struct GovernedModel<'a, Keys, Runner: ModelRunner + ?Sized = Model> {
+    model: &'a Runner,
     store: &'a GovernedAgentSessionStore<'a, Keys>,
+    resolver: &'a dyn floe_core::GovernedDependencyResolver,
 }
 
-impl<Keys: VaultKeyProvider> ModelRunner for GovernedModel<'_, Keys> {
+impl<Keys: VaultKeyProvider, Runner: ModelRunner + ?Sized + Sync> ModelRunner
+    for GovernedModel<'_, Keys, Runner>
+{
     fn placement(&self) -> ModelPlacement {
         self.model.placement()
     }
 
     async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
-        self.store.project_model_request(&mut request, None).await?;
-        self.model.generate(request).await
+        self.store
+            .project_model_request(&mut request, Some(self.resolver))
+            .await?;
+        let fence_request = request.clone();
+        let response = self.model.generate(request).await?;
+        self.store
+            .revalidate_current_coverage(&fence_request, self.resolver)
+            .await?;
+        Ok(response)
+    }
+}
+
+struct CompositeDependencyLiveness<'a> {
+    personal: &'a dyn floe_core::GovernedDependencyLiveness,
+    remote: Option<&'a dyn floe_core::GovernedDependencyLiveness>,
+}
+
+impl floe_core::GovernedDependencyLiveness for CompositeDependencyLiveness<'_> {
+    fn validate(&self, dependency: &floe_domain::ContextDependency) -> Result<(), AgentFailure> {
+        if is_local_personal_connector(dependency.source().connector().as_str()) {
+            self.personal.validate(dependency)
+        } else {
+            self.remote
+                .ok_or(AgentFailure::PolicyDenied)?
+                .validate(dependency)
+        }
+    }
+}
+
+struct CompositeDependencyResolver<'a> {
+    personal: &'a dyn floe_core::GovernedDependencyResolver,
+    remote: Option<&'a dyn floe_core::GovernedDependencyResolver>,
+}
+
+impl floe_core::GovernedDependencyResolver for CompositeDependencyResolver<'_> {
+    fn authorize<'a>(
+        &'a self,
+        dependency: &'a floe_domain::ContextDependency,
+        request: &'a ModelRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        if is_local_personal_connector(dependency.source().connector().as_str()) {
+            self.personal.authorize(dependency, request)
+        } else if let Some(remote) = self.remote {
+            remote.authorize(dependency, request)
+        } else {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
     }
 }
 
 struct PersonalViewSource<'a> {
     model: &'a Model,
     policy: &'a InferencePolicyDecision,
-    local_context: &'a LocalContextStore,
     person_id: PersonId,
+    people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
+    remote_reader: Option<&'a dyn RemoteViewReaderApi>,
+    recorder: Option<&'a dyn ResultRecorder>,
+    dependency_turn_id: Uuid,
+    dependency_result_id: Uuid,
+    consumer_name: &'a str,
 }
 
 impl PersonalViewSource<'_> {
@@ -297,20 +425,24 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<PeopleView, AgentFailure> {
-        match self.local_context.people(self.person_id) {
-            Ok(view) => Ok(view),
-            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
-                let Model::Server(model) = self.model else {
-                    unreachable!()
-                };
-                model.read_people_view(deadline, cancellation).await
-            }
-            Err(error) => Err(error),
+        let reader = self
+            .people_reader
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let (view, dependency) = reader
+            .read(self.person_id, self.consumer_name, deadline, cancellation)
+            .await?;
+        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+            recorder.record(
+                self.dependency_turn_id,
+                self.dependency_result_id,
+                dependency,
+            )?;
         }
+        Ok(view)
     }
 
     async fn feasibility_view(&self) -> Result<FeasibilityView, AgentFailure> {
-        self.local_context.feasibility(self.person_id)
+        Err(AgentFailure::CapabilityUnavailable)
     }
 
     async fn attention_view(
@@ -318,16 +450,8 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<AttentionView, AgentFailure> {
-        match self.local_context.attention(self.person_id) {
-            Ok(view) => Ok(view),
-            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
-                let Model::Server(model) = self.model else {
-                    unreachable!()
-                };
-                model.read_attention_view(deadline, cancellation).await
-            }
-            Err(error) => Err(error),
-        }
+        let _ = (deadline, cancellation);
+        Err(AgentFailure::CapabilityUnavailable)
     }
 
     async fn wellbeing_view(
@@ -335,16 +459,8 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<WellbeingView, AgentFailure> {
-        match self.local_context.wellbeing(self.person_id) {
-            Ok(view) => Ok(view),
-            Err(AgentFailure::CapabilityUnavailable) if self.server_fallback_allowed() => {
-                let Model::Server(model) = self.model else {
-                    unreachable!()
-                };
-                model.read_wellbeing_view(deadline, cancellation).await
-            }
-            Err(error) => Err(error),
-        }
+        let _ = (deadline, cancellation);
+        Err(AgentFailure::CapabilityUnavailable)
     }
 
     async fn calendar_views(
@@ -415,14 +531,37 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<Vec<floe_agent::WorkContextView>, AgentFailure> {
-        let Model::Server(model) = self.model else {
+        let Model::Server(_model) = self.model else {
             return Ok(vec![]);
         };
         if !self.server_fallback_allowed() {
             return Ok(vec![]);
         }
-        match model.read_work_context_view(deadline, cancellation).await {
-            Ok(view) => Ok(vec![view]),
+        let Some(reader) = self.remote_reader else {
+            return Err(AgentFailure::CapabilityUnavailable);
+        };
+        match reader
+            .read(
+                "work.context",
+                self.consumer_name,
+                serde_json::json!({"schema_version": AGENT_VERSION}),
+                deadline,
+                cancellation,
+            )
+            .await
+        {
+            Ok((value, dependency)) => {
+                if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+                    recorder.record(
+                        self.dependency_turn_id,
+                        self.dependency_turn_id,
+                        dependency,
+                    )?;
+                }
+                let view = serde_json::from_value(value)
+                    .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+                Ok(vec![view])
+            }
             Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
             Err(error) => Err(error),
         }
@@ -451,6 +590,207 @@ struct ConversationCapabilities<'model> {
     model: &'model Model,
     policy: &'model InferencePolicyDecision,
     local_context: &'model LocalContextStore,
+    attention: Option<&'model dyn PersonalAttentionReaderApi>,
+    people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
+    recorder: Option<&'model dyn ResultRecorder>,
+    remote_reader: Option<&'model dyn RemoteViewReaderApi>,
+}
+
+trait ResultRecorder: Send + Sync {
+    fn record(
+        &self,
+        turn_id: uuid::Uuid,
+        result_id: uuid::Uuid,
+        dependency: floe_domain::ContextDependency,
+    ) -> Result<(), AgentFailure>;
+}
+
+struct StoreResultRecorder<'a, Keys: VaultKeyProvider> {
+    store: &'a GovernedAgentSessionStore<'a, Keys>,
+}
+
+impl<Keys: VaultKeyProvider> ResultRecorder for StoreResultRecorder<'_, Keys> {
+    fn record(
+        &self,
+        turn_id: uuid::Uuid,
+        result_id: uuid::Uuid,
+        dependency: floe_domain::ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        self.store
+            .record_result_dependency(turn_id, result_id, dependency)
+    }
+}
+
+trait PersonalAttentionReaderApi: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'static str,
+        call_id: uuid::Uuid,
+        turn_id: uuid::Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<(AttentionView, floe_domain::ContextDependency), AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
+trait PersonalPeopleReaderApi: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<(PeopleView, floe_domain::ContextDependency), AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    >;
+}
+
+struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
+    vault: &'a EncryptedAgentVault<Keys>,
+    local_context: &'a LocalContextStore,
+    device_id: &'a str,
+}
+
+impl<Keys: VaultKeyProvider> PersonalAttentionReaderApi for PersonalAttentionReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'static str,
+        call_id: uuid::Uuid,
+        turn_id: uuid::Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<(AttentionView, floe_domain::ContextDependency), AgentFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            if tokio::time::Instant::now() >= deadline || cancellation.is_cancelled() {
+                return Err(if cancellation.is_cancelled() {
+                    AgentFailure::Cancelled
+                } else {
+                    AgentFailure::DeadlineExceeded
+                });
+            }
+            let (view, dependency) = personal_grants::admit_attention(
+                self.vault,
+                self.local_context,
+                person_id,
+                self.device_id,
+                consumer,
+                call_id,
+                deadline,
+                cancellation,
+            )
+            .await?;
+            let _ = turn_id;
+            Ok((view, dependency))
+        })
+    }
+}
+
+struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
+    vault: &'a EncryptedAgentVault<Keys>,
+    local_context: &'a LocalContextStore,
+    device_id: &'a str,
+}
+
+impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<(PeopleView, floe_domain::ContextDependency), AgentFailure>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let grants = self.vault.list_data_access_grants(128).await?;
+            let matches: Vec<_> = grants
+                .iter()
+                .filter(|grant| {
+                    let connector = grant.source().connector().as_str();
+                    matches!(connector, "contacts.apple" | "contacts.android")
+                        && grant.source().person_id() == person_id
+                        && grant.source().connection_id().as_str() == format!("{connector}.local")
+                        && grant.source().execution_owner().as_str()
+                            == contacts_execution_owner(connector, self.device_id)
+                        && grant.state() == floe_domain::GrantState::Active
+                        && !grant.review_required()
+                        && grant
+                            .scope()
+                            .resources()
+                            .iter()
+                            .any(|resource| resource.as_str() == "people.identity")
+                        && grant
+                            .scope()
+                            .consumers()
+                            .iter()
+                            .any(|value| value.identifier() == consumer)
+                })
+                .collect();
+            let grant = match matches.as_slice() {
+                [grant] => *grant,
+                [] => return Err(AgentFailure::AccessReviewRequired),
+                _ => return Err(AgentFailure::AccessReviewRequired),
+            };
+            let selected_handles = self
+                .vault
+                .personal_grant_selected_handles(grant.id())
+                .await?;
+            if selected_handles.is_empty() {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let subject = self
+                .vault
+                .personal_grant_subject_fingerprint(grant.id())
+                .await?;
+            personal_grants::read_people(
+                self.vault,
+                self.local_context,
+                person_id,
+                self.device_id,
+                grant.source().clone(),
+                &selected_handles,
+                &subject,
+                consumer,
+                deadline,
+                cancellation,
+            )
+            .await
+        })
+    }
+}
+
+fn is_local_personal_connector(connector: &str) -> bool {
+    connector == personal_grants::ATTENTION_CONNECTOR
+        || connector.starts_with("calendar.")
+        || matches!(connector, "contacts.apple" | "contacts.android")
+}
+
+fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
+    let platform = connector.strip_prefix("contacts.").unwrap_or_default();
+    format!("{platform}:{device_id}")
 }
 
 impl CapabilityHost for ConversationCapabilities<'_> {
@@ -499,22 +839,29 @@ impl CapabilityHost for ConversationCapabilities<'_> {
         }
         let output = match invocation.capability_id.as_str() {
             "mail.communication.read" => {
-                let Model::Server(model) = self.model else {
-                    return Err(AgentFailure::CapabilityUnavailable);
-                };
                 let input: Input = serde_json::from_str(&invocation.input)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-                serde_json::to_value(
-                    model
-                        .read_communication_view(
-                            &input.query,
-                            input.cursor,
-                            input.limit,
-                            invocation.deadline,
-                            &invocation.cancellation,
-                        )
-                        .await?,
-                )
+                let reader = self
+                    .remote_reader
+                    .ok_or(AgentFailure::CapabilityUnavailable)?;
+                let (value, dependency) = reader
+                    .read(
+                        "mail.communication",
+                        personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                        serde_json::json!({
+                            "schema_version": AGENT_VERSION,
+                            "query": input.query,
+                            "cursor": input.cursor,
+                            "limit": input.limit,
+                        }),
+                        invocation.deadline,
+                        &invocation.cancellation,
+                    )
+                    .await?;
+                self.recorder
+                    .ok_or(AgentFailure::CapabilityUnavailable)?
+                    .record(invocation.turn_id, invocation.call_id, dependency)?;
+                Ok(value)
             }
             "work.context.read"
             | "life.logistics.read"
@@ -530,32 +877,50 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                 let personal = PersonalViewSource {
                     model: self.model,
                     policy: self.policy,
-                    local_context: self.local_context,
                     person_id: invocation.person_id,
+                    people_reader: self.people_reader,
+                    remote_reader: self.remote_reader,
+                    recorder: self.recorder,
+                    dependency_turn_id: invocation.turn_id,
+                    dependency_result_id: invocation.call_id,
+                    consumer_name: "assistant",
                 };
                 match invocation.capability_id.as_str() {
                     "work.context.read" => {
-                        let Model::Server(model) = self.model else {
-                            return Err(AgentFailure::CapabilityUnavailable);
-                        };
-                        serde_json::to_value(
-                            model
-                                .read_work_context_view(
-                                    invocation.deadline,
-                                    &invocation.cancellation,
-                                )
-                                .await?,
-                        )
+                        let reader = self
+                            .remote_reader
+                            .ok_or(AgentFailure::CapabilityUnavailable)?;
+                        let (value, dependency) = reader
+                            .read(
+                                "work.context",
+                                personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                                serde_json::json!({"schema_version": AGENT_VERSION}),
+                                invocation.deadline,
+                                &invocation.cancellation,
+                            )
+                            .await?;
+                        self.recorder
+                            .ok_or(AgentFailure::CapabilityUnavailable)?
+                            .record(invocation.turn_id, invocation.call_id, dependency)?;
+                        Ok(value)
                     }
                     "life.logistics.read" => {
-                        let Model::Server(model) = self.model else {
-                            return Err(AgentFailure::CapabilityUnavailable);
-                        };
-                        serde_json::to_value(
-                            model
-                                .read_logistics_view(invocation.deadline, &invocation.cancellation)
-                                .await?,
-                        )
+                        let reader = self
+                            .remote_reader
+                            .ok_or(AgentFailure::CapabilityUnavailable)?;
+                        let (value, dependency) = reader
+                            .read(
+                                "life.logistics",
+                                personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                                serde_json::json!({"schema_version": AGENT_VERSION}),
+                                invocation.deadline,
+                                &invocation.cancellation,
+                            )
+                            .await?;
+                        self.recorder
+                            .ok_or(AgentFailure::CapabilityUnavailable)?
+                            .record(invocation.turn_id, invocation.call_id, dependency)?;
+                        Ok(value)
                     }
                     "people.identity.read" => serde_json::to_value(
                         personal
@@ -565,11 +930,26 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                     "schedule.feasibility.read" => {
                         serde_json::to_value(personal.feasibility_view().await?)
                     }
-                    "attention.coarse.read" => serde_json::to_value(
-                        personal
-                            .attention_view(invocation.deadline, &invocation.cancellation)
-                            .await?,
-                    ),
+                    "attention.coarse.read" => {
+                        if !matches!(self.model, Model::Foundation(_)) {
+                            return Err(AgentFailure::CapabilityUnavailable);
+                        }
+                        let attention =
+                            self.attention.ok_or(AgentFailure::CapabilityUnavailable)?;
+                        let recorder = self.recorder.ok_or(AgentFailure::CapabilityUnavailable)?;
+                        let (view, dependency) = attention
+                            .read(
+                                invocation.person_id,
+                                personal_grants::ATTENTION_ASSISTANT_CONSUMER,
+                                invocation.call_id,
+                                invocation.turn_id,
+                                invocation.deadline,
+                                &invocation.cancellation,
+                            )
+                            .await?;
+                        recorder.record(invocation.turn_id, invocation.call_id, dependency)?;
+                        serde_json::to_value(view)
+                    }
                     "wellbeing.derived.read" => serde_json::to_value(
                         personal
                             .wellbeing_view(invocation.deadline, &invocation.cancellation)
@@ -609,9 +989,294 @@ use expert_dispatch::ConversationExperts;
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashMap,
+        fs,
+        os::unix::fs::PermissionsExt,
+        pin::Pin,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
+
+    use floe_agent::Cancellation;
+    use floe_agent::ModelStep;
+    use floe_core::{VaultKey, VaultKeyProvider};
+    use floe_protocol::{
+        LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionResultDto,
+        LocalContextOperationDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use uuid::Uuid;
 
     use super::*;
+
+    struct FixtureRemoteReader<'a> {
+        model: &'a ServerModelRunner,
+        person_id: PersonId,
+    }
+
+    impl RemoteViewReaderApi for FixtureRemoteReader<'_> {
+        fn read<'a>(
+            &'a self,
+            view_id: &'a str,
+            consumer: &'a str,
+            query: serde_json::Value,
+            deadline: tokio::time::Instant,
+            cancellation: &'a Cancellation,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            (serde_json::Value, floe_domain::ContextDependency),
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let (value, category, connector) = match view_id {
+                    "mail.communication" => {
+                        let query = query.as_object().ok_or(AgentFailure::InvalidInput)?;
+                        let text = query
+                            .get("query")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        let cursor = query
+                            .get("cursor")
+                            .and_then(serde_json::Value::as_u64)
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        let limit = query
+                            .get("limit")
+                            .and_then(serde_json::Value::as_u64)
+                            .and_then(|value| usize::try_from(value).ok())
+                            .ok_or(AgentFailure::InvalidInput)?;
+                        (
+                            serde_json::to_value(
+                                self.model
+                                    .read_communication_view(
+                                        text,
+                                        cursor as usize,
+                                        limit,
+                                        deadline,
+                                        cancellation,
+                                    )
+                                    .await?,
+                            )
+                            .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                            floe_domain::GrantDataCategory::Content,
+                            "gmail",
+                        )
+                    }
+                    "work.context" => (
+                        serde_json::to_value(
+                            self.model
+                                .read_work_context_view(deadline, cancellation)
+                                .await?,
+                        )
+                        .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                        floe_domain::GrantDataCategory::Derived,
+                        "linear",
+                    ),
+                    "life.logistics" => (
+                        serde_json::to_value(
+                            self.model
+                                .read_logistics_view(deadline, cancellation)
+                                .await?,
+                        )
+                        .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                        floe_domain::GrantDataCategory::Derived,
+                        "home",
+                    ),
+                    _ => return Err(AgentFailure::InvalidInput),
+                };
+                let connection_id = "00000000-0000-4000-8000-000000000099";
+                let source = floe_domain::GrantSourceBinding::try_new(
+                    self.person_id,
+                    floe_domain::ConnectionId::try_new(connection_id)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    floe_domain::ConnectorId::try_new(connector)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    floe_domain::ExecutionOwnerId::try_new("00000000-0000-4000-8000-000000000098")
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    floe_domain::SourceAuthority::new(),
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                let consumer = floe_domain::GrantConsumer::builtin(consumer)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+                let scope = floe_domain::GrantScope::try_new(
+                    vec![
+                        floe_domain::ResourceHandle::try_new(format!("{view_id}:{connection_id}"))
+                            .map_err(|_| AgentFailure::InvalidInput)?,
+                    ],
+                    vec![category],
+                    vec![floe_domain::GrantOperation::Read],
+                    vec![floe_domain::GrantPurpose::Assistant],
+                    vec![consumer.clone()],
+                    floe_domain::ProcessingRestriction::ApprovedRecipient {
+                        recipient: "server-audience".into(),
+                        categories: vec![category],
+                    },
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                let now = chrono::Utc::now();
+                let dependency = floe_domain::ContextDependency::try_new(
+                    self.person_id,
+                    floe_domain::GrantId::new(),
+                    floe_domain::GrantAuthority::new(),
+                    source,
+                    scope.resources().to_vec(),
+                    scope.categories().to_vec(),
+                    floe_domain::GrantOperation::Read,
+                    floe_domain::GrantPurpose::Assistant,
+                    consumer,
+                    scope.processing().clone(),
+                    floe_domain::ConsumerPolicyAuthority::new(),
+                    Uuid::new_v4(),
+                    vec![1; 32],
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    now,
+                    now + chrono::Duration::minutes(5),
+                )
+                .map_err(|_| AgentFailure::InvalidInput)?;
+                Ok((value, dependency))
+            })
+        }
+    }
+
+    struct FixtureResultRecorder;
+
+    impl ResultRecorder for FixtureResultRecorder {
+        fn record(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: floe_domain::ContextDependency,
+        ) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct AttentionTestKeys(Arc<Mutex<HashMap<(PersonId, uuid::Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for AttentionTestKeys {
+        fn load(
+            &self,
+            person_id: PersonId,
+            vault_id: uuid::Uuid,
+        ) -> Result<VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: uuid::Uuid,
+            key: &VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    fn attention_test_view() -> AttentionView {
+        let now = chrono::Utc::now().timestamp_millis();
+        AttentionView {
+            schema_version: 1,
+            view_id: "attention.coarse".into(),
+            source_handle: "attention.macos:session_idle".into(),
+            observed_at_unix_ms: now.saturating_sub(1),
+            expires_at_unix_ms: now.saturating_add(60_000),
+            state: floe_agent::AttentionState::Available,
+            confidence_millis: 900,
+            evidence_handles: vec!["attention:aggregate".into()],
+        }
+    }
+
+    async fn drive_attention_host(
+        local_context: Arc<LocalContextStore>,
+        person_id: PersonId,
+        host_epoch: String,
+        subject: String,
+        stop: Arc<AtomicBool>,
+        inspect_count: Arc<AtomicUsize>,
+        read_count: Arc<AtomicUsize>,
+    ) {
+        while !stop.load(Ordering::Acquire) {
+            if let Ok(result) = local_context.request(
+                person_id,
+                LocalContextOperationDto::PollAttentionAcquisitions {
+                    host_epoch: host_epoch.clone(),
+                },
+            ) {
+                for request in result.attention_acquisitions {
+                    match request.mode {
+                        LocalContextAttentionAcquisitionModeDto::InspectSubject => {
+                            inspect_count.fetch_add(1, Ordering::AcqRel);
+                        }
+                        LocalContextAttentionAcquisitionModeDto::ReadProjection => {
+                            read_count.fetch_add(1, Ordering::AcqRel);
+                        }
+                    }
+                    let view = (request.mode
+                        == LocalContextAttentionAcquisitionModeDto::ReadProjection)
+                        .then(|| serde_json::to_value(attention_test_view()).unwrap());
+                    let completion = LocalContextAttentionAcquisitionResultDto {
+                        request_id: request.request_id,
+                        host_epoch: request.host_epoch,
+                        person_id: request.person_id,
+                        device_id: request.device_id,
+                        mode: request.mode,
+                        native_subject_fingerprint_before: subject.clone(),
+                        native_subject_fingerprint_after: subject.clone(),
+                        permission_class: "session_observation".into(),
+                        view,
+                    };
+                    let _ = local_context.request(
+                        person_id,
+                        LocalContextOperationDto::CompleteAttentionAcquisition {
+                            host_epoch: host_epoch.clone(),
+                            result: completion,
+                        },
+                    );
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    }
+
+    struct PositiveFakeModel;
+
+    impl ModelRunner for PositiveFakeModel {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+            Ok(ModelResponse {
+                replay: None,
+                schema_version: 1,
+                output: vec![ModelStep::Answer {
+                    text: "Attention response".into(),
+                }],
+                used_tokens: 1,
+                cost_micros: 0,
+            })
+        }
+    }
 
     const COMMITMENTS_AGENT_ID: &str = BuiltinExpertKind::Commitments.package_id();
     const COMMUNICATION_AGENT_ID: &str = BuiltinExpertKind::Communication.package_id();
@@ -751,6 +1416,7 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         }))
         .unwrap();
         assert!(matches!(model, Model::Server(_)));
@@ -769,8 +1435,13 @@ mod tests {
         let result = PersonalViewSource {
             model: &model,
             policy: &policy,
-            local_context: &local_context,
             person_id: PersonId::new(),
+            people_reader: None,
+            remote_reader: None,
+            recorder: None,
+            dependency_turn_id: Uuid::nil(),
+            dependency_result_id: Uuid::nil(),
+            consumer_name: "assistant",
         }
         .attention_view(
             tokio::time::Instant::now() + std::time::Duration::from_secs(1),
@@ -781,7 +1452,253 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expert_cannot_read_a_source_missing_from_its_durable_grant() {
+    async fn encrypted_attention_admission_model_and_final_cas_are_fenced() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let keys = AttentionTestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys)
+            .await
+            .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let local_context = Arc::new(LocalContextStore::default());
+        let host_epoch = "attention-test-host".to_owned();
+        local_context
+            .request(
+                person_id,
+                LocalContextOperationDto::RegisterAttentionHost {
+                    host_epoch: host_epoch.clone(),
+                },
+            )
+            .unwrap();
+        let subject = "a".repeat(64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let inspect_count = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let driver = tokio::spawn(drive_attention_host(
+            local_context.clone(),
+            person_id,
+            host_epoch,
+            subject.clone(),
+            stop.clone(),
+            inspect_count.clone(),
+            read_count.clone(),
+        ));
+
+        let inspected = personal_grants::apply(
+            &vault,
+            &local_context,
+            person_id,
+            PersonalAccessConfigurationDto {
+                connector: personal_grants::ATTENTION_CONNECTOR.into(),
+                device_id: "test-device".into(),
+                change: PersonalAccessChangeDto::Inspect {},
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inspected.native_subject_fingerprint, Some(subject.clone()));
+        let reviewed = personal_grants::apply(
+            &vault,
+            &local_context,
+            person_id,
+            PersonalAccessConfigurationDto {
+                connector: personal_grants::ATTENTION_CONNECTOR.into(),
+                device_id: "test-device".into(),
+                change: PersonalAccessChangeDto::Review {
+                    expected_native_subject_fingerprint: subject.clone(),
+                    consumers: vec![personal_grants::ATTENTION_ASSISTANT_CONSUMER.into()],
+                    expected_grant_id: None,
+                    expected_grant_authority: None,
+                },
+            },
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reviewed.state, "active");
+        assert_eq!(
+            reviewed.consumers,
+            vec![personal_grants::ATTENTION_ASSISTANT_CONSUMER]
+        );
+
+        let model = Model::Foundation(FoundationModelRunner::encrypted());
+        let policy = policy(&model, None);
+        let liveness = personal_grants::PersonalDependencyLiveness {
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+        let reader = PersonalAttentionReader {
+            vault: &vault,
+            local_context: &local_context,
+            device_id: "test-device",
+        };
+        let recorder = StoreResultRecorder { store: &store };
+        let capabilities = ConversationCapabilities {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+            attention: Some(&reader),
+            people_reader: None,
+            recorder: Some(&recorder),
+            remote_reader: None,
+        };
+        let turn_id = Uuid::new_v4();
+        let call_id = Uuid::new_v4();
+        let capability_output = capabilities
+            .invoke(CapabilityInvocation {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id,
+                turn_id,
+                call_id,
+                session_id: session.id,
+                capability_id: "attention.coarse.read".into(),
+                input: "{}".into(),
+                max_output_bytes: 8 * 1024,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                cancellation: Cancellation::default(),
+            })
+            .await
+            .unwrap();
+        assert!(capability_output.contains("attention.coarse"));
+
+        let mut admitted = session.clone();
+        admitted.revision = 1;
+        admitted.messages = vec![
+            floe_agent::AgentMessage::User {
+                turn_id,
+                text: "What is my attention state?".into(),
+            },
+            floe_agent::AgentMessage::Capability {
+                turn_id,
+                call_id,
+                capability_id: "attention.coarse.read".into(),
+                input: "{}".into(),
+                result: Ok(capability_output),
+            },
+        ];
+        store.compare_and_swap(&admitted, 0).await.unwrap();
+
+        let resolver = personal_grants::PersonalDependencyResolver {
+            vault: &vault,
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let fake_model = PositiveFakeModel;
+        let governed_model = GovernedModel {
+            model: &fake_model,
+            store: &store,
+            resolver: &resolver,
+        };
+        let request = ModelRequest {
+            usage: floe_agent::UsageLedger::default(),
+            replay: vec![],
+            schema_version: AGENT_VERSION,
+            prompt: floe_agent::focus_expert_prompt(),
+            person_id,
+            session_id: session.id,
+            turn_id,
+            policy: policy.clone(),
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
+            messages: admitted.messages.clone(),
+            capabilities: capabilities.descriptors(person_id),
+            active_agents: vec![],
+            remaining_tokens: 1_000,
+            remaining_cost_micros: 1_000,
+            max_output_bytes: 8 * 1024,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        };
+        store
+            .revalidate_current_coverage(&request, &resolver)
+            .await
+            .unwrap();
+        let response = governed_model.generate(request).await.unwrap();
+        assert!(matches!(
+            response.output.as_slice(),
+            [ModelStep::Answer { .. }]
+        ));
+
+        let mut completed = admitted.clone();
+        completed.revision = 2;
+        completed
+            .messages
+            .push(floe_agent::AgentMessage::Assistant {
+                turn_id,
+                text: "Attention response".into(),
+            });
+        store.compare_and_swap(&completed, 1).await.unwrap();
+        assert_eq!(vault.load(person_id, session.id).await.unwrap().revision, 2);
+
+        let grant = vault
+            .list_data_access_grants(128)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        vault
+            .revoke_data_access_grant(grant.id(), grant.authority())
+            .await
+            .unwrap();
+        let mut rejected = completed.clone();
+        rejected.revision = 3;
+        rejected.messages.push(floe_agent::AgentMessage::Assistant {
+            turn_id,
+            text: "Late attention response".into(),
+        });
+        assert_eq!(
+            store.compare_and_swap(&rejected, 2).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(vault.load(person_id, session.id).await.unwrap().revision, 2);
+        assert!(inspect_count.load(Ordering::Acquire) >= 3);
+        assert!(read_count.load(Ordering::Acquire) >= 1);
+
+        let independent = vault.create_session().await.unwrap();
+        let independent_store = vault.governed_general_store(independent.id);
+        let independent_turn = Uuid::new_v4();
+        let mut independent_saved = independent.clone();
+        independent_saved.revision = 1;
+        independent_saved.messages = vec![
+            floe_agent::AgentMessage::User {
+                turn_id: independent_turn,
+                text: "Hello".into(),
+            },
+            floe_agent::AgentMessage::Assistant {
+                turn_id: independent_turn,
+                text: "Hi".into(),
+            },
+        ];
+        independent_store
+            .compare_and_swap(&independent_saved, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            vault
+                .load(person_id, independent.id)
+                .await
+                .unwrap()
+                .messages
+                .len(),
+            2
+        );
+        stop.store(true, Ordering::Release);
+        driver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_expert_requires_an_admitted_reader() {
         let model = Model::new(Some(AgentRemoteRouteDto {
             base_url: "http://127.0.0.1:1".into(),
             bearer_token: "test_token_that_is_long_enough_to_validate".into(),
@@ -789,6 +1706,7 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -805,9 +1723,13 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
-            builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Tasks)),
+            builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Mail)),
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -831,7 +1753,7 @@ mod tests {
                 cancellation: floe_agent::Cancellation::default(),
             })
             .await;
-        assert_eq!(result, Err(AgentFailure::CapabilityDenied));
+        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
     }
 
     #[tokio::test]
@@ -866,9 +1788,13 @@ mod tests {
             model: &model,
             policy: &policy,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
         };
 
-        let output = capabilities
+        let result = capabilities
             .invoke(CapabilityInvocation {
                 usage: floe_agent::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
@@ -882,10 +1808,8 @@ mod tests {
                 deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
                 cancellation: floe_agent::Cancellation::default(),
             })
-            .await
-            .unwrap();
-        let view: AttentionView = serde_json::from_str(&output).unwrap();
-        assert_eq!(view.source_handle, "attention:macos_local");
+            .await;
+        assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
     }
 
     #[test]
@@ -897,6 +1821,7 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -905,6 +1830,10 @@ mod tests {
             model: &model,
             policy: &policy,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
         };
         let descriptors = capabilities.descriptors(PersonId::new());
         assert_eq!(descriptors.len(), 7);
@@ -941,6 +1870,10 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -973,6 +1906,10 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
             task_views: &[],
             cards: vec![],
             builtin_setup: None,
@@ -1011,6 +1948,7 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         }))
         .unwrap();
         let policy = policy(&model, None);
@@ -1019,6 +1957,10 @@ mod tests {
             model: &model,
             policy: &policy,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
         };
         let result = capabilities
             .invoke(CapabilityInvocation {
@@ -1128,8 +2070,14 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: test_calendar_connections(),
+            pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
+        let person_id = PersonId::new();
+        let remote_reader = match &model {
+            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Foundation(_) => unreachable!(),
+        };
         let policy = policy(&model, Some(&route));
         let context = AgentContext {
             projection_version: 1,
@@ -1138,11 +2086,16 @@ mod tests {
             evidence: vec![],
         };
         let local_context = LocalContextStore::default();
+        let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: Some(&recorder),
+            remote_reader: Some(&remote_reader),
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -1152,7 +2105,7 @@ mod tests {
             .handle_message(A2ASendMessageRequest {
                 usage: floe_agent::UsageLedger::default(),
                 schema_version: AGENT_VERSION,
-                person_id: PersonId::new(),
+                person_id,
                 session_id: uuid::Uuid::new_v4(),
                 parent_turn_id: uuid::Uuid::new_v4(),
                 agent_id: COMMITMENTS_AGENT_ID.into(),
@@ -1296,9 +2249,14 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: test_calendar_connections(),
+            pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
+        let remote_reader = match &model {
+            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Foundation(_) => unreachable!(),
+        };
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1320,6 +2278,7 @@ mod tests {
             evidence: vec![],
         };
         let local_context = LocalContextStore::default();
+        let recorder = FixtureResultRecorder;
         let task_handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
         let tasks = [NativeContextView {
             schema_version: AGENT_VERSION,
@@ -1344,6 +2303,10 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: Some(&recorder),
+            remote_reader: Some(&remote_reader),
             task_views: &tasks,
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -1504,9 +2467,15 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
+        let person_id = PersonId::new();
         let policy = policy(&model, Some(&route));
+        let remote_reader = match &model {
+            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Foundation(_) => unreachable!(),
+        };
         let context = AgentContext {
             projection_version: 1,
             persona: None,
@@ -1514,22 +2483,27 @@ mod tests {
             evidence: vec![],
         };
         let local_context = LocalContextStore::default();
+        let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             model: &model,
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: Some(&recorder),
+            remote_reader: Some(&remote_reader),
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
         };
-        let mut results = vec![];
+        let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
             let task = experts
                 .handle_message(A2ASendMessageRequest {
                     usage: floe_agent::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
-                    person_id: PersonId::new(),
+                    person_id,
                     session_id: uuid::Uuid::new_v4(),
                     parent_turn_id: uuid::Uuid::new_v4(),
                     agent_id: agent_id.into(),
@@ -1761,6 +2735,7 @@ mod tests {
             external: false,
             allow_external: false,
             calendar_connections: test_calendar_connections(),
+            pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1776,12 +2751,16 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
-            let task = experts
+            let result = experts
                 .handle_message(A2ASendMessageRequest {
                     usage: floe_agent::UsageLedger::default(),
                     schema_version: AGENT_VERSION,
@@ -1802,58 +2781,24 @@ mod tests {
                     deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(5),
                     cancellation: floe_agent::Cancellation::default(),
                 })
-                .await
-                .unwrap();
-            let data: serde_json::Value =
-                serde_json::from_str(task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap()).unwrap();
-            assert_eq!(data["source_handle"], source_handle);
-            if agent_id == RELATIONSHIPS_AGENT_ID {
-                assert_eq!(
-                    data["source_handles"],
-                    serde_json::json!(["contacts:local"])
-                );
-                assert_eq!(data["follow_ups"], serde_json::json!([]));
-            }
-            if agent_id == FOCUS_AGENT_ID {
-                assert_eq!(
-                    data["source_handles"],
-                    serde_json::json!([
-                        "attention:mac-local",
-                        "calendar:selected",
-                        "work:selected"
-                    ])
-                );
-                assert_eq!(
-                    data["evidence_handles"],
-                    serde_json::json!(["attention:aggregate", "calendar:review", "work:release"])
-                );
-            }
+                .await;
+            assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
+            let _ = (agent_id, source_handle);
+            break;
         }
-        server.await.unwrap();
+        server.abort();
     }
 
     #[tokio::test]
     async fn unavailable_personal_provider_is_typed_and_never_runs_the_expert() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let (view_request, mut socket) = request(socket).await;
-            assert!(view_request.starts_with("POST /v1/views/attention.coarse "));
-            socket
-                .write_all(
-                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                )
-                .await
-                .unwrap();
-        });
         let route = AgentRemoteRouteDto {
-            base_url: format!("http://{address}"),
+            base_url: "http://127.0.0.1:1".into(),
             bearer_token: "daily_route_token_that_is_long_enough".into(),
             purpose: "everyday_assistance".into(),
             external: false,
             allow_external: false,
             calendar_connections: test_calendar_connections(),
+            pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
         let policy = policy(&model, Some(&route));
@@ -1869,6 +2814,10 @@ mod tests {
             policy: &policy,
             context: &context,
             local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            recorder: None,
+            remote_reader: None,
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
@@ -1896,6 +2845,5 @@ mod tests {
             })
             .await;
         assert_eq!(result, Err(AgentFailure::CapabilityUnavailable));
-        server.await.unwrap();
     }
 }

@@ -12,14 +12,19 @@ pub use agent::{
     AgentFixtureRunRequestDto, AgentMemoryOriginDto, AgentMemoryOverviewDto,
     AgentMemoryReviewDecisionDto, AgentMemoryReviewDecisionKindDto, AgentMemoryReviewOverviewDto,
     AgentMemorySummaryDto, AgentProposalActionDto, AgentProposalInspectionDto,
-    AgentProposalStatusDto, AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto, AgentSessionDto,
-    AgentVaultActionDto, AgentVaultFailureDto, AgentVaultOperationDto, AgentVaultRecoveryActionDto,
-    AgentVaultRequestDto, AgentVaultResultDto,
+    AgentProposalStatusDto, AgentRemoteCalendarConnectionDto, AgentRemotePairingDto,
+    AgentRemoteRouteDto, AgentSessionDto, AgentVaultActionDto, AgentVaultFailureDto,
+    AgentVaultOperationDto, AgentVaultRecoveryActionDto, AgentVaultRequestDto, AgentVaultResultDto,
     AgentVaultStateDto, CalendarAccessChangeDto, CalendarAccessConfigurationDto,
     CalendarActionDecisionDto, CalendarActionOperationDto, CalendarActionRequestDto,
-    CalendarExpertOverviewDto, CalendarExpertSetupDto, ConnectorSnapshotDto, EpistemicStatusDto,
-    KnowledgeCandidateDto, KnowledgeDecisionResultDto, PersonalMemoryKindDto,
-    RegistryConfigurationDto, RegistryConfigurationTargetDto, RegistryOverviewDto,
+    CalendarExpertOverviewDto, CalendarExpertSetupDto, CalendarSubjectPreviewDto,
+    CalendarSubjectPreviewRequestDto, ConnectorSnapshotDto, ContactsAccessChangeDto,
+    ContactsAccessConfigurationDto, EpistemicStatusDto, KnowledgeCandidateDto,
+    KnowledgeDecisionResultDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
+    PersonalAccessOverviewDto, PersonalMemoryKindDto, RegistryConfigurationDto,
+    RegistryConfigurationTargetDto, RegistryOverviewDto, RemoteAuthorityEnrollmentStatusDto,
+    RemoteCalendarGrantOverviewDto, RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto,
+    RemoteProducerIdentityDto, RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,
@@ -28,4 +33,11 @@ pub use day::{
     SourceRefDto, TaskDto, TimelineItemDto,
 };
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
-pub use local_context::{LocalContextOperationDto, LocalContextRequestDto, LocalContextResultDto};
+pub use local_context::{
+    LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
+    LocalContextAcquisitionResultDto, LocalContextAttentionAcquisitionModeDto,
+    LocalContextAttentionAcquisitionRequestDto, LocalContextAttentionAcquisitionResultDto,
+    LocalContextOperationDto, LocalContextPersonalAcquisitionRequestDto,
+    LocalContextPersonalAcquisitionResultDto, LocalContextPersonalDomainDto,
+    LocalContextRequestDto, LocalContextResultDto,
+};

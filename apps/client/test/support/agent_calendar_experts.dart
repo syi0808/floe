@@ -30,6 +30,7 @@ AgentCalendarSetup calendarSetupRequest({List<String>? calendarIds}) =>
       connectionScope: 'selected',
       connectionRevision: 1,
       sourceAuthority: calendarSourceAuthority,
+      reviewedNativeSubjectFingerprint: 'a' * 64,
     );
 
 Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
@@ -94,6 +95,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'connection_scope': 'selected',
         'connection_revision': 1,
         'source_authority': calendarSourceAuthority.toJson(),
+        'reviewed_native_subject_fingerprint': 'a' * 64,
         'enabled': false,
       },
   ],
@@ -106,6 +108,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'connection_scope': 'selected',
         'connection_revision': 1,
         'source_authority': calendarSourceAuthority.toJson(),
+        'reviewed_native_subject_fingerprint': 'a' * 64,
         'view_handle': calendarViewId,
         'tool_installation_id': calendarToolInstallation,
         'expert_installation_id': registryInstallation,
@@ -121,6 +124,7 @@ final class CalendarExpertTransport {
   Map<String, dynamic>? committedSetup;
   String? loss;
   String? failure;
+  String previewFingerprint = 'a' * 64;
   int installations = 0;
   int submissions = 0;
   final List<String> operations = [];
@@ -132,9 +136,29 @@ final class CalendarExpertTransport {
     if (kind == 'submit') {
       if (pending != null) throw const AgentVaultException('conflict');
       final action = operation['action'] as Map;
+      if (action['kind'] == 'calendar_subject_preview') {
+        final previewRequest = action['request'] as Map;
+        pending = {
+          'request_id': request['request_id'],
+          'events': <Object>[],
+          'next_sequence': 0,
+          'done': true,
+          'state': 'ready',
+          'calendar_subject_preview': {
+            ...previewRequest,
+            'connection_id': previewRequest['connection_id'],
+            'native_subject_fingerprint': previewFingerprint,
+          },
+        };
+        return pending!;
+      }
       final setup = action['setup'] as Map?;
       if (setup != null) {
         submissions++;
+        if (setup['reviewed_native_subject_fingerprint'] !=
+            previewFingerprint) {
+          throw const AgentVaultException('access_review_required');
+        }
         if (committedSetup != null &&
             jsonEncode(committedSetup) != jsonEncode(setup)) {
           throw const AgentVaultException('conflict');
@@ -155,6 +179,9 @@ final class CalendarExpertTransport {
               setup['connection_scope'];
           ((snapshot['setups'] as List).single as Map)['connection_revision'] =
               setup['connection_revision'];
+          ((snapshot['setups'] as List).single
+                  as Map)['reviewed_native_subject_fingerprint'] =
+              setup['reviewed_native_subject_fingerprint'];
         }
       }
       if (action['kind'] == 'registry') {
@@ -200,11 +227,17 @@ final class CalendarExpertTransport {
                 change['connection_scope'];
             ((snapshot['views'] as List).single as Map)['connection_revision'] =
                 change['connection_revision'];
+            ((snapshot['views'] as List).single
+                    as Map)['reviewed_native_subject_fingerprint'] =
+                change['reviewed_native_subject_fingerprint'];
             ((snapshot['setups'] as List).single as Map)['connection_scope'] =
                 change['connection_scope'];
             ((snapshot['setups'] as List).single
                     as Map)['connection_revision'] =
                 change['connection_revision'];
+            ((snapshot['setups'] as List).single
+                    as Map)['reviewed_native_subject_fingerprint'] =
+                change['reviewed_native_subject_fingerprint'];
           case 'remove':
             (snapshot['setups'] as List).clear();
             (snapshot['views'] as List).clear();
@@ -282,6 +315,13 @@ class TestCalendarExpertGateway extends TestVaultGateway
   Future<AgentCalendarExperts> readCalendarExperts(String personId) async {
     await _wait();
     return native.readCalendarExperts(personId);
+  }
+
+  @override
+  Future<CalendarSubjectPreview> previewCalendarSubject(
+    CalendarSubjectPreviewRequest request,
+  ) async {
+    return native.previewCalendarSubject(request);
   }
 
   @override

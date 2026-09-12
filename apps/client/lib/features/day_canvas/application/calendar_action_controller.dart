@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../app/floe_loading.dart';
+import '../../agent/agent_vault_gateway.dart';
 
 import '../domain/calendar_action.dart';
 import '../domain/day_models.dart';
@@ -26,6 +27,7 @@ final class CalendarActionController extends ChangeNotifier {
   bool busy = false;
   bool needsReload = true;
   bool failed = false;
+  String? authorityFailure;
   bool _disposed = false;
 
   CalendarAction? find(String id) {
@@ -53,7 +55,8 @@ final class CalendarActionController extends ChangeNotifier {
       connection.error == null &&
       connection.lastSuccessAt != null &&
       connection.provider == action.provider &&
-      connection.revision == action.connectionRevision &&
+      (action.agentOrigin != null ||
+          connection.revision == action.connectionRevision) &&
       connection.selectedCalendarIds.contains(action.calendarId) &&
       !connection.calendars.any(
         (calendar) =>
@@ -66,6 +69,7 @@ final class CalendarActionController extends ChangeNotifier {
     busy = true;
     final minimum = FloeLoading.minimumVisibility();
     failed = false;
+    authorityFailure = null;
     notifyListeners();
     try {
       final result = await gateway.loadCalendarActions(personId);
@@ -73,6 +77,8 @@ final class CalendarActionController extends ChangeNotifier {
           ? await (gateway as CalendarActionExecutionGateway)
                 .calendarWritesEnabled(personId)
           : false;
+      if (_disposed) return;
+      writesEnabled = enabled;
       final loadedAuthority = gateway is CalendarActionExecutionGateway
           ? await (gateway as CalendarActionExecutionGateway)
                 .loadActionAuthority(personId)
@@ -85,9 +91,13 @@ final class CalendarActionController extends ChangeNotifier {
       writesEnabled = enabled;
       authority = loadedAuthority;
       needsReload = false;
-    } on Object {
+    } on Object catch (error) {
       if (_disposed) return;
       failed = true;
+      if (error is AgentVaultException &&
+          error.failure == 'vault_unavailable') {
+        authorityFailure = 'Open and unlock the agent vault to review or change action permissions.';
+      }
       needsReload = true;
     } finally {
       await minimum;
@@ -327,12 +337,19 @@ final class CalendarActionController extends ChangeNotifier {
     busy = true;
     final minimum = FloeLoading.minimumVisibility();
     failed = false;
+    authorityFailure = null;
     notifyListeners();
     try {
       authority = await (gateway as CalendarActionExecutionGateway)
           .setCalendarCreateAuthority(personId, mode);
-    } on Object {
-      if (!_disposed) failed = true;
+    } on Object catch (error) {
+      if (!_disposed) {
+        failed = true;
+        if (error is AgentVaultException &&
+            error.failure == 'vault_unavailable') {
+          authorityFailure = 'Open and unlock the agent vault to review or change action permissions.';
+        }
+      }
     } finally {
       await minimum;
       if (!_disposed) {

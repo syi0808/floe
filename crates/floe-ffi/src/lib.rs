@@ -349,21 +349,8 @@ pub fn calendar_actions(
                 authority: Some(authority),
             });
         }
-        CalendarActionOperationDto::SetAuthority { calendar_create } => {
-            let mode = match calendar_create {
-                ActionAuthorityModeDto::Allow => floe_core::ActionAuthorityMode::Allow,
-                ActionAuthorityModeDto::Ask => floe_core::ActionAuthorityMode::Ask,
-                ActionAuthorityModeDto::Deny => floe_core::ActionAuthorityMode::Deny,
-            };
-            let authority = handle
-                .runtime
-                .block_on(handle.core.set_action_authority(person_id, mode))
-                .map_err(core_error)?;
-            return Ok(CalendarActionsResult {
-                actions: vec![],
-                writes_enabled: None,
-                authority: Some(authority),
-            });
+        CalendarActionOperationDto::SetAuthority { .. } => {
+            return Err(agent_failure(floe_agent::AgentFailure::PolicyDenied));
         }
         CalendarActionOperationDto::Execute { action_id }
         | CalendarActionOperationDto::Recover { action_id } => {

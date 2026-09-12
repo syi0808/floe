@@ -1,0 +1,1291 @@
+use std::time::Duration;
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use floe_agent::AgentFailure;
+use floe_core::{
+    EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
+    RemoteOwnerPublicKey, RemoteProducerIdentity, VaultKeyProvider,
+};
+use floe_protocol::AgentRemoteRouteDto;
+use reqwest::{Client, StatusCode, Url};
+use serde::{Deserialize, Serialize};
+
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+
+fn valid_connection_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|identifier| {
+        identifier.get_version_num() == 4
+            && identifier
+                .hyphenated()
+                .to_string()
+                .eq_ignore_ascii_case(value)
+    })
+}
+
+#[derive(Clone)]
+pub struct RemoteAuthorizationClient {
+    base_url: String,
+    bearer_token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProducerIdentityResponse {
+    pub schema_version: u32,
+    pub instance_id: String,
+    pub execution_owner: String,
+    pub audience: String,
+    pub key_id: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarSourcePreviewResponse {
+    pub descriptor_b64url: String,
+    pub producer_signature: String,
+    #[serde(flatten)]
+    pub producer: ProducerIdentityResponse,
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteViewSourcePreviewResponse {
+    pub descriptor_b64url: String,
+    pub producer_signature: String,
+    #[serde(flatten)]
+    pub producer: ProducerIdentityResponse,
+    pub connection_revision: u64,
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentResponse {
+    pub schema_version: u32,
+    pub instance_id: String,
+    pub execution_owner: String,
+    pub audience: String,
+    pub producer_key_id: String,
+    pub producer_public_key: String,
+    pub producer_fingerprint: String,
+    pub enrollment_id: String,
+    pub challenge_id: String,
+    pub key_id: String,
+    pub fingerprint: String,
+    pub challenge_b64url: String,
+    pub producer_signature: String,
+    pub expires: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentStatusResponse {
+    pub enrollment_id: String,
+    pub key_id: String,
+    pub fingerprint: String,
+    pub local_confirmed: bool,
+    pub admin_approved: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarChallengeResponse {
+    pub schema_version: u32,
+    pub operation: String,
+    pub challenge_id: String,
+    pub challenge_b64url: String,
+    pub producer_signature: String,
+    pub producer: ProducerIdentityResponse,
+    pub expires: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarChallengeParts {
+    pub v: u32,
+    pub operation: String,
+    pub challenge_id: String,
+    pub nonce: String,
+    pub key_id: String,
+    pub person_id: String,
+    pub client_id: String,
+    pub device_id: String,
+    pub audience: String,
+    pub purpose: String,
+    pub consumer: String,
+    pub policy: CalendarPolicyParts,
+    pub source: CalendarSourceParts,
+    pub grant: CalendarGrantParts,
+    pub resources: Vec<String>,
+    pub query_sha256: String,
+    pub max_items: u32,
+    pub max_bytes: u32,
+    pub result_sha256: String,
+    pub admission_id: String,
+    pub issued_at_unix_ms: i64,
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarPolicyParts {
+    pub incarnation: String,
+    pub epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarSourceParts {
+    pub connector_id: String,
+    pub connection_id: String,
+    pub execution_owner: String,
+    pub incarnation: String,
+    pub epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarGrantParts {
+    pub id: String,
+    pub incarnation: String,
+    pub epoch: u64,
+}
+
+pub fn parse_calendar_challenge(
+    challenge_b64url: &str,
+) -> Result<CalendarChallengeParts, AgentFailure> {
+    if challenge_b64url.is_empty() || challenge_b64url.len() > 96 * 1024 {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let bytes = URL_SAFE_NO_PAD
+        .decode(challenge_b64url)
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    if bytes.is_empty()
+        || bytes.len() > 64 * 1024
+        || URL_SAFE_NO_PAD.encode(&bytes) != challenge_b64url
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| AgentFailure::InvalidInput)
+}
+
+pub fn calendar_query_sha256(
+    range_start_unix_ms: i64,
+    range_end_unix_ms: i64,
+    cursor: &str,
+    limit: usize,
+) -> Result<String, AgentFailure> {
+    let query = CalendarQueryRequest {
+        range_start_unix_ms,
+        range_end_unix_ms,
+        cursor,
+        limit,
+    };
+    let query = serde_json::to_value(query).map_err(|_| AgentFailure::InvalidInput)?;
+    let bytes = serde_json::to_vec(&query).map_err(|_| AgentFailure::InvalidInput)?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[derive(Serialize)]
+struct CalendarAdmissionRequest<'value> {
+    schema_version: u32,
+    connector_id: &'value str,
+    connection_id: &'value str,
+    connection_revision: u64,
+    resources: Vec<&'value str>,
+    policy: CalendarPolicyRequest<'value>,
+    grant: CalendarGrantRequest<'value>,
+    purpose: &'value str,
+    consumer: &'value str,
+    max_items: u32,
+    max_bytes: u32,
+    query: CalendarQueryRequest<'value>,
+}
+
+#[derive(Serialize)]
+struct CalendarPolicyRequest<'value> {
+    incarnation: &'value str,
+    epoch: u64,
+}
+
+#[derive(Serialize)]
+struct CalendarGrantRequest<'value> {
+    id: &'value str,
+    incarnation: &'value str,
+    epoch: u64,
+}
+
+#[derive(Serialize)]
+struct CalendarQueryRequest<'value> {
+    range_start_unix_ms: i64,
+    range_end_unix_ms: i64,
+    cursor: &'value str,
+    limit: usize,
+}
+
+#[derive(Serialize)]
+struct CalendarProofRequest<'value> {
+    schema_version: u32,
+    proof: CalendarProof<'value>,
+}
+
+#[derive(Serialize)]
+struct CalendarProof<'value> {
+    challenge_id: &'value str,
+    key_id: &'value str,
+    signature: &'value str,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct BeginRequest<'value> {
+    key_id: &'value str,
+    public_key: &'value str,
+    audience: &'value str,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompleteRequest<'value> {
+    enrollment_id: &'value str,
+    challenge_id: &'value str,
+    key_id: &'value str,
+    signature: &'value str,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoteViewAuthorizationRequest<'value> {
+    pub path: &'value str,
+    pub connector_id: &'value str,
+    pub connection_id: &'value str,
+    pub connection_revision: u64,
+    pub resource: &'value str,
+    pub policy_incarnation: &'value str,
+    pub policy_epoch: u64,
+    pub grant_id: &'value str,
+    pub grant_incarnation: &'value str,
+    pub grant_epoch: u64,
+    pub purpose: &'value str,
+    pub consumer: &'value str,
+    pub max_items: u32,
+    pub max_bytes: u32,
+    pub query: serde_json::Value,
+}
+
+impl RemoteAuthorizationClient {
+    pub fn new(route: &AgentRemoteRouteDto) -> Result<Self, AgentFailure> {
+        let address = Url::parse(&route.base_url).map_err(|_| AgentFailure::InvalidInput)?;
+        if address.scheme() != "http"
+            || address.host_str() != Some("127.0.0.1")
+            || address.path() != "/"
+            || address.query().is_some()
+            || address.fragment().is_some()
+            || address.port().is_none()
+            || route.bearer_token.len() < 32
+            || route.bearer_token.len() > 256
+            || !route
+                .bearer_token
+                .bytes()
+                .all(|value| value.is_ascii_alphanumeric() || value == b'_' || value == b'-')
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(Self {
+            base_url: route.base_url.trim_end_matches('/').to_owned(),
+            bearer_token: route.bearer_token.clone(),
+        })
+    }
+
+    pub async fn producer_identity(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<ProducerIdentityResponse, AgentFailure> {
+        self.request(
+            "GET",
+            "/v1/authority/producer",
+            None,
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn calendar_source_preview(
+        &self,
+        connector_id: &str,
+        connection_id: &str,
+        resource: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarSourcePreviewResponse, AgentFailure> {
+        if !matches!(connector_id, "calendar.google" | "calendar.microsoft")
+            || !valid_connection_id(connection_id)
+            || resource.is_empty()
+            || resource.len() > 256
+            || resource.chars().any(char::is_control)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = serde_json::json!({
+            "connector_id": connector_id,
+            "connection_id": connection_id,
+            "resource": resource,
+        });
+        let response: CalendarSourcePreviewResponse = self
+            .request(
+                "POST",
+                "/v1/authority/calendar/source",
+                Some(body),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if response.producer.schema_version != 1
+            || response.descriptor_b64url.is_empty()
+            || response.producer_signature.is_empty()
+            || response.expires_at_unix_ms <= 0
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        Ok(response)
+    }
+
+    pub async fn view_source_preview(
+        &self,
+        view_id: &str,
+        connector_id: &str,
+        connection_id: &str,
+        resource: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<RemoteViewSourcePreviewResponse, AgentFailure> {
+        if !matches!(
+            view_id,
+            "mail.communication" | "work.context" | "life.logistics" | "calendar.timeline"
+        ) || connector_id.is_empty()
+            || !valid_connection_id(connection_id)
+            || resource.is_empty()
+            || resource.len() > 256
+            || resource.chars().any(char::is_control)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = serde_json::json!({
+            "connector_id": connector_id,
+            "connection_id": connection_id,
+            "resource": resource,
+        });
+        let response: RemoteViewSourcePreviewResponse = self
+            .request(
+                "POST",
+                &format!("/v1/views/{view_id}/source-preview"),
+                Some(body),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if response.producer.schema_version != 1
+            || response.descriptor_b64url.is_empty()
+            || response.producer_signature.is_empty()
+            || response.connection_revision == 0
+            || response.expires_at_unix_ms <= 0
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        Ok(response)
+    }
+
+    pub async fn begin_enrollment(
+        &self,
+        owner_key: &RemoteOwnerPublicKey,
+        audience: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<EnrollmentResponse, AgentFailure> {
+        let request = BeginRequest {
+            key_id: &owner_key.key_id,
+            public_key: &owner_key.public_key,
+            audience,
+        };
+        self.request(
+            "POST",
+            "/v1/authority/enrollment/begin",
+            Some(serde_json::to_value(request).map_err(|_| AgentFailure::InvalidInput)?),
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn complete_enrollment(
+        &self,
+        enrollment: &EnrollmentResponse,
+        signature: &RemoteEnrollmentSignature,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<(), AgentFailure> {
+        if signature.key_id != enrollment.key_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let request = CompleteRequest {
+            enrollment_id: &enrollment.enrollment_id,
+            challenge_id: &enrollment.challenge_id,
+            key_id: &signature.key_id,
+            signature: &signature.signature,
+        };
+        let _: serde_json::Value = self
+            .request(
+                "POST",
+                "/v1/authority/enrollment/complete",
+                Some(serde_json::to_value(request).map_err(|_| AgentFailure::InvalidInput)?),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn enrollment_status(
+        &self,
+        enrollment_id: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<EnrollmentStatusResponse, AgentFailure> {
+        if enrollment_id.is_empty()
+            || enrollment_id.len() > 128
+            || enrollment_id
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'-')
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.request(
+            "GET",
+            &format!("/v1/authority/enrollment/{enrollment_id}"),
+            None,
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn enroll<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        client_id: &str,
+        device_id: &str,
+        pinned_producer: &RemoteProducerIdentity,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<EnrollmentStatusResponse, AgentFailure> {
+        let producer = self.producer_identity(deadline, cancellation).await?;
+        let observed = RemoteProducerIdentity {
+            schema_version: producer.schema_version,
+            instance_id: producer.instance_id,
+            execution_owner: producer.execution_owner,
+            audience: producer.audience,
+            key_id: producer.key_id,
+            public_key: producer.public_key,
+            fingerprint: producer.fingerprint,
+        };
+        if &observed != pinned_producer || vault.remote_pinned_producer().await? != *pinned_producer
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let owner_key = vault.remote_owner_public_key().await?;
+        let enrollment = self
+            .begin_enrollment(
+                &owner_key,
+                &pinned_producer.audience,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        let signature = vault
+            .remote_sign_enrollment(
+                client_id,
+                device_id,
+                &enrollment.challenge_b64url,
+                &enrollment.producer_signature,
+            )
+            .await?;
+        self.complete_enrollment(&enrollment, &signature, deadline, cancellation)
+            .await?;
+        self.enrollment_status(&enrollment.enrollment_id, deadline, cancellation)
+            .await
+    }
+
+    pub async fn begin_calendar_admission(
+        &self,
+        connector_id: &str,
+        connection_id: &str,
+        connection_revision: u64,
+        resource: &str,
+        policy_incarnation: &str,
+        policy_epoch: u64,
+        grant_id: &str,
+        grant_incarnation: &str,
+        grant_epoch: u64,
+        purpose: &str,
+        consumer: &str,
+        max_items: u32,
+        max_bytes: u32,
+        range_start_unix_ms: i64,
+        range_end_unix_ms: i64,
+        cursor: &str,
+        limit: usize,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+        if !matches!(connector_id, "calendar.google" | "calendar.microsoft")
+            || !valid_connection_id(connection_id)
+            || connection_revision == 0
+            || resource.is_empty()
+            || resource.len() > 256
+            || policy_incarnation.is_empty()
+            || grant_id.is_empty()
+            || grant_incarnation.is_empty()
+            || purpose.is_empty()
+            || consumer.is_empty()
+            || max_items == 0
+            || max_items > 128
+            || max_bytes == 0
+            || max_bytes > 1 << 20
+            || range_start_unix_ms < 0
+            || range_end_unix_ms <= range_start_unix_ms
+            || range_end_unix_ms - range_start_unix_ms > 32 * 86_400_000
+            || cursor.len() > 2048
+            || cursor.chars().any(char::is_control)
+            || !(1..=128).contains(&limit)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = CalendarAdmissionRequest {
+            schema_version: 1,
+            connector_id,
+            connection_id,
+            connection_revision,
+            resources: vec![resource],
+            policy: CalendarPolicyRequest {
+                incarnation: policy_incarnation,
+                epoch: policy_epoch,
+            },
+            grant: CalendarGrantRequest {
+                id: grant_id,
+                incarnation: grant_incarnation,
+                epoch: grant_epoch,
+            },
+            purpose,
+            consumer,
+            max_items,
+            max_bytes,
+            query: CalendarQueryRequest {
+                range_start_unix_ms,
+                range_end_unix_ms,
+                cursor,
+                limit,
+            },
+        };
+        self.request(
+            "POST",
+            "/v1/views/calendar.timeline/admit",
+            Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn begin_view_admission(
+        &self,
+        request: RemoteViewAuthorizationRequest<'_>,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+        if !matches!(
+            request.path,
+            "/v1/views/mail.communication/admit"
+                | "/v1/views/work.context/admit"
+                | "/v1/views/life.logistics/admit"
+        ) || request.connector_id.is_empty()
+            || !valid_connection_id(request.connection_id)
+            || request.connection_revision == 0
+            || request.resource.is_empty()
+            || request.resource.len() > 256
+            || request.policy_incarnation.is_empty()
+            || request.policy_epoch == 0
+            || request.grant_id.is_empty()
+            || request.grant_incarnation.is_empty()
+            || request.grant_epoch == 0
+            || request.purpose.is_empty()
+            || request.consumer.is_empty()
+            || request.max_items == 0
+            || request.max_items > 128
+            || request.max_bytes == 0
+            || request.max_bytes > 1 << 20
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = CalendarAdmissionRequest {
+            schema_version: 1,
+            connector_id: request.connector_id,
+            connection_id: request.connection_id,
+            connection_revision: request.connection_revision,
+            resources: vec![request.resource],
+            policy: CalendarPolicyRequest {
+                incarnation: request.policy_incarnation,
+                epoch: request.policy_epoch,
+            },
+            grant: CalendarGrantRequest {
+                id: request.grant_id,
+                incarnation: request.grant_incarnation,
+                epoch: request.grant_epoch,
+            },
+            purpose: request.purpose,
+            consumer: request.consumer,
+            max_items: request.max_items,
+            max_bytes: request.max_bytes,
+            query: CalendarQueryRequest {
+                range_start_unix_ms: 0,
+                range_end_unix_ms: 1,
+                cursor: "",
+                limit: 1,
+            },
+        };
+        let mut encoded = serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?;
+        encoded["query"] = request.query;
+        self.request("POST", request.path, Some(encoded), deadline, cancellation)
+            .await
+    }
+
+    pub async fn read_view_admission<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge: &CalendarChallengeResponse,
+        path: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+        if !path.ends_with("/read") || challenge.operation != "admission" {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let signature = vault
+            .remote_sign_calendar_authorization(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+            )
+            .await?;
+        let body = CalendarProofRequest {
+            schema_version: 1,
+            proof: CalendarProof {
+                challenge_id: &challenge.challenge_id,
+                key_id: &signature.key_id,
+                signature: &signature.signature,
+            },
+        };
+        self.request(
+            "POST",
+            path,
+            Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn release_view<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge: &CalendarChallengeResponse,
+        path: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<serde_json::Value, AgentFailure> {
+        if !path.ends_with("/release") || challenge.operation != "release" {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let signature = vault
+            .remote_sign_calendar_authorization(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+            )
+            .await?;
+        let body = CalendarProofRequest {
+            schema_version: 1,
+            proof: CalendarProof {
+                challenge_id: &challenge.challenge_id,
+                key_id: &signature.key_id,
+                signature: &signature.signature,
+            },
+        };
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ViewResponse {
+            schema_version: u32,
+            view: Box<serde_json::value::RawValue>,
+        }
+        let response: ViewResponse = self
+            .request(
+                "POST",
+                path,
+                Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if response.schema_version != 1 {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        if sha256_hex(response.view.get().as_bytes()) != expected.result_sha256 {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        serde_json::from_str(response.view.get()).map_err(|_| AgentFailure::CapabilityUnavailable)
+    }
+
+    pub async fn read_calendar_admission<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge: &CalendarChallengeResponse,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<CalendarChallengeResponse, AgentFailure> {
+        if challenge.operation != "admission" {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let signature = vault
+            .remote_sign_calendar_authorization(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+            )
+            .await?;
+        let body = CalendarProofRequest {
+            schema_version: 1,
+            proof: CalendarProof {
+                challenge_id: &challenge.challenge_id,
+                key_id: &signature.key_id,
+                signature: &signature.signature,
+            },
+        };
+        self.request(
+            "POST",
+            "/v1/views/calendar.timeline/read",
+            Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
+            deadline,
+            cancellation,
+        )
+        .await
+    }
+
+    pub async fn release_calendar<Keys: VaultKeyProvider>(
+        &self,
+        vault: &EncryptedAgentVault<Keys>,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge: &CalendarChallengeResponse,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<serde_json::Value, AgentFailure> {
+        if challenge.operation != "release" {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let signature = vault
+            .remote_sign_calendar_authorization(
+                expected,
+                &challenge.challenge_b64url,
+                &challenge.producer_signature,
+            )
+            .await?;
+        let body = CalendarProofRequest {
+            schema_version: 1,
+            proof: CalendarProof {
+                challenge_id: &challenge.challenge_id,
+                key_id: &signature.key_id,
+                signature: &signature.signature,
+            },
+        };
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct CalendarViewResponse {
+            schema_version: u32,
+            view: Box<serde_json::value::RawValue>,
+        }
+        let response: CalendarViewResponse = self
+            .request(
+                "POST",
+                "/v1/views/calendar.timeline/release",
+                Some(serde_json::to_value(body).map_err(|_| AgentFailure::InvalidInput)?),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if response.schema_version != 1 {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        if sha256_hex(response.view.get().as_bytes()) != expected.result_sha256 {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        serde_json::from_str(response.view.get()).map_err(|_| AgentFailure::CapabilityUnavailable)
+    }
+
+    async fn request<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<T, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if timeout.is_zero() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        let client = Client::builder()
+            .timeout(timeout.min(Duration::from_secs(10)))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        let mut request = match method {
+            "GET" => client.get(format!("{}{path}", self.base_url)),
+            "POST" => client.post(format!("{}{path}", self.base_url)),
+            _ => return Err(AgentFailure::InvalidInput),
+        }
+        .bearer_auth(&self.bearer_token);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let mut response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            response = request.send() => response.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+        };
+        match response.status() {
+            StatusCode::BAD_REQUEST => return Err(AgentFailure::InvalidInput),
+            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
+            StatusCode::CONFLICT => return Err(AgentFailure::Conflict),
+            status if !status.is_success() => return Err(AgentFailure::CapabilityUnavailable),
+            _ => {}
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            chunk = response.chunk() => chunk.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+        } {
+            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::{Arc, Mutex},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use floe_core::{VaultKey, VaultKeyProvider};
+    use floe_domain::PersonId;
+    use tokio::io::AsyncWriteExt;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn route(address: std::net::SocketAddr) -> AgentRemoteRouteDto {
+        AgentRemoteRouteDto {
+            base_url: format!("http://127.0.0.1:{}", address.port()),
+            bearer_token: "secret_token_value_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: true,
+            allow_external: false,
+            calendar_connections: vec![],
+            pairing: None,
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for TestKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<VaultKey, AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(VaultKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &VaultKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn producer_identity_uses_authenticated_loopback_http() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 2048];
+            let read = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                .await
+                .unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /v1/authority/producer HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret_token_value_that_is_long_enough")
+            );
+            let body = r#"{"schema_version":1,"instance_id":"00000000-0000-4000-8000-000000000001","execution_owner":"00000000-0000-4000-8000-000000000002","audience":"floe.server:00000000-0000-4000-8000-000000000001","key_id":"00000000-0000-4000-8000-000000000003","public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","fingerprint":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let identity = client
+            .producer_identity(
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            identity.audience,
+            "floe.server:00000000-0000-4000-8000-000000000001"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_response_is_rejected_before_body_allocation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 512];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                .await
+                .unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 65537\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        assert_eq!(
+            client
+                .producer_identity(
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                    &floe_agent::Cancellation::default()
+                )
+                .await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chunked_response_is_bounded_without_content_length() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 512];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                .await
+                .unwrap();
+            let first = "a".repeat(40_000);
+            let second = "b".repeat(40_000);
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+                        first.len(),
+                        first,
+                        second.len(),
+                        second
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        assert_eq!(
+            client
+                .producer_identity(
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                    &floe_agent::Cancellation::default()
+                )
+                .await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_response_honors_cancellation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 512];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let cancellation = floe_agent::Cancellation::default();
+        let request_client = client.clone();
+        let request_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            request_client
+                .producer_identity(
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                    &request_cancellation,
+                )
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancellation.cancel();
+        assert_eq!(task.await.unwrap(), Err(AgentFailure::Cancelled));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn forged_producer_signature_is_rejected_before_complete_request() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys)
+            .await
+            .unwrap_or_else(|failure| panic!("vault setup failed: {failure:?}"));
+        let owner = vault.remote_owner_public_key().await.unwrap();
+        let public_key = [9u8; 32];
+        let instance_id = "00000000-0000-4000-8000-000000000001";
+        let producer = RemoteProducerIdentity {
+            schema_version: 1,
+            instance_id: instance_id.into(),
+            execution_owner: "00000000-0000-4000-8000-000000000002".into(),
+            audience: format!("floe.server:{instance_id}"),
+            key_id: "00000000-0000-4000-8000-000000000003".into(),
+            public_key: URL_SAFE_NO_PAD.encode(public_key),
+            fingerprint: "8c0cc17a04942cc4f8e0fe0b302606d3108860c126428ba2ceeb5f9ed41c2b05".into(),
+        };
+        vault.remote_pin_producer(producer.clone()).await.unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let challenge = serde_json::json!({
+            "v": 1,
+            "operation": "enrollment",
+            "challenge_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "nonce": URL_SAFE_NO_PAD.encode([0u8; 32]),
+            "key_id": owner.key_id.clone(),
+            "person_id": person_id.to_string(),
+            "client_id": "client-1",
+            "device_id": "device-1",
+            "audience": producer.audience.clone(),
+            "purpose": "owner_enrollment",
+            "consumer": "owner",
+            "issued_at_unix_ms": now,
+            "expires_at_unix_ms": now + 30_000,
+        });
+        let challenge_bytes = serde_json::to_vec(&challenge).unwrap();
+        let challenge_b64url = URL_SAFE_NO_PAD.encode(challenge_bytes);
+        let forged_signature = URL_SAFE_NO_PAD.encode([1u8; 64]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for body in [
+                format!(
+                    "{{\"schema_version\":1,\"instance_id\":\"{instance_id}\",\"execution_owner\":\"00000000-0000-4000-8000-000000000002\",\"audience\":\"floe.server:{instance_id}\",\"key_id\":\"00000000-0000-4000-8000-000000000003\",\"public_key\":\"{}\",\"fingerprint\":\"{}\"}}",
+                    URL_SAFE_NO_PAD.encode(public_key),
+                    "8c0cc17a04942cc4f8e0fe0b302606d3108860c126428ba2ceeb5f9ed41c2b05",
+                ),
+                format!(
+                    "{{\"schema_version\":1,\"instance_id\":\"{instance_id}\",\"execution_owner\":\"00000000-0000-4000-8000-000000000002\",\"audience\":\"floe.server:{instance_id}\",\"producer_key_id\":\"00000000-0000-4000-8000-000000000003\",\"producer_public_key\":\"{}\",\"producer_fingerprint\":\"{}\",\"enrollment_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"challenge_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"key_id\":\"{}\",\"fingerprint\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"challenge_b64url\":\"{}\",\"producer_signature\":\"{}\",\"expires\":0}}",
+                    URL_SAFE_NO_PAD.encode(public_key),
+                    "8c0cc17a04942cc4f8e0fe0b302606d3108860c126428ba2ceeb5f9ed41c2b05",
+                    owner.key_id,
+                    challenge_b64url,
+                    forged_signature,
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 8192];
+                let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                    .await
+                    .unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        assert_eq!(
+            client
+                .enroll(
+                    &vault,
+                    "client-1",
+                    "device-1",
+                    &producer,
+                    tokio::time::Instant::now() + Duration::from_secs(5),
+                    &floe_agent::Cancellation::default(),
+                )
+                .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enrollment_begin_complete_status_flow_uses_fixed_routes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (path, body) in [
+                (
+                    "/v1/authority/enrollment/begin",
+                    r#"{"schema_version":1,"instance_id":"00000000-0000-4000-8000-000000000001","execution_owner":"00000000-0000-4000-8000-000000000002","audience":"floe.server:00000000-0000-4000-8000-000000000001","producer_key_id":"00000000-0000-4000-8000-000000000003","producer_public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","producer_fingerprint":"0000000000000000000000000000000000000000000000000000000000000000","enrollment_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","challenge_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","key_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","fingerprint":"1111111111111111111111111111111111111111111111111111111111111111","challenge_b64url":"AQ","producer_signature":"AQ","expires":0}"#,
+                ),
+                (
+                    "/v1/authority/enrollment/complete",
+                    r#"{"status":"pending_admin"}"#,
+                ),
+                (
+                    "/v1/authority/enrollment/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    r#"{"enrollment_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","key_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","fingerprint":"1111111111111111111111111111111111111111111111111111111111111111","local_confirmed":true,"admin_approved":false,"active":false}"#,
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 8192];
+                let read = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                    .await
+                    .unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with(&format!(
+                    "{} ",
+                    if path.ends_with("begin") {
+                        "POST"
+                    } else if path.ends_with("complete") {
+                        "POST"
+                    } else {
+                        "GET"
+                    }
+                )));
+                assert!(request.contains(path));
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = RemoteAuthorizationClient::new(&route(address)).unwrap();
+        let owner = RemoteOwnerPublicKey {
+            key_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
+            public_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        };
+        let enrollment = client
+            .begin_enrollment(
+                &owner,
+                "floe.server:00000000-0000-4000-8000-000000000001",
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        client
+            .complete_enrollment(
+                &enrollment,
+                &RemoteEnrollmentSignature {
+                    key_id: owner.key_id.clone(),
+                    signature: "AQ".into(),
+                },
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let status = client
+            .enrollment_status(
+                &enrollment.enrollment_id,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!status.active);
+        server.await.unwrap();
+    }
+}

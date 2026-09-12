@@ -5,12 +5,107 @@ import '../day_canvas/domain/day_models.dart';
 
 abstract interface class AgentCalendarExpertGateway {
   Future<AgentCalendarExperts> readCalendarExperts(String personId);
+  Future<CalendarSubjectPreview> previewCalendarSubject(
+    CalendarSubjectPreviewRequest request,
+  );
   Future<AgentCalendarExperts> installCalendarExpert(
     AgentCalendarSetup request,
   );
   Future<AgentCalendarExperts> configureCalendarAccess(
     AgentCalendarAccessRequest request,
   );
+}
+
+final class CalendarSubjectPreviewRequest {
+  CalendarSubjectPreviewRequest({
+    required this.personId,
+    required this.provider,
+    required this.deviceId,
+    required this.connectionId,
+    required List<String> calendarIds,
+    required this.connectionScope,
+    required this.connectionRevision,
+    required this.sourceAuthority,
+  }) : calendarIds = List.unmodifiable([...calendarIds]..sort());
+
+  final String personId;
+  final String provider;
+  final String deviceId;
+  final String connectionId;
+  final List<String> calendarIds;
+  final String connectionScope;
+  final int connectionRevision;
+  final CalendarSourceAuthority sourceAuthority;
+
+  Map<String, Object?> toJson() => {
+    'provider': provider,
+    'device_id': deviceId,
+    'connection_id': connectionId,
+    'calendar_ids': calendarIds,
+    'connection_scope': connectionScope,
+    'connection_revision': connectionRevision,
+    'source_authority': sourceAuthority.toJson(),
+  };
+}
+
+final class CalendarSubjectPreview {
+  CalendarSubjectPreview({
+    required this.provider,
+    required this.deviceId,
+    required List<String> calendarIds,
+    required this.connectionScope,
+    required this.connectionId,
+    required this.connectionRevision,
+    required this.sourceAuthority,
+    required this.nativeSubjectFingerprint,
+  }) : calendarIds = List.unmodifiable(calendarIds);
+
+  final String provider;
+  final String deviceId;
+  final List<String> calendarIds;
+  final String connectionScope;
+  final String connectionId;
+  final int connectionRevision;
+  final CalendarSourceAuthority sourceAuthority;
+  final String nativeSubjectFingerprint;
+
+  factory CalendarSubjectPreview.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid Calendar preview');
+    final value = Map<String, Object?>.from(raw);
+    final ids = value['calendar_ids'];
+    if (value['provider'] is! String ||
+        value['device_id'] is! String ||
+        ids is! List ||
+        ids.any((id) => id is! String) ||
+        value['connection_id'] is! String ||
+        value['connection_scope'] is! String ||
+        value['connection_revision'] is! int ||
+        value['source_authority'] is! Map ||
+        value['native_subject_fingerprint'] is! String) {
+      throw const FormatException('Invalid Calendar preview');
+    }
+    final calendarIds = ids.cast<String>();
+    final fingerprint = value['native_subject_fingerprint']! as String;
+    final provider = _provider(value['provider']);
+    final deviceId = _deviceIdentifier(value['device_id']);
+    final connectionRevision = _positiveCounter(value['connection_revision']);
+    final canonicalIds = _scope(calendarIds, canonical: true);
+    if (!_isNativeSubjectFingerprint(fingerprint)) {
+      throw const FormatException('Invalid Calendar preview');
+    }
+    return CalendarSubjectPreview(
+      provider: provider,
+      deviceId: deviceId,
+      calendarIds: canonicalIds,
+      connectionScope: _connectionScope(value['connection_scope']),
+      connectionId: value['connection_id']! as String,
+      connectionRevision: connectionRevision,
+      sourceAuthority: CalendarSourceAuthority.fromJson(
+        value['source_authority'],
+      ),
+      nativeSubjectFingerprint: fingerprint,
+    );
+  }
 }
 
 enum AgentCalendarAccessOperation { setEnabled, setScope, remove }
@@ -26,6 +121,7 @@ final class AgentCalendarAccessRequest {
     this.provider,
     this.deviceId,
     this.sourceAuthority,
+    this.reviewedNativeSubjectFingerprint,
     List<String>? calendarIds,
     this.connectionScope,
     this.connectionRevision,
@@ -53,13 +149,18 @@ final class AgentCalendarAccessRequest {
                 sourceAuthority != null ||
                 calendarIds != null ||
                 connectionScope != null ||
-                connectionRevision != null))) {
+                connectionRevision != null ||
+                reviewedNativeSubjectFingerprint != null))) {
       throw const FormatException('Invalid Calendar access change');
     }
     if (provider != null) _provider(provider);
     if (deviceId != null) _deviceIdentifier(deviceId);
     if (sourceAuthority != null && !sourceAuthority!.isValid) {
       throw const FormatException('Invalid Calendar source authority');
+    }
+    if (reviewedNativeSubjectFingerprint != null &&
+        !_isNativeSubjectFingerprint(reviewedNativeSubjectFingerprint!)) {
+      throw const FormatException('Invalid native subject fingerprint');
     }
   }
 
@@ -72,6 +173,7 @@ final class AgentCalendarAccessRequest {
   final String? provider;
   final String? deviceId;
   final CalendarSourceAuthority? sourceAuthority;
+  final String? reviewedNativeSubjectFingerprint;
   final List<String>? calendarIds;
   final String? connectionScope;
   final int? connectionRevision;
@@ -93,6 +195,9 @@ final class AgentCalendarAccessRequest {
         'connection_scope': connectionScope!,
         'connection_revision': connectionRevision!,
         'source_authority': sourceAuthority!.toJson(),
+        if (reviewedNativeSubjectFingerprint != null)
+          'reviewed_native_subject_fingerprint':
+              reviewedNativeSubjectFingerprint!,
       },
       AgentCalendarAccessOperation.remove => {'kind': 'remove'},
     },
@@ -111,6 +216,7 @@ final class AgentCalendarSetup {
     required String connectionScope,
     required int connectionRevision,
     required this.sourceAuthority,
+    this.reviewedNativeSubjectFingerprint,
   }) : personId = _identifier(personId),
        instanceId = _identifier(instanceId),
        expectedRevision = _counter(expectedRevision),
@@ -122,6 +228,10 @@ final class AgentCalendarSetup {
        connectionRevision = _positiveCounter(connectionRevision) {
     if (!sourceAuthority.isValid) {
       throw const FormatException('Invalid Calendar source authority');
+    }
+    if (reviewedNativeSubjectFingerprint != null &&
+        !_isNativeSubjectFingerprint(reviewedNativeSubjectFingerprint!)) {
+      throw const FormatException('Invalid native subject fingerprint');
     }
   }
 
@@ -135,6 +245,7 @@ final class AgentCalendarSetup {
   final String connectionScope;
   final int connectionRevision;
   final CalendarSourceAuthority sourceAuthority;
+  final String? reviewedNativeSubjectFingerprint;
 
   Map<String, Object> toJson() => {
     'instance_id': instanceId,
@@ -146,6 +257,8 @@ final class AgentCalendarSetup {
     'connection_scope': connectionScope,
     'connection_revision': connectionRevision,
     'source_authority': sourceAuthority.toJson(),
+    if (reviewedNativeSubjectFingerprint != null)
+      'reviewed_native_subject_fingerprint': reviewedNativeSubjectFingerprint!,
   };
 }
 
@@ -301,6 +414,9 @@ final class AgentCalendarView {
       connectionScope = _connectionScope(json['connection_scope']),
       connectionRevision = _positiveCounter(json['connection_revision']),
       sourceAuthority = _optionalSourceAuthority(json['source_authority']),
+      reviewedNativeSubjectFingerprint = _optionalNativeSubjectFingerprint(
+        json['reviewed_native_subject_fingerprint'],
+      ),
       enabled = _flag(json['enabled']);
 
   final String handle;
@@ -311,6 +427,7 @@ final class AgentCalendarView {
   final String connectionScope;
   final int connectionRevision;
   final CalendarSourceAuthority? sourceAuthority;
+  final String? reviewedNativeSubjectFingerprint;
   final bool enabled;
 }
 
@@ -322,6 +439,9 @@ final class AgentCalendarSetupReceipt {
       connectionScope = _connectionScope(json['connection_scope']),
       connectionRevision = _positiveCounter(json['connection_revision']),
       sourceAuthority = _optionalSourceAuthority(json['source_authority']),
+      reviewedNativeSubjectFingerprint = _optionalNativeSubjectFingerprint(
+        json['reviewed_native_subject_fingerprint'],
+      ),
       viewHandle = _identifier(json['view_handle']),
       toolInstallationId = _identifier(json['tool_installation_id']),
       expertInstallationId = _identifier(json['expert_installation_id']),
@@ -334,11 +454,23 @@ final class AgentCalendarSetupReceipt {
   final String connectionScope;
   final int connectionRevision;
   final CalendarSourceAuthority? sourceAuthority;
+  final String? reviewedNativeSubjectFingerprint;
   final String viewHandle;
   final String toolInstallationId;
   final String expertInstallationId;
   final String toolAssignmentId;
   final String expertAssignmentId;
+}
+
+bool _isNativeSubjectFingerprint(String value) =>
+    value.length == 64 && RegExp(r'^[0-9a-f]{64}$').hasMatch(value);
+
+String? _optionalNativeSubjectFingerprint(Object? value) {
+  if (value == null) return null;
+  if (value is! String || !_isNativeSubjectFingerprint(value)) {
+    throw const FormatException('Invalid native subject fingerprint');
+  }
+  return value;
 }
 
 String _identifier(Object? value) {

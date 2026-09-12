@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::*;
 
-const CALENDAR_GRANT_SCHEMA_VERSION: i64 = 2;
+const CALENDAR_GRANT_SCHEMA_VERSION: i64 = 3;
 const MAX_CALENDAR_GRANT_MAPPINGS: usize = 128;
 const MAX_MAPPING_PAYLOAD_BYTES: usize = 16 * 1024;
 
@@ -29,6 +29,7 @@ pub struct CalendarGrantAdmission {
     pub scope: GrantScope,
     pub grant_scope: GrantScope,
     pub consumer_policy: ConsumerPolicyAuthority,
+    pub reviewed_native_subject_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -43,6 +44,7 @@ struct CalendarGrantMapping {
     expert_installation_id: Uuid,
     tool_installation_id: Uuid,
     consumer_policy: ConsumerPolicyAuthority,
+    reviewed_native_subject_fingerprint: String,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -68,21 +70,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let result = async {
                 transaction
                     .execute(
-                        "CREATE TABLE calendar_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
+                        "CREATE TABLE calendar_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
                         (),
                     )
                     .await
                     .map_err(storage)?;
                 transaction
                     .execute(
-                        "INSERT INTO calendar_grant_schema (id, version) VALUES (1, 2)",
+                        "INSERT INTO calendar_grant_schema (id, version) VALUES (1, 3)",
                         (),
                     )
                     .await
                     .map_err(storage)?;
                 transaction
                     .execute(
-                        "CREATE TABLE calendar_grant_mappings (setup_id TEXT PRIMARY KEY, view_handle TEXT NOT NULL UNIQUE, grant_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, expert_assignment_id TEXT NOT NULL, tool_assignment_id TEXT NOT NULL, expert_installation_id TEXT NOT NULL, tool_installation_id TEXT NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, payload TEXT NOT NULL)",
+                        "CREATE TABLE calendar_grant_mappings (setup_id TEXT PRIMARY KEY, view_handle TEXT NOT NULL UNIQUE, grant_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, expert_assignment_id TEXT NOT NULL, tool_assignment_id TEXT NOT NULL, expert_installation_id TEXT NOT NULL, tool_installation_id TEXT NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, reviewed_native_subject_fingerprint TEXT NOT NULL, payload TEXT NOT NULL)",
                         (),
                     )
                     .await
@@ -128,7 +130,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::VaultUnavailable);
         }
         let mut mappings = connection
-            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings", ())
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings", ())
             .await
             .map_err(storage)?;
         let mut count = 0;
@@ -197,6 +199,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         purpose: GrantPurpose,
         consumer: GrantConsumer,
         processing: ProcessingRestriction,
+        native_subject_fingerprint: Option<&str>,
     ) -> Result<CalendarGrantAdmission, AgentFailure> {
         if setup_id.is_nil()
             || view_handle.is_nil()
@@ -209,7 +212,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND view_handle = ? AND person_id = ?",
+                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings WHERE setup_id = ? AND view_handle = ? AND person_id = ?",
                 (setup_id.to_string(), view_handle.to_string(), self.person_id.to_string()),
             )
             .await
@@ -220,6 +223,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?
             .ok_or(AgentFailure::AccessReviewRequired)?;
         let mapping = decode_mapping(&row)?;
+        let native_subject_fingerprint = native_subject_fingerprint
+            .ok_or(AgentFailure::AccessReviewRequired)
+            .and_then(validate_native_subject_fingerprint)?;
+        if mapping.reviewed_native_subject_fingerprint != native_subject_fingerprint {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         let grant = self.get_data_access_grant(mapping.grant_id).await?;
         if grant.state() != GrantState::Active {
             return Err(if grant.state() == GrantState::Revoked {
@@ -316,6 +325,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             scope: requested_scope,
             grant_scope: grant.scope().clone(),
             consumer_policy: mapping.consumer_policy,
+            reviewed_native_subject_fingerprint: mapping.reviewed_native_subject_fingerprint,
         })
     }
 
@@ -329,7 +339,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?",
+                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?",
                 (setup_id.to_string(), self.person_id.to_string()),
             )
             .await
@@ -379,6 +389,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::AccessReviewRequired)?;
         let (source, scope) =
             calendar_binding(self.person_id, request, connection_id, source_authority)?;
+        let reviewed_native_subject_fingerprint = request
+            .reviewed_native_subject_fingerprint
+            .as_deref()
+            .ok_or(AgentFailure::AccessReviewRequired)
+            .and_then(validate_native_subject_fingerprint)?;
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -415,8 +430,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     super::access_grants::AccessGrantMutation::Review { source, scope },
                 )
                 .await?;
-            self.insert_calendar_mapping(&transaction, setup, &reviewed)
-                .await?;
+            self.insert_calendar_mapping(
+                &transaction,
+                setup,
+                &reviewed,
+                reviewed_native_subject_fingerprint,
+            )
+            .await?;
             self.check_access()?;
             check()?;
             Ok(())
@@ -470,59 +490,90 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let current = self
                 .read_data_access_grant_in_transaction(&transaction, mapping.grant_id)
                 .await?;
-            let (source, scope, mutation) = match &configuration.change {
-                CalendarAccessChange::SetEnabled { enabled: true } => {
-                    let mutation = super::access_grants::AccessGrantMutation::Activate {
-                        source: current.source().clone(),
-                        scope: current.scope().clone(),
-                    };
-                    (current.source().clone(), current.scope().clone(), mutation)
-                }
-                CalendarAccessChange::SetEnabled { enabled: false } => (
-                    current.source().clone(),
-                    current.scope().clone(),
-                    super::access_grants::AccessGrantMutation::Pause,
-                ),
-                CalendarAccessChange::SetScope {
-                    provider,
-                    device_id,
-                    calendar_ids,
-                    source_authority,
-                    ..
-                } => {
-                    let authority = source_authority.ok_or(AgentFailure::AccessReviewRequired)?;
-                    let request = CalendarExpertSetup {
-                        instance_id: self.vault_id,
-                        expected_revision: previous.revision,
-                        setup_id: configuration.setup_id,
-                        provider: *provider,
-                        device_id: device_id.clone(),
-                        calendar_ids: calendar_ids.clone(),
-                        connection_scope: binding.connection_scope,
-                        connection_revision: 1,
-                        source_authority: Some(authority),
-                    };
-                    let (source, scope) =
-                        calendar_binding(self.person_id, &request, connection_id, authority)?;
-                    let mutation = if current.state() == GrantState::Active {
-                        super::access_grants::AccessGrantMutation::Activate {
-                            source: source.clone(),
-                            scope: scope.clone(),
-                        }
-                    } else {
-                        super::access_grants::AccessGrantMutation::Review {
-                            source: source.clone(),
-                            scope: scope.clone(),
-                        }
-                    };
-                    (source, scope, mutation)
-                }
-                CalendarAccessChange::Remove {} => (
-                    current.source().clone(),
-                    current.scope().clone(),
-                    super::access_grants::AccessGrantMutation::Revoke,
-                ),
-            };
+            let (source, scope, reviewed_native_subject_fingerprint, mutation) =
+                match &configuration.change {
+                    CalendarAccessChange::SetEnabled { enabled: true } => {
+                        let mutation = super::access_grants::AccessGrantMutation::Activate {
+                            source: current.source().clone(),
+                            scope: current.scope().clone(),
+                        };
+                        (
+                            current.source().clone(),
+                            current.scope().clone(),
+                            mapping.reviewed_native_subject_fingerprint.clone(),
+                            mutation,
+                        )
+                    }
+                    CalendarAccessChange::SetEnabled { enabled: false } => (
+                        current.source().clone(),
+                        current.scope().clone(),
+                        mapping.reviewed_native_subject_fingerprint.clone(),
+                        super::access_grants::AccessGrantMutation::Pause,
+                    ),
+                    CalendarAccessChange::SetScope {
+                        provider,
+                        device_id,
+                        calendar_ids,
+                        source_authority,
+                        reviewed_native_subject_fingerprint,
+                        ..
+                    } => {
+                        let authority =
+                            source_authority.ok_or(AgentFailure::AccessReviewRequired)?;
+                        let reviewed_native_subject_fingerprint =
+                            reviewed_native_subject_fingerprint
+                                .as_deref()
+                                .ok_or(AgentFailure::AccessReviewRequired)
+                                .and_then(validate_native_subject_fingerprint)?;
+                        let request = CalendarExpertSetup {
+                            instance_id: self.vault_id,
+                            expected_revision: previous.revision,
+                            setup_id: configuration.setup_id,
+                            provider: *provider,
+                            device_id: device_id.clone(),
+                            calendar_ids: calendar_ids.clone(),
+                            connection_scope: binding.connection_scope,
+                            connection_revision: 1,
+                            source_authority: Some(authority),
+                            reviewed_native_subject_fingerprint: Some(
+                                reviewed_native_subject_fingerprint.to_owned(),
+                            ),
+                        };
+                        let (source, scope) =
+                            calendar_binding(self.person_id, &request, connection_id, authority)?;
+                        let mutation = if current.state() == GrantState::Active
+                            && mapping.reviewed_native_subject_fingerprint
+                                != reviewed_native_subject_fingerprint
+                        {
+                            super::access_grants::AccessGrantMutation::ReviewActive {
+                                source: source.clone(),
+                                scope: scope.clone(),
+                            }
+                        } else if current.state() == GrantState::Active {
+                            super::access_grants::AccessGrantMutation::Activate {
+                                source: source.clone(),
+                                scope: scope.clone(),
+                            }
+                        } else {
+                            super::access_grants::AccessGrantMutation::Review {
+                                source: source.clone(),
+                                scope: scope.clone(),
+                            }
+                        };
+                        (
+                            source,
+                            scope,
+                            reviewed_native_subject_fingerprint.to_owned(),
+                            mutation,
+                        )
+                    }
+                    CalendarAccessChange::Remove {} => (
+                        current.source().clone(),
+                        current.scope().clone(),
+                        mapping.reviewed_native_subject_fingerprint.clone(),
+                        super::access_grants::AccessGrantMutation::Revoke,
+                    ),
+                };
             let updated = self
                 .mutate_data_access_grant_in_transaction(
                     &transaction,
@@ -551,6 +602,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &updated,
                 source,
                 scope,
+                reviewed_native_subject_fingerprint,
                 consumer_policy,
             )
             .await?;
@@ -568,6 +620,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &turso::transaction::Transaction<'_>,
         setup: &CalendarExpertSetupReceipt,
         grant: &DataAccessGrant,
+        reviewed_native_subject_fingerprint: String,
     ) -> Result<(), AgentFailure> {
         let mapping = CalendarGrantMapping {
             setup_id: setup.setup_id,
@@ -579,6 +632,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             expert_installation_id: setup.expert_installation_id,
             tool_installation_id: setup.tool_installation_id,
             consumer_policy: ConsumerPolicyAuthority::new(),
+            reviewed_native_subject_fingerprint,
         };
         let payload =
             serde_json::to_string(&mapping).map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -587,8 +641,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         transaction
             .execute(
-                "INSERT INTO calendar_grant_mappings (setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                mapping_values(&mapping, payload)?,
+                "INSERT INTO calendar_grant_mappings (setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                turso::params![
+                    mapping.setup_id.to_string(),
+                    mapping.view_handle.to_string(),
+                    mapping.grant_id.as_uuid().to_string(),
+                    self.person_id.to_string(),
+                    mapping.source.connection_id().as_str().to_owned(),
+                    mapping.source.connector().as_str().to_string(),
+                    mapping.source.execution_owner().as_str().to_string(),
+                    mapping.source.source_authority().incarnation().to_string(),
+                    i64::try_from(mapping.source.source_authority().epoch().get())
+                        .map_err(|_| AgentFailure::Conflict)?,
+                    mapping.expert_assignment_id.to_string(),
+                    mapping.tool_assignment_id.to_string(),
+                    mapping.expert_installation_id.to_string(),
+                    mapping.tool_installation_id.to_string(),
+                    mapping.consumer_policy.incarnation().to_string(),
+                    i64::try_from(mapping.consumer_policy.epoch().get())
+                        .map_err(|_| AgentFailure::Conflict)?,
+                    mapping.reviewed_native_subject_fingerprint.clone(),
+                    payload,
+                ],
             )
             .await
             .map_err(storage)?;
@@ -602,6 +676,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         grant: &DataAccessGrant,
         source: GrantSourceBinding,
         _scope: GrantScope,
+        reviewed_native_subject_fingerprint: String,
         consumer_policy: ConsumerPolicyAuthority,
     ) -> Result<(), AgentFailure> {
         let mapping = CalendarGrantMapping {
@@ -614,12 +689,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             expert_installation_id: previous.expert_installation_id,
             tool_installation_id: previous.tool_installation_id,
             consumer_policy,
+            reviewed_native_subject_fingerprint,
         };
         let payload =
             serde_json::to_string(&mapping).map_err(|_| AgentFailure::StorageUnavailable)?;
         let changed = transaction
             .execute(
-                "UPDATE calendar_grant_mappings SET grant_id = ?, person_id = ?, connection_id = ?, connector = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, expert_assignment_id = ?, tool_assignment_id = ?, expert_installation_id = ?, tool_installation_id = ?, policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE setup_id = ? AND person_id = ? AND grant_id = ?",
+                "UPDATE calendar_grant_mappings SET grant_id = ?, person_id = ?, connection_id = ?, connector = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, expert_assignment_id = ?, tool_assignment_id = ?, expert_installation_id = ?, tool_installation_id = ?, policy_incarnation = ?, policy_epoch = ?, reviewed_native_subject_fingerprint = ?, payload = ? WHERE setup_id = ? AND person_id = ? AND grant_id = ?",
                 turso::params![
                     mapping.grant_id.as_uuid().to_string(),
                     self.person_id.to_string(),
@@ -634,6 +710,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     mapping.tool_installation_id.to_string(),
                     mapping.consumer_policy.incarnation().to_string(),
                     i64::try_from(mapping.consumer_policy.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
+                    mapping.reviewed_native_subject_fingerprint.clone(),
                     payload,
                     mapping.setup_id.to_string(),
                     self.person_id.to_string(),
@@ -654,7 +731,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         setup_id: Uuid,
     ) -> Result<CalendarGrantMapping, AgentFailure> {
         let mut rows = transaction
-            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?", (setup_id.to_string(), self.person_id.to_string()))
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?", (setup_id.to_string(), self.person_id.to_string()))
             .await
             .map_err(storage)?;
         let row = rows
@@ -672,7 +749,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         next: &RegistrySnapshot,
     ) -> Result<(), AgentFailure> {
         let mut rows = transaction
-            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE person_id = ?", [self.person_id.to_string()])
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, reviewed_native_subject_fingerprint, payload FROM calendar_grant_mappings WHERE person_id = ?", [self.person_id.to_string()])
             .await
             .map_err(storage)?;
         while let Some(row) = rows.next().await.map_err(storage)? {
@@ -811,6 +888,16 @@ fn is_native_provider(provider: CalendarProvider) -> bool {
     )
 }
 
+fn validate_native_subject_fingerprint(value: &str) -> Result<String, AgentFailure> {
+    if value.len() != 64
+        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || value.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(value.to_owned())
+}
+
 fn connector(provider: CalendarProvider) -> Result<ConnectorId, AgentFailure> {
     ConnectorId::try_new(match provider {
         CalendarProvider::EventKit => "calendar.event_kit",
@@ -895,53 +982,10 @@ fn calendar_scope(
     .map_err(|_| AgentFailure::InvalidInput)
 }
 
-fn mapping_values(
-    mapping: &CalendarGrantMapping,
-    payload: String,
-) -> Result<
-    (
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        String,
-    ),
-    AgentFailure,
-> {
-    Ok((
-        mapping.setup_id.to_string(),
-        mapping.view_handle.to_string(),
-        mapping.grant_id.as_uuid().to_string(),
-        mapping.source.person_id().to_string(),
-        mapping.source.connection_id().as_str().to_owned(),
-        mapping.source.connector().as_str().to_string(),
-        mapping.source.execution_owner().as_str().to_string(),
-        mapping.source.source_authority().incarnation().to_string(),
-        i64::try_from(mapping.source.source_authority().epoch().get())
-            .map_err(|_| AgentFailure::Conflict)?,
-        mapping.expert_assignment_id.to_string(),
-        mapping.tool_assignment_id.to_string(),
-        mapping.expert_installation_id.to_string(),
-        mapping.tool_installation_id.to_string(),
-        mapping.consumer_policy.incarnation().to_string(),
-        i64::try_from(mapping.consumer_policy.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
-        payload,
-    ))
-}
-
 fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
-    let payload = row.get::<String>(15).map_err(storage)?;
+    let reviewed_native_subject_fingerprint = row.get::<String>(15).map_err(storage)?;
+    validate_native_subject_fingerprint(&reviewed_native_subject_fingerprint)?;
+    let payload = row.get::<String>(16).map_err(storage)?;
     if payload.len() > MAX_MAPPING_PAYLOAD_BYTES {
         return Err(AgentFailure::BudgetExceeded);
     }
@@ -1008,6 +1052,7 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
         || mapping.consumer_policy
             != ConsumerPolicyAuthority::from_parts(policy_incarnation, policy_epoch)
                 .ok_or(AgentFailure::VaultUnavailable)?
+        || mapping.reviewed_native_subject_fingerprint != reviewed_native_subject_fingerprint
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -1065,6 +1110,7 @@ mod tests {
             connection_scope: floe_domain::CalendarScope::Selected,
             connection_revision: 1,
             source_authority: Some(SourceAuthority::new()),
+            reviewed_native_subject_fingerprint: Some("a".repeat(64)),
         }
     }
 
@@ -1099,6 +1145,7 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("calendar.expert").unwrap(),
                 ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
             )
             .await;
         assert_eq!(denied, Err(AgentFailure::AccessReviewRequired));
@@ -1128,11 +1175,29 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("calendar.expert").unwrap(),
                 ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();
         assert_eq!(admission.scope.resources().len(), 1);
         assert_eq!(admission.grant_scope.resources().len(), 2);
+        let subject_mismatch = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+                Some("b".repeat(64).as_str()),
+            )
+            .await;
+        assert_eq!(subject_mismatch, Err(AgentFailure::AccessReviewRequired));
         let stable_policy = admission.consumer_policy;
         let retry = vault
             .configure_calendar_access_with_connection(
@@ -1161,6 +1226,7 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("calendar.expert").unwrap(),
                 ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();
@@ -1206,6 +1272,7 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("calendar.expert").unwrap(),
                 ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();
@@ -1237,6 +1304,7 @@ mod tests {
                     GrantPurpose::Assistant,
                     GrantConsumer::builtin("calendar.expert").unwrap(),
                     ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
                 )
                 .await,
             Err(AgentFailure::AccessReviewRequired)
@@ -1267,6 +1335,7 @@ mod tests {
                 GrantPurpose::Assistant,
                 GrantConsumer::builtin("calendar.expert").unwrap(),
                 ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
             )
             .await
             .unwrap();
@@ -1298,9 +1367,119 @@ mod tests {
                     GrantPurpose::Assistant,
                     GrantConsumer::builtin("calendar.expert").unwrap(),
                     ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
                 )
                 .await,
             Err(AgentFailure::PolicyDenied)
+        );
+    }
+
+    #[tokio::test]
+    async fn native_subject_rereview_advances_active_authority_and_rejects_old_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = floe_domain::PersonId::new();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, TestKeys::default())
+            .await
+            .unwrap();
+        let request = setup_request(&vault);
+        let source_authority = request.source_authority.unwrap();
+        let installed = vault
+            .install_calendar_expert_with_connection(
+                request.clone(),
+                "opaque-eventkit-connection".into(),
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let enabled = vault
+            .configure_calendar_access_with_connection(
+                CalendarAccessConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: installed.registry.revision,
+                    setup_id: installed.setup.setup_id,
+                    change: CalendarAccessChange::SetEnabled { enabled: true },
+                },
+                "opaque-eventkit-connection".into(),
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let old = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &request.calendar_ids,
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+                Some("a".repeat(64).as_str()),
+            )
+            .await
+            .unwrap();
+        let reviewed = vault
+            .configure_calendar_access_with_connection(
+                CalendarAccessConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: enabled.registry.revision,
+                    setup_id: installed.setup.setup_id,
+                    change: CalendarAccessChange::SetScope {
+                        provider: CalendarProvider::EventKit,
+                        device_id: "test-device".into(),
+                        calendar_ids: request.calendar_ids.clone(),
+                        connection_scope: floe_domain::CalendarScope::Selected,
+                        connection_revision: 1,
+                        source_authority: Some(source_authority),
+                        reviewed_native_subject_fingerprint: Some("b".repeat(64)),
+                    },
+                },
+                "opaque-eventkit-connection".into(),
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let new = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &request.calendar_ids,
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+                Some("b".repeat(64).as_str()),
+            )
+            .await
+            .unwrap();
+        assert_ne!(old.authority, new.authority);
+        assert!(reviewed.registry.revision > enabled.registry.revision);
+        assert_eq!(
+            vault
+                .authorize_calendar_grant(
+                    installed.setup.setup_id,
+                    installed.setup.view_handle,
+                    "opaque-eventkit-connection",
+                    CalendarProvider::EventKit,
+                    "test-device",
+                    &request.calendar_ids,
+                    source_authority,
+                    GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    GrantConsumer::builtin("calendar.expert").unwrap(),
+                    ProcessingRestriction::LocalOnly,
+                    Some("a".repeat(64).as_str()),
+                )
+                .await,
+            Err(AgentFailure::AccessReviewRequired)
         );
     }
 

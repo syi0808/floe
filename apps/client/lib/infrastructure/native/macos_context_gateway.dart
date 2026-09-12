@@ -6,6 +6,7 @@ const _channel = MethodChannel('floe/macos_context');
 
 abstract interface class MacOSContextApi {
   Future<Map<String, dynamic>> readAttention();
+  Future<Map<String, dynamic>> inspectAttentionSubject(String deviceId);
 }
 
 final class MacOSContextGateway implements MacOSContextApi {
@@ -19,6 +20,39 @@ final class MacOSContextGateway implements MacOSContextApi {
     );
     validateMacOSAttentionView(view);
     return view;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectAttentionSubject(String deviceId) async {
+    if (!Platform.isMacOS) {
+      throw UnsupportedError('macOS context is available only on macOS.');
+    }
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectAttentionSubject',
+        {'device_id': deviceId},
+      ),
+    );
+    const keys = {
+      'schema_version',
+      'subject_fingerprint',
+      'permission_class',
+      'resources',
+      'presence_available',
+    };
+    if (value.keys.toSet().difference(keys).isNotEmpty ||
+        value['schema_version'] != 1 ||
+        value['subject_fingerprint'] is! String ||
+        value['permission_class'] is! String ||
+        value['resources'] is! List ||
+        value['presence_available'] is! bool) {
+      throw const FormatException('Invalid macOS Attention subject.');
+    }
+    final resources = value['resources']! as List<Object?>;
+    if (resources.length != 1 || resources.single != 'attention.coarse') {
+      throw const FormatException('Invalid macOS Attention subject.');
+    }
+    return value;
   }
 }
 

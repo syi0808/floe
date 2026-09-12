@@ -1,5 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_agent::AgentFailure;
+use floe_domain::{
+    GrantOperation, GrantPurpose, GrantState, ProcessingRestriction, SourceAuthority,
+};
 use ring::{
     aead, hkdf,
     rand::{SecureRandom, SystemRandom},
@@ -47,6 +50,102 @@ pub struct RemoteEnrollmentSignature {
     pub signature: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteCalendarAuthorizationExpectation {
+    pub operation: String,
+    pub client_id: String,
+    pub device_id: String,
+    pub challenge_id: String,
+    pub admission_id: String,
+    pub query_sha256: String,
+    pub result_sha256: String,
+    pub grant_id: String,
+    pub grant_incarnation: String,
+    pub grant_epoch: u64,
+    pub source_connector: String,
+    pub source_connection: String,
+    pub source_execution_owner: String,
+    pub source_incarnation: String,
+    pub source_epoch: u64,
+    pub resources: Vec<String>,
+    pub max_items: u32,
+    pub max_bytes: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteCalendarSourceReference {
+    pub person_id: String,
+    pub client_id: String,
+    pub device_id: String,
+    pub audience: String,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub execution_owner: String,
+    pub source_authority: SourceAuthority,
+    pub resource: String,
+    pub provider_identity: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteViewSourceReference {
+    pub view_id: String,
+    pub person_id: String,
+    pub client_id: String,
+    pub device_id: String,
+    pub audience: String,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub connection_revision: u64,
+    pub execution_owner: String,
+    pub source_authority: SourceAuthority,
+    pub resource: String,
+    pub provider_identity: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalendarSourcePreviewWire {
+    v: u32,
+    operation: String,
+    challenge_id: String,
+    nonce: String,
+    person_id: String,
+    client_id: String,
+    device_id: String,
+    audience: String,
+    connector_id: String,
+    connection_id: String,
+    execution_owner: String,
+    incarnation: String,
+    epoch: u64,
+    resource: String,
+    provider_identity: String,
+    issued_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewSourcePreviewWire {
+    v: u32,
+    operation: String,
+    challenge_id: String,
+    nonce: String,
+    view_id: String,
+    person_id: String,
+    client_id: String,
+    device_id: String,
+    audience: String,
+    connector_id: String,
+    connection_id: String,
+    connection_revision: u64,
+    execution_owner: String,
+    incarnation: String,
+    epoch: u64,
+    resource: String,
+    provider_identity: String,
+    issued_at_unix_ms: i64,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ChallengeWire {
@@ -63,11 +162,11 @@ struct ChallengeWire {
     #[serde(rename = "consumer")]
     _consumer: String,
     #[serde(default)]
-    policy: Option<EmptyObject>,
+    policy: Option<PolicyWire>,
     #[serde(default)]
-    source: Option<EmptyObject>,
+    source: Option<SourceWire>,
     #[serde(default)]
-    grant: Option<EmptyObject>,
+    grant: Option<GrantWire>,
     #[serde(default)]
     resources: Vec<String>,
     #[serde(default)]
@@ -78,15 +177,106 @@ struct ChallengeWire {
     max_bytes: u32,
     #[serde(default)]
     result_sha256: String,
+    #[serde(default)]
+    admission_id: String,
     issued_at_unix_ms: i64,
     expires_at_unix_ms: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmptyObject {}
+struct PolicyWire {
+    incarnation: String,
+    epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceWire {
+    connector_id: String,
+    connection_id: String,
+    execution_owner: String,
+    incarnation: String,
+    epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GrantWire {
+    id: String,
+    incarnation: String,
+    epoch: u64,
+}
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub async fn verify_remote_view_source_preview(
+        &self,
+        descriptor_b64url: &str,
+        producer_signature_b64url: &str,
+        person_id: &str,
+        client_id: &str,
+        device_id: &str,
+        view_id: &str,
+        connector_id: &str,
+        connection_id: &str,
+        resource: &str,
+    ) -> Result<RemoteViewSourceReference, AgentFailure> {
+        let descriptor = decode_canonical(descriptor_b64url, MAX_PRODUCER_PROOF_BYTES)?;
+        let producer_signature = decode_exact(producer_signature_b64url, 64)?;
+        strict_json_bytes(&descriptor, MAX_PRODUCER_PROOF_BYTES)?;
+        let wire: ViewSourcePreviewWire =
+            serde_json::from_slice(&descriptor).map_err(|_| AgentFailure::InvalidInput)?;
+        let producer = self.remote_pinned_producer().await?;
+        let producer_key = decode_exact(&producer.public_key, 32)?;
+        let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + descriptor.len());
+        message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        message.extend_from_slice(&descriptor);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&message, &producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if wire.v != 1
+            || wire.operation != "remote_view_source_preview"
+            || wire.view_id != view_id
+            || wire.person_id != person_id
+            || person_id != self.person_id.to_string()
+            || wire.client_id != client_id
+            || wire.device_id != device_id
+            || wire.audience != producer.audience
+            || wire.connector_id != connector_id
+            || wire.connection_id != connection_id
+            || wire.resource != resource
+            || wire.execution_owner != producer.execution_owner
+            || !valid_text(&wire.nonce, 256)
+            || wire.connection_revision == 0
+            || !valid_text(&wire.provider_identity, 256)
+            || wire.issued_at_unix_ms <= 0
+            || Uuid::parse_str(&wire.challenge_id).is_err()
+            || Uuid::parse_str(&wire.incarnation).is_err()
+            || Uuid::parse_str(&wire.incarnation).is_ok_and(|identifier| identifier.is_nil())
+            || wire.epoch == 0
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let source_authority = SourceAuthority::from_parts(
+            Uuid::parse_str(&wire.incarnation).map_err(|_| AgentFailure::PolicyDenied)?,
+            std::num::NonZeroU64::new(wire.epoch).ok_or(AgentFailure::PolicyDenied)?,
+        )
+        .ok_or(AgentFailure::PolicyDenied)?;
+        Ok(RemoteViewSourceReference {
+            view_id: wire.view_id,
+            person_id: wire.person_id,
+            client_id: wire.client_id,
+            device_id: wire.device_id,
+            audience: wire.audience,
+            connector_id: wire.connector_id,
+            connection_id: wire.connection_id,
+            connection_revision: wire.connection_revision,
+            execution_owner: wire.execution_owner,
+            source_authority,
+            resource: wire.resource,
+            provider_identity: wire.provider_identity,
+        })
+    }
     pub(crate) async fn initialize_remote_authority_store(
         &self,
         fresh: bool,
@@ -131,9 +321,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "CREATE TABLE remote_authority_challenges (challenge_id TEXT PRIMARY KEY, consumed_at_unix_ms INTEGER NOT NULL)",
+                    "CREATE TABLE remote_authority_challenges (challenge_id TEXT PRIMARY KEY, operation TEXT NOT NULL, admission_id TEXT NOT NULL, query_sha256 TEXT NOT NULL, result_sha256 TEXT NOT NULL, grant_id TEXT NOT NULL, grant_incarnation TEXT NOT NULL, grant_epoch INTEGER NOT NULL, source_connector TEXT NOT NULL, source_connection TEXT NOT NULL, source_execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, max_items INTEGER NOT NULL, max_bytes INTEGER NOT NULL, expires_at_unix_ms INTEGER NOT NULL, consumed_at_unix_ms INTEGER NOT NULL)",
                     (),
                 )
+                .await
+                .map_err(storage)?;
+            transaction
+                .execute(
+                    "CREATE TABLE remote_authority_clock (id INTEGER PRIMARY KEY CHECK(id = 1), last_now_unix_ms INTEGER NOT NULL)",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            transaction
+                .execute("INSERT INTO remote_authority_clock VALUES (1, 0)", ())
                 .await
                 .map_err(storage)?;
             let (key_id, public_key, nonce, ciphertext) = self.generate_wrapped_owner_key()?;
@@ -166,6 +367,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 "remote_authority_owner",
                 "remote_authority_producer",
                 "remote_authority_challenges",
+                "remote_authority_clock",
             ] {
                 transaction
                     .query(&format!("SELECT * FROM {table} LIMIT 0"), ())
@@ -177,6 +379,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await
                 .map_err(storage)?;
             if owner_rows.next().await.map_err(storage)?.is_none() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let mut clock_rows = transaction
+                .query("SELECT last_now_unix_ms FROM remote_authority_clock WHERE id = 1", ())
+                .await
+                .map_err(storage)?;
+            if clock_rows.next().await.map_err(storage)?.is_none() {
                 return Err(AgentFailure::VaultUnavailable);
             }
         }
@@ -357,6 +566,69 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(identity)
     }
 
+    pub async fn verify_remote_calendar_source_preview(
+        &self,
+        descriptor_b64url: &str,
+        producer_signature_b64url: &str,
+        person_id: &str,
+        client_id: &str,
+        device_id: &str,
+        connector_id: &str,
+        connection_id: &str,
+        resource: &str,
+    ) -> Result<RemoteCalendarSourceReference, AgentFailure> {
+        let descriptor = decode_canonical(descriptor_b64url, MAX_PRODUCER_PROOF_BYTES)?;
+        let producer_signature = decode_exact(producer_signature_b64url, 64)?;
+        strict_json_bytes(&descriptor, MAX_PRODUCER_PROOF_BYTES)?;
+        let wire: CalendarSourcePreviewWire =
+            serde_json::from_slice(&descriptor).map_err(|_| AgentFailure::InvalidInput)?;
+        let producer = self.remote_pinned_producer().await?;
+        let producer_key = decode_exact(&producer.public_key, 32)?;
+        let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + descriptor.len());
+        message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        message.extend_from_slice(&descriptor);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&message, &producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if wire.v != 1
+            || wire.operation != "calendar_source_preview"
+            || Uuid::parse_str(&wire.challenge_id).is_ok_and(|identifier| identifier.is_nil())
+            || decode_exact(&wire.nonce, 32).is_err()
+            || wire.person_id != person_id
+            || wire.client_id != client_id
+            || wire.device_id != device_id
+            || wire.audience != producer.audience
+            || wire.connector_id != connector_id
+            || wire.connection_id != connection_id
+            || wire.resource != resource
+            || wire.execution_owner != producer.execution_owner
+            || !valid_text(&wire.provider_identity, 256)
+            || wire.issued_at_unix_ms <= 0
+            || Uuid::parse_str(&wire.incarnation).is_err()
+            || Uuid::parse_str(&wire.incarnation).is_ok_and(|identifier| identifier.is_nil())
+            || wire.epoch == 0
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let source_authority = SourceAuthority::from_parts(
+            Uuid::parse_str(&wire.incarnation).map_err(|_| AgentFailure::PolicyDenied)?,
+            std::num::NonZeroU64::new(wire.epoch).ok_or(AgentFailure::PolicyDenied)?,
+        )
+        .ok_or(AgentFailure::PolicyDenied)?;
+        Ok(RemoteCalendarSourceReference {
+            person_id: wire.person_id,
+            client_id: wire.client_id,
+            device_id: wire.device_id,
+            audience: wire.audience,
+            connector_id: wire.connector_id,
+            connection_id: wire.connection_id,
+            execution_owner: wire.execution_owner,
+            source_authority,
+            resource: wire.resource,
+            provider_identity: wire.provider_identity,
+        })
+    }
+
     pub async fn remote_sign_enrollment(
         &self,
         client_id: &str,
@@ -413,6 +685,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(storage)?;
         let result: Result<(), AgentFailure> = async {
+            self.advance_remote_clock_and_cleanup(&transaction, now)
+                .await?;
             let mut count_rows = transaction
                 .query("SELECT COUNT(*) FROM remote_authority_challenges", ())
                 .await
@@ -440,11 +714,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             transaction
                 .execute(
-                    "INSERT INTO remote_authority_challenges (challenge_id, consumed_at_unix_ms) VALUES (?, ?)",
-                    (wire.challenge_id.clone(), now),
+                    "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    vec![turso::Value::from(wire.challenge_id.clone()), turso::Value::from(wire.operation.clone()), turso::Value::from(String::new()), turso::Value::from(wire.query_sha256.clone()), turso::Value::from(wire.result_sha256.clone()), turso::Value::from(String::new()), turso::Value::from(String::new()), turso::Value::from(0i64), turso::Value::from(String::new()), turso::Value::from(String::new()), turso::Value::from(String::new()), turso::Value::from(String::new()), turso::Value::from(0i64), turso::Value::from(i64::from(wire.max_items)), turso::Value::from(i64::from(wire.max_bytes)), turso::Value::from(wire.expires_at_unix_ms), turso::Value::from(now)],
                 )
                 .await
-                .map_err(|_| AgentFailure::StorageUnavailable)?;
+                .map_err(storage)?;
             Ok(())
         }
         .await;
@@ -458,6 +732,399 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             key_id,
             signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
         })
+    }
+
+    pub async fn remote_sign_calendar_authorization(
+        &self,
+        expected: &RemoteCalendarAuthorizationExpectation,
+        challenge_b64url: &str,
+        producer_signature_b64url: &str,
+    ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
+        if !valid_text(&expected.client_id, 128) || !valid_text(&expected.device_id, 128) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let challenge = decode_canonical(challenge_b64url, MAX_CHALLENGE_BYTES)?;
+        let producer_signature = decode_exact(producer_signature_b64url, 64)?;
+        let wire = parse_challenge(&challenge)?;
+        if wire.operation != expected.operation
+            || wire.challenge_id != expected.challenge_id
+            || wire.client_id != expected.client_id
+            || wire.device_id != expected.device_id
+            || wire.admission_id != expected.admission_id
+            || wire.query_sha256 != expected.query_sha256
+            || wire.result_sha256 != expected.result_sha256
+            || wire.grant.as_ref().is_none_or(|grant| {
+                grant.id != expected.grant_id
+                    || grant.incarnation != expected.grant_incarnation
+                    || grant.epoch != expected.grant_epoch
+            })
+            || wire.source.as_ref().is_none_or(|source| {
+                source.connector_id != expected.source_connector
+                    || source.connection_id != expected.source_connection
+                    || source.execution_owner != expected.source_execution_owner
+                    || source.incarnation != expected.source_incarnation
+                    || source.epoch != expected.source_epoch
+            })
+            || wire.resources != expected.resources
+            || wire.max_items != expected.max_items
+            || wire.max_bytes != expected.max_bytes
+            || (expected.operation != "admission" && expected.operation != "release")
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if wire.person_id != self.person_id.to_string() {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| AgentFailure::VaultUnavailable)?
+            .as_millis() as i64;
+        if wire.expires_at_unix_ms <= now || wire.issued_at_unix_ms > now.saturating_add(5_000) {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let owner = self.remote_owner_public_key().await?;
+        if wire.key_id != owner.key_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let producer = self.remote_pinned_producer().await?;
+        if wire.audience != producer.audience {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let producer_key = decode_exact(&producer.public_key, 32)?;
+        let mut producer_message =
+            Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + challenge.len());
+        producer_message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        producer_message.extend_from_slice(&challenge);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&producer_message, &producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        self.validate_owner_key().await?;
+        let (private_key, key_id) = self.load_owner_key().await?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result: Result<(), AgentFailure> = async {
+            self.advance_remote_clock_and_cleanup(&transaction, now)
+                .await?;
+            self.verify_pinned_producer_in_transaction(
+                &transaction,
+                &wire,
+                &challenge,
+                &producer_signature,
+            )
+            .await?;
+            if wire.operation == "release" {
+                self.validate_release_binding_in_transaction(&transaction, &wire, now)
+                    .await?;
+            }
+            self.validate_remote_calendar_grant_in_transaction(&transaction, &wire)
+                .await?;
+            let mut count_rows = transaction
+                .query("SELECT COUNT(*) FROM remote_authority_challenges", ())
+                .await
+                .map_err(storage)?;
+            if count_rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?
+                >= 128
+            {
+                return Err(AgentFailure::QuotaExceeded);
+            }
+            let mut existing_challenge = transaction
+                .query(
+                    "SELECT challenge_id FROM remote_authority_challenges WHERE challenge_id = ?",
+                    [wire.challenge_id.clone()],
+                )
+                .await
+                .map_err(storage)?;
+            if existing_challenge.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    vec![turso::Value::from(wire.challenge_id.clone()), turso::Value::from(wire.operation.clone()), turso::Value::from(wire.admission_id.clone()), turso::Value::from(wire.query_sha256.clone()), turso::Value::from(wire.result_sha256.clone()), turso::Value::from(wire.grant.as_ref().map_or(String::new(), |grant| grant.id.clone())), turso::Value::from(wire.grant.as_ref().map_or(String::new(), |grant| grant.incarnation.clone())), turso::Value::from(wire.grant.as_ref().map_or(0i64, |grant| grant.epoch as i64)), turso::Value::from(wire.source.as_ref().map_or(String::new(), |source| source.connector_id.clone())), turso::Value::from(wire.source.as_ref().map_or(String::new(), |source| source.connection_id.clone())), turso::Value::from(wire.source.as_ref().map_or(String::new(), |source| source.execution_owner.clone())), turso::Value::from(wire.source.as_ref().map_or(String::new(), |source| source.incarnation.clone())), turso::Value::from(wire.source.as_ref().map_or(0i64, |source| source.epoch as i64)), turso::Value::from(i64::from(wire.max_items)), turso::Value::from(i64::from(wire.max_bytes)), turso::Value::from(wire.expires_at_unix_ms), turso::Value::from(now)],
+                )
+                .await
+                .map_err(storage)?;
+            Ok(())
+        }
+        .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await?;
+        let mut owner_message = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + challenge.len());
+        owner_message.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
+        owner_message.extend_from_slice(&challenge);
+        let signature = private_key.sign(&owner_message);
+        Ok(RemoteEnrollmentSignature {
+            key_id,
+            signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
+        })
+    }
+
+    async fn validate_remote_calendar_grant_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        wire: &ChallengeWire,
+    ) -> Result<(), AgentFailure> {
+        let policy = wire.policy.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+        if Uuid::parse_str(&policy.incarnation).is_err() || policy.epoch == 0 {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let source = wire.source.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+        let grant_wire = wire.grant.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+        if Uuid::parse_str(&grant_wire.id)
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .is_nil()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut policy_rows = transaction
+            .query(
+                "SELECT policy_incarnation, policy_epoch FROM remote_calendar_grant_mappings WHERE grant_id = ? AND person_id = ?",
+                (grant_wire.id.clone(), self.person_id.to_string()),
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let policy_row = policy_rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let mapped_policy_incarnation = policy_row
+            .get::<String>(0)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let mapped_policy_epoch = policy_row
+            .get::<i64>(1)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if mapped_policy_incarnation != policy.incarnation
+            || mapped_policy_epoch <= 0
+            || mapped_policy_epoch as u64 != policy.epoch
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut grant_rows = transaction
+            .query(
+                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?",
+                (grant_wire.id.clone(), self.person_id.to_string(), self.vault_id.to_string()),
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let grant_row = grant_rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let grant_payload = grant_row
+            .get::<String>(11)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let grant: floe_domain::DataAccessGrant =
+            serde_json::from_str(&grant_payload).map_err(|_| AgentFailure::PolicyDenied)?;
+        if grant.state() != GrantState::Active
+            || grant.review_required()
+            || grant.source().person_id() != self.person_id
+            || grant.source().connection_id().as_str() != source.connection_id
+            || grant.source().connector().as_str() != source.connector_id
+            || grant.source().execution_owner().as_str() != source.execution_owner
+            || grant.source().source_authority().incarnation().to_string() != source.incarnation
+            || grant.source().source_authority().epoch().get() != source.epoch
+            || grant.authority().incarnation().to_string() != grant_wire.incarnation
+            || grant.authority().access_epoch().get() != grant_wire.epoch
+            || !grant.scope().operations().contains(&GrantOperation::Read)
+            || !grant
+                .scope()
+                .resources()
+                .iter()
+                .map(|resource| resource.as_str())
+                .eq(wire.resources.iter().map(String::as_str))
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let purpose = match wire.purpose.as_str() {
+            "quick_response" | "everyday_assistance" => GrantPurpose::Assistant,
+            "scheduling" => GrantPurpose::Scheduling,
+            "summarization" => GrantPurpose::Summarization,
+            _ => return Err(AgentFailure::PolicyDenied),
+        };
+        if !grant.scope().purposes().contains(&purpose)
+            || !grant
+                .scope()
+                .consumers()
+                .iter()
+                .any(|consumer| consumer.identifier() == wire._consumer)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        match grant.scope().processing() {
+            ProcessingRestriction::LocalOnly => {}
+            ProcessingRestriction::ApprovedRecipient { recipient, .. }
+                if recipient != &wire.audience =>
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            ProcessingRestriction::ApprovedRecipient { .. } => {}
+        }
+        Ok(())
+    }
+
+    async fn advance_remote_clock_and_cleanup(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        now: i64,
+    ) -> Result<(), AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT last_now_unix_ms FROM remote_authority_clock WHERE id = 1",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        let last_now = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(storage)?;
+        if now < last_now {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        transaction
+            .execute(
+                "UPDATE remote_authority_clock SET last_now_unix_ms = ? WHERE id = 1",
+                [now],
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "DELETE FROM remote_authority_challenges WHERE expires_at_unix_ms < ?",
+                [now.saturating_sub(35_000)],
+            )
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    async fn validate_release_binding_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        wire: &ChallengeWire,
+        now: i64,
+    ) -> Result<(), AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT operation, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms FROM remote_authority_challenges WHERE challenge_id = ? AND operation = 'admission'",
+                [wire.admission_id.clone()],
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let fields = (
+            row.get::<String>(1),
+            row.get::<String>(2),
+            row.get::<String>(3),
+            row.get::<String>(4),
+            row.get::<i64>(5),
+            row.get::<String>(6),
+            row.get::<String>(7),
+            row.get::<String>(8),
+            row.get::<String>(9),
+            row.get::<i64>(10),
+            row.get::<i64>(11),
+            row.get::<i64>(12),
+            row.get::<i64>(13),
+        );
+        let (
+            Ok(query_digest),
+            Ok(result_digest),
+            Ok(grant_id),
+            Ok(grant_incarnation),
+            Ok(grant_epoch),
+            Ok(source_connector),
+            Ok(source_connection),
+            Ok(source_owner),
+            Ok(source_incarnation),
+            Ok(source_epoch),
+            Ok(max_items),
+            Ok(max_bytes),
+            Ok(admission_expires),
+        ) = fields
+        else {
+            return Err(AgentFailure::PolicyDenied);
+        };
+        let source = wire.source.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+        let grant = wire.grant.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+        if !result_digest.is_empty()
+            || query_digest != wire.query_sha256
+            || grant_id != grant.id
+            || grant_incarnation != grant.incarnation
+            || grant_epoch as u64 != grant.epoch
+            || source_connector != source.connector_id
+            || source_connection != source.connection_id
+            || source_owner != source.execution_owner
+            || source_incarnation != source.incarnation
+            || source_epoch as u64 != source.epoch
+            || max_items as u64 != u64::from(wire.max_items)
+            || max_bytes as u64 != u64::from(wire.max_bytes)
+            || admission_expires <= now
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
+
+    async fn verify_pinned_producer_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        wire: &ChallengeWire,
+        challenge: &[u8],
+        producer_signature: &[u8],
+    ) -> Result<(), AgentFailure> {
+        let mut rows = transaction
+            .query(
+                "SELECT identity_json FROM remote_authority_producer WHERE id = 1",
+                (),
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let identity_json = row
+            .get::<String>(0)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        strict_json(&identity_json, MAX_PRODUCER_PROOF_BYTES)?;
+        let identity: RemoteProducerIdentity =
+            serde_json::from_str(&identity_json).map_err(|_| AgentFailure::PolicyDenied)?;
+        validate_producer(&identity).map_err(|_| AgentFailure::PolicyDenied)?;
+        if identity.audience != wire.audience
+            || wire
+                .source
+                .as_ref()
+                .is_none_or(|source| source.execution_owner != identity.execution_owner)
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let producer_key = decode_exact(&identity.public_key, 32)?;
+        let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + challenge.len());
+        message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        message.extend_from_slice(challenge);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&message, producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)
     }
 
     async fn load_owner_key(&self) -> Result<(signature::Ed25519KeyPair, String), AgentFailure> {
@@ -561,7 +1228,9 @@ fn parse_challenge(data: &[u8]) -> Result<ChallengeWire, AgentFailure> {
         serde_json::from_slice(data).map_err(|_| AgentFailure::InvalidInput)?;
     let nonce = decode_canonical(&wire.nonce, 32)?;
     if wire.v != 1
-        || wire.operation != "enrollment"
+        || (wire.operation != "enrollment"
+            && wire.operation != "admission"
+            && wire.operation != "release")
         || Uuid::parse_str(&wire.challenge_id).is_err()
         || Uuid::parse_str(&wire.key_id).is_err()
         || Uuid::parse_str(&wire.key_id).is_ok_and(|identifier| identifier.is_nil())
@@ -570,20 +1239,78 @@ fn parse_challenge(data: &[u8]) -> Result<ChallengeWire, AgentFailure> {
         || !valid_text(&wire.client_id, 128)
         || !valid_text(&wire.device_id, 128)
         || wire.audience.is_empty()
-        || wire._consumer != "owner"
-        || wire.policy.is_some()
-        || wire.source.is_some()
-        || wire.grant.is_some()
-        || !wire.resources.is_empty()
-        || !wire.query_sha256.is_empty()
-        || wire.max_items != 0
-        || wire.max_bytes != 0
-        || !wire.result_sha256.is_empty()
         || wire.issued_at_unix_ms <= 0
         || wire.expires_at_unix_ms <= wire.issued_at_unix_ms
         || nonce.len() != 32
     {
         return Err(AgentFailure::InvalidInput);
+    }
+    if wire.operation == "enrollment" {
+        if wire._consumer != "owner" {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if wire.policy.is_some()
+            || wire.source.is_some()
+            || wire.grant.is_some()
+            || !wire.resources.is_empty()
+            || !wire.query_sha256.is_empty()
+            || wire.max_items != 0
+            || wire.max_bytes != 0
+            || !wire.result_sha256.is_empty()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+    } else {
+        if !valid_text(&wire._consumer, 256) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let policy = wire.policy.as_ref().ok_or(AgentFailure::InvalidInput)?;
+        let source = wire.source.as_ref().ok_or(AgentFailure::InvalidInput)?;
+        let grant = wire.grant.as_ref().ok_or(AgentFailure::InvalidInput)?;
+        if Uuid::parse_str(&policy.incarnation).is_err()
+            || policy.epoch == 0
+            || source.connector_id.is_empty()
+            || source.connector_id.len() > 128
+            || source.connection_id.is_empty()
+            || source.connection_id.len() > 128
+            || source.execution_owner.is_empty()
+            || source.execution_owner.len() > 128
+            || Uuid::parse_str(&source.incarnation).is_err()
+            || source.epoch == 0
+            || Uuid::parse_str(&grant.id).is_err()
+            || Uuid::parse_str(&grant.incarnation).is_err()
+            || grant.epoch == 0
+            || wire.resources.is_empty()
+            || wire.resources.len() > 64
+            || wire.resources.windows(2).any(|pair| pair[0] >= pair[1])
+            || wire.query_sha256.len() != 64
+            || !wire
+                .query_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || wire.max_items == 0
+            || wire.max_items > 128
+            || wire.max_bytes == 0
+            || wire.max_bytes > 1024 * 1024
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if wire.operation == "admission" {
+            if !wire.admission_id.is_empty() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            if !wire.result_sha256.is_empty() {
+                return Err(AgentFailure::InvalidInput);
+            }
+        } else if Uuid::parse_str(&wire.admission_id).is_err()
+            || wire.result_sha256.len() != 64
+            || !wire
+                .result_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
     }
     Ok(wire)
 }
@@ -762,7 +1489,7 @@ mod tests {
         },
     };
 
-    use floe_domain::PersonId;
+    use floe_domain::*;
     use tempfile::tempdir;
 
     use super::*;
@@ -871,6 +1598,85 @@ mod tests {
         let mut changed = identity.clone();
         changed.audience = "caller-controlled".into();
         assert!(validate_producer(&changed).is_err());
+    }
+
+    #[tokio::test]
+    async fn signed_calendar_source_preview_binds_pairing_and_exact_source() {
+        let root = tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys)
+            .await
+            .unwrap();
+        let producer_key = signature::Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let producer_pair = signature::Ed25519KeyPair::from_pkcs8(producer_key.as_ref()).unwrap();
+        let producer_public = producer_pair.public_key().as_ref();
+        let producer = RemoteProducerIdentity {
+            schema_version: 1,
+            instance_id: "00000000-0000-4000-8000-000000000021".into(),
+            execution_owner: "00000000-0000-4000-8000-000000000022".into(),
+            audience: "floe.server:00000000-0000-4000-8000-000000000021".into(),
+            key_id: "00000000-0000-4000-8000-000000000023".into(),
+            public_key: URL_SAFE_NO_PAD.encode(producer_public),
+            fingerprint: encode_hex(&Sha256::digest(producer_public)),
+        };
+        vault.remote_pin_producer(producer.clone()).await.unwrap();
+        let descriptor = serde_json::json!({
+            "v": 1,
+            "operation": "calendar_source_preview",
+            "challenge_id": "00000000-0000-4000-8000-000000000024",
+            "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
+            "person_id": person_id.to_string(),
+            "client_id": "paired-client",
+            "device_id": "paired-device",
+            "audience": producer.audience,
+            "connector_id": "calendar.google",
+            "connection_id": "00000000-0000-4000-8000-000000000025",
+            "execution_owner": producer.execution_owner,
+            "incarnation": "00000000-0000-4000-8000-000000000026",
+            "epoch": 7,
+            "resource": "primary",
+            "provider_identity": "google:subject-a",
+            "issued_at_unix_ms": 1_700_000_000_000i64,
+        });
+        let descriptor_bytes = serde_json::to_vec(&descriptor).unwrap();
+        let mut signed = Vec::from(PRODUCER_SIGNATURE_DOMAIN);
+        signed.extend_from_slice(&descriptor_bytes);
+        let signature = producer_pair.sign(&signed);
+        let reference = vault
+            .verify_remote_calendar_source_preview(
+                &URL_SAFE_NO_PAD.encode(&descriptor_bytes),
+                &URL_SAFE_NO_PAD.encode(signature.as_ref()),
+                &person_id.to_string(),
+                "paired-client",
+                "paired-device",
+                "calendar.google",
+                "00000000-0000-4000-8000-000000000025",
+                "primary",
+            )
+            .await
+            .unwrap();
+        assert_eq!(reference.provider_identity, "google:subject-a");
+        assert_eq!(reference.source_authority.epoch().get(), 7);
+        let mut changed = descriptor.clone();
+        changed["resource"] = serde_json::Value::String("other".into());
+        let changed_bytes = serde_json::to_vec(&changed).unwrap();
+        assert!(
+            vault
+                .verify_remote_calendar_source_preview(
+                    &URL_SAFE_NO_PAD.encode(&changed_bytes),
+                    &URL_SAFE_NO_PAD.encode(signature.as_ref()),
+                    &person_id.to_string(),
+                    "paired-client",
+                    "paired-device",
+                    "calendar.google",
+                    "00000000-0000-4000-8000-000000000025",
+                    "primary",
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -1235,5 +2041,320 @@ mod tests {
             rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn remote_calendar_admission_and_release_are_grant_fenced_for_google_and_microsoft() {
+        for (connector, connection_id, resource) in [
+            (
+                "calendar.google",
+                "00000000-0000-4000-8000-000000000101",
+                "primary",
+            ),
+            (
+                "calendar.microsoft",
+                "00000000-0000-4000-8000-000000000102",
+                "work",
+            ),
+        ] {
+            let root = tempdir().unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let person_id = PersonId::new();
+            let keys = TestKeys::default();
+            let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+                .await
+                .unwrap();
+            let producer_pkcs8 =
+                signature::Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+            let producer_pair =
+                signature::Ed25519KeyPair::from_pkcs8(producer_pkcs8.as_ref()).unwrap();
+            let producer_instance = if connector.ends_with("google") {
+                "00000000-0000-4000-8000-000000000111"
+            } else {
+                "00000000-0000-4000-8000-000000000112"
+            };
+            let audience = format!("floe.server:{producer_instance}");
+            let producer = RemoteProducerIdentity {
+                schema_version: 1,
+                instance_id: producer_instance.into(),
+                execution_owner: if connector.ends_with("google") {
+                    "00000000-0000-4000-8000-000000000121".into()
+                } else {
+                    "00000000-0000-4000-8000-000000000122".into()
+                },
+                audience: audience.clone(),
+                key_id: Uuid::new_v4().to_string(),
+                public_key: URL_SAFE_NO_PAD.encode(producer_pair.public_key().as_ref()),
+                fingerprint: encode_hex(&Sha256::digest(producer_pair.public_key().as_ref())),
+            };
+            vault.remote_pin_producer(producer.clone()).await.unwrap();
+            let source_authority = SourceAuthority::new();
+            let source = GrantSourceBinding::try_new(
+                person_id,
+                ConnectionId::try_new(connection_id).unwrap(),
+                ConnectorId::try_new(connector).unwrap(),
+                ExecutionOwnerId::try_new(producer.execution_owner.clone()).unwrap(),
+                source_authority,
+            )
+            .unwrap();
+            let consumer = GrantConsumer::builtin("calendar.expert").unwrap();
+            let scope = GrantScope::try_new(
+                vec![ResourceHandle::try_new(resource).unwrap()],
+                vec![GrantDataCategory::Content],
+                vec![GrantOperation::Read],
+                vec![GrantPurpose::Assistant],
+                vec![consumer.clone()],
+                ProcessingRestriction::LocalOnly,
+            )
+            .unwrap();
+            let grant = vault
+                .review_and_activate_remote_calendar_grant(
+                    GrantId::new(),
+                    None,
+                    source.clone(),
+                    scope.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let binding = vault
+                .remote_calendar_grant_binding(connector, connection_id, source_authority, resource)
+                .await
+                .unwrap();
+            let owner_key = vault.remote_owner_public_key().await.unwrap();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            let query_digest = encode_hex(&Sha256::digest(br#"{"limit":1}"#));
+            let base_challenge = |operation: &str,
+                                  challenge_id: Uuid,
+                                  admission_id: &str,
+                                  result_digest: &str| {
+                serde_json::json!({
+                    "v": 1,
+                    "operation": operation,
+                    "challenge_id": challenge_id.to_string(),
+                    "nonce": URL_SAFE_NO_PAD.encode([7u8; 32]),
+                    "key_id": owner_key.key_id,
+                    "person_id": person_id.to_string(),
+                    "client_id": "paired-client",
+                    "device_id": "paired-device",
+                    "audience": audience,
+                    "purpose": "everyday_assistance",
+                    "consumer": consumer.identifier(),
+                    "policy": {"incarnation": binding.consumer_policy.incarnation().to_string(), "epoch": binding.consumer_policy.epoch().get()},
+                    "source": {"connector_id": connector, "connection_id": connection_id, "execution_owner": source.execution_owner().as_str(), "incarnation": source_authority.incarnation().to_string(), "epoch": source_authority.epoch().get()},
+                    "grant": {"id": grant.id().as_uuid().to_string(), "incarnation": grant.authority().incarnation().to_string(), "epoch": grant.authority().access_epoch().get()},
+                    "resources": [resource],
+                    "query_sha256": query_digest,
+                    "max_items": 1,
+                    "max_bytes": 4096,
+                    "result_sha256": result_digest,
+                    "admission_id": admission_id,
+                    "issued_at_unix_ms": now,
+                    "expires_at_unix_ms": now + 30_000
+                })
+            };
+            let sign_challenge = |challenge: &serde_json::Value| {
+                let bytes = serde_json::to_vec(challenge).unwrap();
+                let mut message = Vec::from(PRODUCER_SIGNATURE_DOMAIN);
+                message.extend_from_slice(&bytes);
+                (bytes, producer_pair.sign(&message))
+            };
+            let admission_id = Uuid::new_v4();
+            let admission = base_challenge("admission", admission_id, "", "");
+            let (admission_bytes, admission_signature) = sign_challenge(&admission);
+            let admission_expected = RemoteCalendarAuthorizationExpectation {
+                operation: "admission".into(),
+                client_id: "paired-client".into(),
+                device_id: "paired-device".into(),
+                challenge_id: admission_id.to_string(),
+                admission_id: String::new(),
+                query_sha256: query_digest.clone(),
+                result_sha256: String::new(),
+                grant_id: grant.id().as_uuid().to_string(),
+                grant_incarnation: grant.authority().incarnation().to_string(),
+                grant_epoch: grant.authority().access_epoch().get(),
+                source_connector: connector.into(),
+                source_connection: connection_id.into(),
+                source_execution_owner: source.execution_owner().as_str().into(),
+                source_incarnation: source_authority.incarnation().to_string(),
+                source_epoch: source_authority.epoch().get(),
+                resources: vec![resource.into()],
+                max_items: 1,
+                max_bytes: 4096,
+            };
+            let owner_signature = vault
+                .remote_sign_calendar_authorization(
+                    &admission_expected,
+                    &URL_SAFE_NO_PAD.encode(&admission_bytes),
+                    &URL_SAFE_NO_PAD.encode(admission_signature.as_ref()),
+                )
+                .await
+                .unwrap();
+            assert!(!owner_signature.signature.is_empty());
+
+            let result_digest = encode_hex(&Sha256::digest(b"calendar-result"));
+            let release_id = Uuid::new_v4();
+            let release = base_challenge(
+                "release",
+                release_id,
+                &admission_id.to_string(),
+                &result_digest,
+            );
+            let (release_bytes, release_signature) = sign_challenge(&release);
+            let mut release_expected = admission_expected.clone();
+            release_expected.operation = "release".into();
+            release_expected.challenge_id = release_id.to_string();
+            release_expected.admission_id = admission_id.to_string();
+            release_expected.result_sha256 = result_digest;
+            assert!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &release_expected,
+                        &URL_SAFE_NO_PAD.encode(&release_bytes),
+                        &URL_SAFE_NO_PAD.encode(release_signature.as_ref()),
+                    )
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &release_expected,
+                        &URL_SAFE_NO_PAD.encode(&release_bytes),
+                        &URL_SAFE_NO_PAD.encode(release_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::Conflict)
+            );
+
+            let mut altered = admission_expected.clone();
+            altered.query_sha256 = "0".repeat(64);
+            assert_eq!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &altered,
+                        &URL_SAFE_NO_PAD.encode(&admission_bytes),
+                        &URL_SAFE_NO_PAD.encode(admission_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::PolicyDenied)
+            );
+            let mut wrong_recipient = admission.clone();
+            wrong_recipient["audience"] = serde_json::json!("floe.server:wrong-recipient");
+            let (wrong_recipient_bytes, wrong_recipient_signature) =
+                sign_challenge(&wrong_recipient);
+            assert_eq!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &admission_expected,
+                        &URL_SAFE_NO_PAD.encode(&wrong_recipient_bytes),
+                        &URL_SAFE_NO_PAD.encode(wrong_recipient_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::PolicyDenied)
+            );
+            let mut wrong_resource = admission.clone();
+            wrong_resource["resources"] = serde_json::json!(["different-calendar"]);
+            let (wrong_resource_bytes, wrong_resource_signature) = sign_challenge(&wrong_resource);
+            assert_eq!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &admission_expected,
+                        &URL_SAFE_NO_PAD.encode(&wrong_resource_bytes),
+                        &URL_SAFE_NO_PAD.encode(wrong_resource_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::PolicyDenied)
+            );
+            let second_admission_id = Uuid::new_v4();
+            let second_admission = base_challenge("admission", second_admission_id, "", "");
+            let (second_admission_bytes, second_admission_signature) =
+                sign_challenge(&second_admission);
+            let mut second_admission_expected = admission_expected.clone();
+            second_admission_expected.challenge_id = second_admission_id.to_string();
+            let overflow_connection = vault.database.connect().unwrap();
+            for index in 0..128 {
+                overflow_connection
+                    .execute(
+                        &format!(
+                            "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES ('overflow-{index}', 'admission', '', '', '', '', '', 1, '', '', '', '', 1, 1, 1, {}, {})",
+                            now - 60_000,
+                            now - 60_000
+                        ),
+                        (),
+                    )
+                    .await
+                    .unwrap();
+            }
+            vault
+                .remote_sign_calendar_authorization(
+                    &second_admission_expected,
+                    &URL_SAFE_NO_PAD.encode(&second_admission_bytes),
+                    &URL_SAFE_NO_PAD.encode(second_admission_signature.as_ref()),
+                )
+                .await
+                .unwrap();
+            let mut overflow_rows = overflow_connection
+                .query("SELECT COUNT(*) FROM remote_authority_challenges", ())
+                .await
+                .unwrap();
+            assert!(
+                overflow_rows
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .get::<i64>(0)
+                    .unwrap()
+                    <= 3
+            );
+            let second_result_digest = encode_hex(&Sha256::digest(b"second-calendar-result"));
+            let second_release_id = Uuid::new_v4();
+            let second_release = base_challenge(
+                "release",
+                second_release_id,
+                &second_admission_id.to_string(),
+                &second_result_digest,
+            );
+            let (second_release_bytes, second_release_signature) = sign_challenge(&second_release);
+            let mut second_release_expected = second_admission_expected;
+            second_release_expected.operation = "release".into();
+            second_release_expected.challenge_id = second_release_id.to_string();
+            second_release_expected.admission_id = second_admission_id.to_string();
+            second_release_expected.result_sha256 = second_result_digest;
+            let paused = vault
+                .pause_remote_calendar_grant(grant.id(), grant.authority())
+                .await
+                .unwrap();
+            assert_eq!(
+                vault
+                    .remote_sign_calendar_authorization(
+                        &second_release_expected,
+                        &URL_SAFE_NO_PAD.encode(&second_release_bytes),
+                        &URL_SAFE_NO_PAD.encode(second_release_signature.as_ref()),
+                    )
+                    .await,
+                Err(AgentFailure::PolicyDenied)
+            );
+            assert_ne!(paused.authority(), grant.authority());
+            drop(paused);
+            let corruption_connection = vault.database.connect().unwrap();
+            corruption_connection
+                .execute(
+                    "UPDATE remote_calendar_grant_mappings SET payload = '{}' WHERE grant_id = ?",
+                    [grant.id().as_uuid().to_string()],
+                )
+                .await
+                .unwrap();
+            drop(vault);
+            assert!(
+                EncryptedAgentVault::open(root.path(), person_id, keys)
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

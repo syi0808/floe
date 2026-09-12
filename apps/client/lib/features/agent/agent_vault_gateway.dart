@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 
 import '../../infrastructure/diagnostics/app_diagnostics.dart';
 import 'agent_calendar_experts.dart';
@@ -7,11 +10,381 @@ import 'agent_conversation_gateway.dart';
 import 'agent_fixture_gateway.dart';
 import 'agent_memory_review.dart';
 import 'agent_memory.dart';
+import 'agent_personal_access.dart';
 import 'agent_proposal.dart';
 import 'agent_registry.dart';
 import 'agent_request_id.dart';
 
 enum AgentVaultState { missing, locked, ready, unavailable }
+
+final class RemoteProducerIdentity {
+  const RemoteProducerIdentity({
+    required this.schemaVersion,
+    required this.instanceId,
+    required this.executionOwner,
+    required this.audience,
+    required this.keyId,
+    required this.publicKey,
+    required this.fingerprint,
+  });
+
+  final int schemaVersion;
+  final String instanceId;
+  final String executionOwner;
+  final String audience;
+  final String keyId;
+  final String publicKey;
+  final String fingerprint;
+
+  factory RemoteProducerIdentity.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid producer identity');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'schema_version',
+      'instance_id',
+      'execution_owner',
+      'audience',
+      'key_id',
+      'public_key',
+      'fingerprint',
+    };
+    if (value.keys.any((key) => !fields.contains(key))) {
+      throw const FormatException('Invalid producer identity');
+    }
+    String text(String key) {
+      final item = value[key];
+      if (item is! String || item.isEmpty || item.length > 256) {
+        throw const FormatException('Invalid producer identity');
+      }
+      return item;
+    }
+
+    final schema = value['schema_version'];
+    if (schema != 1) throw const FormatException('Invalid producer identity');
+    return RemoteProducerIdentity(
+      schemaVersion: schema as int,
+      instanceId: text('instance_id'),
+      executionOwner: text('execution_owner'),
+      audience: text('audience'),
+      keyId: text('key_id'),
+      publicKey: text('public_key'),
+      fingerprint: text('fingerprint'),
+    );
+  }
+
+  Map<String, Object> toJson() => {
+    'schema_version': schemaVersion,
+    'instance_id': instanceId,
+    'execution_owner': executionOwner,
+    'audience': audience,
+    'key_id': keyId,
+    'public_key': publicKey,
+    'fingerprint': fingerprint,
+  };
+}
+
+final class RemoteEnrollmentStatus {
+  const RemoteEnrollmentStatus({
+    required this.enrollmentId,
+    required this.keyId,
+    required this.fingerprint,
+    required this.localConfirmed,
+    required this.adminApproved,
+    required this.active,
+  });
+
+  final String enrollmentId;
+  final String keyId;
+  final String fingerprint;
+  final bool localConfirmed;
+  final bool adminApproved;
+  final bool active;
+
+  factory RemoteEnrollmentStatus.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid enrollment status');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'enrollment_id',
+      'key_id',
+      'fingerprint',
+      'local_confirmed',
+      'admin_approved',
+      'active',
+    };
+    if (value.keys.any((key) => !fields.contains(key))) {
+      throw const FormatException('Invalid enrollment status');
+    }
+    final enrollmentId = value['enrollment_id'];
+    final keyId = value['key_id'];
+    final fingerprint = value['fingerprint'];
+    if (enrollmentId is! String ||
+        enrollmentId.isEmpty ||
+        keyId is! String ||
+        keyId.isEmpty ||
+        fingerprint is! String ||
+        fingerprint.isEmpty ||
+        value['local_confirmed'] is! bool ||
+        value['admin_approved'] is! bool ||
+        value['active'] is! bool) {
+      throw const FormatException('Invalid enrollment status');
+    }
+    return RemoteEnrollmentStatus(
+      enrollmentId: enrollmentId,
+      keyId: keyId,
+      fingerprint: fingerprint,
+      localConfirmed: value['local_confirmed'] as bool,
+      adminApproved: value['admin_approved'] as bool,
+      active: value['active'] as bool,
+    );
+  }
+}
+
+final class RemoteProducerInspection {
+  const RemoteProducerInspection({
+    required this.producer,
+    this.ownerFingerprint,
+  });
+
+  final RemoteProducerIdentity producer;
+  final String? ownerFingerprint;
+}
+
+final class RemoteCalendarGrantPreview {
+  const RemoteCalendarGrantPreview({
+    required this.connectorId,
+    required this.connectionId,
+    required this.resource,
+    required this.sourceAuthority,
+    required this.providerIdentity,
+    required this.executionOwner,
+    required this.producer,
+    required this.recipient,
+  });
+
+  final String connectorId;
+  final String connectionId;
+  final String resource;
+  final Map<String, Object?> sourceAuthority;
+  final String providerIdentity;
+  final String executionOwner;
+  final RemoteProducerIdentity producer;
+  final String recipient;
+
+  factory RemoteCalendarGrantPreview.fromJson(Object? raw) {
+    if (raw is! Map)
+      throw const FormatException('Invalid calendar grant preview');
+    final value = Map<String, Object?>.from(raw);
+    if (value['schema_version'] != 1 ||
+        value['connector_id'] is! String ||
+        value['connection_id'] is! String ||
+        value['resource'] is! String ||
+        value['provider_identity'] is! String ||
+        value['execution_owner'] is! String ||
+        value['recipient'] is! String ||
+        value['source_authority'] is! Map) {
+      throw const FormatException('Invalid calendar grant preview');
+    }
+    return RemoteCalendarGrantPreview(
+      connectorId: value['connector_id'] as String,
+      connectionId: value['connection_id'] as String,
+      resource: value['resource'] as String,
+      sourceAuthority: Map<String, Object?>.from(
+        value['source_authority'] as Map,
+      ),
+      providerIdentity: value['provider_identity'] as String,
+      executionOwner: value['execution_owner'] as String,
+      producer: RemoteProducerIdentity.fromJson(value['producer']),
+      recipient: value['recipient'] as String,
+    );
+  }
+}
+
+final class RemoteCalendarGrantOverview {
+  const RemoteCalendarGrantOverview({
+    required this.grantId,
+    required this.grantAuthority,
+    required this.state,
+    required this.connectorId,
+    required this.resource,
+    required this.recipient,
+  });
+
+  final String grantId;
+  final Map<String, Object?> grantAuthority;
+  final String state;
+  final String connectorId;
+  final String resource;
+  final String recipient;
+
+  factory RemoteCalendarGrantOverview.fromJson(Object? raw) {
+    if (raw is! Map)
+      throw const FormatException('Invalid calendar grant overview');
+    final value = Map<String, Object?>.from(raw);
+    if (value['schema_version'] != 1 ||
+        value['grant_id'] is! String ||
+        value['grant_authority'] is! Map ||
+        value['state'] is! String ||
+        value['connector_id'] is! String ||
+        value['resource'] is! String ||
+        value['recipient'] is! String) {
+      throw const FormatException('Invalid calendar grant overview');
+    }
+    return RemoteCalendarGrantOverview(
+      grantId: value['grant_id'] as String,
+      grantAuthority: Map<String, Object?>.from(
+        value['grant_authority'] as Map,
+      ),
+      state: value['state'] as String,
+      connectorId: value['connector_id'] as String,
+      resource: value['resource'] as String,
+      recipient: value['recipient'] as String,
+    );
+  }
+}
+
+final class RemoteViewGrantPreview {
+  const RemoteViewGrantPreview({
+    required this.viewId,
+    required this.connectorId,
+    required this.connectionId,
+    required this.connectionRevision,
+    required this.resource,
+    required this.sourceAuthority,
+    required this.providerIdentity,
+    required this.executionOwner,
+    required this.producer,
+    required this.consumer,
+    required this.purpose,
+    required this.recipient,
+  });
+
+  final String viewId;
+  final String connectorId;
+  final String connectionId;
+  final int connectionRevision;
+  final String resource;
+  final Map<String, Object?> sourceAuthority;
+  final String providerIdentity;
+  final String executionOwner;
+  final RemoteProducerIdentity producer;
+  final String consumer;
+  final String purpose;
+  final String recipient;
+
+  factory RemoteViewGrantPreview.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid remote view preview');
+    final value = Map<String, Object?>.from(raw);
+    if (value['schema_version'] != 1 ||
+        value['view_id'] is! String ||
+        value['connector_id'] is! String ||
+        value['connection_id'] is! String ||
+        value['connection_revision'] is! int ||
+        (value['connection_revision'] as int) <= 0 ||
+        value['resource'] is! String ||
+        value['source_authority'] is! Map ||
+        value['provider_identity'] is! String ||
+        value['execution_owner'] is! String ||
+        value['consumer'] is! String ||
+        value['purpose'] is! String ||
+        value['recipient'] is! String) {
+      throw const FormatException('Invalid remote view preview');
+    }
+    return RemoteViewGrantPreview(
+      viewId: value['view_id'] as String,
+      connectorId: value['connector_id'] as String,
+      connectionId: value['connection_id'] as String,
+      connectionRevision: value['connection_revision'] as int,
+      resource: value['resource'] as String,
+      sourceAuthority: Map<String, Object?>.from(
+        value['source_authority'] as Map,
+      ),
+      providerIdentity: value['provider_identity'] as String,
+      executionOwner: value['execution_owner'] as String,
+      producer: RemoteProducerIdentity.fromJson(value['producer']),
+      consumer: value['consumer'] as String,
+      purpose: value['purpose'] as String,
+      recipient: value['recipient'] as String,
+    );
+  }
+}
+
+final class RemoteViewGrantOverview {
+  const RemoteViewGrantOverview({
+    required this.grantId,
+    required this.grantAuthority,
+    required this.viewId,
+    required this.connectorId,
+    required this.connectionId,
+    required this.connectionRevision,
+    required this.resource,
+    required this.sourceAuthority,
+    required this.executionOwner,
+    required this.state,
+    required this.reviewRequired,
+    required this.consumer,
+    required this.purpose,
+    required this.recipient,
+  });
+
+  final String grantId;
+  final Map<String, Object?> grantAuthority;
+  final String viewId;
+  final String connectorId;
+  final String connectionId;
+  final int? connectionRevision;
+  final String resource;
+  final Map<String, Object?> sourceAuthority;
+  final String executionOwner;
+  final String state;
+  final bool reviewRequired;
+  final String consumer;
+  final String purpose;
+  final String recipient;
+
+  factory RemoteViewGrantOverview.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid remote view grant');
+    final value = Map<String, Object?>.from(raw);
+    if (value['schema_version'] != 1 ||
+        value['grant_id'] is! String ||
+        value['grant_authority'] is! Map ||
+        value['view_id'] is! String ||
+        value['connector_id'] is! String ||
+        value['connection_id'] is! String ||
+        value['connection_revision'] != null &&
+            (value['connection_revision'] is! int ||
+                (value['connection_revision'] as int) <= 0) ||
+        value['resource'] is! String ||
+        value['source_authority'] is! Map ||
+        value['execution_owner'] is! String ||
+        value['state'] is! String ||
+        value['review_required'] is! bool ||
+        value['consumer'] is! String ||
+        value['purpose'] is! String ||
+        value['recipient'] is! String) {
+      throw const FormatException('Invalid remote view grant');
+    }
+    return RemoteViewGrantOverview(
+      grantId: value['grant_id'] as String,
+      grantAuthority: Map<String, Object?>.from(
+        value['grant_authority'] as Map,
+      ),
+      viewId: value['view_id'] as String,
+      connectorId: value['connector_id'] as String,
+      connectionId: value['connection_id'] as String,
+      connectionRevision: value['connection_revision'] as int?,
+      resource: value['resource'] as String,
+      sourceAuthority: Map<String, Object?>.from(
+        value['source_authority'] as Map,
+      ),
+      executionOwner: value['execution_owner'] as String,
+      state: value['state'] as String,
+      reviewRequired: value['review_required'] as bool,
+      consumer: value['consumer'] as String,
+      purpose: value['purpose'] as String,
+      recipient: value['recipient'] as String,
+    );
+  }
+}
 
 class AgentVaultException implements Exception {
   const AgentVaultException(
@@ -70,6 +443,7 @@ final class NativeAgentVaultGateway
         AgentConversationGateway,
         AgentCalendarExpertGateway,
         AgentConnectionsGateway,
+        AgentPersonalAccessGateway,
         AgentMemoryGateway,
         AgentMemoryReviewGateway {
   NativeAgentVaultGateway(
@@ -112,6 +486,168 @@ final class NativeAgentVaultGateway
     return memory;
   }
 
+  Future<RemoteProducerInspection> inspectRemoteProducer({
+    required String personId,
+    required Map<String, Object?> route,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_authority_inspect_producer',
+      'route': route,
+    });
+    final owner = result['remote_owner'];
+    final ownerMap = owner is Map ? Map<String, Object?>.from(owner) : null;
+    return RemoteProducerInspection(
+      producer: RemoteProducerIdentity.fromJson(result['remote_producer']),
+      ownerFingerprint: ownerMap?['fingerprint'] as String?,
+    );
+  }
+
+  Future<RemoteEnrollmentStatus> reviewAndEnrollRemoteProducer({
+    required String personId,
+    required Map<String, Object?> route,
+    required RemoteProducerIdentity producer,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_authority_review_and_enroll',
+      'route': route,
+      'producer': producer.toJson(),
+    });
+    return RemoteEnrollmentStatus.fromJson(result['remote_enrollment']);
+  }
+
+  Future<RemoteEnrollmentStatus> remoteEnrollmentStatus({
+    required String personId,
+    required Map<String, Object?> route,
+    required String enrollmentId,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_authority_enrollment_status',
+      'route': route,
+      'enrollment_id': enrollmentId,
+    });
+    return RemoteEnrollmentStatus.fromJson(result['remote_enrollment']);
+  }
+
+  Future<RemoteCalendarGrantPreview> previewRemoteCalendarGrant({
+    required String personId,
+    required Map<String, Object?> route,
+    required String connectorId,
+    required String connectionId,
+    required String resource,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_calendar_grant_preview',
+      'route': route,
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'resource': resource,
+    });
+    return RemoteCalendarGrantPreview.fromJson(
+      result['remote_calendar_preview'],
+    );
+  }
+
+  Future<RemoteCalendarGrantOverview> reviewRemoteCalendarGrant({
+    required String personId,
+    required Map<String, Object?> route,
+    required String connectorId,
+    required String connectionId,
+    required String resource,
+    required String expectedProducerFingerprint,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_calendar_grant_review',
+      'route': route,
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'resource': resource,
+      'expected_producer_fingerprint': expectedProducerFingerprint,
+    });
+    return RemoteCalendarGrantOverview.fromJson(
+      result['remote_calendar_grant'],
+    );
+  }
+
+  Future<RemoteCalendarGrantOverview> pauseRemoteCalendarGrant({
+    required String personId,
+    required String grantId,
+    required Map<String, Object?> expectedAuthority,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_calendar_grant_pause',
+      'grant_id': grantId,
+      'expected_authority': expectedAuthority,
+    });
+    return RemoteCalendarGrantOverview.fromJson(
+      result['remote_calendar_grant'],
+    );
+  }
+
+  Future<RemoteViewGrantPreview> previewRemoteViewGrant({
+    required String personId,
+    required Map<String, Object?> route,
+    required String viewId,
+    required String connectorId,
+    required String connectionId,
+    required String resource,
+    required String consumer,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_view_grant_preview',
+      'route': route,
+      'view_id': viewId,
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'resource': resource,
+      'consumer': consumer,
+    });
+    return RemoteViewGrantPreview.fromJson(result['remote_view_preview']);
+  }
+
+  Future<RemoteViewGrantOverview> reviewRemoteViewGrant({
+    required String personId,
+    required Map<String, Object?> route,
+    required String viewId,
+    required String connectorId,
+    required String connectionId,
+    required String resource,
+    required String consumer,
+    required String expectedProducerFingerprint,
+    required Map<String, Object?> expectedSourceAuthority,
+    required int expectedConnectionRevision,
+    required String expectedProviderIdentity,
+    required String expectedRecipient,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_view_grant_review',
+      'route': route,
+      'view_id': viewId,
+      'connector_id': connectorId,
+      'connection_id': connectionId,
+      'resource': resource,
+      'consumer': consumer,
+      'expected_producer_fingerprint': expectedProducerFingerprint,
+      'expected_source_authority': expectedSourceAuthority,
+      'expected_connection_revision': expectedConnectionRevision,
+      'expected_provider_identity': expectedProviderIdentity,
+      'expected_recipient': expectedRecipient,
+    });
+    return RemoteViewGrantOverview.fromJson(result['remote_view_grant']);
+  }
+
+  Future<RemoteViewGrantOverview> pauseRemoteViewGrant({
+    required String personId,
+    required String grantId,
+    required Map<String, Object?> expectedAuthority,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_view_grant_pause',
+      'grant_id': grantId,
+      'expected_authority': expectedAuthority,
+    });
+    return RemoteViewGrantOverview.fromJson(result['remote_view_grant']);
+  }
+
   @override
   Future<AgentMemoryReviewOverview> readMemoryReview(String personId) =>
       _memoryReview(personId, null);
@@ -132,7 +668,7 @@ final class NativeAgentVaultGateway
   ) async {
     final result = await _perform(personId, {
       'kind': 'memory_review',
-      'decision': ?decision,
+      'decision': decision,
     });
     final review = AgentMemoryReviewOverview.fromJson(
       Map<String, Object?>.from(result['memory_review'] as Map),
@@ -303,6 +839,36 @@ final class NativeAgentVaultGateway
   }
 
   @override
+  Future<CalendarSubjectPreview> previewCalendarSubject(
+    CalendarSubjectPreviewRequest request,
+  ) async {
+    if (request.deviceId != deviceId) {
+      throw const FormatException('Calendar preview device mismatch');
+    }
+    final result = await _perform(request.personId, {
+      'kind': 'calendar_subject_preview',
+      'request': request.toJson(),
+    });
+    if (result['state'] != 'ready' ||
+        result['calendar_subject_preview'] is! Map) {
+      throw const FormatException('Missing Calendar subject preview');
+    }
+    final preview = CalendarSubjectPreview.fromJson(
+      result['calendar_subject_preview'],
+    );
+    final expectedCalendarIds = [...request.calendarIds]..sort();
+    if (preview.provider != request.provider ||
+        preview.deviceId != request.deviceId ||
+        preview.connectionId != request.connectionId ||
+        preview.connectionScope != request.connectionScope ||
+        !listEquals(preview.calendarIds, expectedCalendarIds) ||
+        preview.sourceAuthority != request.sourceAuthority) {
+      throw const FormatException('Calendar preview identity mismatch');
+    }
+    return preview;
+  }
+
+  @override
   Future<AgentCalendarExperts> installCalendarExpert(
     AgentCalendarSetup setup,
   ) async {
@@ -348,6 +914,149 @@ final class NativeAgentVaultGateway
       throw const FormatException('Calendar Expert Person or vault mismatch');
     }
     return overview;
+  }
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalAttention(
+    String personId,
+  ) async {
+    return _personalAccess(personId, {'kind': 'inspect'});
+  }
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalAttention(
+    String personId, {
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async {
+    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
+    if (fingerprint == null) {
+      throw const FormatException('Attention preview unavailable');
+    }
+    if (reviewedPreview.personId != personId ||
+        reviewedPreview.deviceId != deviceId ||
+        consumers.isEmpty ||
+        consumers.toSet().length != consumers.length) {
+      throw const FormatException('Attention review scope changed');
+    }
+    return _personalAccess(personId, {
+      'kind': 'review',
+      'expected_native_subject_fingerprint': fingerprint,
+      'consumers': List<String>.unmodifiable(consumers),
+      'expected_grant_id': reviewedPreview.grantId,
+      'expected_grant_authority': reviewedPreview.grantAuthority,
+    });
+  }
+
+  @override
+  Future<PersonalAccessOverview> setPersonalAttentionEnabled(
+    String personId,
+    bool enabled,
+  ) async {
+    return _personalAccess(personId, {
+      'kind': 'set_enabled',
+      'enabled': enabled,
+    });
+  }
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalContacts(
+    String personId,
+    List<String> selectedHandles,
+  ) async {
+    final handles = _canonicalContactHandles(selectedHandles);
+    return _personalContacts(personId, {
+      'kind': 'inspect',
+      'selected_handles': handles,
+    });
+  }
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalContacts(
+    String personId, {
+    required List<String> selectedHandles,
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async {
+    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
+    if (fingerprint == null ||
+        reviewedPreview.personId != personId ||
+        reviewedPreview.deviceId != deviceId ||
+        consumers.isEmpty ||
+        consumers.toSet().length != consumers.length) {
+      throw const FormatException('Contacts review scope changed');
+    }
+    return _personalContacts(personId, {
+      'kind': 'review',
+      'selected_handles': _canonicalContactHandles(selectedHandles),
+      'expected_native_subject_fingerprint': fingerprint,
+      'consumers': List<String>.unmodifiable(consumers),
+      'expected_grant_id': reviewedPreview.grantId,
+      'expected_grant_authority': reviewedPreview.grantAuthority,
+    });
+  }
+
+  Future<PersonalAccessOverview> _personalAccess(
+    String personId,
+    Map<String, Object?> change,
+  ) async {
+    final result = await _perform(personId, {
+      'kind': 'personal_access',
+      'change': {
+        'connector': 'attention.macos',
+        'device_id': deviceId,
+        'change': change,
+      },
+    });
+    if (result['state'] != 'ready' || result['personal_access'] is! Map) {
+      throw const FormatException('Missing personal access overview');
+    }
+    final overview = PersonalAccessOverview.fromJson(result['personal_access']);
+    if (overview.personId != personId || overview.deviceId != deviceId) {
+      throw const FormatException('Personal access scope mismatch');
+    }
+    return overview;
+  }
+
+  Future<PersonalAccessOverview> _personalContacts(
+    String personId,
+    Map<String, Object?> change,
+  ) async {
+    final result = await _perform(personId, {
+      'kind': 'contacts_access',
+      'change': {
+        'connector': 'contacts.$platformContactsConnector',
+        'device_id': deviceId,
+        'change': change,
+      },
+    });
+    if (result['state'] != 'ready' || result['personal_access'] is! Map) {
+      throw const FormatException('Missing Contacts access overview');
+    }
+    final overview = PersonalAccessOverview.fromJson(result['personal_access']);
+    if (overview.personId != personId || overview.deviceId != deviceId) {
+      throw const FormatException('Contacts access scope mismatch');
+    }
+    return overview;
+  }
+
+  String get platformContactsConnector => Platform.isAndroid
+      ? 'android'
+      : Platform.isIOS
+      ? 'apple'
+      : 'unsupported';
+
+  List<String> _canonicalContactHandles(List<String> handles) {
+    final value = handles.toSet().toList()..sort();
+    if (value.isEmpty ||
+        value.length > 64 ||
+        value.length != handles.length ||
+        value.any(
+          (handle) => handle.isEmpty || handle.contains(RegExp(r'\s')),
+        )) {
+      throw const FormatException('Invalid Contacts selection');
+    }
+    return List.unmodifiable(value);
   }
 
   @override

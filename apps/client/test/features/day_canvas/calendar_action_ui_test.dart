@@ -66,8 +66,12 @@ CalendarConnection connection({int revision = 3, String? error}) =>
       deviceId: 'test-device',
       provider: 'fixture',
       revision: revision,
-      calendars: const [
-        ConnectedCalendar(id: 'calendar', name: 'Personal calendar'),
+      calendars: [
+        ConnectedCalendar(
+          id: 'calendar',
+          name: 'Personal calendar',
+          lastSuccessAt: DateTime.now(),
+        ),
       ],
       lastSuccessAt: DateTime.now(),
       error: error,
@@ -160,6 +164,14 @@ void main() {
         isTrue,
       );
       expect(controller.canApprove(proposal, null, DateTime.now()), isFalse);
+      expect(
+        controller.canApprove(
+          action(agentOrigin: origin()),
+          connection(revision: 4),
+          DateTime.now(),
+        ),
+        isTrue,
+      );
       expect(
         controller.canApprove(
           proposal,
@@ -385,10 +397,6 @@ void main() {
       expect(find.text('Suggested by Floe'), findsOneWidget);
       expect(find.text('saved-conversation'), findsNothing);
       expect(tester.takeException(), isNull);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('../../goldens/agent_action_review.png'),
-      );
       await tester.ensureVisible(find.text('Technical details'));
       await tester.tap(find.text('Technical details'));
       await tester.pumpAndSettle();

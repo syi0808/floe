@@ -37,11 +37,39 @@ final class AppleContactsProviderTests: XCTestCase {
             .denied,
             .restricted,
         ] {
-            let provider = try makeProvider(store: MockContactsStore(state: state))
+            let store = MockContactsStore(state: state)
+            let provider = try makeProvider(store: store)
             XCTAssertThrowsError(try provider.readPeopleView()) { error in
                 XCTAssertEqual(error as? AppleContactsProviderError, .permissionRequired(state))
             }
+            XCTAssertEqual(store.fetchCount, 0)
         }
+    }
+
+    func testUnresolvedSelectionDeniesBeforeProviderRead() throws {
+        let store = MockContactsStore(state: .authorized, records: [record(identifier: "one", name: "One")])
+        let provider = try makeProvider(store: store)
+
+        XCTAssertThrowsError(
+            try provider.readPeopleView(selection: .identityHandles(["person.identity:missing"]))
+        ) { error in
+            XCTAssertEqual(error as? AppleContactsProviderError, .selectionUnresolved)
+        }
+        XCTAssertEqual(store.fetchCount, 0)
+    }
+
+    func testPermissionRevokedDuringProviderReadIsNotProjected() throws {
+        let store = MockContactsStore(
+            state: .authorized,
+            records: [record(identifier: "one", name: "One")],
+            revokeDuringFetch: true
+        )
+        let provider = try makeProvider(store: store)
+
+        XCTAssertThrowsError(try provider.readPeopleView()) { error in
+            XCTAssertEqual(error as? AppleContactsProviderError, .permissionRequired(.denied))
+        }
+        XCTAssertEqual(store.fetchCount, 1)
     }
 
     func testLimitedAndAuthorizedCanReadBoundedOpaqueProjection() throws {
@@ -84,15 +112,23 @@ final class AppleContactsProviderTests: XCTestCase {
         let selected = try provider.readPeopleView(selection: .identityHandles([selectedHandle]))
         XCTAssertEqual(selected.identities.map(\.displayName), ["Two"])
         XCTAssertTrue(selected.coverageComplete)
+        XCTAssertEqual(store.requestedIdentifiers, ["two"])
     }
 
-    func testMissingSelectedIdentityMarksCoverageIncomplete() throws {
-        let provider = try makeProvider(
-            store: MockContactsStore(state: .authorized, records: [record(identifier: "one", name: "One")])
+    func testInspectedSubjectResolvesProviderIdentifiersAndIsStable() throws {
+        let store = MockContactsStore(
+            state: .limited,
+            records: [record(identifier: "one", name: "One"), record(identifier: "two", name: "Two")]
         )
-        let selected = try provider.readPeopleView(selection: .identityHandles(["person.identity:missing"]))
-        XCTAssertTrue(selected.identities.isEmpty)
-        XCTAssertFalse(selected.coverageComplete)
+        let provider = try makeProvider(store: store)
+        let view = try provider.readPeopleView()
+        let handles = view.identities.map(\.identityHandle)
+        let first = try provider.inspectSelectedSubject(handles)
+        let second = try provider.inspectSelectedSubject(Array(handles.reversed()))
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.permissionClass, "limited")
+        XCTAssertEqual(first.resolvedHandles, handles.sorted())
+        XCTAssertEqual(store.requestedIdentifiers, ["one", "two"])
     }
 
     func testEncodedViewMatchesStrictFixtureShapeAndContainsNoForbiddenFields() throws {
@@ -168,18 +204,24 @@ final class AppleContactsProviderTests: XCTestCase {
 private final class MockContactsStore: AppleContactsStore {
     private(set) var state: AppleContactsAuthorizationState
     private(set) var requestCount = 0
+    private(set) var fetchCount = 0
+    private(set) var requestedIdentifiers: [String] = []
     let requestedState: AppleContactsAuthorizationState
     let records: [AppleContactRecord]
 
     init(
         state: AppleContactsAuthorizationState,
         requestedState: AppleContactsAuthorizationState = .authorized,
-        records: [AppleContactRecord] = []
+        records: [AppleContactRecord] = [],
+        revokeDuringFetch: Bool = false
     ) {
         self.state = state
         self.requestedState = requestedState
         self.records = records
+        self.revokeDuringFetch = revokeDuringFetch
     }
+
+    let revokeDuringFetch: Bool
 
     func authorizationState() -> AppleContactsAuthorizationState {
         state
@@ -191,10 +233,16 @@ private final class MockContactsStore: AppleContactsStore {
         return state == .authorized || state == .limited
     }
 
-    func fetchContacts(limit: Int) throws -> AppleContactBatch {
-        AppleContactBatch(
+    func fetchContacts(limit: Int, identifiers: Set<String>?) throws -> AppleContactBatch {
+        fetchCount += 1
+        if revokeDuringFetch { state = .denied }
+        requestedIdentifiers = identifiers?.sorted() ?? []
+        let records = identifiers.map { selected in
+            self.records.filter { selected.contains($0.identifier) }
+        } ?? self.records
+        return AppleContactBatch(
             records: Array(records.prefix(limit)),
-            coverageComplete: records.count <= limit
+            coverageComplete: records.count <= limit && (identifiers == nil || records.count == identifiers?.count)
         )
     }
 }

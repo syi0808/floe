@@ -198,6 +198,105 @@ final class _RecordingTransport implements LocalContextTransport {
   final List<(String, String, String?)> revocations = [];
 
   @override
+  Future<void> registerAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completeAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposeAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<void> registerAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAttentionAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completeAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposeAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<void> registerPersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollPersonalAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completePersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failPersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposePersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
   Future<void> publishCalendarObservation({
     required String personId,
     required String deviceId,

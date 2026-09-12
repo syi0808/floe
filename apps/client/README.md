@@ -119,6 +119,12 @@ Live acceptance, timezone/recurrence limitations, and dogfood steps are tracked 
 
 ## Validation commands
 
+In a connected, unlocked conversation, `/focus` requests a 60-minute focus proposal for today.
+It requires exactly one reviewed EventKit calendar. Open the resulting proposal to review it;
+the command never dispatches a calendar write. Approval and execution use the unlocked encrypted
+vault, and an expired source observation requires a fresh proposal rather than replaying an old one.
+Other platforms and ambiguous calendar selections return an explicit source/capability error.
+
 ```sh
 flutter analyze
 flutter test

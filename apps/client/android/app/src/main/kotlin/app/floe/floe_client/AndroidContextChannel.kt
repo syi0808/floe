@@ -45,6 +45,7 @@ internal class AndroidContextChannel(
     @Volatile private var healthLastView: Map<String, Any?>? = null
     @Volatile private var calendarLastSuccess: Long? = null
     @Volatile private var contactsLastSuccess: Long? = null
+    private val contactNativeIdentifiersByHandle = mutableMapOf<String, String>()
     @Volatile private var healthLastSuccess: Long? = null
 
     init {
@@ -61,6 +62,7 @@ internal class AndroidContextChannel(
             "readCalendar" -> runWorker(result) { readCalendar(arguments(call)) }
             "readAcquisition" -> runWorker(result) { readAcquisition(arguments(call)) }
             "readContacts" -> runWorker(result) { readContacts(arguments(call)) }
+            "inspectContactsSubject" -> runWorker(result) { inspectContactsSubject(arguments(call)) }
             "readWellbeing" -> runWorker(result) { readWellbeing() }
             else -> result.notImplemented()
         }
@@ -406,10 +408,23 @@ internal class AndroidContextChannel(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) throw ContextFailure("unsupported", "Bounded provider queries require Android 8 or later.")
         val limit = arguments.int("limit")
         if (limit !in 1..MAX_CONTACT_ITEMS) throw ContextFailure("invalid_input", "Contact limit is invalid.")
+        val selectedHandles = (arguments["selected_handles"] as? List<*>)?.map {
+            it as? String ?: throw ContextFailure("invalid_input", "selected_handles is invalid.")
+        }
+        if (selectedHandles != null && (selectedHandles.isEmpty() || selectedHandles.size > MAX_CONTACT_ITEMS || selectedHandles.toSet().size != selectedHandles.size || selectedHandles.any { !validOpaque(it, 512) })) {
+            throw ContextFailure("invalid_input", "selected_handles is invalid.")
+        }
+        val selectedIdentifiers = selectedHandles?.map {
+            contactNativeIdentifiersByHandle[it] ?: throw ContextFailure("unavailable", "Selected contact is unavailable.")
+        }
         val query = Bundle().apply {
             putStringArray(ContentResolverKeys.SORT_COLUMNS, arrayOf(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY))
             putInt(ContentResolverKeys.SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_ASCENDING)
             putInt(ContentResolverKeys.LIMIT, limit + 1)
+            if (selectedIdentifiers != null) {
+                putString(ContentResolverKeys.SELECTION, selectedIdentifiers.joinToString(",", prefix = "${ContactsContract.Contacts._ID} IN (", postfix = ")") { "?" })
+                putStringArray(ContentResolverKeys.SELECTION_ARGS, selectedIdentifiers.toTypedArray())
+            }
         }
         val projection = arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)
         val identities = mutableListOf<Map<String, Any?>>()
@@ -424,8 +439,10 @@ internal class AndroidContextChannel(
                     break
                 }
                 val evidence = opaqueHandle("contact.evidence", identifier)
+                val identityHandle = opaqueHandle("person.identity", identifier)
+                contactNativeIdentifiersByHandle[identityHandle] = identifier
                 identities += linkedMapOf(
-                    "identity_handle" to opaqueHandle("person.identity", identifier),
+                    "identity_handle" to identityHandle,
                     "display_name" to name,
                     "aliases" to emptyList<String>(),
                     "confidence_millis" to 1000,
@@ -433,20 +450,76 @@ internal class AndroidContextChannel(
                 )
             }
         } ?: throw ContextFailure("unavailable", "Contacts provider returned no cursor.")
+        requirePermission(Manifest.permission.READ_CONTACTS)
         val observed = System.currentTimeMillis()
+        val selectedResolved = selectedHandles?.all { handle -> identities.any { it["identity_handle"] == handle } } ?: true
         val view = linkedMapOf<String, Any?>(
             "schema_version" to 1,
             "view_id" to "people.identity",
             "source_handle" to opaqueHandle("people", deviceId()),
             "observed_at_unix_ms" to observed,
             "expires_at_unix_ms" to observed + FRESHNESS_MS,
-            "coverage_complete" to !hasMore,
+            "coverage_complete" to (!hasMore && selectedResolved),
             "identities" to identities,
         )
         requireEncodedLimit(view, MAX_PEOPLE_BYTES)
         contactsLastView = view
         contactsLastSuccess = observed
         return view
+    }
+
+    private fun inspectContactsSubject(arguments: Map<String, Any?>): Map<String, Any?> {
+        if (arguments.keys != setOf("selected_handles")) {
+            throw ContextFailure("invalid_input", "Invalid Contacts subject request.")
+        }
+        requirePermission(Manifest.permission.READ_CONTACTS)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            throw ContextFailure("unsupported", "Bounded provider queries require Android 8 or later.")
+        }
+        val selectedHandles = (arguments["selected_handles"] as? List<*>)?.map {
+            it as? String ?: throw ContextFailure("invalid_input", "selected_handles is invalid.")
+        } ?: throw ContextFailure("invalid_input", "selected_handles is required.")
+        if (selectedHandles.isEmpty() || selectedHandles.size > MAX_CONTACT_ITEMS ||
+            selectedHandles.toSet().size != selectedHandles.size ||
+            selectedHandles.any { !validOpaque(it, 512) }) {
+            throw ContextFailure("invalid_input", "selected_handles is invalid.")
+        }
+        val identifiers = selectedHandles.map {
+            contactNativeIdentifiersByHandle[it]
+                ?: throw ContextFailure("unavailable", "Selected contact is unavailable.")
+        }
+        val query = Bundle().apply {
+            putString(
+                ContentResolverKeys.SELECTION,
+                identifiers.joinToString(",", prefix = "${ContactsContract.Contacts._ID} IN (", postfix = ")") { "?" },
+            )
+            putStringArray(ContentResolverKeys.SELECTION_ARGS, identifiers.toTypedArray())
+            putInt(ContentResolverKeys.LIMIT, identifiers.size + 1)
+        }
+        val resolved = mutableSetOf<String>()
+        val projection = arrayOf(ContactsContract.Contacts._ID)
+        activity.contentResolver.query(ContactsContract.Contacts.CONTENT_URI, projection, query, null)?.use { cursor ->
+            while (cursor.moveToNext()) resolved += cursor.requiredString(0, 512)
+        } ?: throw ContextFailure("unavailable", "Contacts provider returned no cursor.")
+        requirePermission(Manifest.permission.READ_CONTACTS)
+        if (resolved != identifiers.toSet()) {
+            throw ContextFailure("unavailable", "Selected contact is unavailable.")
+        }
+        val permissionClass = "read_contacts"
+        val fingerprint = nativeFingerprint(permissionClass, identifiers)
+        return linkedMapOf(
+            "schema_version" to 1,
+            "subject_fingerprint" to fingerprint,
+            "permission_class" to permissionClass,
+            "resolved_handles" to selectedHandles.sorted(),
+        )
+    }
+
+    private fun nativeFingerprint(permissionClass: String, identifiers: List<String>): String {
+        val input = "contacts.subject\u0000$permissionClass\u0000${identifiers.sorted().joinToString("\u0000")}"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 
     private fun readWellbeing(): Map<String, Any?> {

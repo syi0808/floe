@@ -201,6 +201,8 @@ type Console struct {
 	connectorLifecycleMu                         sync.Mutex
 	connectorLifecycles                          map[string]*sync.Mutex
 	connectorReservations                        map[string]connectionRecord
+	calendarAdmissions                           map[string]calendarAdmissionState
+	remoteViewAdmissions                         map[string]remoteViewAdmissionState
 }
 
 func (console *Console) authorityEngine() *authorization.Engine {
@@ -389,7 +391,7 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if err != nil {
 		return nil, err
 	}
-	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
+	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}, remoteViewAdmissions: map[string]remoteViewAdmissionState{}}
 	producer, producerError := loadProducerIdentity(filepath.Join(directory, "producer-identity.json"), !stateExists)
 	if producerError != nil {
 		console.producerUnavailable.Store(true)
@@ -637,7 +639,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		failure(writer, 503, "person_cleanup_pending")
 		return
 	}
-	if strings.HasPrefix(request.URL.Path, "/v1/authority/enrollment") || request.URL.Path == "/v1/authority/producer" {
+	if strings.HasPrefix(request.URL.Path, "/v1/authority/enrollment") || request.URL.Path == "/v1/authority/producer" || request.URL.Path == "/v1/authority/calendar/source" {
 		console.serveAuthority(writer, request, scope)
 		return
 	}
@@ -706,133 +708,58 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		return
 	}
 	if request.URL.Path == "/v1/views/mail.communication" {
-		ownsGmail := connectionOwnedBy(connectionRecords, "gmail", scope)
-		ownsMicrosoftMail := connectionOwnedBy(connectionRecords, "microsoft.mail", scope)
-		if !ownsGmail {
-			gmail = nil
-		}
-		if !ownsMicrosoftMail {
-			microsoftMail = nil
-		}
-		if request.Method != http.MethodPost || gmail == nil && microsoftMail == nil {
-			failure(writer, 404, "not_found")
-			return
-		}
-		var input struct {
-			SchemaVersion int    `json:"schema_version"`
-			Query         string `json:"query"`
-			Cursor        int    `json:"cursor"`
-			Limit         int    `json:"limit"`
-		}
-		if !decode(writer, request, &input) || input.SchemaVersion != 1 || len(input.Query) > 512 || input.Cursor < 0 || input.Limit < 1 || input.Limit > 100 {
-			failure(writer, 400, "validation")
-			return
-		}
-		var view any
-		var err error
-		if gmail != nil {
-			view, err = gmail.ReadCommunicationView(input.Query, input.Cursor, input.Limit)
-		}
-		if (gmail == nil || err != nil) && microsoftMail != nil {
-			view, err = microsoftMail.ReadCommunicationView(request.Context(), input.Query, input.Cursor, input.Limit)
-		}
-		if err != nil {
-			failure(writer, 503, "view_unavailable")
-			return
-		}
-		reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
+		failure(writer, http.StatusBadRequest, "admission_required")
 		return
 	}
-	if request.URL.Path == "/v1/views/calendar.timeline" {
-		if request.Method != http.MethodPost || len(calendars) == 0 {
-			failure(writer, 404, "not_found")
+	if strings.HasPrefix(request.URL.Path, "/v1/views/calendar.timeline") {
+		if request.URL.Path == "/v1/views/calendar.timeline/source-preview" {
+			console.serveRemoteViewSourcePreview(writer, request, "calendar.timeline", scope, connectionRecords)
 			return
 		}
-		var input struct {
-			SchemaVersion      int    `json:"schema_version"`
-			ConnectorID        string `json:"connector_id"`
-			ConnectionID       string `json:"connection_id"`
-			ConnectionRevision uint64 `json:"connection_revision"`
-			RangeStartUnixMS   int64  `json:"range_start_unix_ms"`
-			RangeEndUnixMS     int64  `json:"range_end_unix_ms"`
-			Cursor             string `json:"cursor"`
-			Limit              int    `json:"limit"`
-		}
-		if !decode(writer, request, &input) || input.SchemaVersion != 1 || input.ConnectorID != "calendar.google" && input.ConnectorID != "calendar.microsoft" || input.RangeStartUnixMS < 0 || input.RangeEndUnixMS <= input.RangeStartUnixMS || input.RangeEndUnixMS-input.RangeStartUnixMS > int64(32*24*time.Hour/time.Millisecond) || len(input.Cursor) > 2048 || strings.ContainsAny(input.Cursor, "\r\n\x00") || input.Limit < 1 || input.Limit > 128 {
-			failure(writer, 400, "validation")
-			return
-		}
-		record, exists := connectionRecords[input.ConnectionID]
-		if !exists || record.PersonID != scope.PersonID || record.Device != nil && record.Device.DeviceID != scope.DeviceID {
-			failure(writer, http.StatusConflict, "connection_changed")
-			return
-		}
-		if record.Revision != input.ConnectionRevision || record.ConnectorID != input.ConnectorID {
-			failure(writer, http.StatusConflict, "connection_changed")
-			return
-		}
-		selected := calendars[input.ConnectionID]
-		if selected == nil {
-			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
-			return
-		}
-		selectedSnapshot, err := selected.ConnectionSnapshot(request.Context())
-		if err != nil {
-			failure(writer, http.StatusServiceUnavailable, "view_unavailable")
-			return
-		}
-		owned, err := console.ownedConnectionSnapshots([]any{selectedSnapshot}, scope)
-		if err != nil || len(owned) != 1 {
-			failure(writer, http.StatusNotFound, "calendar_connector_not_found")
-			return
-		}
-		view, err := selected.ReadCalendarView(request.Context(), time.UnixMilli(input.RangeStartUnixMS), time.UnixMilli(input.RangeEndUnixMS), input.Cursor, input.Limit)
-		if err != nil {
-			failure(writer, 503, "view_unavailable")
-			return
-		}
-		reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
+		console.serveCalendarAuthority(writer, request, scope, calendars, connectionRecords)
 		return
+	}
+	if request.URL.Path == "/v1/views/mail.communication/source-preview" || request.URL.Path == "/v1/views/work.context/source-preview" || request.URL.Path == "/v1/views/life.logistics/source-preview" {
+		viewID, _, _ := remoteViewRoute(strings.TrimSuffix(request.URL.Path, "/source-preview") + "/admit")
+		console.serveRemoteViewSourcePreview(writer, request, viewID, scope, connectionRecords)
+		return
+	}
+	if strings.HasSuffix(request.URL.Path, "/admit") || strings.HasSuffix(request.URL.Path, "/read") || strings.HasSuffix(request.URL.Path, "/release") {
+		if strings.HasPrefix(request.URL.Path, "/v1/views/mail.communication/") || strings.HasPrefix(request.URL.Path, "/v1/views/work.context/") || strings.HasPrefix(request.URL.Path, "/v1/views/life.logistics/") {
+			communication := make([]CommunicationRuntime, 0, 2)
+			if gmail != nil && connectionOwnedBy(connectionRecords, "gmail", scope) {
+				communication = append(communication, legacyCommunicationAdapter{runtime: gmail})
+			}
+			if microsoftMail != nil && connectionOwnedBy(connectionRecords, "microsoft.mail", scope) {
+				communication = append(communication, microsoftMail)
+			}
+			workRuntimes := make([]WorkContextRuntime, 0, len(work))
+			for connectionID, runtime := range work {
+				if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+					workRuntimes = append(workRuntimes, runtime)
+				}
+			}
+			logisticsRuntimes := make([]LogisticsRuntime, 0, len(logistics))
+			for connectionID, runtime := range logistics {
+				if runtimeConnectionOwnedBy(connectionRecords, connectionID, scope) {
+					logisticsRuntimes = append(logisticsRuntimes, runtime)
+				}
+			}
+			console.serveRemoteViewAuthority(writer, request, request.URL.Path, authorization.Principal{ClientID: scope.ClientID, PersonID: scope.PersonID, DeviceID: scope.DeviceID, Authenticated: true}, connectionRecords, communication, workRuntimes, logisticsRuntimes)
+			return
+		}
 	}
 	if request.URL.Path == "/v1/views/work.context" {
-		console.serveWorkContextView(writer, request, ownedWorkContextRuntimes(scope, work, connectionRecords))
+		failure(writer, http.StatusBadRequest, "admission_required")
 		return
 	}
 	if request.URL.Path == "/v1/views/life.logistics" {
-		readers := make([]LogisticsViewReader, 0, len(logistics)+1)
-		ownsGmail := connectionOwnedBy(connectionRecords, "gmail", scope)
-		if gmail != nil && ownsGmail {
-			readers = append(readers, gmail)
-		}
-		for _, runtime := range ownedLogisticsRuntimes(scope, logistics, connectionRecords) {
-			readers = append(readers, runtime)
-		}
-		console.serveLogisticsView(writer, request, readers)
+		failure(writer, http.StatusBadRequest, "admission_required")
 		return
 	}
 	forward := request.Clone(request.Context())
 	forward.Header.Set("Authorization", "Bearer "+console.internalToken)
 	gateway.ServeHTTP(writer, forward)
-}
-
-func ownedWorkContextRuntimes(scope clientScope, runtimes map[string]WorkContextRuntime, connections map[string]connectionRecord) []WorkContextRuntime {
-	owned := make([]WorkContextRuntime, 0, len(runtimes))
-	for connectionID, runtime := range runtimes {
-		if runtimeConnectionOwnedBy(connections, connectionID, scope) {
-			owned = append(owned, runtime)
-		}
-	}
-	return owned
-}
-
-func ownedLogisticsRuntimes(scope clientScope, runtimes map[string]LogisticsRuntime, connections map[string]connectionRecord) []LogisticsRuntime {
-	owned := make([]LogisticsRuntime, 0, len(runtimes))
-	for connectionID, runtime := range runtimes {
-		if runtimeConnectionOwnedBy(connections, connectionID, scope) {
-			owned = append(owned, runtime)
-		}
-	}
-	return owned
 }
 
 func connectionOwnedBy(connections map[string]connectionRecord, connectorID string, scope clientScope) bool {
@@ -847,68 +774,6 @@ func connectionOwnedBy(connections map[string]connectionRecord, connectorID stri
 func runtimeConnectionOwnedBy(connections map[string]connectionRecord, connectionID string, scope clientScope) bool {
 	record, exists := connections[connectionID]
 	return exists && record.PersonID == scope.PersonID && (record.Device == nil || record.Device.DeviceID == scope.DeviceID)
-}
-
-func (console *Console) serveLogisticsView(writer http.ResponseWriter, request *http.Request, runtimes []LogisticsViewReader) {
-	if request.Method != http.MethodPost || len(runtimes) == 0 {
-		failure(writer, 404, "not_found")
-		return
-	}
-	var input struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
-		failure(writer, 400, "validation")
-		return
-	}
-	views := make([]common.LogisticsView, 0, len(runtimes))
-	for _, runtime := range runtimes {
-		view, err := runtime.ReadLogisticsView(request.Context())
-		if err == nil {
-			views = append(views, view)
-		}
-	}
-	if len(views) == 0 {
-		failure(writer, 503, "view_unavailable")
-		return
-	}
-	view, err := common.MergeLogisticsViews(views, time.Now().UnixMilli())
-	if err != nil {
-		failure(writer, 503, "view_unavailable")
-		return
-	}
-	reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
-}
-
-func (console *Console) serveWorkContextView(writer http.ResponseWriter, request *http.Request, runtimes []WorkContextRuntime) {
-	if request.Method != http.MethodPost || len(runtimes) == 0 {
-		failure(writer, 404, "not_found")
-		return
-	}
-	var input struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if !decode(writer, request, &input) || input.SchemaVersion != 1 {
-		failure(writer, 400, "validation")
-		return
-	}
-	views := make([]common.WorkContextView, 0, len(runtimes))
-	for _, runtime := range runtimes {
-		view, err := runtime.ReadWorkContextView(request.Context())
-		if err == nil {
-			views = append(views, view)
-		}
-	}
-	if len(views) == 0 {
-		failure(writer, 503, "view_unavailable")
-		return
-	}
-	view, err := common.MergeWorkContextViews(views, time.Now().UnixMilli())
-	if err != nil {
-		failure(writer, 503, "view_unavailable")
-		return
-	}
-	reply(writer, 200, map[string]any{"schema_version": 1, "view": view})
 }
 
 func (console *Console) servePair(writer http.ResponseWriter, request *http.Request) {

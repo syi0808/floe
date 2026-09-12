@@ -6,10 +6,23 @@ use super::*;
 
 #[test]
 fn native_grants_capture_authority_only_on_explicit_review() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let fixture_library = std::env::current_exe().ok().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("Frameworks/libfloe_eventkit.dylib"))
+    });
+    if !fixture_library.is_some_and(|path| path.exists()) {
+        return;
+    }
     use floe_agent::{CalendarAccessChange, CalendarAccessConfiguration};
     use floe_domain::{CalendarFailure, CalendarProvider, CalendarScope, CalendarSelection};
     let directory = tempfile::tempdir().unwrap();
-    let person = PersonId::new();
+    let person = PersonId(
+        Uuid::parse_str(floe_infra::native_calendar::LOCAL_PERSON)
+            .expect("native test person is a valid UUID"),
+    );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -65,6 +78,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         connection_scope: CalendarScope::Selected,
         connection_revision: 1,
         source_authority: Some(authority),
+        reviewed_native_subject_fingerprint: Some("a".repeat(64)),
     };
     let mut invalid = request.clone();
     invalid.calendar_ids = vec!["ungranted".into()];
@@ -134,6 +148,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     connection_scope: CalendarScope::Selected,
                     connection_revision: connection.revision,
                     source_authority: Some(authority),
+                    reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
             })
             .unwrap(),
@@ -155,6 +170,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     connection_scope: CalendarScope::Selected,
                     connection_revision: connection.revision,
                     source_authority: Some(connection.source_authority),
+                    reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
             })
             .unwrap(),
@@ -318,6 +334,7 @@ fn answer_server(
             external: false,
             allow_external: false,
             calendar_connections: vec![],
+            pairing: None,
         },
         server,
     )
@@ -361,6 +378,7 @@ fn calendar_setup_worker_inspects_without_initializing_installs_and_reconciles_a
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: None,
+        reviewed_native_subject_fingerprint: None,
     };
     let action = AgentVaultActionDto::CalendarExperts {
         setup: Some(encode_contract(&setup).unwrap()),
@@ -501,6 +519,7 @@ fn blocked_setup_keeps_worker_ownership_until_cancelled_work_really_finishes() {
         connection_scope: floe_domain::CalendarScope::Selected,
         connection_revision: 1,
         source_authority: None,
+        reviewed_native_subject_fingerprint: None,
     };
     *keys.0.paused.lock().unwrap() = true;
     keys.0.entered.store(false, Ordering::Release);

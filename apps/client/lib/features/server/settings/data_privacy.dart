@@ -10,6 +10,7 @@ class _DataPrivacy extends StatefulWidget {
     this.daySnapshot,
     this.calendarSources,
     this.calendarSourceChanges,
+    this.personalAccessGateway,
   });
 
   final AgentController controller;
@@ -20,6 +21,7 @@ class _DataPrivacy extends StatefulWidget {
   final DaySnapshot? daySnapshot;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+  final NativeAgentVaultGateway? personalAccessGateway;
 
   @override
   State<_DataPrivacy> createState() => _DataPrivacyState();
@@ -754,6 +756,39 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     sources: widget.calendarSources,
                     sourceChanges: widget.calendarSourceChanges,
                   ),
+                if (widget.personalAccessGateway != null) ...[
+                  const SizedBox(height: FloeSpace.lg),
+                  PersonalAttentionAccessCard(
+                    gateway: widget.personalAccessGateway!,
+                    personId: controller.personId,
+                  ),
+                  if (widget.appleContext is AppleContextSubjectApi ||
+                      widget.androidContext is AndroidContextSubjectApi) ...[
+                    const SizedBox(height: FloeSpace.lg),
+                    PersonalContactsAccessCard(
+                      gateway: widget.personalAccessGateway!,
+                      personId: controller.personId,
+                      readContacts: () => widget.appleContext != null
+                          ? widget.appleContext!.readContacts()
+                          : widget.androidContext!.readContacts(),
+                      inspectSubject: (handles) {
+                        final apple = widget.appleContext;
+                        if (apple is AppleContextSubjectApi) {
+                          return (apple as AppleContextSubjectApi)
+                              .inspectContactsSubject(handles);
+                        }
+                        final android = widget.androidContext;
+                        if (android is AndroidContextSubjectApi) {
+                          return (android as AndroidContextSubjectApi)
+                              .inspectContactsSubject(handles);
+                        }
+                        throw UnsupportedError(
+                          'Contacts selection is unsupported on this device.',
+                        );
+                      },
+                    ),
+                  ],
+                ],
                 if (!controller.hasConnections &&
                     widget.serverClient == null &&
                     widget.androidContext == null &&

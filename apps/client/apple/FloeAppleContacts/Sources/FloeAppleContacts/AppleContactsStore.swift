@@ -17,7 +17,7 @@ struct AppleContactBatch: Equatable, Sendable {
 protocol AppleContactsStore: AnyObject {
     func authorizationState() -> AppleContactsAuthorizationState
     func requestAuthorization() async throws -> Bool
-    func fetchContacts(limit: Int) throws -> AppleContactBatch
+    func fetchContacts(limit: Int, identifiers: Set<String>?) throws -> AppleContactBatch
 }
 
 final class SystemAppleContactsStore: AppleContactsStore {
@@ -59,7 +59,7 @@ final class SystemAppleContactsStore: AppleContactsStore {
         }
     }
 
-    func fetchContacts(limit: Int) throws -> AppleContactBatch {
+    func fetchContacts(limit: Int, identifiers: Set<String>? = nil) throws -> AppleContactBatch {
         let formatterDescriptor = CNContactFormatter.descriptorForRequiredKeys(for: .fullName)
         let keys: [CNKeyDescriptor] = [
             CNContactIdentifierKey as CNKeyDescriptor,
@@ -70,6 +70,9 @@ final class SystemAppleContactsStore: AppleContactsStore {
             CNContactPhoneNumbersKey as CNKeyDescriptor,
         ]
         let request = CNContactFetchRequest(keysToFetch: keys)
+        if let identifiers {
+            request.predicate = CNContact.predicateForContacts(withIdentifiers: Array(identifiers))
+        }
         request.sortOrder = .userDefault
         request.unifyResults = true
         var records: [AppleContactRecord] = []

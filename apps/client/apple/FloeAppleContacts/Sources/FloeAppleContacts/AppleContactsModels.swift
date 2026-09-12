@@ -55,6 +55,18 @@ public enum AppleContactsSelection: Sendable, Equatable {
     case identityHandles(Set<String>)
 }
 
+public struct AppleContactsSubject: Equatable, Sendable {
+    public let fingerprint: String
+    public let permissionClass: String
+    public let resolvedHandles: [String]
+
+    public init(fingerprint: String, permissionClass: String, resolvedHandles: [String]) {
+        self.fingerprint = fingerprint
+        self.permissionClass = permissionClass
+        self.resolvedHandles = resolvedHandles
+    }
+}
+
 public struct AppleContactIdentity: Codable, Equatable, Sendable {
     public let identityHandle: String
     public let displayName: String
@@ -135,4 +147,5 @@ public enum AppleContactsProviderError: Error, Equatable, Sendable {
     case permissionRequired(AppleContactsAuthorizationState)
     case authorizationRequestFailed
     case storeReadFailed
+    case selectionUnresolved
 }

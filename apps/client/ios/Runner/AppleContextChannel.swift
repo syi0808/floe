@@ -59,6 +59,8 @@ final class AppleContextChannel {
         result(try await requestPermission(arguments))
       case "readContacts":
         result(try readContacts(arguments))
+      case "inspectContactsSubject":
+        result(try inspectContactsSubject(arguments))
       case "readFeasibility":
         result(try await readFeasibility(arguments))
       case "readWellbeing":
@@ -98,14 +100,44 @@ final class AppleContextChannel {
   }
 
   private func readContacts(_ arguments: [String: Any]) throws -> [String: Any] {
-    try requireExactKeys(arguments, ["device_id", "limit"])
+    guard Set(arguments.keys).isSubset(of: ["device_id", "limit", "selected_handles"]) else {
+      throw ChannelFailure.invalidInput
+    }
     guard let limit = arguments["limit"] as? Int, (1...64).contains(limit) else {
       throw ChannelFailure.invalidInput
     }
-    let value = try encodedObject(contacts.readPeopleView(limit: limit))
+    let selection: AppleContactsSelection
+    if let selected = arguments["selected_handles"] {
+      guard let handles = selected as? [String], !handles.isEmpty, handles.count <= 64,
+            Set(handles).count == handles.count,
+            handles.allSatisfy({ boundedHandle($0) != nil }) else {
+        throw ChannelFailure.invalidInput
+      }
+      selection = .identityHandles(Set(handles))
+    } else {
+      selection = .allAuthorized
+    }
+    let value = try encodedObject(contacts.readPeopleView(selection: selection, limit: limit))
     contactsLastView = value
     contactsLastSuccess = value["observed_at_unix_ms"] as? Int64
     return value
+  }
+
+  private func inspectContactsSubject(_ arguments: [String: Any]) throws -> [String: Any] {
+    try requireExactKeys(arguments, ["device_id", "selected_handles"])
+    guard let selected = arguments["selected_handles"] as? [String],
+          !selected.isEmpty, selected.count <= 64,
+          Set(selected).count == selected.count,
+          selected.allSatisfy({ boundedHandle($0) != nil }) else {
+      throw ChannelFailure.invalidInput
+    }
+    let subject = try contacts.inspectSelectedSubject(selected)
+    return [
+      "schema_version": 1,
+      "subject_fingerprint": subject.fingerprint,
+      "permission_class": subject.permissionClass,
+      "resolved_handles": subject.resolvedHandles,
+    ]
   }
 
   private func readFeasibility(_ arguments: [String: Any]) async throws -> [String: Any] {
@@ -314,6 +346,7 @@ final class AppleContextChannel {
     switch failure {
     case .permissionRequired: "permission_denied"
     case .invalidHandleSecret, .invalidLimit, .invalidSelection: "invalid_input"
+    case .selectionUnresolved: "unavailable"
     case .authorizationRequestFailed, .storeReadFailed: "unavailable"
     }
   }

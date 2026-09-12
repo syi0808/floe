@@ -19,16 +19,30 @@ public func invoke(_ input: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>
       response = ["data": ["provider": "event_kit"]]
     } else {
       let generation = mode == "changed_generation" && readCalls > 1 ? "changed" : "stable"
+      let fingerprint = mode == "changed_subject" && readCalls > 1
+        ? String(repeating: "b", count: 64)
+        : String(repeating: "a", count: 64)
       let identifiers = request["calendar_ids"] as! [String]
       response = ["data": [
         "schema_version": 1, "person_id": request["person_id"]!,
         "device_id": request["device_id"]!, "provider": "event_kit",
-        "calendar_ids": identifiers.sorted(), "generation": generation
+        "calendar_ids": identifiers.sorted(),
+        "native_subject_fingerprint": fingerprint,
+        "generation": generation
       ]]
     }
   } else if operation == "observe" {
     let mode = ProcessInfo.processInfo.environment["FLOE_NATIVE_READ_FIXTURE"] ?? "valid"
     let identifiers = request["calendar_ids"] as! [String]
+    let fingerprint = mode == "changed_subject"
+      ? String(repeating: "b", count: 64)
+      : String(repeating: "a", count: 64)
+    if let expected = request["expected_native_subject_fingerprint"] as? String,
+       expected != fingerprint {
+      response = ["error": "permission_denied"]
+      let data = try! JSONSerialization.data(withJSONObject: response)
+      return strdup(String(decoding: data, as: UTF8.self))
+    }
     let generation = mode == "changed_generation" ? "stable" : "stable"
     let count = mode == "oversized" ? 129 : mode == "aggregate_oversized" ? 65 : 1
     let title = mode == "raw_oversized" ? String(repeating: "x", count: 70_000) : "Event"
@@ -68,7 +82,9 @@ public func invoke(_ input: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>
     response = ["data": [
       "stamp": ["schema_version": 1, "person_id": request["person_id"]!,
         "device_id": request["device_id"]!, "provider": "event_kit",
-        "calendar_ids": identifiers.sorted(), "generation": generation],
+        "calendar_ids": identifiers.sorted(),
+        "native_subject_fingerprint": fingerprint,
+        "generation": generation],
       "observed_at": ISO8601DateFormatter().string(from: Date()),
       "batches": batches
     ]]

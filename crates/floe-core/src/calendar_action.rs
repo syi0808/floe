@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use chrono::{DateTime, Duration, Utc};
-use floe_domain::{CalendarProvider, Event, PersonId, TimedSchedule};
+use floe_domain::{CalendarProvider, ContextDependency, Event, PersonId, TimedSchedule};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -115,6 +115,15 @@ pub trait CalendarActionProvider {
         &self,
         action: &CalendarAction,
     ) -> impl Future<Output = Result<Vec<CalendarCreateReceipt>, ActionFailure>> + Send;
+
+    fn validate_source(
+        &self,
+        _action: &CalendarAction,
+        _dependency: &ContextDependency,
+        _native_subject_fingerprint: &str,
+    ) -> impl Future<Output = Result<(), ActionFailure>> + Send {
+        async { Err(ActionFailure::PermissionDenied) }
+    }
 }
 
 impl FloeCore {
@@ -282,7 +291,7 @@ impl FloeCore {
         now: DateTime<Utc>,
     ) -> Result<CalendarAction, CoreError> {
         let action = self.calendar_action(person_id, id).await?;
-        if action.state != CalendarActionState::Pending {
+        if action.agent_origin.is_some() || action.state != CalendarActionState::Pending {
             return Err(conflict());
         }
         let mut updated = action.clone();
@@ -311,7 +320,7 @@ impl FloeCore {
         clock: impl Fn() -> DateTime<Utc>,
     ) -> Result<CalendarAction, CoreError> {
         let action = self.calendar_action(person_id, id).await?;
-        if action.state != CalendarActionState::Approved {
+        if action.agent_origin.is_some() || action.state != CalendarActionState::Approved {
             return Err(conflict());
         }
         let executing = self
@@ -490,7 +499,7 @@ impl FloeCore {
 }
 
 impl CalendarCreateReceipt {
-    fn matches(&self, action: &CalendarAction) -> bool {
+    pub(crate) fn matches(&self, action: &CalendarAction) -> bool {
         self.execution_id == action.execution_id
             && self.person_id == action.person_id
             && self.provider == action.provider

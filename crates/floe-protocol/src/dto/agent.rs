@@ -74,6 +74,8 @@ pub struct CalendarExpertSetupDto {
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_authority: Option<floe_domain::SourceAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_native_subject_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -83,6 +85,31 @@ pub struct CalendarAccessConfigurationDto {
     pub expected_revision: u64,
     pub setup_id: Uuid,
     pub change: CalendarAccessChangeDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarSubjectPreviewRequestDto {
+    pub provider: floe_domain::CalendarProvider,
+    pub device_id: String,
+    pub connection_id: String,
+    pub calendar_ids: Vec<String>,
+    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_revision: u64,
+    pub source_authority: floe_domain::SourceAuthority,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarSubjectPreviewDto {
+    pub provider: floe_domain::CalendarProvider,
+    pub device_id: String,
+    pub calendar_ids: Vec<String>,
+    pub connection_scope: floe_domain::CalendarScope,
+    pub connection_id: String,
+    pub connection_revision: u64,
+    pub source_authority: floe_domain::SourceAuthority,
+    pub native_subject_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -99,6 +126,8 @@ pub enum CalendarAccessChangeDto {
         connection_revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_authority: Option<floe_domain::SourceAuthority>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reviewed_native_subject_fingerprint: Option<String>,
     },
     Remove {},
 }
@@ -140,6 +169,18 @@ pub enum AgentVaultActionDto {
     CalendarAccess {
         change: CalendarAccessConfigurationDto,
     },
+    CalendarSubjectPreview {
+        request: CalendarSubjectPreviewRequestDto,
+    },
+    PersonalAccess {
+        change: PersonalAccessConfigurationDto,
+    },
+    ContactsAccess {
+        change: ContactsAccessConfigurationDto,
+    },
+    CalendarAction {
+        operation: CalendarActionOperationDto,
+    },
     InspectProposal {
         session_id: String,
         invocation_id: String,
@@ -156,6 +197,244 @@ pub enum AgentVaultActionDto {
     },
     Memory {},
     Connections {},
+    RemoteAuthorityInspectProducer {
+        route: AgentRemoteRouteDto,
+    },
+    RemoteAuthorityReviewAndEnroll {
+        route: AgentRemoteRouteDto,
+        producer: RemoteProducerIdentityDto,
+    },
+    RemoteAuthorityEnrollmentStatus {
+        route: AgentRemoteRouteDto,
+        enrollment_id: String,
+    },
+    RemoteCalendarGrantPreview {
+        route: AgentRemoteRouteDto,
+        connector_id: String,
+        connection_id: String,
+        resource: String,
+    },
+    RemoteCalendarGrantReview {
+        route: AgentRemoteRouteDto,
+        connector_id: String,
+        connection_id: String,
+        resource: String,
+        expected_producer_fingerprint: String,
+    },
+    RemoteCalendarGrantStatus {
+        grant_id: floe_domain::GrantId,
+    },
+    RemoteCalendarGrantPause {
+        grant_id: floe_domain::GrantId,
+        expected_authority: floe_domain::GrantAuthority,
+    },
+    RemoteViewGrantPreview {
+        route: AgentRemoteRouteDto,
+        view_id: String,
+        connector_id: String,
+        connection_id: String,
+        resource: String,
+        consumer: String,
+    },
+    RemoteViewGrantReview {
+        route: AgentRemoteRouteDto,
+        view_id: String,
+        connector_id: String,
+        connection_id: String,
+        resource: String,
+        consumer: String,
+        expected_producer_fingerprint: String,
+        expected_source_authority: floe_domain::SourceAuthority,
+        expected_connection_revision: u64,
+        expected_provider_identity: String,
+        expected_recipient: String,
+    },
+    RemoteViewGrantStatus {
+        grant_id: floe_domain::GrantId,
+    },
+    RemoteViewGrantPause {
+        grant_id: floe_domain::GrantId,
+        expected_authority: floe_domain::GrantAuthority,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalAccessConfigurationDto {
+    pub connector: String,
+    pub device_id: String,
+    pub change: PersonalAccessChangeDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PersonalAccessChangeDto {
+    Inspect {},
+    Review {
+        expected_native_subject_fingerprint: String,
+        consumers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_grant_id: Option<floe_domain::GrantId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_grant_authority: Option<floe_domain::GrantAuthority>,
+    },
+    SetEnabled {
+        enabled: bool,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactsAccessConfigurationDto {
+    pub connector: String,
+    pub device_id: String,
+    pub change: ContactsAccessChangeDto,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContactsAccessChangeDto {
+    Inspect {
+        selected_handles: Vec<String>,
+    },
+    Review {
+        selected_handles: Vec<String>,
+        expected_native_subject_fingerprint: String,
+        consumers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_grant_id: Option<floe_domain::GrantId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_grant_authority: Option<floe_domain::GrantAuthority>,
+    },
+    SetEnabled {
+        enabled: bool,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalAccessOverviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub connector: String,
+    pub device_id: String,
+    pub connection_id: String,
+    pub source_authority: Option<floe_domain::SourceAuthority>,
+    pub grant_id: Option<floe_domain::GrantId>,
+    pub grant_authority: Option<floe_domain::GrantAuthority>,
+    pub state: String,
+    pub review_required: bool,
+    pub presence_available: bool,
+    pub consumers: Vec<String>,
+    pub native_subject_fingerprint: Option<String>,
+    pub process_incarnation: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteProducerIdentityDto {
+    pub schema_version: u32,
+    pub instance_id: String,
+    pub execution_owner: String,
+    pub audience: String,
+    pub key_id: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteAuthorityEnrollmentStatusDto {
+    pub enrollment_id: String,
+    pub key_id: String,
+    pub fingerprint: String,
+    pub local_confirmed: bool,
+    pub admin_approved: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteCalendarGrantPreviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub resource: String,
+    pub source_authority: floe_domain::SourceAuthority,
+    pub provider_identity: String,
+    pub execution_owner: String,
+    pub producer: RemoteProducerIdentityDto,
+    pub consumer: String,
+    pub purpose: String,
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteCalendarGrantOverviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub grant_id: floe_domain::GrantId,
+    pub grant_authority: floe_domain::GrantAuthority,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub resource: String,
+    pub source_authority: floe_domain::SourceAuthority,
+    pub execution_owner: String,
+    pub state: String,
+    pub review_required: bool,
+    pub consumer: String,
+    pub purpose: String,
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteViewGrantPreviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub view_id: String,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub connection_revision: u64,
+    pub resource: String,
+    pub source_authority: floe_domain::SourceAuthority,
+    pub provider_identity: String,
+    pub execution_owner: String,
+    pub producer: RemoteProducerIdentityDto,
+    pub consumer: String,
+    pub purpose: String,
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteViewGrantOverviewDto {
+    pub schema_version: u32,
+    pub person_id: String,
+    pub grant_id: floe_domain::GrantId,
+    pub grant_authority: floe_domain::GrantAuthority,
+    pub view_id: String,
+    pub connector_id: String,
+    pub connection_id: String,
+    pub connection_revision: Option<u64>,
+    pub resource: String,
+    pub source_authority: floe_domain::SourceAuthority,
+    pub execution_owner: String,
+    pub state: String,
+    pub review_required: bool,
+    pub consumer: String,
+    pub purpose: String,
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteOwnerPublicKeyDto {
+    pub key_id: String,
+    pub public_key: String,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -208,6 +487,16 @@ pub struct AgentRemoteRouteDto {
     pub external: bool,
     pub allow_external: bool,
     pub calendar_connections: Vec<AgentRemoteCalendarConnectionDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing: Option<AgentRemotePairingDto>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRemotePairingDto {
+    pub client_id: String,
+    pub person_id: String,
+    pub device_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -228,6 +517,7 @@ impl std::fmt::Debug for AgentRemoteRouteDto {
             .field("external", &self.external)
             .field("allow_external", &self.allow_external)
             .field("calendar_connections", &self.calendar_connections)
+            .field("pairing", &self.pairing)
             .finish()
     }
 }
@@ -331,6 +621,12 @@ pub struct AgentVaultResultDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_experts: Option<CalendarExpertOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_subject_preview: Option<CalendarSubjectPreviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_access: Option<PersonalAccessOverviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_actions: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<AgentProposalInspectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_review: Option<AgentMemoryReviewOverviewDto>,
@@ -338,6 +634,20 @@ pub struct AgentVaultResultDto {
     pub memory: Option<AgentMemoryOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections: Option<Vec<ConnectorSnapshotDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_producer: Option<RemoteProducerIdentityDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_owner: Option<RemoteOwnerPublicKeyDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_view_grant: Option<RemoteViewGrantOverviewDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_view_preview: Option<RemoteViewGrantPreviewDto>,
     pub failure: Option<AgentVaultFailureDto>,
 }
 

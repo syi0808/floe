@@ -37,6 +37,7 @@ import '../../server/settings_screen.dart';
 import '../../server/local_server_client.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/agent_controller.dart';
+import '../../agent/agent_vault_gateway.dart';
 import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_panel.dart';
 import '../../../infrastructure/native/android_context_gateway.dart';
@@ -274,6 +275,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
         client: widget.serverClient,
+        agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
+            ? widget.agentGateway as NativeAgentVaultGateway
+            : null,
         actionController: actionController,
         agentController: agentController,
         androidContext: widget.androidContext,

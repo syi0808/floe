@@ -9,7 +9,9 @@ use floe_core::{
     CalendarObservation, CalendarObserveRequest, CalendarPreflight, CalendarReadAccess,
     CalendarReadAccessRequest, CalendarReadAccessStamp,
 };
-use floe_domain::{CalendarBatch, CalendarProvider, CalendarRecord, Event, PersonId};
+use floe_domain::{
+    CalendarBatch, CalendarProvider, CalendarRecord, ContextDependency, Event, PersonId,
+};
 use floe_protocol::{CalendarBatchDto, PROTOCOL_VERSION};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -21,6 +23,14 @@ pub const LOCAL_PERSON: &str = "00000000-0000-4000-8000-000000000001";
 pub struct NativeCalendar {
     pub calendar_ids: Vec<String>,
     local_events: std::sync::Mutex<Vec<Event>>,
+    reviewed_source: std::sync::Mutex<Option<NativeActionSource>>,
+}
+
+#[derive(Clone)]
+struct NativeActionSource {
+    execution_id: uuid::Uuid,
+    calendar_ids: Vec<String>,
+    fingerprint: String,
 }
 
 pub struct NativeCalendarReadAccess {
@@ -186,6 +196,11 @@ impl CalendarReadAccess for NativeCalendarReadAccess {
             || stamp.device_id != self.device_id
             || stamp.provider != CalendarProvider::EventKit
             || stamp.calendar_ids != self.calendar_ids
+            || stamp.native_subject_fingerprint.len() != 64
+            || stamp
+                .native_subject_fingerprint
+                .bytes()
+                .any(|byte| !byte.is_ascii_hexdigit())
             || stamp.generation.trim().is_empty()
             || stamp.generation.len() > 128
         {
@@ -215,12 +230,21 @@ impl CalendarReadAccess for NativeCalendarReadAccess {
                 device_id: request.device_id.clone(),
                 provider: request.provider,
                 calendar_ids: request.calendar_ids.clone(),
+                expected_native_subject_fingerprint: None,
                 deadline: request.deadline,
                 cancellation: request.cancellation.clone(),
             })
             .await?;
+        if let Some(expected) = request.expected_native_subject_fingerprint.as_deref()
+            && expected != before.native_subject_fingerprint
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         let cancellation = request.cancellation.clone();
         let mut input = self.request_base("observe", request.deadline)?;
+        if let Some(expected) = request.expected_native_subject_fingerprint.as_deref() {
+            input["expected_native_subject_fingerprint"] = json!(expected);
+        }
         input["starts_at"] = json!(request.starts_at.to_rfc3339());
         input["ends_at"] = json!(request.ends_at.to_rfc3339());
         let observation: NativeObservation =
@@ -231,6 +255,7 @@ impl CalendarReadAccess for NativeCalendarReadAccess {
                 device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
+                expected_native_subject_fingerprint: None,
                 deadline: request.deadline,
                 cancellation: cancellation.clone(),
             })
@@ -364,6 +389,7 @@ impl NativeCalendar {
         Self {
             calendar_ids,
             local_events: Default::default(),
+            reviewed_source: Default::default(),
         }
     }
 
@@ -382,15 +408,89 @@ impl NativeCalendar {
             .lock()
             .map_err(|_| ActionFailure::ProviderUnavailable)?
             .clone();
-        call(json!({
+        let mut request = json!({
             "operation": operation, "action": action, "calendar_ids": self.calendar_ids,
             "local_events": local_events,
             "deadline": (chrono::Utc::now() + chrono::Duration::seconds(12)).to_rfc3339(),
-        }))
+        });
+        if action.agent_origin.is_some() && matches!(operation, "preflight" | "create") {
+            let source = self
+                .reviewed_source
+                .lock()
+                .map_err(|_| ActionFailure::ProviderUnavailable)?;
+            let source = source
+                .as_ref()
+                .filter(|source| source.execution_id == action.execution_id)
+                .ok_or(ActionFailure::PermissionDenied)?;
+            request["reviewed_calendar_ids"] = json!(source.calendar_ids);
+            request["expected_native_subject_fingerprint"] = json!(source.fingerprint);
+        }
+        call(request)
     }
 }
 
 impl CalendarActionProvider for NativeCalendar {
+    async fn validate_source(
+        &self,
+        action: &CalendarAction,
+        dependency: &ContextDependency,
+        native_subject_fingerprint: &str,
+    ) -> Result<(), ActionFailure> {
+        let calendar_ids: Vec<String> = dependency
+            .resources()
+            .iter()
+            .map(|resource| resource.as_str().to_owned())
+            .collect();
+        if action.provider != CalendarProvider::EventKit
+            || action.person_id.to_string() != LOCAL_PERSON
+            || dependency.person_id() != action.person_id
+            || dependency.source().connector().as_str() != "calendar.event_kit"
+            || !calendar_ids.contains(&action.calendar_id)
+            || self.calendar_ids != [action.calendar_id.clone()]
+        {
+            return Err(ActionFailure::PermissionDenied);
+        }
+        let device_id = dependency.source().execution_owner().as_str().to_owned();
+        let access = NativeCalendarReadAccess::new(
+            action.person_id,
+            device_id.clone(),
+            action.provider,
+            calendar_ids.clone(),
+            dependency.source().connection_id().as_str().to_owned(),
+            action.connection_revision,
+        );
+        let stamp = access
+            .check(CalendarReadAccessRequest {
+                person_id: action.person_id,
+                device_id,
+                provider: action.provider,
+                calendar_ids: calendar_ids.clone(),
+                expected_native_subject_fingerprint: Some(native_subject_fingerprint.to_owned()),
+                deadline: Instant::now() + Duration::from_secs(12),
+                cancellation: Cancellation::default(),
+            })
+            .await
+            .map_err(|failure| match failure {
+                AgentFailure::DeadlineExceeded => ActionFailure::Timeout,
+                AgentFailure::CapabilityDenied | AgentFailure::AccessReviewRequired => {
+                    ActionFailure::PermissionDenied
+                }
+                _ => ActionFailure::ProviderUnavailable,
+            })?;
+        if stamp.native_subject_fingerprint != native_subject_fingerprint {
+            return Err(ActionFailure::PermissionDenied);
+        }
+        *self
+            .reviewed_source
+            .lock()
+            .map_err(|_| ActionFailure::ProviderUnavailable)? = Some(NativeActionSource {
+            execution_id: action.execution_id,
+            calendar_ids,
+            fingerprint: native_subject_fingerprint.to_owned(),
+        });
+        Ok(())
+    }
+
     async fn preflight(
         &self,
         action: &CalendarAction,

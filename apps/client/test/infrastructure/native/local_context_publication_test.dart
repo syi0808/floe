@@ -292,7 +292,10 @@ final class _FakeAppleContext implements AppleContextApi {
   Future<List<Map<String, dynamic>>> connections() async => [];
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => people;
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async => people;
 
   @override
   Future<Map<String, dynamic>> readFeasibility(
@@ -345,6 +348,16 @@ final class _FakeMacOSContext implements MacOSContextApi {
 
   @override
   Future<Map<String, dynamic>> readAttention() async => view;
+
+  @override
+  Future<Map<String, dynamic>> inspectAttentionSubject(String deviceId) async =>
+      {
+        'schema_version': 1,
+        'subject_fingerprint': 'a' * 64,
+        'permission_class': 'session_observation',
+        'resources': ['attention.coarse'],
+        'presence_available': true,
+      };
 }
 
 final class _FakeAndroidContext implements AndroidContextApi {
@@ -369,8 +382,10 @@ final class _FakeAndroidContext implements AndroidContextApi {
       permissionGranted;
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async =>
-      Map.of(_peopleView)..['source_handle'] = 'people:android:source';
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async => Map.of(_peopleView)..['source_handle'] = 'people:android:source';
 
   @override
   Future<Map<String, dynamic>> readWellbeing() async => wellbeing;
@@ -400,11 +415,115 @@ final class _FakeAndroidContext implements AndroidContextApi {
       },
     ],
   };
+
+  @override
+  Future<Map<String, dynamic>> readAcquisition(
+    Map<String, dynamic> request,
+  ) async => Map.of(request);
 }
 
 final class _RecordingTransport implements LocalContextTransport {
   final List<_Publication> published = [];
   final List<_Revocation> revoked = [];
+
+  @override
+  Future<void> registerAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completeAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposeAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<void> registerAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAttentionAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completeAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposeAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<void> registerPersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
+
+  @override
+  Future<List<Map<String, dynamic>>> pollPersonalAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async => const [];
+
+  @override
+  Future<void> completePersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {}
+
+  @override
+  Future<void> failPersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {}
+
+  @override
+  Future<void> disposePersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {}
 
   @override
   Future<void> publishCalendarObservation({

@@ -1,5 +1,12 @@
 # FloeAppleContacts
 
+Contacts acquisition is limited to an explicit finite selection of provider-issued
+opaque identity handles. `inspectSelectedSubject` re-resolves those handles against
+the current Contacts authorization state and returns a native subject fingerprint;
+the fingerprint is generated and checked in the provider, never fabricated in Dart.
+Deleted or no-longer-readable contacts fail closed. Full account-scope acquisition
+is intentionally not exposed by this contract.
+
 `FloeAppleContacts` is a read-only Apple Contacts provider for Floe's
 `people.identity` View. It supports iOS/iPadOS and macOS without importing contact
 notes, postal addresses, birthdays, images, or write authority.

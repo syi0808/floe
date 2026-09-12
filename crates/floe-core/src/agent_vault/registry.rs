@@ -969,6 +969,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             after_registry_write.await?;
             if let Some((turn_id, coverage)) = coverage {
+                self.validate_context_dependency_coverage_in_transaction(&transaction, &coverage)
+                    .await?;
                 super::context_dependencies::merge_context_dependency_coverage(
                     &transaction,
                     self.person_id,

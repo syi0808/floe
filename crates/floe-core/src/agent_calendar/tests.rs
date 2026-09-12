@@ -3,7 +3,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize},
     },
 };
 
@@ -159,6 +159,8 @@ struct Access {
 
 struct NativeObserveAccess {
     fail_first: AtomicBool,
+    generation: AtomicUsize,
+    rollback_clock: Option<Arc<AtomicI64>>,
 }
 
 impl CalendarReadAccess for Access {
@@ -176,8 +178,53 @@ impl CalendarReadAccess for Access {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "a".repeat(64),
             generation: "fixture-generation".into(),
         })
+    }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        if request.provider == CalendarProvider::EventKit {
+            return Ok(Some(CalendarObservation {
+                stamp: CalendarReadAccessStamp {
+                    schema_version: 1,
+                    person_id: request.person_id,
+                    device_id: request.device_id,
+                    provider: request.provider,
+                    calendar_ids: request.calendar_ids.clone(),
+                    native_subject_fingerprint: "a".repeat(64),
+                    generation: "fixture-generation".into(),
+                },
+                observed_at: now(),
+                batches: request
+                    .calendar_ids
+                    .iter()
+                    .map(|calendar_id| CalendarBatch {
+                        calendar_id: calendar_id.clone(),
+                        records: vec![CalendarRecord {
+                            can_modify: false,
+                            calendar_id: calendar_id.clone(),
+                            external_id: "native-event".into(),
+                            external_revision: "native-revision".into(),
+                            title: "Native event".into(),
+                            schedule: EventSchedule::Timed(
+                                TimedSchedule::new(
+                                    now() + TimeDelta::hours(1),
+                                    now() + TimeDelta::minutes(90),
+                                    "UTC",
+                                )
+                                .unwrap(),
+                            ),
+                        }],
+                        failure: None,
+                    })
+                    .collect(),
+            }));
+        }
+        Ok(None)
     }
 }
 
@@ -186,13 +233,15 @@ impl CalendarReadAccess for NativeObserveAccess {
         &self,
         request: CalendarReadAccessRequest,
     ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        let generation = self.generation.load(Ordering::Acquire);
         Ok(CalendarReadAccessStamp {
             schema_version: 1,
             person_id: request.person_id,
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
-            generation: "native-generation".into(),
+            native_subject_fingerprint: "a".repeat(64),
+            generation: format!("native-generation-{generation}"),
         })
     }
 
@@ -203,6 +252,16 @@ impl CalendarReadAccess for NativeObserveAccess {
         if self.fail_first.swap(false, Ordering::AcqRel) {
             return Err(AgentFailure::CapabilityDenied);
         }
+        let generation = self.generation.load(Ordering::Acquire);
+        let observed_at = if let Some(clock) = &self.rollback_clock {
+            clock.store(
+                (now() - TimeDelta::seconds(2)).timestamp_millis(),
+                Ordering::Release,
+            );
+            now() - TimeDelta::seconds(3)
+        } else {
+            now()
+        };
         Ok(Some(CalendarObservation {
             stamp: CalendarReadAccessStamp {
                 schema_version: 1,
@@ -210,9 +269,10 @@ impl CalendarReadAccess for NativeObserveAccess {
                 device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids.clone(),
-                generation: "native-generation".into(),
+                native_subject_fingerprint: "a".repeat(64),
+                generation: format!("native-generation-{generation}"),
             },
-            observed_at: now(),
+            observed_at,
             batches: request
                 .calendar_ids
                 .iter()
@@ -552,6 +612,7 @@ impl Fixture {
                 connection_scope: connection.scope,
                 connection_revision: connection.revision,
                 source_authority: Some(connection.source_authority),
+                reviewed_native_subject_fingerprint: Some("a".repeat(64)),
             };
             let installed = vault
                 .install_calendar_expert_with_connection(
@@ -668,8 +729,7 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_without_republication()
-{
+async fn recorded_calendar_proposal_remains_inspectable_without_republication_after_revocation() {
     for class in [DataClass::Synthetic, DataClass::Personal] {
         let fixture = Fixture::with_class(class).await;
         let model = Model::default();
@@ -686,7 +746,12 @@ async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_wit
             )
             .await
             .unwrap();
-        let action = result.proposals[0].result.as_ref().unwrap();
+        let expected_action = if class == DataClass::Personal {
+            Some(result.proposals[0].result.as_ref().unwrap().clone())
+        } else {
+            assert_eq!(result.proposals[0].result, Err(AgentFailure::PolicyDenied));
+            None
+        };
         let reference = result.proposals[0].reference.clone();
         let snapshot = fixture.state().await;
         fixture
@@ -718,7 +783,7 @@ async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_wit
                 .await
                 .unwrap()
                 .as_ref(),
-            Some(action)
+            expected_action.as_ref()
         );
         assert_eq!(
             fixture
@@ -743,7 +808,7 @@ async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_wit
                 .calendar_actions(fixture.session.person_id)
                 .await
                 .unwrap(),
-            std::slice::from_ref(action)
+            expected_action.into_iter().collect::<Vec<_>>()
         );
     }
 }
@@ -774,6 +839,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
                     connection_scope: connection.scope,
                     connection_revision: connection.revision,
                     source_authority: Some(connection.source_authority),
+                    reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                 },
                 connection.connection_id,
             )
@@ -789,6 +855,7 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
                     connection_scope: floe_domain::CalendarScope::Selected,
                     connection_revision: fixture.grant.connection_revision,
                     source_authority: None,
+                    reviewed_native_subject_fingerprint: None,
                 },
                 String::new(),
             )
@@ -925,10 +992,14 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             .unwrap();
         assert_eq!(result.session.last_outcome, Some(AgentOutcome::Completed));
         assert_eq!(result.proposals.len(), 1);
-        assert_eq!(
-            result.proposals[0].result.as_ref().unwrap().state,
-            CalendarActionState::Pending
-        );
+        if class == DataClass::Personal {
+            assert_eq!(
+                result.proposals[0].result.as_ref().unwrap().state,
+                CalendarActionState::Pending
+            );
+        } else {
+            assert_eq!(result.proposals[0].result, Err(AgentFailure::PolicyDenied));
+        }
         let committed = fixture.state().await;
         let assignment = committed
             .assignments
@@ -1039,10 +1110,10 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
         result.session
     );
     assert_eq!(result.proposals.len(), 1);
-    let action = result.proposals[0].result.as_ref().unwrap();
-    assert_eq!(action.state, CalendarActionState::Pending);
-    assert_eq!(action.title, "Focus time");
-    assert_eq!(action.schedule.starts_at, now() + TimeDelta::minutes(90));
+    assert!(matches!(
+        result.proposals[0].result,
+        Err(AgentFailure::PolicyDenied)
+    ));
     assert_eq!(fixture.state().await.revision, fixture.revision + 1);
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
@@ -1092,6 +1163,265 @@ async fn model_turn_consumes_the_registered_view_commits_receipt_and_prepares_re
             .iter()
             .any(|event| matches!(event.event, AgentEventKind::DelegationStarted { .. }))
     );
+}
+
+#[tokio::test]
+async fn native_calendar_coverage_is_persisted_and_requires_live_resolution() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let model = Model::default();
+    fixture.configure_model(&model);
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let mut model_request = model
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| {
+            request
+                .messages
+                .iter()
+                .any(|message| !matches!(message, AgentMessage::User { .. }))
+        })
+        .cloned()
+        .expect("calendar model request");
+    assert!(
+        model_request
+            .messages
+            .iter()
+            .any(|message| !matches!(message, AgentMessage::User { .. }))
+    );
+    fixture
+        .vault
+        .governed_general_store(result.session.id)
+        .project_model_request(&mut model_request, None)
+        .await
+        .unwrap();
+    assert!(
+        model_request
+            .messages
+            .iter()
+            .all(|message| matches!(message, AgentMessage::User { .. }))
+    );
+}
+
+#[tokio::test]
+async fn live_calendar_history_resolves_across_turns_without_a_new_observation() {
+    let mut fixture = Fixture::with_class(DataClass::Personal).await;
+    let first_model = Model::default();
+    fixture.configure_model(&first_model);
+    let first = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &first_model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert!(first.session.messages.iter().any(|message| {
+        matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+    }));
+
+    fixture.session = first.session;
+    let second_model = Model::default();
+    *second_model.steps.lock().unwrap() = VecDeque::from([ModelStep::Answer {
+        text: "I can continue from the reviewed calendar context.".into(),
+    }]);
+    let second = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &second_model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let requests = second_model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].messages.iter().any(|message| {
+        matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+    }));
+    assert!(requests[0].replay.is_empty());
+    assert!(second.session.revision > fixture.session.revision);
+}
+
+#[tokio::test]
+async fn historical_calendar_revocation_during_model_blocks_new_answer_and_preserves_history() {
+    struct RevokeHistory<'vault> {
+        vault: &'vault EncryptedAgentVault<Keys>,
+        calls: AtomicUsize,
+    }
+
+    impl ModelRunner for RevokeHistory<'_> {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            assert!(request.messages.iter().any(|message| {
+                matches!(message, AgentMessage::Delegation { task, .. } if task.state == A2ATaskState::Completed)
+            }));
+            let grant = self
+                .vault
+                .list_data_access_grants(128)
+                .await?
+                .into_iter()
+                .next()
+                .unwrap();
+            self.vault
+                .revoke_data_access_grant(grant.id(), grant.authority())
+                .await?;
+            let model = Model::default();
+            *model.steps.lock().unwrap() = VecDeque::from([ModelStep::Answer {
+                text: "This revoked answer must not escape.".into(),
+            }]);
+            model.generate(request).await
+        }
+    }
+
+    let mut fixture = Fixture::with_class(DataClass::Personal).await;
+    let first_model = Model::default();
+    fixture.configure_model(&first_model);
+    let first = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &first_model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await
+        .unwrap();
+    fixture.session = first.session;
+    let original = fixture.session.messages.clone();
+    let model = RevokeHistory {
+        vault: &fixture.vault,
+        calls: AtomicUsize::new(0),
+    };
+    let result = fixture
+        .core
+        .run_calendar_agent_turn(
+            &fixture.vault,
+            &Access::default(),
+            &model,
+            fixture.request(),
+            now,
+            |_| {},
+        )
+        .await;
+    assert_eq!(
+        result.unwrap().session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::PolicyDenied,
+        })
+    );
+    assert_eq!(model.calls.load(Ordering::Acquire), 1);
+    let saved = fixture
+        .vault
+        .load(fixture.session.person_id, fixture.session.id)
+        .await
+        .unwrap();
+    assert_eq!(&saved.messages[..original.len()], original.as_slice());
+    assert!(!saved.messages.iter().any(|message| {
+        matches!(message, AgentMessage::Assistant { text, .. } if text.contains("must not escape"))
+    }));
+}
+
+#[tokio::test]
+async fn expired_or_paused_calendar_history_is_filtered_before_model_use() {
+    for pause in [false, true] {
+        let mut fixture = Fixture::with_class(DataClass::Personal).await;
+        let first_model = Model::default();
+        fixture.configure_model(&first_model);
+        let first = fixture
+            .core
+            .run_calendar_agent_turn(
+                &fixture.vault,
+                &Access::default(),
+                &first_model,
+                fixture.request(),
+                now,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        fixture.session = first.session;
+        if pause {
+            let overview = fixture.vault.calendar_expert_overview().await.unwrap();
+            let setup = overview.setups.first().unwrap();
+            let connection_id = fixture
+                .vault
+                .calendar_grant_connection_id(setup.setup_id)
+                .await
+                .unwrap();
+            fixture
+                .vault
+                .configure_calendar_access_with_connection(
+                    CalendarAccessConfiguration {
+                        instance_id: overview.registry.instance_id,
+                        expected_revision: overview.registry.revision,
+                        setup_id: setup.setup_id,
+                        change: CalendarAccessChange::SetEnabled { enabled: false },
+                    },
+                    connection_id,
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap();
+        }
+        let second_model = Model::default();
+        *second_model.steps.lock().unwrap() = VecDeque::from([ModelStep::Answer {
+            text: "I cannot use the prior calendar context.".into(),
+        }]);
+        let result = fixture
+            .core
+            .run_calendar_agent_turn(
+                &fixture.vault,
+                &Access::default(),
+                &second_model,
+                fixture.request(),
+                || {
+                    if pause {
+                        now()
+                    } else {
+                        now() + TimeDelta::minutes(3)
+                    }
+                },
+                |_| {},
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(AgentFailure::StaleContext | AgentFailure::CapabilityDenied)
+        ));
+        let requests = second_model.requests.lock().unwrap();
+        assert!(requests.iter().all(|request| {
+            request
+                .messages
+                .iter()
+                .all(|message| matches!(message, AgentMessage::User { .. }))
+        }));
+    }
 }
 
 #[tokio::test]
@@ -1407,7 +1737,7 @@ async fn permission_withdrawn_before_answer_commit_keeps_receipt_but_not_answer_
 async fn publication_failure_preserves_completed_session_and_reports_reconcilable_reference() {
     let fixture = Fixture::new().await;
     let access = Access::default();
-    access.deny_at.store(11, Ordering::Release);
+    access.deny_at.store(13, Ordering::Release);
     let result = fixture
         .core
         .run_calendar_agent_turn(
@@ -1760,12 +2090,96 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
         panic!("missing projection")
     };
     let output = task.data_part(EXPERT_RESULT_MEDIA_TYPE).unwrap();
-    assert_eq!(
-        serde_json::from_str::<ExpertResult>(output)
-            .unwrap()
-            .data_class,
-        DataClass::Personal
+    let expert_result = serde_json::from_str::<ExpertResult>(output).unwrap();
+    assert_eq!(expert_result.data_class, DataClass::Personal);
+    assert!(expert_result.source_handle.starts_with("calendar.lease:"));
+}
+
+#[tokio::test]
+async fn native_lease_reuses_exact_query_payload_after_observation_generation_changes() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let access = NativeObserveAccess {
+        fail_first: AtomicBool::new(false),
+        generation: AtomicUsize::new(1),
+        rollback_clock: None,
+    };
+    let guarded_access = GrantBoundCalendarAccess {
+        core: &fixture.core,
+        vault: &fixture.vault,
+        access: &access,
+        grant: fixture.grant.clone(),
+        grant_pin: Mutex::new(None),
+        remote_processing: false,
+    };
+    let views =
+        CalendarTimelineViews::new(&fixture.core, &guarded_access, fixture.grant.clone(), now)
+            .unwrap();
+    let request = || TimelineViewRead {
+        person_id: fixture.grant.person_id,
+        handle: fixture.grant.handle,
+        range_start_unix_ms: None,
+        range_end_unix_ms: None,
+        cursor: None,
+        max_items: 32,
+        max_bytes: 16_384,
+        deadline: Instant::now() + Duration::from_secs(5),
+        cancellation: Cancellation::default(),
+    };
+    let first = views.timeline(request()).await.unwrap();
+    access.generation.store(2, Ordering::Release);
+    let second = views.timeline(request()).await.unwrap();
+    assert_eq!(second, first);
+    assert!(second.source_handle.starts_with("calendar.lease:"));
+    let mut different = request();
+    different.range_start_unix_ms =
+        Some(u64::try_from(fixture.grant.starts_at.timestamp_millis()).unwrap());
+    different.range_end_unix_ms = Some(
+        u64::try_from((fixture.grant.starts_at + TimeDelta::hours(1)).timestamp_millis()).unwrap(),
     );
+    let third = views.timeline(different).await.unwrap();
+    assert_ne!(third.source_handle, first.source_handle);
+    assert_eq!(views.consumed_dependencies().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn native_lease_rejects_wall_clock_rollback_during_acquisition() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let clock_millis = Arc::new(AtomicI64::new(now().timestamp_millis()));
+    let access = NativeObserveAccess {
+        fail_first: AtomicBool::new(false),
+        generation: AtomicUsize::new(1),
+        rollback_clock: Some(Arc::clone(&clock_millis)),
+    };
+    let guarded_access = GrantBoundCalendarAccess {
+        core: &fixture.core,
+        vault: &fixture.vault,
+        access: &access,
+        grant: fixture.grant.clone(),
+        grant_pin: Mutex::new(None),
+        remote_processing: false,
+    };
+    let views = CalendarTimelineViews::new(
+        &fixture.core,
+        &guarded_access,
+        fixture.grant.clone(),
+        move || DateTime::from_timestamp_millis(clock_millis.load(Ordering::Acquire)).unwrap(),
+    )
+    .unwrap();
+    let result = views
+        .timeline(TimelineViewRead {
+            person_id: fixture.grant.person_id,
+            handle: fixture.grant.handle,
+            range_start_unix_ms: None,
+            range_end_unix_ms: None,
+            cursor: None,
+            max_items: 32,
+            max_bytes: 16_384,
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancellation: Cancellation::default(),
+        })
+        .await;
+    assert_eq!(result, Err(AgentFailure::StaleContext));
+    assert!(views.consumed_dependencies().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1773,6 +2187,8 @@ async fn failed_native_read_does_not_pin_an_authority_before_a_later_success() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let access = NativeObserveAccess {
         fail_first: AtomicBool::new(true),
+        generation: AtomicUsize::new(1),
+        rollback_clock: None,
     };
     let guarded_access = GrantBoundCalendarAccess {
         core: &fixture.core,
@@ -1787,6 +2203,7 @@ async fn failed_native_read_does_not_pin_an_authority_before_a_later_success() {
         device_id: fixture.grant.device_id.clone(),
         provider: fixture.grant.provider,
         calendar_ids: fixture.grant.calendar_ids.clone(),
+        expected_native_subject_fingerprint: None,
         starts_at: fixture.grant.starts_at,
         ends_at: fixture.grant.ends_at,
         deadline: Instant::now() + Duration::from_secs(5),
@@ -1847,6 +2264,8 @@ async fn consumer_policy_disable_reenable_invalidates_a_pinned_native_read() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let access = NativeObserveAccess {
         fail_first: AtomicBool::new(false),
+        generation: AtomicUsize::new(1),
+        rollback_clock: None,
     };
     let guarded_access = GrantBoundCalendarAccess {
         core: &fixture.core,
@@ -1861,6 +2280,7 @@ async fn consumer_policy_disable_reenable_invalidates_a_pinned_native_read() {
         device_id: fixture.grant.device_id.clone(),
         provider: fixture.grant.provider,
         calendar_ids: fixture.grant.calendar_ids.clone(),
+        expected_native_subject_fingerprint: None,
         starts_at: fixture.grant.starts_at,
         ends_at: fixture.grant.ends_at,
         deadline: Instant::now() + Duration::from_secs(5),
@@ -2069,6 +2489,7 @@ impl ModelRunner for ExpandingGrantModel<'_> {
                             connection_scope: connection.scope,
                             connection_revision: connection.revision,
                             source_authority: Some(connection.source_authority),
+                            reviewed_native_subject_fingerprint: Some("a".repeat(64)),
                         },
                     },
                     connection.connection_id,
@@ -2149,11 +2570,11 @@ async fn native_grant_pause_after_a_successful_read_blocks_second_egress() {
     assert_eq!(
         result.session.last_outcome,
         Some(AgentOutcome::Halted {
-            reason: AgentFailure::Conflict,
+            reason: AgentFailure::PolicyDenied,
         })
     );
     assert_eq!(result.proposals.len(), 0);
-    assert_eq!(result.session.messages.len(), 2);
+    assert_eq!(result.session.messages.len(), 1);
 }
 
 #[tokio::test]
@@ -2171,6 +2592,8 @@ async fn native_grant_scope_expansion_after_a_successful_read_blocks_second_egre
             &fixture.vault,
             &NativeObserveAccess {
                 fail_first: AtomicBool::new(false),
+                generation: AtomicUsize::new(1),
+                rollback_clock: None,
             },
             &model,
             fixture.request(),
@@ -2182,7 +2605,7 @@ async fn native_grant_scope_expansion_after_a_successful_read_blocks_second_egre
     assert_eq!(
         result.session.last_outcome,
         Some(AgentOutcome::Halted {
-            reason: AgentFailure::StaleContext,
+            reason: AgentFailure::PolicyDenied,
         })
     );
     assert!(result.proposals.is_empty());

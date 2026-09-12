@@ -71,12 +71,14 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
                 children: [
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.all,
-                    enabled: !controller.busy,
+                    enabled:
+                        !controller.busy && controller.authorityFailure == null,
                     title: const Text('Allow all supported actions'),
                   ),
                   FloeRadioTile<_ActionPermissionPreset>(
                     value: _ActionPermissionPreset.customize,
-                    enabled: !controller.busy,
+                    enabled:
+                        !controller.busy && controller.authorityFailure == null,
                     title: const Text('Customize permissions'),
                   ),
                 ],
@@ -88,7 +90,8 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
               value: controller.authority.calendarCreate,
               enabled:
                   preset == _ActionPermissionPreset.customize &&
-                  !controller.busy,
+                  !controller.busy &&
+                  controller.authorityFailure == null,
               options: const [
                 FloeSelectOption(
                   value: ActionAuthorityMode.allow,
@@ -126,7 +129,10 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
             ),
             if (controller.failed) ...[
               const SizedBox(height: FloeSpace.sm),
-              const Text('The permission could not be saved. Try again.'),
+              Text(
+                controller.authorityFailure ??
+                    'The permission could not be saved. Try again.',
+              ),
             ],
           ],
         ),

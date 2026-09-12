@@ -382,6 +382,19 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   try requirePermission()
   let store = EKEventStore()
   guard let target = store.calendar(withIdentifier: proposal.calendarID) else { throw NativeFailure("provider_unavailable") }
+  let agentOrigin = raw["agent_origin"] as? [String: Any]
+  let validateReviewedSource = {
+    if agentOrigin != nil && (operation == "preflight" || operation == "create") {
+      guard let identifiers = request["reviewed_calendar_ids"] as? [String],
+            !identifiers.isEmpty, identifiers.count <= 4,
+            Set(identifiers).count == identifiers.count, identifiers.contains(proposal.calendarID),
+            let expected = request["expected_native_subject_fingerprint"] as? String,
+            expected == (try nativeSubjectFingerprint(store, identifiers)) else {
+        throw NativeFailure("permission_denied")
+      }
+    }
+  }
+  try validateReviewedSource()
   let predicate = store.predicateForEvents(withStart: proposal.start.addingTimeInterval(-86400),
     end: proposal.end.addingTimeInterval(86400), calendars: [target])
   if operation == "lookup" {
@@ -400,13 +413,14 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   guard operation == "preflight" || operation == "create",
         let identifiers = request["calendar_ids"] as? [String], identifiers.contains(proposal.calendarID),
         let records = request["local_events"] as? [[String: Any]],
-        let state = raw["state"] as? [String: Any], state["status"] as? String == "executing",
+        let state = raw["state"] as? [String: Any],
+        state["status"] as? String == "executing" || (operation == "preflight" && state["status"] as? String == "approved"),
         let approved = raw["approved_at"], !(approved is NSNull) else { throw NativeFailure("permission_denied") }
   let approvedAt = try timestamp(approved)
   guard Date() >= approvedAt, Date() < proposal.expiry else { throw NativeFailure("timeout") }
   let calendars = identifiers.compactMap { store.calendar(withIdentifier: $0) }
   guard calendars.count == identifiers.count,
-        raw["calendar_name"] as? String == "\(target.source.title) · \(target.title)" else { throw NativeFailure("provider_unavailable") }
+        agentOrigin != nil || raw["calendar_name"] as? String == "\(target.source.title) · \(target.title)" else { throw NativeFailure("provider_unavailable") }
   let canCreate = target.allowsContentModifications && !target.isSubscribed
   let existing = try proposal.existing(store)
   let scheduleMetadataValid = TimeZone(identifier: proposal.timezone) != nil
@@ -416,6 +430,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
     $0.calendarItemIdentifier != existing?.calendarItemIdentifier && $0.startDate < proposal.end && $0.endDate > proposal.start
   } || hasLocalConflict)
   try requirePermission()
+  try validateReviewedSource()
   if operation == "preflight" {
     return ["person_id": proposal.person, "provider": "event_kit", "calendar_id": proposal.calendarID,
       "permission_granted": true, "can_create": canCreate, "timezone_valid": scheduleMetadataValid, "has_conflict": conflict]
@@ -439,6 +454,7 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   if existing == nil { event.alarms = nil }
   try requirePermission()
   guard Date() < deadline, Date() < proposal.expiry, target.allowsContentModifications else { throw NativeFailure("timeout") }
+  try validateReviewedSource()
   try store.save(event, span: .thisEvent, commit: true)
   guard proposal.matches(event), !event.calendarItemIdentifier.isEmpty else { throw NativeFailure("uncertain_result") }
   return proposal.receipt(event)

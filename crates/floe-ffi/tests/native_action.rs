@@ -1,10 +1,17 @@
 #![cfg(target_os = "macos")]
 
 use floe_agent::{AgentFailure, Cancellation};
-use floe_core::{CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest};
-use floe_domain::{CalendarProvider, PersonId};
+use floe_core::{
+    ActionFailure, CalendarAction, CalendarActionProvider, CalendarActionState,
+    CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest,
+};
+use floe_domain::{
+    CalendarProvider, ConnectionId, ContextDependency, GrantAuthority, GrantConsumer,
+    GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, PersonId,
+    ProcessingRestriction, ResourceHandle, SourceAuthority, TimedSchedule,
+};
 use floe_ffi::*;
-use floe_infra::native_calendar::NativeCalendarReadAccess;
+use floe_infra::native_calendar::{NativeCalendar, NativeCalendarReadAccess};
 use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString},
@@ -120,6 +127,7 @@ fn observe_request_with_ids(
         device_id: "test-device".into(),
         provider: CalendarProvider::EventKit,
         calendar_ids,
+        expected_native_subject_fingerprint: None,
         starts_at: chrono::Utc::now(),
         ends_at: chrono::Utc::now() + chrono::Duration::hours(1),
         deadline,
@@ -133,6 +141,7 @@ fn check_request(deadline: Instant, cancellation: Cancellation) -> CalendarReadA
         device_id: "test-device".into(),
         provider: CalendarProvider::EventKit,
         calendar_ids: vec!["target".into()],
+        expected_native_subject_fingerprint: None,
         deadline,
         cancellation,
     }
@@ -325,6 +334,107 @@ async fn native_read_rejects_changed_generation() {
         ))
         .await;
     assert!(matches!(result, Err(AgentFailure::StaleContext)));
+}
+
+#[tokio::test]
+async fn native_action_source_validation_rejects_wrong_subject() {
+    if run_read_fixture_child(
+        "native_action_source_validation_rejects_wrong_subject",
+        "valid",
+    ) {
+        return;
+    }
+    let person = PersonId(uuid::Uuid::parse_str(PERSON).unwrap());
+    let provider = NativeCalendar::new(vec!["target".into()]);
+    let now = chrono::Utc::now();
+    let action = CalendarAction {
+        agent_origin: None,
+        direct: false,
+        mutation: None,
+        id: uuid::Uuid::new_v4(),
+        person_id: person,
+        provider: CalendarProvider::EventKit,
+        calendar_id: "target".into(),
+        calendar_name: "Target".into(),
+        title: "Focus time".into(),
+        schedule: TimedSchedule::new(
+            now + chrono::Duration::hours(1),
+            now + chrono::Duration::hours(2),
+            "Etc/UTC",
+        )
+        .unwrap(),
+        connection_revision: 1,
+        created_at: now,
+        expires_at: now + chrono::Duration::minutes(10),
+        approved_at: Some(now),
+        execution_id: uuid::Uuid::new_v4(),
+        state: CalendarActionState::Approved,
+    };
+    let source = GrantSourceBinding::try_new(
+        person,
+        ConnectionId::try_new("00000000-0000-4000-8000-000000000010").unwrap(),
+        floe_domain::ConnectorId::try_new("calendar.event_kit").unwrap(),
+        floe_domain::ExecutionOwnerId::try_new("test-device").unwrap(),
+        SourceAuthority::new(),
+    )
+    .unwrap();
+    let consumer = GrantConsumer::builtin("calendar.expert").unwrap();
+    let scope = GrantScope::try_new(
+        vec![ResourceHandle::try_new("target").unwrap()],
+        vec![GrantDataCategory::Metadata],
+        vec![GrantOperation::Read],
+        vec![GrantPurpose::Assistant],
+        vec![consumer.clone()],
+        ProcessingRestriction::LocalOnly,
+    )
+    .unwrap();
+    let dependency = ContextDependency::try_new(
+        person,
+        floe_domain::GrantId::new(),
+        GrantAuthority::new(),
+        source,
+        scope.resources().to_vec(),
+        scope.categories().to_vec(),
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        floe_domain::ConsumerPolicyAuthority::new(),
+        uuid::Uuid::new_v4(),
+        vec![1],
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        now,
+        now + chrono::Duration::minutes(5),
+    )
+    .unwrap();
+    provider
+        .validate_source(&action, &dependency, &"a".repeat(64))
+        .await
+        .unwrap();
+    assert_eq!(
+        provider
+            .validate_source(&action, &dependency, &"b".repeat(64))
+            .await,
+        Err(ActionFailure::PermissionDenied)
+    );
+}
+
+#[tokio::test]
+async fn native_read_rejects_subject_change_before_events_query() {
+    if run_read_fixture_child(
+        "native_read_rejects_subject_change_before_events_query",
+        "changed_subject",
+    ) {
+        return;
+    }
+    let mut request = observe_request(
+        Instant::now() + std::time::Duration::from_secs(5),
+        Cancellation::default(),
+    );
+    request.expected_native_subject_fingerprint = Some("a".repeat(64));
+    let result = read_access().observe(request).await;
+    assert!(matches!(result, Err(AgentFailure::CapabilityDenied)));
 }
 
 #[tokio::test]

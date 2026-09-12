@@ -24,6 +24,7 @@ void main() {
       'connection_scope',
       'connection_revision',
       'source_authority',
+      'reviewed_native_subject_fingerprint',
     ]);
     final unicode = calendarSetupRequest(calendarIds: ['\u{10000}', '\ue000']);
     expect(unicode.calendarIds, ['\ue000', '\u{10000}']);

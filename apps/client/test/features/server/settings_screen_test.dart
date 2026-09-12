@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
@@ -443,7 +444,7 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final gateway = Executor();
+    final gateway = _LockableActionExecutor();
     final controller = CalendarActionController(
       gateway: gateway,
       personId: 'person',
@@ -507,7 +508,34 @@ void main() {
     await tester.tap(find.text('Do not allow'));
     await tester.pumpAndSettle();
     expect(controller.authority.calendarCreate, ActionAuthorityMode.deny);
+    gateway.locked = true;
+    await tester.runAsync(controller.load);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Open and unlock the agent vault to review or change action permissions.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<FloeSelect<ActionAuthorityMode>>(
+            find.byType(FloeSelect<ActionAuthorityMode>),
+          )
+          .enabled,
+      isFalse,
+    );
   });
+}
+
+final class _LockableActionExecutor extends Executor {
+  bool locked = false;
+
+  @override
+  Future<ActionAuthority> loadActionAuthority(String personId) {
+    if (locked) throw const AgentVaultException('vault_unavailable');
+    return super.loadActionAuthority(personId);
+  }
 }
 
 final class _AndroidContext implements AndroidContextApi {
@@ -574,7 +602,15 @@ final class _AndroidContext implements AndroidContextApi {
   }
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => {
+  Future<Map<String, dynamic>> readAcquisition(
+    Map<String, dynamic> request,
+  ) async => <String, dynamic>{};
+
+  @override
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async => {
     'schema_version': 1,
     'view_id': 'people.identity',
     'source_handle': 'people:test',
@@ -622,7 +658,10 @@ final class _AppleContext implements AppleContextApi {
   Future<bool> requestPermission(AppleContextSource source) async => true;
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async => {};
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async => {};
 
   @override
   Future<Map<String, dynamic>> readWellbeing() async => {};

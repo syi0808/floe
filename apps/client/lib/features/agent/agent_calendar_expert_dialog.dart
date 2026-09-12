@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/design_tokens.dart';
@@ -32,6 +34,8 @@ class AgentCalendarSettings extends StatefulWidget {
 class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   late Listenable _changes;
   final Set<String> _selected = {};
+  CalendarSubjectPreview? _reviewedPreview;
+  int _previewGeneration = 0;
   String? _fingerprint;
   String? _editingSetupId;
   bool _editing = false;
@@ -80,6 +84,8 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
 
   void _resetEditor() {
     _selected.clear();
+    _reviewedPreview = null;
+    _previewGeneration++;
     _editingSetupId = null;
     _editing = false;
   }
@@ -92,25 +98,83 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
 
   void _startSetup() => setState(() {
     _selected.clear();
+    _reviewedPreview = null;
+    _previewGeneration++;
     _editingSetupId = null;
     _editing = true;
   });
+
+  Future<void> _refreshPreview() async {
+    final sources = _sources;
+    if (sources == null ||
+        !_nativeProvider(sources.provider) ||
+        _selected.isEmpty ||
+        _selected.length > 4) {
+      return;
+    }
+    final generation = ++_previewGeneration;
+    final selected = _selected.toList();
+    final sourceFingerprint = _fingerprint;
+    final preview = await controller.calendarExpertController
+        .previewCalendarSubject(
+          provider: sources.provider,
+          deviceId: sources.deviceId,
+          connectionId: sources.connectionId,
+          calendarIds: selected,
+          connectionScope: sources.connectionScope,
+          connectionRevision: sources.revision,
+          sourceAuthority: sources.sourceAuthority!,
+        );
+    if (!mounted ||
+        generation != _previewGeneration ||
+        sourceFingerprint != _fingerprint ||
+        !_selected.toSet().containsAll(selected) ||
+        _selected.length != selected.length) {
+      return;
+    }
+    setState(() => _reviewedPreview = preview);
+  }
+
+  bool _nativeProvider(String provider) =>
+      provider == 'event_kit' || provider == 'android';
 
   Future<void> _startAdditionalSetup() async {
     final sources = _sources;
     if (!controller.canManageCalendarExperts || sources == null) return;
     final selected = <String>{};
     var saving = false;
+    CalendarSubjectPreview? preview;
+    var previewGeneration = 0;
     await showFloeDialog<void>(
       context,
       (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
+          Future<void> refreshPreview() async {
+            if (selected.isEmpty || selected.length > 4) return;
+            final generation = ++previewGeneration;
+            final next = await controller.calendarExpertController
+                .previewCalendarSubject(
+                  provider: sources.provider,
+                  deviceId: sources.deviceId,
+                  connectionId: sources.connectionId,
+                  calendarIds: selected.toList(),
+                  connectionScope: sources.connectionScope,
+                  connectionRevision: sources.revision,
+                  sourceAuthority: sources.sourceAuthority!,
+                );
+            if (!dialogContext.mounted || generation != previewGeneration) {
+              return;
+            }
+            setDialogState(() => preview = next);
+          }
+
           Future<void> save() async {
             if (saving ||
                 !_fresh() ||
                 selected.isEmpty ||
                 selected.length > 4 ||
-                !sources.containsScope(sources.provider, selected)) {
+                !sources.containsScope(sources.provider, selected) ||
+                (_nativeProvider(sources.provider) && preview == null)) {
               return;
             }
             setDialogState(() => saving = true);
@@ -122,6 +186,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               connectionScope: sources.connectionScope,
               connectionRevision: sources.revision,
               sourceAuthority: sources.sourceAuthority!,
+              reviewedPreview: preview,
             );
             if (!dialogContext.mounted) return;
             if (controller.calendarExpertFailure == null) {
@@ -160,18 +225,32 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
                             source.error == null &&
                             (selected.contains(source.id) ||
                                 selected.length < 4)
-                        ? (checked) => setDialogState(() {
-                            if (checked == true) {
-                              selected.add(source.id);
-                            } else {
-                              selected.remove(source.id);
-                            }
-                          })
+                        ? (checked) {
+                            setDialogState(() {
+                              if (checked == true) {
+                                selected.add(source.id);
+                              } else {
+                                selected.remove(source.id);
+                              }
+                              preview = null;
+                              previewGeneration++;
+                            });
+                            unawaited(refreshPreview());
+                          }
                         : null,
                   ),
                 const SizedBox(height: FloeSpace.xs),
                 Text(
                   '${selected.length} of 4 selected',
+                  style: FloeType.bodySmall.copyWith(
+                    color: FloePalette.neutral600,
+                  ),
+                ),
+                const SizedBox(height: FloeSpace.xs),
+                Text(
+                  preview == null
+                      ? 'Reviewing the selected calendars on this device…'
+                      : 'Selected calendars reviewed on this device.',
                   style: FloeType.bodySmall.copyWith(
                     color: FloePalette.neutral600,
                   ),
@@ -196,7 +275,12 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               ),
               FloeButton.filled(
                 key: const ValueKey('calendar-access-save'),
-                onPressed: !saving && selected.isNotEmpty ? save : null,
+                onPressed:
+                    !saving &&
+                        selected.isNotEmpty &&
+                        (!_nativeProvider(sources.provider) || preview != null)
+                    ? save
+                    : null,
                 child: const Text('Allow access'),
               ),
             ],
@@ -206,14 +290,18 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     );
   }
 
-  void _startChange(AgentCalendarSetupReceipt setup, AgentCalendarView view) =>
-      setState(() {
-        _selected
-          ..clear()
-          ..addAll(view.calendarIds);
-        _editingSetupId = setup.setupId;
-        _editing = true;
-      });
+  void _startChange(AgentCalendarSetupReceipt setup, AgentCalendarView view) {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll(view.calendarIds);
+      _reviewedPreview = null;
+      _previewGeneration++;
+      _editingSetupId = setup.setupId;
+      _editing = true;
+    });
+    unawaited(_refreshPreview());
+  }
 
   Future<void> _save() async {
     final sources = _sources;
@@ -221,7 +309,8 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         sources == null ||
         _selected.isEmpty ||
         _selected.length > 4 ||
-        !sources.containsScope(sources.provider, _selected)) {
+        !sources.containsScope(sources.provider, _selected) ||
+        (_nativeProvider(sources.provider) && _reviewedPreview == null)) {
       return;
     }
     final setupId = _editingSetupId;
@@ -234,6 +323,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         connectionScope: sources.connectionScope,
         connectionRevision: sources.revision,
         sourceAuthority: sources.sourceAuthority!,
+        reviewedPreview: _reviewedPreview,
       );
     } else {
       await controller.changeCalendarAccessScope(
@@ -244,6 +334,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         connectionScope: sources.connectionScope,
         connectionRevision: sources.revision,
         sourceAuthority: sources.sourceAuthority!,
+        reviewedPreview: _reviewedPreview,
       );
     }
     if (mounted && controller.calendarExpertFailure == null) {
@@ -585,16 +676,28 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
                 ? (selected) {
                     if (!_fresh()) return;
                     setState(() {
+                      _reviewedPreview = null;
+                      _previewGeneration++;
                       if (selected == true) {
                         _selected.add(source.id);
                       } else {
                         _selected.remove(source.id);
                       }
                     });
+                    unawaited(_refreshPreview());
                   }
                 : null,
           ),
       Text('${_selected.length} of 4 selected'),
+      if (_nativeProvider(sources?.provider ?? '')) ...[
+        const SizedBox(height: FloeSpace.xs),
+        Text(
+          _reviewedPreview == null
+              ? 'Reviewing the selected calendars on this device…'
+              : 'Selected calendars reviewed on this device.',
+          style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+        ),
+      ],
       const SizedBox(height: FloeSpace.md),
       FloeSquircle(
         size: FloeSquircleSize.md,
@@ -612,7 +715,13 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
         children: [
           FloeButton.filled(
             key: const ValueKey('calendar-access-save'),
-            onPressed: canManage && _selected.isNotEmpty ? _save : null,
+            onPressed:
+                canManage &&
+                    _selected.isNotEmpty &&
+                    (!_nativeProvider(sources?.provider ?? '') ||
+                        _reviewedPreview != null)
+                ? _save
+                : null,
             child: Text(
               _editingSetupId == null ? 'Allow access' : 'Save changes',
             ),

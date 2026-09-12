@@ -788,59 +788,22 @@ func TestConnectorSnapshotFailureIsRedacted(test *testing.T) {
 	}
 }
 
-func TestPairedClientReadsBoundedCommunicationView(test *testing.T) {
+func TestRemoteViewAdmissionRejectsUnboundResourceBeforeProviderRead(test *testing.T) {
 	fixture := setup(test)
 	_, token := fixture.pair()
 	fixture.ownConnector("gmail")
-	view := map[string]any{
-		"schema_version": 1,
-		"view_id":        "mail.communication",
-		"source_handle":  "mail:fixture",
-		"items":          []any{},
+	connectionID := fixtureConnectionID("gmail")
+	body := map[string]any{
+		"schema_version": 1, "connector_id": "gmail", "connection_id": connectionID,
+		"connection_revision": 1, "resources": []string{"mail.communication:forged"},
+		"policy":  map[string]any{"incarnation": "00000000-0000-4000-8000-000000000011", "epoch": 1},
+		"grant":   map[string]any{"id": "00000000-0000-4000-8000-000000000012", "incarnation": "00000000-0000-4000-8000-000000000013", "epoch": 1},
+		"purpose": "everyday_assistance", "consumer": "assistant", "max_items": 25,
+		"max_bytes": 65536, "query": map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25},
 	}
-	fixture.console.SetGmailAuth(&fakeConnectorRuntime{view: view})
-
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{
-		"schema_version": 1,
-		"query":          "follow up",
-		"cursor":         0,
-		"limit":          25,
-	}, token))
-	if value["view"].(map[string]any)["view_id"] != "mail.communication" {
-		test.Fatalf("view: %#v", value)
-	}
-	for _, body := range []map[string]any{
-		{"schema_version": 2, "query": "", "cursor": 0, "limit": 25},
-		{"schema_version": 1, "query": "", "cursor": -1, "limit": 25},
-		{"schema_version": 1, "query": "", "cursor": 0, "limit": 101},
-		{"schema_version": 1, "query": "", "cursor": 0, "limit": 25, "authority": "send"},
-	} {
-		if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", body, token); response.Code != http.StatusBadRequest {
-			test.Fatalf("invalid view request accepted: %#v", body)
-		}
-	}
-	if response := fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "", "cursor": 0, "limit": 25}, ""); response.Code != http.StatusUnauthorized {
-		test.Fatalf("unpaired view read accepted: %d", response.Code)
-	}
-}
-
-func TestPairedClientReadsBoundedCalendarView(test *testing.T) {
-	fixture := setup(test)
-	_, token := fixture.pair()
-	fixture.ownConnector("calendar.google")
-	connectionID := fixtureConnectionID("calendar.google")
-	fixture.console.calendars = map[string]CalendarRuntime{connectionID: &fakeCalendarRuntime{snapshot: calendarSnapshot("calendar.google", "google_calendar"), view: map[string]any{"schema_version": 1, "view_id": "calendar.timeline", "source_handle": "calendar.timeline:fixture", "items": []any{}}}}
-	start := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token))
-	if value["view"].(map[string]any)["view_id"] != "calendar.timeline" {
-		test.Fatalf("view: %#v", value)
-	}
-	stale := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 2, "range_start_unix_ms": start, "range_end_unix_ms": start + int64(24*time.Hour/time.Millisecond), "cursor": "", "limit": 25}, token)
-	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "connection_changed") {
-		test.Fatalf("stale calendar read accepted: %d %s", stale.Code, stale.Body.String())
-	}
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", map[string]any{"schema_version": 1, "connector_id": "calendar.google", "connection_id": connectionID, "connection_revision": 1, "range_start_unix_ms": start, "range_end_unix_ms": start, "cursor": "", "limit": 25}, token); response.Code != http.StatusBadRequest {
-		test.Fatalf("invalid range accepted: %d", response.Code)
+	response := fixture.call(http.MethodPost, "/v1/views/mail.communication/admit", body, token)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation") {
+		test.Fatalf("forged resource admitted: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -863,14 +826,13 @@ func TestCalendarRouteRequiresAndHonorsSelectedConnector(test *testing.T) {
 	body["connector_id"] = "calendar.microsoft"
 	body["connection_id"] = microsoftConnectionID
 	body["connection_revision"] = 1
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token))
-	if value["view"].(map[string]any)["source_handle"] != "calendar.timeline:microsoft" {
-		test.Fatalf("view: %#v", value)
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "admission_required") {
+		test.Fatalf("legacy calendar route was not denied: %d %s", response.Code, response.Body.String())
 	}
 	body["connector_id"] = "calendar.google"
 	body["connection_id"] = googleConnectionID
-	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusServiceUnavailable {
-		test.Fatalf("selected Google failure fell through to Microsoft: %d %s", response.Code, response.Body.String())
+	if response := fixture.call(http.MethodPost, "/v1/views/calendar.timeline", body, token); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "admission_required") {
+		test.Fatalf("legacy Google route was not denied: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -884,9 +846,9 @@ func TestCommunicationRouteFallsBackToMicrosoftMail(test *testing.T) {
 	fixture.console.SetGmailAuth(&fakeConnectorRuntime{err: errors.New("gmail unavailable")})
 	fixture.console.SetMicrosoftMail(&fakeMicrosoftAuth{}, microsoft)
 
-	value := fixture.value(fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "follow up", "cursor": 0, "limit": 25}, token))
-	if value["view"].(map[string]any)["source_handle"] != "mail:microsoft" || microsoft.reads.Load() != 1 {
-		test.Fatalf("view: %#v reads=%d", value, microsoft.reads.Load())
+	response := fixture.call(http.MethodPost, "/v1/views/mail.communication", map[string]any{"schema_version": 1, "query": "follow up", "cursor": 0, "limit": 25}, token)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "admission_required") || microsoft.reads.Load() != 0 {
+		test.Fatalf("legacy route was not denied: %d %s reads=%d", response.Code, response.Body.String(), microsoft.reads.Load())
 	}
 	fixture.console.SetGmailAuth(nil)
 	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
@@ -904,64 +866,18 @@ func TestPairedClientReadsConfiguredWorkAndLogisticsViews(test *testing.T) {
 	fixture.console.SetWorkContext(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "github.repository", "provider": "github", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "github.repository"}}, view: map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": "work:fixture", "scope_handle": "workspace:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"descriptor": map[string]any{"id": "home_assistant.selected", "provider": "home_assistant", "execution": map[string]any{"kind": "server"}}, "connection": map[string]any{"connector_id": "home_assistant.selected"}}, view: map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": "home:fixture", "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{}}})
 
-	for path, viewID := range map[string]string{
-		"/v1/views/work.context":   "work.context",
-		"/v1/views/life.logistics": "life.logistics",
+	for path := range map[string]struct{}{
+		"/v1/views/work.context":   {},
+		"/v1/views/life.logistics": {},
 	} {
-		value := fixture.value(fixture.call(http.MethodPost, path, map[string]any{"schema_version": 1}, token))
-		if value["view"].(map[string]any)["view_id"] != viewID {
-			test.Fatalf("view: %#v", value)
-		}
-		if response := fixture.call(http.MethodPost, path, map[string]any{"schema_version": 1, "write": true}, token); response.Code != http.StatusBadRequest {
-			test.Fatalf("authority field accepted: %s", path)
+		response := fixture.call(http.MethodPost, path, map[string]any{"schema_version": 1}, token)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "admission_required") {
+			test.Fatalf("legacy route was not denied: %s %d %s", path, response.Code, response.Body.String())
 		}
 	}
 	connections := fixture.value(fixture.call(http.MethodGet, "/v1/connections", nil, token))["connections"].([]any)
 	if len(connections) != 2 {
 		test.Fatalf("connections: %#v", connections)
-	}
-}
-
-func TestWorkContextRouteMergesHealthyProvidersAndToleratesOneFailure(test *testing.T) {
-	fixture := setup(test)
-	_, token := fixture.pair()
-	now := time.Now().UnixMilli()
-	view := func(source, scope, evidence string) map[string]any {
-		return map[string]any{"schema_version": 1, "view_id": "work.context", "source_handle": source, "scope_handle": scope, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": "communication", "title": "Selected work", "observed_at_unix_ms": now - 2}}}
-	}
-	fixture.ownConnector("github.issues")
-	fixture.ownConnector("slack.conversations")
-	fixture.console.work = map[string]WorkContextRuntime{
-		fixtureConnectionID("github.issues"):       &fakeContextRuntime{view: view("github:a", "workspace:a", "github:item")},
-		fixtureConnectionID("slack.conversations"): &fakeContextRuntime{view: view("slack:b", "channel:b", "slack:item")},
-	}
-	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
-	merged := response["view"].(map[string]any)
-	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "work:") {
-		test.Fatalf("merged view: %#v", merged)
-	}
-	fixture.console.work[fixtureConnectionID("github.issues")] = &fakeContextRuntime{err: errors.New("private provider failure")}
-	response = fixture.value(fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, token))
-	if len(response["view"].(map[string]any)["items"].([]any)) != 1 || strings.Contains(fmt.Sprint(response), "private provider failure") {
-		test.Fatalf("partial view: %#v", response)
-	}
-}
-
-func TestLogisticsRouteMergesMailAndHomeEvidence(test *testing.T) {
-	fixture := setup(test)
-	_, token := fixture.pair()
-	now := time.Now().UnixMilli()
-	view := func(source, evidence, kind string) map[string]any {
-		return map[string]any{"schema_version": 1, "view_id": "life.logistics", "source_handle": source, "observed_at_unix_ms": now - 1, "expires_at_unix_ms": now + 299_999, "coverage_complete": true, "items": []any{map[string]any{"evidence_handle": evidence, "kind": kind, "summary": "Selected evidence", "status": "observed", "needs_attention": false}}}
-	}
-	fixture.console.SetGmailAuth(&fakeConnectorRuntime{logisticsView: view("mail:a", "mail:item", "delivery")})
-	fixture.ownConnector("gmail")
-	fixture.ownConnector("home_assistant.states")
-	fixture.console.SetLogistics(&fakeContextRuntime{snapshot: map[string]any{"connection": map[string]any{"connector_id": "home_assistant.states"}}, view: view("home:b", "home:item", "home_state")})
-	response := fixture.value(fixture.call(http.MethodPost, "/v1/views/life.logistics", map[string]any{"schema_version": 1}, token))
-	merged := response["view"].(map[string]any)
-	if len(merged["items"].([]any)) != 2 || !strings.HasPrefix(merged["source_handle"].(string), "logistics:") {
-		test.Fatalf("merged logistics: %#v", merged)
 	}
 }
 

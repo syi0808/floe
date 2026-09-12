@@ -7,6 +7,7 @@ mod agent_fixture;
 mod agent_vault;
 mod calendar;
 mod calendar_action;
+mod calendar_lease;
 mod calendar_view;
 mod connected_calendar;
 mod core;
@@ -29,18 +30,23 @@ pub use agent_fixture::{
 };
 #[cfg(unix)]
 pub use agent_vault::{
-    AccessGrantCleanup, CalendarGrantAdmission, EncryptedAgentVault, GovernedAgentSessionStore,
-    GovernedDependencyResolver, KeyringVaultKeys, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
-    RemoteProducerIdentity, SessionCompactionResult, SessionSearchHit, VaultKey, VaultKeyProvider,
+    AccessGrantCleanup, AgentActionAdmission, AgentActionEnvelope, CalendarGrantAdmission,
+    EncryptedAgentVault, GovernedAgentSessionStore, GovernedDependencyLiveness,
+    GovernedDependencyResolver, KeyringVaultKeys, RemoteCalendarAuthorizationExpectation,
+    RemoteCalendarGrantBinding, RemoteCalendarSourceReference, RemoteEnrollmentSignature,
+    RemoteOwnerPublicKey, RemoteProducerIdentity, RemoteViewGrantBinding,
+    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit, VaultKey,
+    VaultKeyProvider,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
     CalendarActionState, CalendarCreateReceipt, CalendarMutation, CalendarPreflight,
 };
+pub use calendar_lease::CalendarLeaseDependencies;
 pub use calendar_view::{
-    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessRequest,
-    CalendarReadAccessStamp, CalendarTimelineGrant, CalendarTimelineViews, ProjectedCalendarItem,
-    ProjectedCalendarObservation,
+    CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessAdmission,
+    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarTimelineGrant,
+    CalendarTimelineViews, ProjectedCalendarItem, ProjectedCalendarObservation,
 };
 pub use core::{Classification, FloeCore};
 pub use error::{CoreError, ErrorCode};

@@ -8,10 +8,19 @@ const _channel = MethodChannel('floe/apple_context');
 abstract interface class AppleContextApi {
   Future<List<Map<String, dynamic>>> connections();
   Future<bool> requestPermission(AppleContextSource source);
-  Future<Map<String, dynamic>> readContacts({int limit = 64});
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  });
   Future<Map<String, dynamic>> readFeasibility(AppleFeasibilityQuery query);
   Future<Map<String, dynamic>> readWellbeing();
   Future<Map<String, dynamic>> screenTimeCapability();
+}
+
+abstract interface class AppleContextSubjectApi {
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  );
 }
 
 enum AppleContextSource { contacts, health }
@@ -42,7 +51,8 @@ final class AppleFeasibilityQuery {
 
 enum AppleTravelMode { automobile, transit, walking }
 
-final class AppleContextGateway implements AppleContextApi {
+final class AppleContextGateway
+    implements AppleContextApi, AppleContextSubjectApi {
   AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
     validateAppleDeviceId(deviceId);
   }
@@ -82,16 +92,54 @@ final class AppleContextGateway implements AppleContextApi {
   }
 
   @override
-  Future<Map<String, dynamic>> readContacts({int limit = 64}) async {
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async {
     _requireAppleMobile();
     final view = _strictMap(
       await _channel.invokeMapMethod<Object?, Object?>('readContacts', {
         'device_id': _deviceId,
         'limit': limit,
+        if (selectedHandles != null) 'selected_handles': selectedHandles,
       }),
     );
     validateApplePeopleView(view);
     return view;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectContactsSubject(
+    List<String> selectedHandles,
+  ) async {
+    _requireAppleMobile();
+    if (selectedHandles.isEmpty || selectedHandles.length > 64) {
+      throw const FormatException('Contact selection is empty.');
+    }
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectContactsSubject',
+        appleNativeArguments(_deviceId, {'selected_handles': selectedHandles}),
+      ),
+    );
+    const fields = {
+      'schema_version',
+      'subject_fingerprint',
+      'permission_class',
+      'resolved_handles',
+    };
+    if (value.keys.toSet().difference(fields).isNotEmpty ||
+        !value.keys.toSet().containsAll(fields) ||
+        value['schema_version'] != 1 ||
+        value['subject_fingerprint'] is! String ||
+        (value['subject_fingerprint']! as String).length != 64 ||
+        value['permission_class'] is! String ||
+        value['resolved_handles'] is! List ||
+        (value['resolved_handles']! as List).length != selectedHandles.length ||
+        !(value['resolved_handles']! as List).every(selectedHandles.contains)) {
+      throw const FormatException('Invalid Apple Contacts subject.');
+    }
+    return value;
   }
 
   @override

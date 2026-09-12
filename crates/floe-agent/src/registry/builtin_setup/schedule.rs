@@ -15,6 +15,8 @@ pub struct CalendarExpertSetup {
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_authority: Option<floe_domain::SourceAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_native_subject_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,6 +29,8 @@ pub struct CalendarExpertSetupReceipt {
     pub connection_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_authority: Option<floe_domain::SourceAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_native_subject_fingerprint: Option<String>,
     pub view_handle: Uuid,
     pub tool_installation_id: Uuid,
     pub expert_installation_id: Uuid,
@@ -64,6 +68,8 @@ pub enum CalendarAccessChange {
         connection_revision: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_authority: Option<floe_domain::SourceAuthority>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reviewed_native_subject_fingerprint: Option<String>,
     },
     Remove {},
 }
@@ -168,6 +174,8 @@ impl AgentRegistry {
             || receipt.connection_scope != binding.connection_scope
             || receipt.connection_revision != binding.connection_revision
             || receipt.source_authority != binding.source_authority
+            || receipt.reviewed_native_subject_fingerprint
+                != request.reviewed_native_subject_fingerprint
         {
             return Err(AgentFailure::Conflict);
         }
@@ -192,6 +200,9 @@ impl AgentRegistry {
             connection_scope: request.connection_scope,
             connection_revision: request.connection_revision,
             source_authority: request.source_authority,
+            reviewed_native_subject_fingerprint: request
+                .reviewed_native_subject_fingerprint
+                .clone(),
             view_handle: binding.handle,
             tool_installation_id: Uuid::new_v4(),
             expert_installation_id: Uuid::new_v4(),
@@ -312,7 +323,12 @@ impl AgentRegistry {
                 connection_scope,
                 connection_revision,
                 source_authority,
+                reviewed_native_subject_fingerprint,
             } => {
+                validate_native_subject_fingerprint(
+                    *provider,
+                    reviewed_native_subject_fingerprint.as_deref(),
+                )?;
                 let binding = next
                     .calendar_views
                     .iter_mut()
@@ -336,6 +352,8 @@ impl AgentRegistry {
                 setup.connection_scope = *connection_scope;
                 setup.connection_revision = *connection_revision;
                 setup.source_authority = *source_authority;
+                setup.reviewed_native_subject_fingerprint =
+                    reviewed_native_subject_fingerprint.clone();
             }
             CalendarAccessChange::Remove {} => {
                 disable_setup(&mut next, &receipt, person_id)?;
@@ -372,6 +390,10 @@ impl AgentRegistry {
                 .iter()
                 .find(|binding| binding.handle == receipt.view_handle)
                 .ok_or(AgentFailure::NotFound)?;
+            validate_native_subject_fingerprint(
+                binding.provider,
+                receipt.reviewed_native_subject_fingerprint.as_deref(),
+            )?;
             let [tool, expert] = setup_packages(binding.provider);
             if binding.person_id != receipt.person_id
                 || binding.connection_scope != receipt.connection_scope
@@ -460,8 +482,35 @@ fn setup_binding(
         source_authority: request.source_authority,
         enabled: false,
     };
+    validate_native_subject_fingerprint(
+        request.provider,
+        request.reviewed_native_subject_fingerprint.as_deref(),
+    )?;
     binding.validate()?;
     Ok(binding)
+}
+
+fn validate_native_subject_fingerprint(
+    provider: CalendarProvider,
+    fingerprint: Option<&str>,
+) -> Result<(), AgentFailure> {
+    if matches!(
+        provider,
+        CalendarProvider::EventKit | CalendarProvider::Android
+    ) {
+        let Some(fingerprint) = fingerprint else {
+            return Err(AgentFailure::AccessReviewRequired);
+        };
+        if fingerprint.len() != 64
+            || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || fingerprint.bytes().any(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+    } else if fingerprint.is_some() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
 }
 
 fn setup_packages(provider: CalendarProvider) -> [AgentPackage; 2] {

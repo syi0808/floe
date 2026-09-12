@@ -9,11 +9,13 @@ use std::{
 use chrono::{DateTime, Utc};
 use floe_agent::*;
 use floe_domain::{
-    CalendarProvider, GrantConsumer, GrantOperation, GrantPurpose, PersonId, ProcessingRestriction,
+    CalendarProvider, ContextDependency, CoverageAccumulator, DependencyCoverage, GrantConsumer,
+    GrantOperation, GrantPurpose, PersonId, ProcessingRestriction,
 };
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::calendar_view::GovernedDependencyResolver;
 use crate::*;
 
 pub struct CalendarAgentTurnRequest {
@@ -61,7 +63,7 @@ impl FloeCore {
         let _cancel = CancelTurn(child.clone());
         let mut request = request;
         request.cancellation = child.clone();
-        let operation = async {
+        let operation = Box::pin(async {
             validate_budget(request.budget)?;
             if request.command.person_id != request.grant.person_id {
                 return Err(AgentFailure::CapabilityDenied);
@@ -168,13 +170,6 @@ impl FloeCore {
                         .evidence
                         .push(native_context_evidence(&note_view)?);
                 }
-                append_schedule_context(
-                    &mut expert_context,
-                    request.feasibility.as_ref(),
-                    request.wellbeing.as_ref(),
-                    context_now,
-                    views.grant().expires_at,
-                )?;
             }
             let turn = CalendarTurn {
                 vault,
@@ -187,6 +182,7 @@ impl FloeCore {
                 propose_focus: request.propose_focus,
                 card,
                 expert_context,
+                historical_dependencies: Mutex::new(Vec::new()),
                 deadline,
                 cancellation: request.cancellation,
                 parent: parent.clone(),
@@ -202,27 +198,25 @@ impl FloeCore {
                 budget: request.budget,
             };
             let session = if request.continuation {
-                runtime
-                    .continue_turn_with_agents(
-                        request.command.person_id,
-                        request.command.session_id,
-                        request.command.expected_revision,
-                        request.context,
-                        &router,
-                        turn.cancellation.clone(),
-                        emit,
-                    )
-                    .await?
+                Box::pin(runtime.continue_turn_with_agents(
+                    request.command.person_id,
+                    request.command.session_id,
+                    request.command.expected_revision,
+                    request.context,
+                    &router,
+                    turn.cancellation.clone(),
+                    emit,
+                ))
+                .await?
             } else {
-                runtime
-                    .run_turn_with_agents(
-                        request.command,
-                        request.context,
-                        &router,
-                        turn.cancellation.clone(),
-                        emit,
-                    )
-                    .await?
+                Box::pin(runtime.run_turn_with_agents(
+                    request.command,
+                    request.context,
+                    &router,
+                    turn.cancellation.clone(),
+                    emit,
+                ))
+                .await?
             };
             let mut proposals = vec![];
             if session.last_outcome == Some(AgentOutcome::Completed)
@@ -284,7 +278,7 @@ impl FloeCore {
                 }
             }
             Ok(CalendarAgentTurnResult { session, proposals })
-        };
+        });
         tokio::pin!(operation);
         tokio::select! {
             biased;
@@ -297,6 +291,7 @@ impl FloeCore {
     }
 }
 
+#[cfg(test)]
 fn append_schedule_context(
     context: &mut AgentContext,
     feasibility: Option<&FeasibilityView>,
@@ -348,6 +343,7 @@ fn append_schedule_context(
     Ok(())
 }
 
+#[cfg(test)]
 fn context_status_evidence(
     view_id: &str,
     state: &str,
@@ -390,16 +386,59 @@ struct GrantBoundCalendarAccess<'host, Keys, Access> {
 impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
     GrantBoundCalendarAccess<'_, Keys, Access>
 {
+    async fn authorize_remote(
+        &self,
+        request: &CalendarReadAccessRequest,
+        stamp: &CalendarReadAccessStamp,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        if matches!(
+            self.grant.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            return Ok(None);
+        }
+        if self.grant.provider == CalendarProvider::Fixture {
+            return Ok(None);
+        }
+        let admission = self
+            .access
+            .admission_after_check(request, stamp)
+            .await?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let expected_connector = match self.grant.provider {
+            CalendarProvider::Google => "calendar.google",
+            CalendarProvider::Microsoft => "calendar.microsoft",
+            _ => return Err(AgentFailure::CapabilityDenied),
+        };
+        if admission.person_id != self.grant.person_id
+            || admission.source.connector().as_str() != expected_connector
+            || admission.scope.resources().iter().any(|resource| {
+                !self
+                    .grant
+                    .calendar_ids
+                    .iter()
+                    .any(|calendar_id| calendar_id == resource.as_str())
+            })
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        match admission.processing {
+            ProcessingRestriction::LocalOnly if self.remote_processing => {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            ProcessingRestriction::ApprovedRecipient { .. } if !self.remote_processing => {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            ProcessingRestriction::LocalOnly | ProcessingRestriction::ApprovedRecipient { .. } => {}
+        }
+        Ok(Some(admission))
+    }
+
     async fn authorize_native(
         &self,
         request: &CalendarReadAccessRequest,
-    ) -> Result<
-        Option<(
-            floe_domain::GrantAuthority,
-            floe_domain::ConsumerPolicyAuthority,
-        )>,
-        AgentFailure,
-    > {
+        native_subject_fingerprint: Option<&str>,
+    ) -> Result<Option<CalendarGrantAdmission>, AgentFailure> {
         if !matches!(
             self.grant.provider,
             CalendarProvider::EventKit | CalendarProvider::Android
@@ -474,6 +513,7 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
                 GrantConsumer::builtin("calendar.expert")
                     .map_err(|_| AgentFailure::CapabilityDenied)?,
                 ProcessingRestriction::LocalOnly,
+                native_subject_fingerprint,
             )
             .await?;
         let grant_pin = self
@@ -485,16 +525,10 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
         }) {
             return Err(AgentFailure::StaleContext);
         }
-        Ok(Some((admission.authority, admission.consumer_policy)))
+        Ok(Some(admission))
     }
 
-    fn pin_native(
-        &self,
-        candidate: Option<(
-            floe_domain::GrantAuthority,
-            floe_domain::ConsumerPolicyAuthority,
-        )>,
-    ) -> Result<(), AgentFailure> {
+    fn pin_native(&self, candidate: Option<&CalendarGrantAdmission>) -> Result<(), AgentFailure> {
         let Some(candidate) = candidate else {
             return Ok(());
         };
@@ -502,10 +536,12 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
             .grant_pin
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if grant_pin.is_some_and(|pin| pin != candidate) {
+        if grant_pin.is_some_and(|(authority, policy)| {
+            authority != candidate.authority || policy != candidate.consumer_policy
+        }) {
             return Err(AgentFailure::StaleContext);
         }
-        *grant_pin = Some(candidate);
+        *grant_pin = Some((candidate.authority, candidate.consumer_policy));
         Ok(())
     }
 }
@@ -517,48 +553,106 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
         &self,
         request: CalendarReadAccessRequest,
     ) -> Result<CalendarReadAccessStamp, AgentFailure> {
-        self.authorize_native(&request).await?;
-        self.access.check(request).await
+        let stamp = self.access.check(request.clone()).await?;
+        if matches!(
+            self.grant.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            self.authorize_native(&request, Some(&stamp.native_subject_fingerprint))
+                .await?;
+        } else {
+            self.authorize_remote(&request, &stamp).await?;
+        }
+        Ok(stamp)
+    }
+
+    async fn admission(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        let stamp = self.access.check(request.clone()).await?;
+        self.admission_after_check(request, &stamp).await
+    }
+
+    async fn admission_after_check(
+        &self,
+        request: &CalendarReadAccessRequest,
+        stamp: &CalendarReadAccessStamp,
+    ) -> Result<Option<CalendarReadAccessAdmission>, AgentFailure> {
+        if matches!(
+            self.grant.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            let consumer = GrantConsumer::builtin("calendar.expert")
+                .map_err(|_| AgentFailure::CapabilityDenied)?;
+            return Ok(self
+                .authorize_native(request, Some(&stamp.native_subject_fingerprint))
+                .await?
+                .map(|admission| CalendarReadAccessAdmission {
+                    person_id: admission.source.person_id(),
+                    grant_id: admission.grant_id,
+                    grant_authority: admission.authority,
+                    source: admission.source,
+                    scope: admission.scope,
+                    consumer_policy: admission.consumer_policy,
+                    operation: GrantOperation::Read,
+                    purpose: GrantPurpose::Assistant,
+                    consumer,
+                    processing: ProcessingRestriction::LocalOnly,
+                }));
+        } else {
+            return self.authorize_remote(request, stamp).await;
+        }
     }
 
     async fn observe(
         &self,
-        request: CalendarObserveRequest,
+        mut request: CalendarObserveRequest,
     ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        request.expected_native_subject_fingerprint = None;
+        let access_request = CalendarReadAccessRequest {
+            person_id: request.person_id,
+            device_id: request.device_id.clone(),
+            provider: request.provider,
+            calendar_ids: request.calendar_ids.clone(),
+            expected_native_subject_fingerprint: None,
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
+        let stamp = self.access.check(access_request.clone()).await?;
         let candidate = self
-            .authorize_native(&CalendarReadAccessRequest {
-                person_id: request.person_id,
-                device_id: request.device_id.clone(),
-                provider: request.provider,
-                calendar_ids: request.calendar_ids.clone(),
-                deadline: request.deadline,
-                cancellation: request.cancellation.clone(),
-            })
+            .authorize_native(&access_request, Some(&stamp.native_subject_fingerprint))
             .await?;
+        request.expected_native_subject_fingerprint = Some(stamp.native_subject_fingerprint);
         let observed = self.access.observe(request).await?;
         if observed.is_some() {
-            self.pin_native(candidate)?;
+            self.pin_native(candidate.as_ref())?;
         }
         Ok(observed)
     }
 
     async fn observe_projected(
         &self,
-        request: CalendarObserveRequest,
+        mut request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
+        request.expected_native_subject_fingerprint = None;
+        let access_request = CalendarReadAccessRequest {
+            person_id: request.person_id,
+            device_id: request.device_id.clone(),
+            provider: request.provider,
+            calendar_ids: request.calendar_ids.clone(),
+            expected_native_subject_fingerprint: None,
+            deadline: request.deadline,
+            cancellation: request.cancellation.clone(),
+        };
+        let stamp = self.access.check(access_request.clone()).await?;
         let candidate = self
-            .authorize_native(&CalendarReadAccessRequest {
-                person_id: request.person_id,
-                device_id: request.device_id.clone(),
-                provider: request.provider,
-                calendar_ids: request.calendar_ids.clone(),
-                deadline: request.deadline,
-                cancellation: request.cancellation.clone(),
-            })
+            .authorize_native(&access_request, Some(&stamp.native_subject_fingerprint))
             .await?;
+        request.expected_native_subject_fingerprint = Some(stamp.native_subject_fingerprint);
         let observed = self.access.observe_projected(request).await?;
         if observed.is_some() {
-            self.pin_native(candidate)?;
+            self.pin_native(candidate.as_ref())?;
         }
         Ok(observed)
     }
@@ -575,6 +669,7 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     propose_focus: bool,
     card: AgentCard,
     expert_context: AgentContext,
+    historical_dependencies: Mutex<Vec<ContextDependency>>,
     deadline: Instant,
     cancellation: Cancellation,
     parent: Cancellation,
@@ -592,6 +687,146 @@ impl<
             self.cancellation.cancel();
         }
         check_running(self.deadline, &self.cancellation)
+    }
+
+    fn coverage_for_message(
+        &self,
+        message: &AgentMessage,
+    ) -> Result<(Uuid, DependencyCoverage), AgentFailure> {
+        let turn_id = message.turn_id();
+        if turn_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut dependencies = self.views.consumed_context_dependencies()?;
+        dependencies.extend(
+            self.historical_dependencies
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?
+                .iter()
+                .cloned(),
+        );
+        if !dependencies.is_empty() {
+            let mut accumulator = CoverageAccumulator::new();
+            for dependency in dependencies {
+                accumulator
+                    .record_host_dependency(dependency)
+                    .map_err(|_| AgentFailure::InvalidInput)?;
+            }
+            return Ok((turn_id, accumulator.coverage()));
+        }
+        if self.views.source_was_observed() {
+            return Ok((turn_id, DependencyCoverage::Unknown));
+        }
+        let mut accumulator = CoverageAccumulator::new();
+        accumulator
+            .record_host_independent()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        let coverage = accumulator.coverage();
+        Ok((turn_id, coverage))
+    }
+
+    fn retain_historical_dependencies(
+        &self,
+        dependencies: impl IntoIterator<Item = ContextDependency>,
+    ) -> Result<(), AgentFailure> {
+        let mut retained = self
+            .historical_dependencies
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        for dependency in dependencies {
+            if !retained.contains(&dependency) {
+                retained.push(dependency);
+            }
+        }
+        Ok(())
+    }
+
+    async fn revalidate_historical_dependencies(&self) -> Result<(), AgentFailure> {
+        let dependencies = self
+            .historical_dependencies
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .clone();
+        let resolver = GovernedDependencyResolver::new(&self.views);
+        for dependency in dependencies {
+            resolver
+                .resolve(&dependency, self.deadline, self.cancellation.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn validate_historical_dependency_liveness(&self) -> Result<(), AgentFailure> {
+        let dependencies = self
+            .historical_dependencies
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .clone();
+        for dependency in dependencies {
+            self.views.validate_dependency_liveness(&dependency)?;
+        }
+        Ok(())
+    }
+
+    async fn project_history(&self, request: &mut ModelRequest) -> Result<(), AgentFailure> {
+        let current_turn = request.turn_id;
+        let resolver = GovernedDependencyResolver::new(&self.views);
+        let mut by_turn = Vec::<(Uuid, Vec<AgentMessage>)>::new();
+        for message in std::mem::take(&mut request.messages) {
+            let turn_id = message.turn_id();
+            if let Some((_, messages)) = by_turn.iter_mut().find(|(id, _)| *id == turn_id) {
+                messages.push(message);
+            } else {
+                by_turn.push((turn_id, vec![message]));
+            }
+        }
+        let mut projected = Vec::new();
+        for (turn_id, messages) in by_turn {
+            if turn_id == current_turn {
+                projected.extend(messages);
+                continue;
+            }
+            let has_calendar_boundary = messages.iter().any(calendar_history_boundary);
+            let coverage = self
+                .vault
+                .read_turn_coverage(request.session_id, turn_id)
+                .await?;
+            let coverage_independent = matches!(&coverage, DependencyCoverage::Independent);
+            let valid_dependencies = match coverage {
+                DependencyCoverage::Dependent { dependencies } => {
+                    let dependency_count = dependencies.len();
+                    let mut valid = Vec::with_capacity(dependencies.len());
+                    for dependency in dependencies {
+                        if resolver
+                            .resolve(&dependency, self.deadline, self.cancellation.clone())
+                            .await
+                            .is_ok()
+                        {
+                            valid.push(dependency);
+                        }
+                    }
+                    (valid.len() == dependency_count).then_some(valid)
+                }
+                DependencyCoverage::Independent => Some(Vec::new()),
+                DependencyCoverage::Unknown => None,
+            };
+            let retain_derived = valid_dependencies
+                .as_ref()
+                .is_some_and(|dependencies| !dependencies.is_empty())
+                || (!has_calendar_boundary && coverage_independent);
+            if let Some(dependencies) = valid_dependencies {
+                self.retain_historical_dependencies(dependencies)?;
+            }
+            for message in messages {
+                let retain = matches!(message, AgentMessage::User { .. }) || retain_derived;
+                if retain {
+                    projected.push(message);
+                }
+            }
+        }
+        request.replay.clear();
+        request.messages = projected;
+        Ok(())
     }
 
     async fn validate(&self) -> Result<(), AgentFailure> {
@@ -665,32 +900,63 @@ impl<
         );
         if appended.is_some() {
             self.check_running()?;
+            if self.views.source_denial_requires_halt() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
         }
+        let coverage = appended
+            .map(|message| self.coverage_for_message(message))
+            .transpose()?;
         let staged = self
             .registry
             .lock()
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .snapshot();
-        let committed = self
-            .vault
-            .commit_expert_session_scoped_with_hook(
-                session,
-                previous_revision,
-                self.revision.load(Ordering::Acquire),
-                &staged,
-                self.assignment_id,
-                self.views.grant().handle,
-                async {
-                    if dependent {
-                        self.views
-                            .revalidate(self.deadline, self.cancellation.clone())
-                            .await?;
-                        self.check_running()?;
-                    }
-                    Ok(())
-                },
-            )
-            .await;
+        let committed = if let Some((coverage_turn, coverage)) = coverage {
+            self.vault
+                .commit_expert_session_scoped_with_coverage_hook(
+                    session,
+                    previous_revision,
+                    self.revision.load(Ordering::Acquire),
+                    &staged,
+                    self.assignment_id,
+                    self.views.grant().handle,
+                    coverage_turn,
+                    coverage,
+                    async {
+                        if dependent {
+                            self.validate_historical_dependency_liveness()?;
+                            self.views
+                                .revalidate(self.deadline, self.cancellation.clone())
+                                .await?;
+                            self.check_running()?;
+                        }
+                        Ok(())
+                    },
+                )
+                .await
+        } else {
+            self.vault
+                .commit_expert_session_scoped_with_hook(
+                    session,
+                    previous_revision,
+                    self.revision.load(Ordering::Acquire),
+                    &staged,
+                    self.assignment_id,
+                    self.views.grant().handle,
+                    async {
+                        if dependent {
+                            self.validate_historical_dependency_liveness()?;
+                            self.views
+                                .revalidate(self.deadline, self.cancellation.clone())
+                                .await?;
+                            self.check_running()?;
+                        }
+                        Ok(())
+                    },
+                )
+                .await
+        };
         let committed = match committed {
             Ok(committed) => committed,
             Err(failure) => {
@@ -854,7 +1120,7 @@ impl<
 
     async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
         self.turn.validate().await?;
-        project_calendar_history(&mut request);
+        self.turn.project_history(&mut request).await?;
         for message in &mut request.messages {
             if let AgentMessage::Capability {
                 turn_id, result, ..
@@ -872,7 +1138,11 @@ impl<
             _ = tokio::time::sleep_until(self.turn.deadline) => return Err(AgentFailure::DeadlineExceeded),
             result = self.model.generate(request) => result?,
         };
+        if self.turn.views.source_denial_requires_halt() {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         self.turn.validate().await?;
+        self.turn.revalidate_historical_dependencies().await?;
         Ok(response)
     }
 }
@@ -885,6 +1155,23 @@ fn check_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), A
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(())
+}
+
+fn calendar_history_boundary(message: &AgentMessage) -> bool {
+    match message {
+        AgentMessage::Compaction { .. } => true,
+        AgentMessage::Delegation { task, .. } => {
+            (task.agent_id == BuiltinExpertKind::Schedule.package_id()
+                || task.agent_id == "schedule")
+                && (task.state == A2ATaskState::Completed || !task.artifacts.is_empty())
+        }
+        AgentMessage::Capability {
+            capability_id,
+            result: Ok(_),
+            ..
+        } => capability_id.starts_with("calendar.") || capability_id.starts_with("schedule."),
+        _ => false,
+    }
 }
 
 fn validate_budget(budget: AgentBudget) -> Result<(), AgentFailure> {

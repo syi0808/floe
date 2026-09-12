@@ -245,6 +245,7 @@ final class AgentController extends ChangeNotifier {
     required String connectionScope,
     required int connectionRevision,
     required CalendarSourceAuthority sourceAuthority,
+    CalendarSubjectPreview? reviewedPreview,
   }) => calendarExpertController.install(
     setupId: setupId,
     provider: provider,
@@ -253,6 +254,7 @@ final class AgentController extends ChangeNotifier {
     connectionScope: connectionScope,
     connectionRevision: connectionRevision,
     sourceAuthority: sourceAuthority,
+    reviewedPreview: reviewedPreview,
   );
 
   Future<void> retryCalendarSetup() => calendarExpertController.retrySetup();
@@ -274,6 +276,7 @@ final class AgentController extends ChangeNotifier {
     required String connectionScope,
     required int connectionRevision,
     required CalendarSourceAuthority sourceAuthority,
+    CalendarSubjectPreview? reviewedPreview,
   }) => calendarExpertController.changeCalendarAccessScope(
     setupId: setupId,
     provider: provider,
@@ -282,6 +285,7 @@ final class AgentController extends ChangeNotifier {
     connectionScope: connectionScope,
     connectionRevision: connectionRevision,
     sourceAuthority: sourceAuthority,
+    reviewedPreview: reviewedPreview,
   );
 
   Future<void> removeCalendarAccess(String setupId) =>

@@ -111,7 +111,9 @@ impl Fixture {
 struct Access {
     calls: AtomicUsize,
     denied: AtomicBool,
+    invalid_subject: bool,
     change_on_second: bool,
+    subject_change_on_call: Option<usize>,
     foreign: bool,
     pending: bool,
     started: tokio::sync::Notify,
@@ -142,6 +144,16 @@ impl CalendarReadAccess for Access {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: if self.invalid_subject {
+                String::new()
+            } else if self
+                .subject_change_on_call
+                .is_some_and(|threshold| call >= threshold)
+            {
+                "d".repeat(64)
+            } else {
+                "c".repeat(64)
+            },
             generation: if self.change_on_second && call > 0 {
                 "second"
             } else {
@@ -155,6 +167,7 @@ impl CalendarReadAccess for Access {
 struct ObservationAccess {
     calendar_id: String,
     record: CalendarRecord,
+    subject_change_during_read: bool,
 }
 
 struct ProjectedObservationAccess;
@@ -170,6 +183,7 @@ impl CalendarReadAccess for ProjectedObservationAccess {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "c".repeat(64),
             generation: "server-7".into(),
         })
     }
@@ -185,6 +199,7 @@ impl CalendarReadAccess for ProjectedObservationAccess {
                 device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
+                native_subject_fingerprint: "c".repeat(64),
                 generation: "server-7".into(),
             },
             source_handle: "calendar.timeline:server".into(),
@@ -215,6 +230,7 @@ impl CalendarReadAccess for ObservationAccess {
             device_id: request.device_id,
             provider: request.provider,
             calendar_ids: request.calendar_ids,
+            native_subject_fingerprint: "c".repeat(64),
             generation: "live-observation".into(),
         })
     }
@@ -230,6 +246,11 @@ impl CalendarReadAccess for ObservationAccess {
                 device_id: request.device_id,
                 provider: request.provider,
                 calendar_ids: request.calendar_ids,
+                native_subject_fingerprint: if self.subject_change_during_read {
+                    "d".repeat(64)
+                } else {
+                    "c".repeat(64)
+                },
                 generation: "live-observation".into(),
             },
             observed_at: now(),
@@ -356,6 +377,7 @@ async fn request_scoped_observation_does_not_depend_on_page_mirror_coverage() {
             8 * 24 * 60,
             8 * 24 * 60 + 60,
         ),
+        subject_change_during_read: false,
     };
     let view = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now)
         .unwrap()
@@ -377,22 +399,43 @@ async fn request_scoped_observation_does_not_depend_on_page_mirror_coverage() {
 }
 
 #[tokio::test]
+async fn native_subject_change_during_read_denies_projection() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let access = ObservationAccess {
+        calendar_id: "home-secret-id".into(),
+        record: record(
+            "home-secret-id",
+            "subject-change",
+            "Subject change",
+            60,
+            120,
+        ),
+        subject_change_during_read: true,
+    };
+    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    assert_eq!(
+        views.timeline(request(&grant)).await,
+        Err(AgentFailure::StaleContext)
+    );
+}
+
+#[tokio::test]
 async fn projected_observation_preserves_server_coverage_and_opaque_provenance() {
     let fixture = Fixture::new().await;
     let grant = fixture.grant();
-    let view = CalendarTimelineViews::new(
+    let views = CalendarTimelineViews::new(
         &fixture.core,
         &ProjectedObservationAccess,
         grant.clone(),
         now,
     )
-    .unwrap()
-    .timeline(request(&grant))
-    .await
     .unwrap();
+    let view = views.timeline(request(&grant)).await.unwrap();
 
     assert_eq!(view.source_handle, "calendar.timeline:server");
     assert!(!view.coverage_complete);
+    assert!(views.source_was_observed());
     assert_eq!(view.next_cursor.as_deref(), Some("next-page"));
     assert_eq!(view.items[0].untrusted_title, "Server review");
     assert_eq!(
@@ -657,6 +700,37 @@ async fn access_generation_change_and_later_calendar_change_invalidate_a_read_le
 }
 
 #[tokio::test]
+async fn native_subject_change_invalidates_cached_read_before_egress() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let access = Access {
+        subject_change_on_call: Some(2),
+        ..Access::default()
+    };
+    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    views.timeline(request(&grant)).await.unwrap();
+    assert_eq!(
+        views.timeline(request(&grant)).await,
+        Err(AgentFailure::StaleContext)
+    );
+}
+
+#[tokio::test]
+async fn missing_native_subject_fingerprint_denies_calendar_read() {
+    let fixture = Fixture::new().await;
+    let grant = fixture.grant();
+    let access = Access {
+        invalid_subject: true,
+        ..Access::default()
+    };
+    let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
+    assert_eq!(
+        views.timeline(request(&grant)).await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+}
+
+#[tokio::test]
 async fn all_day_and_long_events_block_the_entire_requested_window_without_false_focus() {
     let fixture = Fixture::new().await;
     let mut all_day = record("home-secret-id", "all-day", "All day", 0, 1);
@@ -869,7 +943,7 @@ async fn mirror_size_and_invalid_grant_limits_fail_without_partial_projection() 
 }
 
 #[tokio::test]
-async fn eventkit_mirror_projection_is_personal_and_foreign_rows_are_not_evidence() {
+async fn native_eventkit_without_observation_does_not_use_mirror_payload() {
     let fixture = Fixture::new().await;
     fixture
         .core
@@ -903,25 +977,6 @@ async fn eventkit_mirror_projection_is_personal_and_foreign_rows_are_not_evidenc
     grant.connection_revision = 4;
     let access = Access::default();
     let views = CalendarTimelineViews::new(&fixture.core, &access, grant.clone(), now).unwrap();
-    assert_eq!(
-        views.timeline(request(&grant)).await.unwrap().data_class,
-        DataClass::Personal
-    );
-    let previous = fixture
-        .core
-        .store
-        .calendar_mirror(fixture.person)
-        .await
-        .unwrap()
-        .unwrap();
-    let mut malformed = previous.clone();
-    malformed.events[0].person_id = PersonId::new();
-    fixture
-        .core
-        .store
-        .put_calendar_mirror(fixture.person, &malformed, Some(&previous))
-        .await
-        .unwrap();
     assert_eq!(
         views.timeline(request(&grant)).await,
         Err(AgentFailure::CapabilityUnavailable)
@@ -1087,7 +1142,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
         .commit_expert_session(&session, 1, revision, &staged)
         .await
         .unwrap();
-    let action = fixture
+    let publication = fixture
         .core
         .prepare_expert_calendar_action(
             &vault,
@@ -1108,12 +1163,7 @@ async fn bounded_mirror_view_runs_the_real_expert_and_enters_the_existing_encryp
             },
             now,
         )
-        .await
-        .unwrap();
-    assert_eq!(action.state, CalendarActionState::Pending);
-    assert_eq!(
-        action.schedule.starts_at.timestamp_millis() as u64,
-        result.action_proposals[0].starts_at_unix_ms
-    );
+        .await;
+    assert_eq!(publication, Err(AgentFailure::PolicyDenied));
     assert_eq!(vault.expert_registry().await.unwrap().unwrap(), staged);
 }

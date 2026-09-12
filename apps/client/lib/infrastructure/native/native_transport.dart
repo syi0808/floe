@@ -46,6 +46,90 @@ final class NativeTransportException implements Exception {
 }
 
 abstract interface class LocalContextTransport {
+  Future<void> registerAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<List<Map<String, dynamic>>> pollAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<void> completeAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  });
+
+  Future<void> failAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  });
+
+  Future<void> disposeAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<void> registerAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<List<Map<String, dynamic>>> pollAttentionAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<void> completeAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  });
+
+  Future<void> failAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  });
+
+  Future<void> disposeAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<void> registerPersonalHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<List<Map<String, dynamic>>> pollPersonalAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  });
+
+  Future<void> completePersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  });
+
+  Future<void> failPersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  });
+
+  Future<void> disposePersonalHost({
+    required String personId,
+    required String hostEpoch,
+  });
+
   Future<void> publishLocalContext({
     required String personId,
     required String deviceId,
@@ -149,6 +233,283 @@ final class NativeTransport implements LocalContextTransport {
       );
     }
     return _unwrapEnvelope(result['response']! as String);
+  }
+
+  @override
+  Future<void> registerAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'register_acquisition_host',
+        'host_epoch': hostEpoch,
+      },
+    });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    final result = await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'poll_acquisitions', 'host_epoch': hostEpoch},
+    });
+    final raw = result['acquisitions'];
+    if (raw is! List) throw const FormatException('Invalid acquisition poll.');
+    return raw
+        .map((value) {
+          if (value is! Map) {
+            throw const FormatException('Invalid acquisition request.');
+          }
+          return Map<String, dynamic>.from(value);
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> completeAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'complete_acquisition',
+        'host_epoch': hostEpoch,
+        'result': result,
+      },
+    });
+  }
+
+  @override
+  Future<void> failAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {
+    if (!const {
+      'permission_denied',
+      'calendar_unavailable',
+      'provider_unavailable',
+    }.contains(failure)) {
+      throw const FormatException('Invalid native acquisition failure.');
+    }
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'fail_acquisition',
+        'host_epoch': hostEpoch,
+        'request_id': requestId,
+        'failure': failure,
+      },
+    });
+  }
+
+  @override
+  Future<void> disposeAcquisitionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'dispose_acquisition_host',
+        'host_epoch': hostEpoch,
+      },
+    });
+  }
+
+  @override
+  Future<void> registerAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'register_attention_host', 'host_epoch': hostEpoch},
+    });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> pollAttentionAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    final result = await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'poll_attention_acquisitions',
+        'host_epoch': hostEpoch,
+      },
+    });
+    final raw = result['attention_acquisitions'];
+    if (raw is! List) {
+      throw const FormatException('Invalid Attention acquisition poll.');
+    }
+    return raw
+        .map((value) {
+          if (value is! Map) {
+            throw const FormatException('Invalid Attention request.');
+          }
+          return Map<String, dynamic>.from(value);
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> completeAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'complete_attention_acquisition',
+        'host_epoch': hostEpoch,
+        'result': result,
+      },
+    });
+  }
+
+  @override
+  Future<void> failAttentionAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {
+    if (!const {
+      'permission_denied',
+      'attention_unavailable',
+      'provider_unavailable',
+      'cancelled',
+    }.contains(failure)) {
+      throw const FormatException('Invalid Attention acquisition failure.');
+    }
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'fail_attention_acquisition',
+        'host_epoch': hostEpoch,
+        'request_id': requestId,
+        'failure': failure,
+      },
+    });
+  }
+
+  @override
+  Future<void> disposeAttentionHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'dispose_attention_host', 'host_epoch': hostEpoch},
+    });
+  }
+
+  @override
+  Future<void> registerPersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'register_personal_host', 'host_epoch': hostEpoch},
+    });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> pollPersonalAcquisitions({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    final result = await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'poll_personal_acquisitions',
+        'host_epoch': hostEpoch,
+      },
+    });
+    final raw = result['personal_acquisitions'];
+    if (raw is! List)
+      throw const FormatException('Invalid personal acquisition poll.');
+    return raw
+        .map((value) {
+          if (value is! Map)
+            throw const FormatException(
+              'Invalid personal acquisition request.',
+            );
+          return Map<String, dynamic>.from(value);
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> completePersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required Map<String, dynamic> result,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'complete_personal_acquisition',
+        'host_epoch': hostEpoch,
+        'result': result,
+      },
+    });
+  }
+
+  @override
+  Future<void> failPersonalAcquisition({
+    required String personId,
+    required String hostEpoch,
+    required String requestId,
+    required String failure,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {
+        'kind': 'fail_personal_acquisition',
+        'host_epoch': hostEpoch,
+        'request_id': requestId,
+        'failure': failure,
+      },
+    });
+  }
+
+  @override
+  Future<void> disposePersonalHost({
+    required String personId,
+    required String hostEpoch,
+  }) async {
+    await request('local_context', {
+      'schema_version': nativeProtocolVersion,
+      'person_id': personId,
+      'operation': {'kind': 'dispose_personal_host', 'host_epoch': hostEpoch},
+    });
   }
 
   @override

@@ -1,6 +1,8 @@
 import Cocoa
 import CoreGraphics
 import FlutterMacOS
+import CryptoKit
+import Darwin
 
 struct MacOSAttentionProjection {
   let state: String
@@ -64,6 +66,10 @@ final class MacOSAttentionReducer {
     activationTimes.count
   }
 
+  func presenceAvailable(at date: Date) -> Bool {
+    sessionIsActive && date.timeIntervalSince(startedAt) >= Self.minimumObservationWindow
+  }
+
   private func prune(at date: Date) {
     activationTimes.removeAll { date.timeIntervalSince($0) > Self.maximumWindow }
   }
@@ -88,6 +94,25 @@ final class MacOSAttentionBridge {
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "inspectAttentionSubject" {
+      guard let arguments = call.arguments as? [String: Any],
+            let deviceID = arguments["device_id"] as? String,
+            !deviceID.isEmpty,
+            deviceID.count <= 128 else {
+        result(FlutterError(code: "invalid_input", message: nil, details: nil))
+        return
+      }
+      let subject = "macos-user-session\0uid:\(getuid())\0device:\(deviceID)"
+      let fingerprint = SHA256.hash(data: Data(subject.utf8)).map { String(format: "%02x", $0) }.joined()
+      result([
+        "schema_version": 1,
+        "subject_fingerprint": fingerprint,
+        "permission_class": "session_observation",
+        "resources": ["attention.coarse"],
+        "presence_available": reducer.presenceAvailable(at: Date()),
+      ])
+      return
+    }
     guard call.method == "readAttention" else {
       result(FlutterMethodNotImplemented)
       return

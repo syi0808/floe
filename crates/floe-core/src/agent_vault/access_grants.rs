@@ -31,6 +31,10 @@ pub(super) enum AccessGrantMutation {
         source: GrantSourceBinding,
         scope: GrantScope,
     },
+    ReviewActive {
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    },
     Pause,
     Revoke,
 }
@@ -225,6 +229,40 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             });
         }
         Ok(grant)
+    }
+
+    pub(super) async fn find_data_access_grant_by_source_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        source: &GrantSourceBinding,
+    ) -> Result<Option<DataAccessGrant>, AgentFailure> {
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
+        let mut rows = transaction
+            .query(
+                "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE person_id = ? AND authority_owner = ? AND connection_id = ? AND connector = ? AND execution_owner = ? ORDER BY grant_id",
+                (
+                    self.person_id.to_string(),
+                    self.vault_id.to_string(),
+                    source.connection_id().as_str().to_owned(),
+                    source.connector().as_str().to_owned(),
+                    source.execution_owner().as_str().to_owned(),
+                ),
+            )
+            .await
+            .map_err(storage)?;
+        let mut found = None;
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            if found.is_some() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let grant = decode_grant(&row)?;
+            if !grant.source().same_identity(source) {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            found = Some(grant);
+        }
+        Ok(found)
     }
 
     pub async fn get_data_access_grant(
@@ -499,10 +537,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             AccessGrantMutation::Activate { source, scope } => grant
                 .activate_review(expected, source, scope)
                 .map_err(grant_transition)?,
+            AccessGrantMutation::ReviewActive { source, scope } => grant
+                .review_active(expected, source, scope)
+                .map_err(grant_transition)?,
             AccessGrantMutation::Pause => grant.pause(expected).map_err(grant_transition)?,
             AccessGrantMutation::Revoke => grant.revoke(expected).map_err(grant_transition)?,
         };
         if changed {
+            self.invalidate_agent_actions_for_grant_in_transaction(
+                transaction,
+                id,
+                previous.authority(),
+            )
+            .await?;
             if previous.state() == GrantState::Active {
                 let mut cleanup_count = transaction
                     .query("SELECT COUNT(*) FROM data_access_grant_cleanup", ())

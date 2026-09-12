@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -16,6 +18,7 @@ import '../agent/agent_connection_settings.dart';
 import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_memory_settings.dart';
+import '../agent/agent_personal_access_settings.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -27,6 +30,7 @@ import '../../infrastructure/native/apple_context_gateway.dart';
 
 part 'settings/data_privacy.dart';
 part 'settings/ai_processing.dart';
+part 'settings/remote_authority.dart';
 part 'settings/action_permissions.dart';
 part 'settings/navigation.dart';
 
@@ -36,6 +40,7 @@ class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.client,
+    this.agentVaultGateway,
     this.actionController,
     this.agentController,
     this.calendarSources,
@@ -46,6 +51,7 @@ class SettingsScreen extends StatefulWidget {
   });
 
   final LocalServerClient? client;
+  final NativeAgentVaultGateway? agentVaultGateway;
   final CalendarActionController? actionController;
   final AgentController? agentController;
   final AgentCalendarSources? Function()? calendarSources;
@@ -98,13 +104,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       daySnapshot: widget.daySnapshot,
       calendarSources: widget.calendarSources,
       calendarSourceChanges: widget.calendarSourceChanges,
+      personalAccessGateway: widget.agentVaultGateway,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
     _SettingsPage.memory => AgentMemorySettings(
       controller: widget.agentController!,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
-    _SettingsPage.remoteServer => _RemoteServerSettings(client: widget.client),
+    _SettingsPage.remoteServer => _RemoteServerSettings(
+      client: widget.client,
+      agentVaultGateway: widget.agentVaultGateway,
+    ),
   };
 
   @override
@@ -210,9 +220,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 class _RemoteServerSettings extends StatelessWidget {
-  const _RemoteServerSettings({required this.client});
+  const _RemoteServerSettings({
+    required this.client,
+    required this.agentVaultGateway,
+  });
 
   final LocalServerClient? client;
+  final NativeAgentVaultGateway? agentVaultGateway;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -227,6 +241,13 @@ class _RemoteServerSettings extends StatelessWidget {
             'Remote server connection is available in the native Floe app.',
           ),
         ),
+      if (client != null && agentVaultGateway != null) ...[
+        const SizedBox(height: FloeSpace.lg),
+        _RemoteAuthorityEnrollment(
+          client: client!,
+          agentVaultGateway: agentVaultGateway!,
+        ),
+      ],
       const SizedBox(height: FloeSpace.lg),
       Padding(
         padding: EdgeInsets.symmetric(horizontal: 4),

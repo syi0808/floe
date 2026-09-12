@@ -506,6 +506,31 @@ impl DataAccessGrant {
         self.review_required = false;
         Ok(true)
     }
+
+    pub fn review_active(
+        &mut self,
+        expected: GrantAuthority,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    ) -> Result<bool, GrantTransitionError> {
+        self.check_expected(expected)?;
+        self.validate_transition_source(&source)?;
+        scope.validate().map_err(GrantTransitionError::Invalid)?;
+        if self.state == GrantState::Revoked {
+            return Err(GrantTransitionError::Terminal);
+        }
+        if self.state != GrantState::Active {
+            return Err(GrantTransitionError::Conflict);
+        }
+        self.authority = self
+            .authority
+            .advance()
+            .ok_or(GrantTransitionError::Overflow)?;
+        self.source = source;
+        self.scope = scope;
+        self.review_required = false;
+        Ok(true)
+    }
     pub fn review(
         &mut self,
         expected: GrantAuthority,
