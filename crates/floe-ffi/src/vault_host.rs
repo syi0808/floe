@@ -786,9 +786,20 @@ fn protocol_pairing_status(
         || response.pairing_id.is_empty()
         || response.person_id.is_empty()
         || response.device_id.is_empty()
+        || response
+            .client_id
+            .as_deref()
+            .is_some_and(|client_id| client_id != response.pairing_id)
+        || response.issuer.as_ref().is_some_and(|issuer| {
+            response
+                .issuer_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| fingerprint != issuer.fingerprint)
+        })
     {
         return Err(AgentFailure::CapabilityUnavailable);
     }
+    let issuer = response.issuer.map(protocol_pairing_issuer).transpose()?;
     Ok(RemotePairingStatusDto {
         schema_version: response.schema_version,
         pairing_id: response.pairing_id,
@@ -796,9 +807,34 @@ fn protocol_pairing_status(
         person_id: response.person_id,
         device_id: response.device_id,
         producer: response.producer.as_ref().map(protocol_producer_identity),
-        issuer: response.issuer.map(protocol_owner_key),
+        issuer,
         issuer_fingerprint: response.issuer_fingerprint,
         token: response.token,
+    })
+}
+
+fn protocol_pairing_issuer(
+    response: floe_infra::remote_authorization::PairingIssuerResponse,
+) -> Result<RemoteOwnerPublicKeyDto, AgentFailure> {
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(response.public_key.as_bytes())
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    if decoded.len() != 32
+        || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != response.public_key
+    {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    let fingerprint = Sha256::digest(&decoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if fingerprint != response.fingerprint {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    Ok(RemoteOwnerPublicKeyDto {
+        key_id: response.key_id,
+        public_key: response.public_key,
+        fingerprint,
     })
 }
 

@@ -102,6 +102,31 @@ pub struct PairingConfirmationResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct PairingIssuerResponse {
+    pub key_id: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PairingStartResponse {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub code: String,
+    pub proof: String,
+    pub expires_at_unix_ms: i64,
+    pub person_id: String,
+    pub device_id: String,
+    pub producer: ProducerIdentityResponse,
+    pub issuer: PairingIssuerResponse,
+    pub challenge_id: String,
+    pub challenge_b64url: String,
+    pub producer_signature: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct PairingStatusResponse {
     pub schema_version: u32,
     pub pairing_id: String,
@@ -111,7 +136,7 @@ pub struct PairingStatusResponse {
     #[serde(default)]
     pub producer: Option<ProducerIdentityResponse>,
     #[serde(default)]
-    pub issuer: Option<RemoteOwnerPublicKey>,
+    pub issuer: Option<PairingIssuerResponse>,
     #[serde(default)]
     pub issuer_fingerprint: Option<String>,
     #[serde(default)]
@@ -1024,6 +1049,10 @@ impl RemotePairingClient {
                     | "expired"
                     | "repair_required"
             )
+            || (response.status == "approved"
+                && (response.client_id.is_none() || response.token.is_none()))
+            || (response.status != "approved"
+                && (response.client_id.is_some() || response.token.is_some()))
         {
             return Err(AgentFailure::CapabilityUnavailable);
         }
@@ -1221,7 +1250,7 @@ mod tests {
                 let body = if expected_path == "/pair/confirm" {
                     r#"{"schema_version":1,"pairing_id":"00000000-0000-4000-8000-000000000001","status":"local_confirmed"}"#
                 } else {
-                    r#"{"schema_version":1,"pairing_id":"00000000-0000-4000-8000-000000000001","status":"approved","person_id":"00000000-0000-4000-8000-000000000002","device_id":"device","producer":{"schema_version":1,"instance_id":"00000000-0000-4000-8000-000000000003","execution_owner":"00000000-0000-4000-8000-000000000004","audience":"audience","key_id":"00000000-0000-4000-8000-000000000005","public_key":"public","fingerprint":"fingerprint"},"issuer":{"key_id":"00000000-0000-4000-8000-000000000006","public_key":"issuer"},"issuer_fingerprint":"issuer-fingerprint","token":"token"}"#
+                    r#"{"schema_version":1,"pairing_id":"00000000-0000-4000-8000-000000000001","status":"approved","person_id":"00000000-0000-4000-8000-000000000002","device_id":"device","producer":{"schema_version":1,"instance_id":"00000000-0000-4000-8000-000000000003","execution_owner":"00000000-0000-4000-8000-000000000004","audience":"audience","key_id":"00000000-0000-4000-8000-000000000005","public_key":"public","fingerprint":"fingerprint"},"issuer":{"key_id":"00000000-0000-4000-8000-000000000006","public_key":"issuer","fingerprint":"issuer-fingerprint"},"issuer_fingerprint":"issuer-fingerprint","client_id":"00000000-0000-4000-8000-000000000001","token":"token"}"#
                 };
                 socket
                     .write_all(
@@ -1266,7 +1295,48 @@ mod tests {
             .unwrap();
         assert_eq!(status.status, "approved");
         assert_eq!(status.token.as_deref(), Some("token"));
+        assert_eq!(status.client_id.as_deref(), Some(pair_id));
+        assert_eq!(
+            status.issuer.as_ref().unwrap().fingerprint,
+            "issuer-fingerprint"
+        );
         server.await.unwrap();
+    }
+
+    #[test]
+    fn pairing_start_response_matches_go_contract() {
+        let response: PairingStartResponse = serde_json::from_str(
+            r#"{
+                "schema_version": 1,
+                "pairing_id": "00000000-0000-4000-8000-000000000001",
+                "code": "ABCD1234",
+                "proof": "polling-proof",
+                "expires_at_unix_ms": 1893456000000,
+                "person_id": "00000000-0000-4000-8000-000000000002",
+                "device_id": "device",
+                "producer": {
+                    "schema_version": 1,
+                    "instance_id": "00000000-0000-4000-8000-000000000003",
+                    "execution_owner": "00000000-0000-4000-8000-000000000004",
+                    "audience": "floe.server:00000000-0000-4000-8000-000000000003",
+                    "key_id": "00000000-0000-4000-8000-000000000005",
+                    "public_key": "cHVibGlj",
+                    "fingerprint": "fingerprint"
+                },
+                "issuer": {
+                    "key_id": "00000000-0000-4000-8000-000000000006",
+                    "public_key": "aXNzdWVy",
+                    "fingerprint": "issuer-fingerprint"
+                },
+                "challenge_id": "00000000-0000-4000-8000-000000000007",
+                "challenge_b64url": "Y2hhbGxlbmdl",
+                "producer_signature": "c2lnbmF0dXJl"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(response.schema_version, 1);
+        assert_eq!(response.code, "ABCD1234");
+        assert_eq!(response.issuer.fingerprint, "issuer-fingerprint");
     }
 
     #[tokio::test]
