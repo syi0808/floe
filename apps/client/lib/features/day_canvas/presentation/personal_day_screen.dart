@@ -298,8 +298,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
         daySnapshot: controller.snapshot,
-        onManageConnections: () =>
-            _selectDestination(_DestinationView.connections),
         platform: defaultTargetPlatform,
       );
     }

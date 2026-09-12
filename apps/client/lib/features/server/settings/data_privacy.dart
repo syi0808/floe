@@ -5,7 +5,6 @@ class _DataPrivacy extends StatefulWidget {
     required this.controller,
     required this.serverClient,
     required this.onManageMemory,
-    this.onManageConnections,
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
@@ -16,7 +15,6 @@ class _DataPrivacy extends StatefulWidget {
   final AgentController controller;
   final LocalServerClient? serverClient;
   final VoidCallback onManageMemory;
-  final VoidCallback? onManageConnections;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
@@ -334,27 +332,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (widget.onManageConnections != null)
-                  FloeSquircle(
-                    key: const ValueKey('data-privacy-connections-summary'),
-                    padding: const EdgeInsets.all(FloeSpace.base),
-                    fill: FloePalette.neutral50,
-                    borderWidth: 0,
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Connections are managed in Connections.',
-                          ),
-                        ),
-                        FloeButton.text(
-                          key: const ValueKey('data-privacy-open-connections'),
-                          onPressed: widget.onManageConnections,
-                          child: const Text('Open Connections'),
-                        ),
-                      ],
-                    ),
-                  ),
                 if (_androidContext != null && deviceConnections != null)
                   AgentConnectionSettings(
                     connections: deviceConnections,

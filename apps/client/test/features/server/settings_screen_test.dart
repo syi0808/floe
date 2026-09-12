@@ -200,7 +200,6 @@ void main() {
               client: null,
               agentController: controller,
               appleContext: appleContext,
-              onManageConnections: () {},
             ),
           ),
         ),
@@ -210,7 +209,7 @@ void main() {
 
     expect(find.text('Wellbeing access'), findsNothing);
     expect(find.text('Apple Contacts'), findsNothing);
-    expect(find.text('Open Connections'), findsOneWidget);
+    expect(find.text('Open Connections'), findsNothing);
     expect(appleContext.connectionsCalls, 0);
     expect(appleContext.feasibilityReads, 0);
     expect(appleContext.wellbeingReads, 0);

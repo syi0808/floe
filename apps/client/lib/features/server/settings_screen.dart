@@ -42,7 +42,6 @@ class SettingsScreen extends StatefulWidget {
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
-    this.onManageConnections,
     this.platform,
   });
 
@@ -53,7 +52,6 @@ class SettingsScreen extends StatefulWidget {
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
-  final VoidCallback? onManageConnections;
   final TargetPlatform? platform;
 
   @override
@@ -99,7 +97,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appleContext: widget.appleContext,
       daySnapshot: widget.daySnapshot,
       personalAccessGateway: widget.agentVaultGateway,
-      onManageConnections: widget.onManageConnections,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
