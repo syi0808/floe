@@ -25,14 +25,11 @@ func (console *Console) managePairApprove(writer http.ResponseWriter, request *h
 		console.manageLegacyPairApprove(writer, input.ID)
 		return
 	}
-	if input.SchemaVersion != 1 || input.PairingID != "" && input.ID != "" && input.PairingID != input.ID {
+	if input.SchemaVersion != 1 || input.PairingID == "" || input.ID != "" {
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
-	if input.PairingID == "" {
-		input.PairingID = input.ID
-	}
-	if input.PairingID == "" || input.Fingerprint == "" {
+	if input.Fingerprint == "" {
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}

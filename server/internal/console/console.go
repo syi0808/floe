@@ -218,6 +218,7 @@ type Console struct {
 	connectorReservations                        map[string]connectionRecord
 	calendarAdmissions                           map[string]calendarAdmissionState
 	remoteViewAdmissions                         map[string]remoteViewAdmissionState
+	allowLegacyPairing                           bool
 }
 
 func (console *Console) authorityEngine() *authorization.Engine {
@@ -812,7 +813,7 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 		failure(writer, 400, "validation")
 		return
 	}
-	if request.URL.Path == "/pair/start" && input.SchemaVersion == 0 && input.IssuerKeyID == "" && input.IssuerPublicKey == "" {
+	if request.URL.Path == "/pair/start" && console.allowLegacyPairing && input.SchemaVersion == 0 && input.IssuerKeyID == "" && input.IssuerPublicKey == "" {
 		if !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) {
 			failure(writer, 400, "identity_required")
 			return
@@ -897,7 +898,11 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 			}
 		}
 		console.lastPair = now
-		pairingID := randomToken()
+		pairingID, err := newConnectionID()
+		if err != nil {
+			failure(writer, http.StatusServiceUnavailable, "pairing_unavailable")
+			return
+		}
 		pollingProof := randomToken()
 		console.mu.Unlock()
 		principal := authorization.Principal{ClientID: pairingID, PersonID: input.PersonID, DeviceID: input.DeviceID, Authenticated: true}
@@ -913,7 +918,7 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 		}
 		producerFingerprint, _ := metadata["fingerprint"].(string)
 		pending := &pairing{
-			ID: pairingID, Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute),
+			ID: pairingID, Code: strings.ToUpper(randomToken()[:8]), Expires: challenge.ExpiresAt,
 			PersonID: input.PersonID, DeviceID: input.DeviceID, IssuerKeyID: enrollment.KeyID,
 			IssuerPublicKey:   base64.RawURLEncoding.EncodeToString(publicKey),
 			IssuerFingerprint: enrollment.Fingerprint, ProducerFingerprint: producerFingerprint, ProducerAudience: audience,
@@ -944,6 +949,11 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 	if console.pair == nil || digest(input.Proof) != digest(console.pair.proof) {
 		console.mu.Unlock()
 		failure(writer, 401, "pairing_expired")
+		return
+	}
+	if console.pair.IssuerKeyID != "" && (request.URL.Path == "/pair/poll" || request.URL.Path == "/pair/cancel") && (input.SchemaVersion != 1 || input.PairingID != console.pair.ID) {
+		console.mu.Unlock()
+		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
 	if !console.pair.Expires.After(now) {

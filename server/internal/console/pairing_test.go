@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"floe/server/internal/authorization"
 )
@@ -33,6 +34,12 @@ func pairingConfirmBody(test *testing.T, started map[string]any) map[string]any 
 func TestPairingRequiresLocalConfirmationAndExactFingerprint(t *testing.T) {
 	fixture := setup(t)
 	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), ""))
+	if !validConnectionID(started["pairing_id"].(string)) {
+		t.Fatalf("pairing id is not a canonical UUID: %v", started["pairing_id"])
+	}
+	if expires := int64(started["expires_at_unix_ms"].(float64)); expires > time.Now().Add(35*time.Second).UnixMilli() {
+		t.Fatalf("pairing advertised a lifetime longer than its signed challenge: %d", expires)
+	}
 	issuer := started["issuer"].(map[string]any)
 	approve := fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{
 		"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": issuer["fingerprint"],
@@ -57,7 +64,7 @@ func TestPairingRequiresLocalConfirmationAndExactFingerprint(t *testing.T) {
 	if wrong.Code != http.StatusConflict || !strings.Contains(wrong.Body.String(), "fingerprint_mismatch") {
 		t.Fatalf("wrong fingerprint approved: %d %s", wrong.Code, wrong.Body.String())
 	}
-	pending := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"proof": started["proof"]}, ""))
+	pending := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": started["proof"]}, ""))
 	if pending["status"] != "local_confirmed" || pending["token"] != nil {
 		t.Fatalf("wrong fingerprint issued credential: %#v", pending)
 	}
@@ -68,7 +75,7 @@ func TestPairingRequiresLocalConfirmationAndExactFingerprint(t *testing.T) {
 	if approved["status"] != "approved" {
 		t.Fatalf("approval status: %#v", approved)
 	}
-	credential := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"proof": started["proof"]}, ""))
+	credential := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": started["proof"]}, ""))
 	if credential["token"] == nil || credential["client_id"] != started["pairing_id"] {
 		t.Fatalf("approved pairing did not issue credential: %#v", credential)
 	}
@@ -98,7 +105,7 @@ func TestPairingCredentialRemainsHiddenWhenActivationSaveFails(t *testing.T) {
 	if failed.Code != http.StatusConflict {
 		t.Fatalf("failed activation status: %d %s", failed.Code, failed.Body.String())
 	}
-	pending := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"proof": started["proof"]}, ""))
+	pending := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": started["proof"]}, ""))
 	if pending["status"] != "local_confirmed" || pending["token"] != nil {
 		t.Fatalf("failed activation exposed credential: %#v", pending)
 	}
@@ -112,5 +119,30 @@ func TestPairingCredentialRemainsHiddenWhenActivationSaveFails(t *testing.T) {
 		"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": issuer["fingerprint"],
 	}, ""); response.Code != http.StatusOK {
 		t.Fatalf("retry activation: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPairingRejectsLegacyStartOutsideFixtureCompatibilityMode(t *testing.T) {
+	fixture := setup(t)
+	fixture.console.allowLegacyPairing = false
+	response := fixture.call(http.MethodPost, "/pair/start", map[string]string{
+		"person_id": fixturePersonID,
+		"device_id": fixtureDeviceID,
+	}, "")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("legacy pairing remained enabled: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPairingPollRequiresExactPairingIdentity(t *testing.T) {
+	fixture := setup(t)
+	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), ""))
+	response := fixture.call(http.MethodPost, "/pair/poll", map[string]any{
+		"schema_version": 1,
+		"pairing_id":     "00000000-0000-4000-8000-000000000099",
+		"proof":          started["proof"],
+	}, "")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "validation") {
+		t.Fatalf("poll accepted a different pairing identity: %d %s", response.Code, response.Body.String())
 	}
 }

@@ -258,6 +258,7 @@ func setup(test *testing.T) *fixture {
 	if err != nil {
 		test.Fatal(err)
 	}
+	management.allowLegacyPairing = true
 	github := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
 	slack := &clientDriveRuntime{clientOAuthRuntime: &clientOAuthRuntime{status: "disconnected", vault: vault, instant: true}}
 	if management.SetGitHubAuth(github) != nil || management.SetSlackAuth(slack) != nil {
@@ -1050,7 +1051,7 @@ func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 	if fixture.call("POST", "/manage/api/pair/approve", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": "wrong"}, "").Code != 409 {
 		test.Fatal("expired request approved")
 	}
-	expired := fixture.call("POST", "/pair/poll", map[string]any{"proof": started["proof"]}, "")
+	expired := fixture.call("POST", "/pair/poll", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": started["proof"]}, "")
 	if expired.Code != 200 || !strings.Contains(expired.Body.String(), `"status":"expired"`) {
 		test.Fatalf("expired proof did not report status: %d %s", expired.Code, expired.Body.String())
 	}

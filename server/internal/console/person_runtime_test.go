@@ -148,7 +148,7 @@ func TestRevokingLastClientRemovesPersonConnectorLifecycle(test *testing.T) {
 	ownerPrivate := pairIssuerPrivateKey(issuer["key_id"].(string))
 	fixture.value(fixture.call(http.MethodPost, "/pair/confirm", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": proof, "challenge_id": started["challenge_id"], "key_id": issuer["key_id"], "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(ownerPrivate, append([]byte(authorization.SignatureDomain), challenge...)))}, ""))
 	fixture.value(fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": issuer["fingerprint"]}, ""))
-	other := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]string{"proof": proof}, ""))
+	other := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": proof}, ""))
 	otherToken := other["token"].(string)
 	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, otherToken); response.Code != http.StatusBadRequest {
 		test.Fatalf("re-paired Person read revoked owner's view: %d %s", response.Code, response.Body.String())
