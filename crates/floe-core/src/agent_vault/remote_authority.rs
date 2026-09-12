@@ -791,6 +791,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::PolicyDenied);
         }
         let producer_key = decode_exact(&challenge.producer.public_key, 32)?;
+        let challenge_digest = encode_hex(&Sha256::digest(&encoded));
         let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + encoded.len());
         message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
         message.extend_from_slice(&encoded);
@@ -822,8 +823,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             transaction
                 .execute(
-                    "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES (?, 'pairing', '', '', '', '', '', 0, '', '', '', '', 0, 0, 0, ?, ?)",
-                    (challenge.pairing_id.clone(), challenge.expires_at_unix_ms, now),
+                    "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES (?, 'pairing', '', ?, ?, '', '', 0, '', '', '', '', 0, 0, 0, ?, ?)",
+                    (
+                        challenge.pairing_id.clone(),
+                        challenge_digest,
+                        challenge.producer.fingerprint.clone(),
+                        challenge.expires_at_unix_ms,
+                        now,
+                    ),
                 )
                 .await
                 .map_err(storage)?;
@@ -844,14 +851,77 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn finalize_remote_pairing(
         &self,
-        producer: RemoteProducerIdentity,
+        pairing_id: &str,
+        challenge: &RemotePairingChallenge,
         active: bool,
     ) -> Result<RemoteProducerIdentity, AgentFailure> {
         if !active {
             return Err(AgentFailure::PolicyDenied);
         }
-        self.remote_pin_producer(producer.clone()).await?;
-        Ok(producer)
+        if pairing_id != challenge.pairing_id
+            || !valid_text(pairing_id, 128)
+            || Uuid::parse_str(&challenge.challenge_id).is_err()
+            || Uuid::parse_str(&challenge.challenge_id).is_ok_and(|identifier| identifier.is_nil())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        validate_producer(&challenge.producer).map_err(|_| AgentFailure::PolicyDenied)?;
+        let encoded = decode_canonical(&challenge.challenge_b64url, MAX_CHALLENGE_BYTES)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let wire = parse_challenge(&encoded).map_err(|_| AgentFailure::PolicyDenied)?;
+        let producer_signature = decode_exact(&challenge.producer_signature, 64)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| AgentFailure::VaultUnavailable)?
+            .as_millis() as i64;
+        if wire.operation != "enrollment"
+            || wire.challenge_id != challenge.challenge_id
+            || wire.client_id != pairing_id
+            || wire.audience != challenge.producer.audience
+            || wire.purpose != "owner_enrollment"
+            || wire._consumer != "owner"
+            || wire.expires_at_unix_ms != challenge.expires_at_unix_ms
+            || wire.expires_at_unix_ms <= now
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let producer_key = decode_exact(&challenge.producer.public_key, 32)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let mut producer_message =
+            Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + encoded.len());
+        producer_message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        producer_message.extend_from_slice(&encoded);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&producer_message, &producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let challenge_digest = encode_hex(&Sha256::digest(&encoded));
+        let mut rows = self
+            .connection()?
+            .query(
+                "SELECT operation, query_sha256, result_sha256, expires_at_unix_ms FROM remote_authority_challenges WHERE challenge_id = ?",
+                [pairing_id],
+            )
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(|_| AgentFailure::PolicyDenied)?
+            .ok_or(AgentFailure::PolicyDenied)?;
+        let operation: String = row.get(0).map_err(|_| AgentFailure::PolicyDenied)?;
+        let stored_digest: String = row.get(1).map_err(|_| AgentFailure::PolicyDenied)?;
+        let stored_fingerprint: String = row.get(2).map_err(|_| AgentFailure::PolicyDenied)?;
+        let stored_expiry: i64 = row.get(3).map_err(|_| AgentFailure::PolicyDenied)?;
+        if operation != "pairing"
+            || stored_digest != challenge_digest
+            || stored_fingerprint != challenge.producer.fingerprint
+            || stored_expiry != challenge.expires_at_unix_ms
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.remote_pin_producer(challenge.producer.clone()).await?;
+        Ok(challenge.producer.clone())
     }
 
     pub async fn remote_sign_calendar_authorization(
@@ -1754,7 +1824,7 @@ mod tests {
             "nonce": URL_SAFE_NO_PAD.encode([3u8; 32]),
             "key_id": issuer.key_id,
             "person_id": person_id.to_string(),
-            "client_id": "pairing-client",
+            "client_id": pairing_id,
             "device_id": "pairing-device",
             "audience": producer.audience,
             "purpose": "owner_enrollment",
@@ -1780,7 +1850,7 @@ mod tests {
             .remote_sign_pairing(
                 &challenge,
                 &person_id.to_string(),
-                "pairing-client",
+                pairing_id,
                 "pairing-device",
             )
             .await
@@ -1791,7 +1861,7 @@ mod tests {
                 .remote_sign_pairing(
                     &challenge,
                     &person_id.to_string(),
-                    "pairing-client",
+                    pairing_id,
                     "pairing-device",
                 )
                 .await,
@@ -1799,17 +1869,17 @@ mod tests {
         );
         assert_eq!(
             vault
-                .finalize_remote_pairing(challenge.producer.clone(), false)
+                .finalize_remote_pairing(&challenge.pairing_id, &challenge, false)
                 .await,
             Err(AgentFailure::PolicyDenied)
         );
         assert!(vault.remote_pinned_producer().await.is_err());
         vault
-            .finalize_remote_pairing(challenge.producer.clone(), true)
+            .finalize_remote_pairing(&challenge.pairing_id, &challenge, true)
             .await
             .unwrap();
         vault
-            .finalize_remote_pairing(challenge.producer.clone(), true)
+            .finalize_remote_pairing(&challenge.pairing_id, &challenge, true)
             .await
             .unwrap();
         let mut changed = challenge.clone();
@@ -1819,9 +1889,25 @@ mod tests {
                 .remote_sign_pairing(
                     &changed,
                     &person_id.to_string(),
-                    "pairing-client",
+                    pairing_id,
                     "pairing-device",
                 )
+                .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        let mut changed_producer = challenge.clone();
+        changed_producer.producer.fingerprint = "changed".into();
+        assert_eq!(
+            vault
+                .finalize_remote_pairing(&changed_producer.pairing_id, &changed_producer, true,)
+                .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        let mut changed_challenge = challenge.clone();
+        changed_challenge.challenge_id = "00000000-0000-4000-8000-000000000035".into();
+        assert_eq!(
+            vault
+                .finalize_remote_pairing(&changed_challenge.pairing_id, &changed_challenge, true)
                 .await,
             Err(AgentFailure::PolicyDenied)
         );

@@ -1637,19 +1637,35 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 .await?;
             let status = protocol_pairing_status(response)?;
             let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            let owner = Box::pin(vault.remote_owner_public_key()).await?;
             if status.person_id != job.person.to_string()
                 || status.pairing_id != challenge.pairing_id
                 || challenge.pairing_id != *pairing_id
                 || pairing.person_id != status.person_id
                 || pairing.device_id != status.device_id
                 || pairing.client_id != status.pairing_id
-                || challenge.issuer.key_id
-                    != Box::pin(vault.remote_owner_public_key()).await?.key_id
+                || challenge.issuer != protocol_owner_key(owner)
             {
                 return Err(AgentFailure::PolicyDenied);
             }
             let producer = core_producer_identity(&challenge.producer);
-            Box::pin(vault.finalize_remote_pairing(producer, status.status == "approved")).await?;
+            Box::pin(vault.finalize_remote_pairing(
+                pairing_id,
+                &RemotePairingChallenge {
+                    pairing_id: challenge.pairing_id.clone(),
+                    challenge_id: challenge.challenge_id.clone(),
+                    challenge_b64url: challenge.challenge_b64url.clone(),
+                    producer_signature: challenge.producer_signature.clone(),
+                    producer: producer.clone(),
+                    issuer: floe_core::RemoteOwnerPublicKey {
+                        key_id: challenge.issuer.key_id.clone(),
+                        public_key: challenge.issuer.public_key.clone(),
+                    },
+                    expires_at_unix_ms: challenge.expires_at_unix_ms,
+                },
+                status.status == "approved",
+            ))
+            .await?;
             Ok(VaultExecutionResult {
                 remote_pairing: Some(status),
                 ..VaultExecutionResult::ready()
