@@ -785,12 +785,14 @@ name = "floe-core"
 version = "0.1.0"
 dependencies = [
  "apple-native-keyring-store",
+ "base64",
  "chrono",
  "floe-agent",
  "floe-domain",
  "getrandom 0.3.4",
  "keyring-core",
  "libc",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

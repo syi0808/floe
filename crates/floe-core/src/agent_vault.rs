@@ -30,10 +30,14 @@ mod expert_actions;
 mod keyring;
 mod learning;
 mod registry;
+mod remote_authority;
 mod session_archive;
 pub use access_grants::AccessGrantCleanup;
 pub use calendar_grants::CalendarGrantAdmission;
 pub use keyring::KeyringVaultKeys;
+pub use remote_authority::{
+    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemoteProducerIdentity,
+};
 pub use session_archive::*;
 
 pub struct VaultKey(Zeroizing<[u8; 32]>);
@@ -428,6 +432,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_calendar_grant_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_context_cleanup(true).await?;
+        vault.initialize_remote_authority_store(true).await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -505,6 +510,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_calendar_grant_store().await?;
         vault.initialize_context_dependencies().await?;
         vault.initialize_context_cleanup(false).await?;
+        vault.initialize_remote_authority_store(false).await?;
         vault.expert_registry().await?;
         Ok(vault)
     }
