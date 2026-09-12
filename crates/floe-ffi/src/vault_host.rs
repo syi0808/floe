@@ -25,14 +25,14 @@ use floe_core::KeyringVaultKeys as PlatformVaultKeys;
 use floe_core::{
     AgentFixtureTurn, CalendarActionState, CalendarReadAccess, CalendarReadAccessRequest,
     EncryptedAgentVault, ExpertCalendarInspection, ExpertProposalReference, FloeCore,
-    RemoteProducerIdentity, VaultKeyProvider, recover_agent_sample,
+    RemotePairingChallenge, RemoteProducerIdentity, VaultKeyProvider, recover_agent_sample,
 };
 use floe_domain::{
     CalendarProvider, ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer,
     GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, GrantState,
     PersonId, ProcessingRestriction, ResourceHandle,
 };
-use floe_infra::remote_authorization::RemoteAuthorizationClient;
+use floe_infra::remote_authorization::{RemoteAuthorizationClient, RemotePairingClient};
 use floe_protocol::*;
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -88,6 +88,10 @@ fn action_name(action: &AgentVaultActionDto) -> &'static str {
         AgentVaultActionDto::RemoteAuthorityEnrollmentStatus { .. } => {
             "remote_authority_enrollment_status"
         }
+        AgentVaultActionDto::RemotePairingPrepare {} => "remote_pairing_prepare",
+        AgentVaultActionDto::RemotePairingConfirm { .. } => "remote_pairing_confirm",
+        AgentVaultActionDto::RemotePairingStatus { .. } => "remote_pairing_status",
+        AgentVaultActionDto::RemotePairingFinalize { .. } => "remote_pairing_finalize",
         AgentVaultActionDto::RemoteCalendarGrantPreview { .. } => "remote_calendar_grant_preview",
         AgentVaultActionDto::RemoteCalendarGrantReview { .. } => "remote_calendar_grant_review",
         AgentVaultActionDto::RemoteCalendarGrantStatus { .. } => "remote_calendar_grant_status",
@@ -185,6 +189,7 @@ struct Progress {
     connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     remote_producer: Option<RemoteProducerIdentityDto>,
     remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
+    remote_pairing: Option<RemotePairingStatusDto>,
     remote_owner: Option<RemoteOwnerPublicKeyDto>,
     remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
     remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
@@ -213,6 +218,7 @@ struct VaultJobResult {
     connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     remote_producer: Option<RemoteProducerIdentityDto>,
     remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
+    remote_pairing: Option<RemotePairingStatusDto>,
     remote_owner: Option<RemoteOwnerPublicKeyDto>,
     remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
     remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
@@ -256,6 +262,7 @@ impl VaultJobResult {
             connections: self.connections.map(encode_contracts).transpose()?,
             remote_producer: self.remote_producer,
             remote_enrollment: self.remote_enrollment,
+            remote_pairing: self.remote_pairing,
             remote_owner: self.remote_owner,
             remote_calendar_grant: self.remote_calendar_grant,
             remote_calendar_preview: self.remote_calendar_preview,
@@ -359,6 +366,7 @@ impl Worker {
                                         progress.memory = result.memory;
                                         progress.remote_producer = result.remote_producer;
                                         progress.remote_enrollment = result.remote_enrollment;
+                                        progress.remote_pairing = result.remote_pairing;
                                         progress.remote_owner = result.remote_owner;
                                         progress.remote_calendar_grant =
                                             result.remote_calendar_grant;
@@ -536,6 +544,7 @@ impl Worker {
             remote_owner: progress.remote_owner.clone(),
             remote_producer: progress.remote_producer.clone(),
             remote_enrollment: progress.remote_enrollment.clone(),
+            remote_pairing: progress.remote_pairing.clone(),
             remote_calendar_grant: progress.remote_calendar_grant.clone(),
             remote_calendar_preview: progress.remote_calendar_preview.clone(),
             remote_view_grant: progress.remote_view_grant.clone(),
@@ -582,6 +591,7 @@ struct VaultExecutionResult {
     memory: Option<AgentMemoryOverviewDto>,
     remote_producer: Option<RemoteProducerIdentityDto>,
     remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
+    remote_pairing: Option<RemotePairingStatusDto>,
     remote_owner: Option<RemoteOwnerPublicKeyDto>,
     remote_calendar_grant: Option<RemoteCalendarGrantOverviewDto>,
     remote_calendar_preview: Option<RemoteCalendarGrantPreviewDto>,
@@ -769,6 +779,29 @@ fn protocol_owner_key(key: floe_core::RemoteOwnerPublicKey) -> RemoteOwnerPublic
     }
 }
 
+fn protocol_pairing_status(
+    response: floe_infra::remote_authorization::PairingStatusResponse,
+) -> Result<RemotePairingStatusDto, AgentFailure> {
+    if response.schema_version != PROTOCOL_VERSION
+        || response.pairing_id.is_empty()
+        || response.person_id.is_empty()
+        || response.device_id.is_empty()
+    {
+        return Err(AgentFailure::CapabilityUnavailable);
+    }
+    Ok(RemotePairingStatusDto {
+        schema_version: response.schema_version,
+        pairing_id: response.pairing_id,
+        status: response.status,
+        person_id: response.person_id,
+        device_id: response.device_id,
+        producer: response.producer.as_ref().map(protocol_producer_identity),
+        issuer: response.issuer.map(protocol_owner_key),
+        issuer_fingerprint: response.issuer_fingerprint,
+        token: response.token,
+    })
+}
+
 impl VaultExecutionResult {
     fn new(state: AgentVaultStateDto) -> Self {
         Self {
@@ -782,6 +815,7 @@ impl VaultExecutionResult {
             memory: None,
             remote_producer: None,
             remote_enrollment: None,
+            remote_pairing: None,
             remote_owner: None,
             remote_calendar_grant: None,
             remote_calendar_preview: None,
@@ -1451,6 +1485,139 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 || stored_vault_state(root, job.person),
                 |_| AgentVaultStateDto::Ready,
             )))
+        }
+        AgentVaultActionDto::RemotePairingPrepare {} => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            Ok(VaultExecutionResult {
+                remote_owner: Some(protocol_owner_key(
+                    Box::pin(vault.remote_owner_public_key()).await?,
+                )),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        AgentVaultActionDto::RemotePairingConfirm {
+            route,
+            challenge,
+            polling_proof,
+        } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            if pairing.person_id != job.person.to_string()
+                || pairing.client_id != challenge.pairing_id
+                || pairing.device_id.is_empty()
+                || challenge.issuer.key_id.is_empty()
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let core_challenge = RemotePairingChallenge {
+                pairing_id: challenge.pairing_id.clone(),
+                challenge_id: challenge.challenge_id.clone(),
+                challenge_b64url: challenge.challenge_b64url.clone(),
+                producer_signature: challenge.producer_signature.clone(),
+                producer: core_producer_identity(&challenge.producer),
+                issuer: floe_core::RemoteOwnerPublicKey {
+                    key_id: challenge.issuer.key_id.clone(),
+                    public_key: challenge.issuer.public_key.clone(),
+                },
+                expires_at_unix_ms: challenge.expires_at_unix_ms,
+            };
+            let owner_signature = Box::pin(vault.remote_sign_pairing(
+                &core_challenge,
+                &pairing.person_id,
+                &pairing.client_id,
+                &pairing.device_id,
+            ))
+            .await?;
+            let client = RemotePairingClient::new(&route.base_url)?;
+            let response = client
+                .confirm(
+                    &challenge.pairing_id,
+                    polling_proof,
+                    &owner_signature,
+                    &challenge.challenge_id,
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                    &job.cancellation,
+                )
+                .await?;
+            let status = RemotePairingStatusDto {
+                schema_version: response.schema_version,
+                pairing_id: response.pairing_id,
+                status: response.status,
+                person_id: pairing.person_id.clone(),
+                device_id: pairing.device_id.clone(),
+                producer: Some(challenge.producer.clone()),
+                issuer: Some(challenge.issuer.clone()),
+                issuer_fingerprint: Some(challenge.issuer.fingerprint.clone()),
+                token: None,
+            };
+            Ok(VaultExecutionResult {
+                remote_pairing: Some(status),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        AgentVaultActionDto::RemotePairingStatus {
+            route,
+            pairing_id,
+            polling_proof,
+        } => {
+            let client = RemotePairingClient::new(&route.base_url)?;
+            let response = client
+                .status(
+                    pairing_id,
+                    polling_proof,
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                    &job.cancellation,
+                )
+                .await?;
+            let status = protocol_pairing_status(response)?;
+            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            if status.person_id != job.person.to_string()
+                || pairing.person_id != status.person_id
+                || pairing.device_id != status.device_id
+                || pairing.client_id != status.pairing_id
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            Ok(VaultExecutionResult {
+                remote_pairing: Some(status),
+                ..VaultExecutionResult::ready()
+            })
+        }
+        AgentVaultActionDto::RemotePairingFinalize {
+            route,
+            pairing_id,
+            polling_proof,
+            challenge,
+        } => {
+            let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
+            let client = RemotePairingClient::new(&route.base_url)?;
+            let response = client
+                .status(
+                    pairing_id,
+                    polling_proof,
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                    &job.cancellation,
+                )
+                .await?;
+            let status = protocol_pairing_status(response)?;
+            let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
+            if status.person_id != job.person.to_string()
+                || status.pairing_id != challenge.pairing_id
+                || challenge.pairing_id != *pairing_id
+                || pairing.person_id != status.person_id
+                || pairing.device_id != status.device_id
+                || pairing.client_id != status.pairing_id
+                || challenge.issuer.key_id
+                    != Box::pin(vault.remote_owner_public_key()).await?.key_id
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let producer = core_producer_identity(&challenge.producer);
+            Box::pin(vault.finalize_remote_pairing(producer, status.status == "approved")).await?;
+            Ok(VaultExecutionResult {
+                remote_pairing: Some(status),
+                ..VaultExecutionResult::ready()
+            })
         }
         AgentVaultActionDto::RemoteAuthorityInspectProducer { route } => {
             let client = RemoteAuthorizationClient::new(route)?;

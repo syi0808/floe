@@ -43,8 +43,8 @@ pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{
     RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
-    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemoteProducerIdentity,
-    RemoteViewSourceReference,
+    RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemotePairingChallenge,
+    RemoteProducerIdentity, RemoteViewSourceReference,
 };
 pub use remote_calendar_grants::RemoteCalendarGrantBinding;
 pub use remote_view_grants::RemoteViewGrantBinding;

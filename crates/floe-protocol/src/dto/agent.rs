@@ -208,6 +208,23 @@ pub enum AgentVaultActionDto {
         route: AgentRemoteRouteDto,
         enrollment_id: String,
     },
+    RemotePairingPrepare {},
+    RemotePairingConfirm {
+        route: AgentRemoteRouteDto,
+        challenge: RemotePairingChallengeDto,
+        polling_proof: String,
+    },
+    RemotePairingStatus {
+        route: AgentRemoteRouteDto,
+        pairing_id: String,
+        polling_proof: String,
+    },
+    RemotePairingFinalize {
+        route: AgentRemoteRouteDto,
+        pairing_id: String,
+        polling_proof: String,
+        challenge: RemotePairingChallengeDto,
+    },
     RemoteCalendarGrantPreview {
         route: AgentRemoteRouteDto,
         connector_id: String,
@@ -365,6 +382,45 @@ pub struct RemoteAuthorityEnrollmentStatusDto {
     pub local_confirmed: bool,
     pub admin_approved: bool,
     pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePairingChallengeDto {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub challenge_id: String,
+    pub challenge_b64url: String,
+    pub producer_signature: String,
+    pub producer: RemoteProducerIdentityDto,
+    pub issuer: RemoteOwnerPublicKeyDto,
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePairingConfirmationDto {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePairingStatusDto {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub status: String,
+    pub person_id: String,
+    pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer: Option<RemoteProducerIdentityDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<RemoteOwnerPublicKeyDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -652,6 +708,8 @@ pub struct AgentVaultResultDto {
     pub remote_producer: Option<RemoteProducerIdentityDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_enrollment: Option<RemoteAuthorityEnrollmentStatusDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_pairing: Option<RemotePairingStatusDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_owner: Option<RemoteOwnerPublicKeyDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

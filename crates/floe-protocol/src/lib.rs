@@ -29,7 +29,8 @@ pub use dto::{
     PersonalAccessChangeDto, PersonalAccessConfigurationDto, PersonalAccessOverviewDto,
     PersonalMemoryKindDto, PriorityDto, RegistryConfigurationDto, RegistryConfigurationTargetDto,
     RegistryOverviewDto, RemoteAuthorityEnrollmentStatusDto, RemoteCalendarGrantOverviewDto,
-    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemotePairingChallengeDto,
+    RemotePairingConfirmationDto, RemotePairingStatusDto, RemoteProducerIdentityDto,
     RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto, ResponseEnvelopeDto, ResponseOutcomeDto,
     SourceRefDto, TaskDto, TimelineItemDto,
 };

@@ -24,7 +24,8 @@ pub use agent::{
     PersonalAccessConfigurationDto, PersonalAccessOverviewDto, PersonalMemoryKindDto,
     RegistryConfigurationDto, RegistryConfigurationTargetDto, RegistryOverviewDto,
     RemoteAuthorityEnrollmentStatusDto, RemoteCalendarGrantOverviewDto,
-    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemoteProducerIdentityDto,
+    RemoteCalendarGrantPreviewDto, RemoteOwnerPublicKeyDto, RemotePairingChallengeDto,
+    RemotePairingConfirmationDto, RemotePairingStatusDto, RemoteProducerIdentityDto,
     RemoteViewGrantOverviewDto, RemoteViewGrantPreviewDto,
 };
 pub use day::{

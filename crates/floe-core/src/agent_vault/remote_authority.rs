@@ -51,6 +51,17 @@ pub struct RemoteEnrollmentSignature {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemotePairingChallenge {
+    pub pairing_id: String,
+    pub challenge_id: String,
+    pub challenge_b64url: String,
+    pub producer_signature: String,
+    pub producer: RemoteProducerIdentity,
+    pub issuer: RemoteOwnerPublicKey,
+    pub expires_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteCalendarAuthorizationExpectation {
     pub operation: String,
     pub client_id: String,
@@ -732,6 +743,115 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             key_id,
             signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
         })
+    }
+
+    pub async fn remote_sign_pairing(
+        &self,
+        challenge: &RemotePairingChallenge,
+        person_id: &str,
+        client_id: &str,
+        device_id: &str,
+    ) -> Result<RemoteEnrollmentSignature, AgentFailure> {
+        if person_id != self.person_id.to_string()
+            || !valid_text(client_id, 128)
+            || !valid_text(device_id, 128)
+            || !valid_text(&challenge.pairing_id, 128)
+            || Uuid::parse_str(&challenge.pairing_id).is_err()
+            || Uuid::parse_str(&challenge.pairing_id).is_ok_and(|identifier| identifier.is_nil())
+            || challenge.issuer != self.remote_owner_public_key().await?
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        validate_producer(&challenge.producer).map_err(|_| AgentFailure::PolicyDenied)?;
+        let encoded = decode_canonical(&challenge.challenge_b64url, MAX_CHALLENGE_BYTES)?;
+        let producer_signature = decode_exact(&challenge.producer_signature, 64)?;
+        let wire = parse_challenge(&encoded)?;
+        if Uuid::parse_str(&challenge.challenge_id).is_ok_and(|identifier| identifier.is_nil())
+            || Uuid::parse_str(&challenge.challenge_id).is_err()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| AgentFailure::VaultUnavailable)?
+            .as_millis() as i64;
+        if challenge.expires_at_unix_ms != wire.expires_at_unix_ms
+            || wire.expires_at_unix_ms <= now
+            || wire.issued_at_unix_ms > now.saturating_add(5_000)
+            || wire.operation != "enrollment"
+            || wire.purpose != "owner_enrollment"
+            || wire._consumer != "owner"
+            || wire.challenge_id != challenge.challenge_id
+            || wire.person_id != person_id
+            || wire.client_id != client_id
+            || wire.device_id != device_id
+            || wire.key_id != challenge.issuer.key_id
+            || wire.audience != challenge.producer.audience
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let producer_key = decode_exact(&challenge.producer.public_key, 32)?;
+        let mut message = Vec::with_capacity(PRODUCER_SIGNATURE_DOMAIN.len() + encoded.len());
+        message.extend_from_slice(PRODUCER_SIGNATURE_DOMAIN);
+        message.extend_from_slice(&encoded);
+        signature::UnparsedPublicKey::new(&signature::ED25519, producer_key)
+            .verify(&message, &producer_signature)
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        self.validate_owner_key().await?;
+        let (private_key, key_id) = self.load_owner_key().await?;
+        if key_id != challenge.issuer.key_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result: Result<(), AgentFailure> = async {
+            self.advance_remote_clock_and_cleanup(&transaction, now)
+                .await?;
+            let mut existing = transaction
+                .query(
+                    "SELECT challenge_id FROM remote_authority_challenges WHERE challenge_id = ?",
+                    [challenge.pairing_id.clone()],
+                )
+                .await
+                .map_err(storage)?;
+            if existing.next().await.map_err(storage)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO remote_authority_challenges (challenge_id, operation, admission_id, query_sha256, result_sha256, grant_id, grant_incarnation, grant_epoch, source_connector, source_connection, source_execution_owner, source_incarnation, source_epoch, max_items, max_bytes, expires_at_unix_ms, consumed_at_unix_ms) VALUES (?, 'pairing', '', '', '', '', '', 0, '', '', '', '', 0, 0, 0, ?, ?)",
+                    (challenge.pairing_id.clone(), challenge.expires_at_unix_ms, now),
+                )
+                .await
+                .map_err(storage)?;
+            Ok(())
+        }
+        .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await?;
+        let mut owner_message = Vec::with_capacity(OWNER_SIGNATURE_DOMAIN.len() + encoded.len());
+        owner_message.extend_from_slice(OWNER_SIGNATURE_DOMAIN);
+        owner_message.extend_from_slice(&encoded);
+        let signature = private_key.sign(&owner_message);
+        Ok(RemoteEnrollmentSignature {
+            key_id,
+            signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
+        })
+    }
+
+    pub async fn finalize_remote_pairing(
+        &self,
+        producer: RemoteProducerIdentity,
+        active: bool,
+    ) -> Result<RemoteProducerIdentity, AgentFailure> {
+        if !active {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.remote_pin_producer(producer.clone()).await?;
+        Ok(producer)
     }
 
     pub async fn remote_sign_calendar_authorization(
@@ -1598,6 +1718,113 @@ mod tests {
         let mut changed = identity.clone();
         changed.audience = "caller-controlled".into();
         assert!(validate_producer(&changed).is_err());
+    }
+
+    #[tokio::test]
+    async fn pairing_proof_is_strict_single_use_and_pins_only_after_activation() {
+        let root = tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, keys)
+            .await
+            .unwrap();
+        let producer_key = signature::Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let producer_pair = signature::Ed25519KeyPair::from_pkcs8(producer_key.as_ref()).unwrap();
+        let producer_public = producer_pair.public_key().as_ref();
+        let producer = RemoteProducerIdentity {
+            schema_version: 1,
+            instance_id: "00000000-0000-4000-8000-000000000031".into(),
+            execution_owner: "00000000-0000-4000-8000-000000000032".into(),
+            audience: "floe.server:00000000-0000-4000-8000-000000000031".into(),
+            key_id: "00000000-0000-4000-8000-000000000033".into(),
+            public_key: URL_SAFE_NO_PAD.encode(producer_public),
+            fingerprint: encode_hex(&Sha256::digest(producer_public)),
+        };
+        let issuer = vault.remote_owner_public_key().await.unwrap();
+        let pairing_id = "00000000-0000-4000-8000-000000000034";
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let descriptor = serde_json::json!({
+            "v": 1,
+            "operation": "enrollment",
+            "challenge_id": pairing_id,
+            "nonce": URL_SAFE_NO_PAD.encode([3u8; 32]),
+            "key_id": issuer.key_id,
+            "person_id": person_id.to_string(),
+            "client_id": "pairing-client",
+            "device_id": "pairing-device",
+            "audience": producer.audience,
+            "purpose": "owner_enrollment",
+            "consumer": "owner",
+            "issued_at_unix_ms": now,
+            "expires_at_unix_ms": now + 30_000,
+        });
+        let descriptor_bytes = serde_json::to_vec(&descriptor).unwrap();
+        let mut producer_message = Vec::from(PRODUCER_SIGNATURE_DOMAIN);
+        producer_message.extend_from_slice(&descriptor_bytes);
+        let producer_signature = producer_pair.sign(&producer_message);
+        let challenge = RemotePairingChallenge {
+            pairing_id: pairing_id.into(),
+            challenge_id: pairing_id.into(),
+            challenge_b64url: URL_SAFE_NO_PAD.encode(&descriptor_bytes),
+            producer_signature: URL_SAFE_NO_PAD.encode(producer_signature.as_ref()),
+            producer,
+            issuer,
+            expires_at_unix_ms: now + 30_000,
+        };
+        assert!(vault.remote_pinned_producer().await.is_err());
+        let proof = vault
+            .remote_sign_pairing(
+                &challenge,
+                &person_id.to_string(),
+                "pairing-client",
+                "pairing-device",
+            )
+            .await
+            .unwrap();
+        assert_eq!(proof.key_id, challenge.issuer.key_id);
+        assert_eq!(
+            vault
+                .remote_sign_pairing(
+                    &challenge,
+                    &person_id.to_string(),
+                    "pairing-client",
+                    "pairing-device",
+                )
+                .await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            vault
+                .finalize_remote_pairing(challenge.producer.clone(), false)
+                .await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert!(vault.remote_pinned_producer().await.is_err());
+        vault
+            .finalize_remote_pairing(challenge.producer.clone(), true)
+            .await
+            .unwrap();
+        vault
+            .finalize_remote_pairing(challenge.producer.clone(), true)
+            .await
+            .unwrap();
+        let mut changed = challenge.clone();
+        changed.challenge_id = "00000000-0000-4000-8000-000000000035".into();
+        assert_eq!(
+            vault
+                .remote_sign_pairing(
+                    &changed,
+                    &person_id.to_string(),
+                    "pairing-client",
+                    "pairing-device",
+                )
+                .await,
+            Err(AgentFailure::PolicyDenied)
+        );
     }
 
     #[tokio::test]

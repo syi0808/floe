@@ -35,8 +35,9 @@ pub use agent_vault::{
     GovernedDependencyLiveness, GovernedDependencyResolver, KeyringVaultKeys,
     RemoteCalendarAuthorizationExpectation, RemoteCalendarGrantBinding,
     RemoteCalendarSourceReference, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
-    RemoteProducerIdentity, RemoteViewGrantBinding, RemoteViewSourceReference,
-    SessionCompactionResult, SessionSearchHit, VaultKey, VaultKeyProvider,
+    RemotePairingChallenge, RemoteProducerIdentity, RemoteViewGrantBinding,
+    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit, VaultKey,
+    VaultKeyProvider,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,

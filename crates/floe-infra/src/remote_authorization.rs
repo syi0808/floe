@@ -9,6 +9,7 @@ use floe_core::{
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -89,6 +90,34 @@ pub struct EnrollmentStatusResponse {
     pub local_confirmed: bool,
     pub admin_approved: bool,
     pub active: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PairingConfirmationResponse {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PairingStatusResponse {
+    pub schema_version: u32,
+    pub pairing_id: String,
+    pub status: String,
+    pub person_id: String,
+    pub device_id: String,
+    #[serde(default)]
+    pub producer: Option<ProducerIdentityResponse>,
+    #[serde(default)]
+    pub issuer: Option<RemoteOwnerPublicKey>,
+    #[serde(default)]
+    pub issuer_fingerprint: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -907,6 +936,171 @@ impl RemoteAuthorizationClient {
     }
 }
 
+#[derive(Clone)]
+pub struct RemotePairingClient {
+    base_url: String,
+}
+
+impl RemotePairingClient {
+    pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
+        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
+        if address.scheme() != "http"
+            || address.host_str() != Some("127.0.0.1")
+            || address.path() != "/"
+            || address.query().is_some()
+            || address.fragment().is_some()
+            || address.port().is_none()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+        })
+    }
+
+    pub async fn confirm(
+        &self,
+        pairing_id: &str,
+        polling_proof: &str,
+        signature: &RemoteEnrollmentSignature,
+        challenge_id: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PairingConfirmationResponse, AgentFailure> {
+        if !valid_uuid_text(pairing_id)
+            || !valid_uuid_text(challenge_id)
+            || !valid_token_text(polling_proof)
+            || signature.key_id.is_empty()
+            || signature.signature.is_empty()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "pairing_id": pairing_id,
+            "proof": polling_proof,
+            "challenge_id": challenge_id,
+            "key_id": signature.key_id,
+            "signature": signature.signature,
+        });
+        let response: PairingConfirmationResponse = self
+            .request("POST", "/pair/confirm", Some(body), deadline, cancellation)
+            .await?;
+        if response.schema_version != 1
+            || response.pairing_id != pairing_id
+            || !matches!(response.status.as_str(), "local_confirmed" | "approved")
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        Ok(response)
+    }
+
+    pub async fn status(
+        &self,
+        pairing_id: &str,
+        polling_proof: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PairingStatusResponse, AgentFailure> {
+        if !valid_uuid_text(pairing_id) || !valid_token_text(polling_proof) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "pairing_id": pairing_id,
+            "proof": polling_proof,
+        });
+        let response: PairingStatusResponse = self
+            .request("POST", "/pair/poll", Some(body), deadline, cancellation)
+            .await?;
+        if response.schema_version != 1
+            || response.pairing_id != pairing_id
+            || !matches!(
+                response.status.as_str(),
+                "pending"
+                    | "local_confirmed"
+                    | "approved"
+                    | "rejected"
+                    | "expired"
+                    | "repair_required"
+            )
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        Ok(response)
+    }
+
+    async fn request<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<T, AgentFailure> {
+        if cancellation.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if timeout.is_zero() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        let client = Client::builder()
+            .timeout(timeout.min(Duration::from_secs(10)))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        let mut request = match method {
+            "POST" => client.post(format!("{}{path}", self.base_url)),
+            _ => return Err(AgentFailure::InvalidInput),
+        };
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let mut response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            response = request.send() => response.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+        };
+        match response.status() {
+            StatusCode::BAD_REQUEST => return Err(AgentFailure::InvalidInput),
+            StatusCode::UNAUTHORIZED => return Err(AgentFailure::CredentialExpired),
+            StatusCode::CONFLICT => return Err(AgentFailure::Conflict),
+            status if !status.is_success() => return Err(AgentFailure::CapabilityUnavailable),
+            _ => {}
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = tokio::select! {
+            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
+            chunk = response.chunk() => chunk.map_err(|_| AgentFailure::CapabilityUnavailable)?,
+        } {
+            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)
+    }
+}
+
+fn valid_uuid_text(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == value)
+}
+
+fn valid_token_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1007,6 +1201,71 @@ mod tests {
             identity.audience,
             "floe.server:00000000-0000-4000-8000-000000000001"
         );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pairing_transport_uses_proof_auth_and_strict_statuses() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for expected_path in ["/pair/confirm", "/pair/poll"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let read = tokio::io::AsyncReadExt::read(&mut socket, &mut request)
+                    .await
+                    .unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+                assert!(!request.to_ascii_lowercase().contains("authorization:"));
+                let body = if expected_path == "/pair/confirm" {
+                    r#"{"schema_version":1,"pairing_id":"00000000-0000-4000-8000-000000000001","status":"local_confirmed"}"#
+                } else {
+                    r#"{"schema_version":1,"pairing_id":"00000000-0000-4000-8000-000000000001","status":"approved","person_id":"00000000-0000-4000-8000-000000000002","device_id":"device","producer":{"schema_version":1,"instance_id":"00000000-0000-4000-8000-000000000003","execution_owner":"00000000-0000-4000-8000-000000000004","audience":"audience","key_id":"00000000-0000-4000-8000-000000000005","public_key":"public","fingerprint":"fingerprint"},"issuer":{"key_id":"00000000-0000-4000-8000-000000000006","public_key":"issuer"},"issuer_fingerprint":"issuer-fingerprint","token":"token"}"#
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let client =
+            RemotePairingClient::new(&format!("http://127.0.0.1:{}", address.port())).unwrap();
+        let pair_id = "00000000-0000-4000-8000-000000000001";
+        let cancellation = floe_agent::Cancellation::default();
+        let confirmation = client
+            .confirm(
+                pair_id,
+                "polling-proof",
+                &RemoteEnrollmentSignature {
+                    key_id: "00000000-0000-4000-8000-000000000006".into(),
+                    signature: "owner-signature".into(),
+                },
+                pair_id,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(confirmation.status, "local_confirmed");
+        let status = client
+            .status(
+                pair_id,
+                "polling-proof",
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status, "approved");
+        assert_eq!(status.token.as_deref(), Some("token"));
         server.await.unwrap();
     }
 
