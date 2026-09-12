@@ -36,6 +36,15 @@ flutter pub get
 flutter run -d macos
 ```
 
+To start the local server and macOS client together from the repository root:
+
+```sh
+./scripts/run-local.sh
+```
+
+Pass Flutter run arguments to target another Apple device, for example
+`./scripts/run-local.sh -d <apple-device>`. Stopping either process stops the other.
+
 ## Localization
 
 The client defaults to English regardless of the operating system language. App-owned UI strings live in `lib/l10n/app_en.arb`, including accessibility labels, errors, and parameterized/plural messages. User-authored tasks, notes, and imported calendar content are never translated.
