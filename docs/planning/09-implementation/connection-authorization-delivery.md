@@ -415,6 +415,19 @@ persisted timestamps. Recovery may reacquire authority but cannot silently exten
 
 ### P5c mutual identity review contract
 
+The server producer identity/challenge half is accepted in `2214b16`: root reran all Go packages
+and authorization/console race suites. Tests cover exact signed challenge bytes, canonical field
+case rejection, shared negative vectors, and seed-only private-key corruption. Producer identity
+loads are size-bounded and missing/corrupt identity is not silently regenerated on reopen.
+This does not adopt protected provider routes. The owner signer/HTTP client passed root's focused
+10/6 tests; FFI/UI integration and additional widget coverage remain under review.
+
+P7 fixture follow-up `eef6a47` updates three test files to the strict failure envelope and explicit
+safe-read retry contract. Root reran all three files: 22 passed, including cancellation/resume
+without retrying an unsafe action. Full Flutter acceptance still requires a stable rebuilt tree.
+Root also reran Core library tests (146 passed) and encrypted vault integration (18 passed) at the
+pre-mobile-broker checkpoint; these counts are not final P7 acceptance of subsequent changes.
+
 Loopback address, bearer pairing, and a caller-supplied audience do not authenticate a producer.
 The producer must own a separate Ed25519 identity and sign its exact challenge bytes under a distinct
 producer domain. The local owner explicitly reviews and pins that producer fingerprint, instance,
