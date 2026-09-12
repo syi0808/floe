@@ -39,19 +39,24 @@ impl Default for GrantId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
-pub struct ConnectionId(Uuid);
+pub struct ConnectionId(String);
 
 impl ConnectionId {
-    pub fn from_uuid(value: Uuid) -> Option<Self> {
-        (!value.is_nil()).then_some(Self(value))
+    pub fn try_new(value: impl Into<String>) -> Result<Self, GrantValidationError> {
+        let value = value.into();
+        validate_identifier(&value, 256, "connection")?;
+        Ok(Self(value))
     }
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self(Uuid::new_v4().to_string())
     }
-    pub fn as_uuid(self) -> Uuid {
-        self.0
+    pub fn from_uuid(value: Uuid) -> Option<Self> {
+        (!value.is_nil()).then(|| Self(value.to_string()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -314,15 +319,14 @@ impl GrantSourceBinding {
         execution_owner: ExecutionOwnerId,
         source_authority: SourceAuthority,
     ) -> Result<Self, GrantValidationError> {
-        if person_id.0.is_nil() || connection_id.as_uuid().is_nil() || !source_authority.is_valid()
-        {
+        if person_id.0.is_nil() || !source_authority.is_valid() {
             return Err(GrantValidationError::Identity);
         }
         ConnectorId::try_new(connector.0.clone())?;
         ExecutionOwnerId::try_new(execution_owner.0.clone())?;
         Ok(Self {
             person_id,
-            connection_id,
+            connection_id: connection_id.clone(),
             connector,
             execution_owner,
             source_authority,
@@ -332,7 +336,7 @@ impl GrantSourceBinding {
         self.person_id
     }
     pub fn connection_id(&self) -> ConnectionId {
-        self.connection_id
+        self.connection_id.clone()
     }
     pub fn connector(&self) -> &ConnectorId {
         &self.connector
@@ -352,7 +356,7 @@ impl GrantSourceBinding {
     pub fn validate(&self) -> Result<(), GrantValidationError> {
         Self::try_new(
             self.person_id,
-            self.connection_id,
+            self.connection_id.clone(),
             self.connector.clone(),
             self.execution_owner.clone(),
             self.source_authority,
@@ -502,6 +506,33 @@ impl DataAccessGrant {
         self.review_required = false;
         Ok(true)
     }
+    pub fn review(
+        &mut self,
+        expected: GrantAuthority,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    ) -> Result<bool, GrantTransitionError> {
+        self.check_expected(expected)?;
+        self.validate_transition_source(&source)?;
+        scope.validate().map_err(GrantTransitionError::Invalid)?;
+        if self.state == GrantState::Revoked {
+            return Err(GrantTransitionError::Terminal);
+        }
+        if self.state != GrantState::Paused {
+            return Err(GrantTransitionError::Conflict);
+        }
+        if !self.review_required && self.source == source && self.scope == scope {
+            return Ok(false);
+        }
+        self.authority = self
+            .authority
+            .advance()
+            .ok_or(GrantTransitionError::Overflow)?;
+        self.source = source;
+        self.scope = scope;
+        self.review_required = false;
+        Ok(true)
+    }
     pub fn pause(&mut self, expected: GrantAuthority) -> Result<bool, GrantTransitionError> {
         self.check_expected(expected)?;
         if self.state == GrantState::Revoked {
@@ -591,7 +622,11 @@ fn validate_identifier(
     limit: usize,
     name: &'static str,
 ) -> Result<(), GrantValidationError> {
-    if value.trim() != value || value.is_empty() || value.chars().any(char::is_control) {
+    if value.trim() != value
+        || value.is_empty()
+        || value.chars().any(char::is_control)
+        || Uuid::parse_str(value).is_ok_and(|identifier| identifier.is_nil())
+    {
         return Err(GrantValidationError::InvalidIdentifier(name));
     }
     if value.len() > limit {
@@ -778,7 +813,7 @@ mod tests {
         );
         let alternate_connector = GrantSourceBinding::try_new(
             person,
-            connection_id,
+            connection_id.clone(),
             ConnectorId::try_new("other-calendar").unwrap(),
             ExecutionOwnerId::try_new("mac-host").unwrap(),
             SourceAuthority::new(),
@@ -790,7 +825,7 @@ mod tests {
         );
         let alternate_owner = GrantSourceBinding::try_new(
             person,
-            connection_id,
+            connection_id.clone(),
             ConnectorId::try_new("calendar").unwrap(),
             ExecutionOwnerId::try_new("other-host").unwrap(),
             SourceAuthority::new(),

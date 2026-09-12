@@ -14,32 +14,57 @@ fn setup_request(fixture: &Fixture, revision: u64) -> CalendarExpertSetup {
     }
 }
 
+async fn install_calendar(
+    fixture: &Fixture,
+    request: CalendarExpertSetup,
+    cancellation: Cancellation,
+) -> Result<CalendarExpertSetupResult, AgentFailure> {
+    let connection_id = request.setup_id.to_string();
+    fixture
+        .vault
+        .install_calendar_expert_with_connection(request, connection_id, cancellation)
+        .await
+}
+
+async fn configure_calendar(
+    fixture: &Fixture,
+    configuration: CalendarAccessConfiguration,
+    cancellation: Cancellation,
+) -> Result<CalendarExpertOverview, AgentFailure> {
+    let connection_id = configuration.setup_id.to_string();
+    fixture
+        .vault
+        .configure_calendar_access_with_connection(configuration, connection_id, cancellation)
+        .await
+}
+
 #[tokio::test]
 async fn aggregate_calendar_access_changes_persist_as_one_revision() {
     let fixture = Fixture::new().await;
-    let installed = fixture
-        .vault
-        .install_calendar_expert(setup_request(&fixture, 0), Cancellation::default())
-        .await
-        .unwrap();
+    let installed = install_calendar(
+        &fixture,
+        setup_request(&fixture, 0),
+        Cancellation::default(),
+    )
+    .await
+    .unwrap();
     let configuration = |revision, setup_id, change| CalendarAccessConfiguration {
         instance_id: fixture.vault.registry_instance_id(),
         expected_revision: revision,
         setup_id,
         change,
     };
-    let active = fixture
-        .vault
-        .configure_calendar_access(
-            configuration(
-                1,
-                installed.setup.setup_id,
-                CalendarAccessChange::SetEnabled { enabled: true },
-            ),
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
+    let active = configure_calendar(
+        &fixture,
+        configuration(
+            1,
+            installed.setup.setup_id,
+            CalendarAccessChange::SetEnabled { enabled: true },
+        ),
+        Cancellation::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(active.registry.revision, 2);
     assert!(active.views[0].enabled);
     assert!(
@@ -57,35 +82,33 @@ async fn aggregate_calendar_access_changes_persist_as_one_revision() {
             .all(|entry| entry.enabled)
     );
 
-    let changed = fixture
-        .vault
-        .configure_calendar_access(
-            configuration(
-                2,
-                installed.setup.setup_id,
-                CalendarAccessChange::SetScope {
-                    provider: floe_domain::CalendarProvider::EventKit,
-                    device_id: "test-device".into(),
-                    calendar_ids: vec!["work".into(), "home".into()],
-                    connection_scope: floe_domain::CalendarScope::All,
-                    connection_revision: 2,
-                    source_authority: Some(floe_domain::SourceAuthority::new()),
-                },
-            ),
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
+    let changed = configure_calendar(
+        &fixture,
+        configuration(
+            2,
+            installed.setup.setup_id,
+            CalendarAccessChange::SetScope {
+                provider: floe_domain::CalendarProvider::EventKit,
+                device_id: "test-device".into(),
+                calendar_ids: vec!["work".into(), "home".into()],
+                connection_scope: floe_domain::CalendarScope::All,
+                connection_revision: 2,
+                source_authority: Some(floe_domain::SourceAuthority::new()),
+            },
+        ),
+        Cancellation::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(changed.views[0].calendar_ids, ["home", "work"]);
 
-    let removed = fixture
-        .vault
-        .configure_calendar_access(
-            configuration(3, installed.setup.setup_id, CalendarAccessChange::Remove {}),
-            Cancellation::default(),
-        )
-        .await
-        .unwrap();
+    let removed = configure_calendar(
+        &fixture,
+        configuration(3, installed.setup.setup_id, CalendarAccessChange::Remove {}),
+        Cancellation::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(removed.registry.revision, 4);
     assert!(removed.views.is_empty());
     assert!(removed.setups.is_empty());
@@ -109,9 +132,7 @@ async fn management_overview_is_read_only_and_view_configuration_is_scoped_revis
     assert!(empty.views.is_empty() && empty.setups.is_empty());
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
     let request = setup_request(&fixture, 0);
-    let installed = fixture
-        .vault
-        .install_calendar_expert(request, Cancellation::default())
+    let installed = install_calendar(&fixture, request, Cancellation::default())
         .await
         .unwrap();
     let before = fixture.vault.calendar_expert_overview().await.unwrap();
@@ -159,9 +180,7 @@ async fn management_overview_is_read_only_and_view_configuration_is_scoped_revis
 async fn setup_bootstraps_without_a_sample_and_replays_after_reopen_without_resurrection() {
     let mut fixture = Fixture::new().await;
     let request = setup_request(&fixture, 0);
-    let installed = fixture
-        .vault
-        .install_calendar_expert(request.clone(), Cancellation::default())
+    let installed = install_calendar(&fixture, request.clone(), Cancellation::default())
         .await
         .unwrap();
     assert_eq!(installed.registry.revision, 1);
@@ -227,9 +246,7 @@ async fn setup_bootstraps_without_a_sample_and_replays_after_reopen_without_resu
         EncryptedAgentVault::open(fixture.root.path(), fixture.person, fixture.keys.clone())
             .await
             .unwrap();
-    let replay = fixture
-        .vault
-        .install_calendar_expert(request, Cancellation::default())
+    let replay = install_calendar(&fixture, request, Cancellation::default())
         .await
         .unwrap();
     assert_eq!(replay.setup, installed.setup);
@@ -264,9 +281,7 @@ async fn setup_and_sample_coexist_in_both_orders_without_regranting_disabled_sam
             .unwrap()
             .map_or(0, |overview| overview.revision);
         let request = setup_request(&fixture, revision);
-        let installed = fixture
-            .vault
-            .install_calendar_expert(request.clone(), Cancellation::default())
+        let installed = install_calendar(&fixture, request.clone(), Cancellation::default())
             .await
             .unwrap();
         let result = expert(&fixture.sample().await);
@@ -293,9 +308,7 @@ async fn setup_and_sample_coexist_in_both_orders_without_regranting_disabled_sam
             .await
             .unwrap();
         let disabled = registry.snapshot();
-        let replay = fixture
-            .vault
-            .install_calendar_expert(request, Cancellation::default())
+        let replay = install_calendar(&fixture, request, Cancellation::default())
             .await
             .unwrap();
         assert_eq!(replay.setup, installed.setup);
@@ -335,16 +348,11 @@ async fn setup_rejects_changed_retry_stale_new_request_wrong_instance_and_cancel
     let cancellation = Cancellation::default();
     cancellation.cancel();
     assert_eq!(
-        fixture
-            .vault
-            .install_calendar_expert(request.clone(), cancellation)
-            .await,
+        install_calendar(&fixture, request.clone(), cancellation).await,
         Err(AgentFailure::Cancelled)
     );
     assert_eq!(fixture.vault.expert_registry().await.unwrap(), None);
-    fixture
-        .vault
-        .install_calendar_expert(request.clone(), Cancellation::default())
+    install_calendar(&fixture, request.clone(), Cancellation::default())
         .await
         .unwrap();
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();
@@ -358,9 +366,7 @@ async fn setup_rejects_changed_retry_stale_new_request_wrong_instance_and_cancel
             _ => changed.instance_id = Uuid::new_v4(),
         }
         assert!(
-            fixture
-                .vault
-                .install_calendar_expert(changed, Cancellation::default())
+            install_calendar(&fixture, changed, Cancellation::default())
                 .await
                 .is_err()
         );
@@ -384,10 +390,7 @@ async fn setup_key_loss_before_commit_rolls_back_both_initialization_and_existin
         let request = setup_request(&fixture, revision);
         fixture.keys.0.fail_on_read.store(3, Ordering::Release);
         assert_eq!(
-            fixture
-                .vault
-                .install_calendar_expert(request.clone(), Cancellation::default())
-                .await,
+            install_calendar(&fixture, request.clone(), Cancellation::default()).await,
             Err(AgentFailure::VaultUnavailable)
         );
         assert_eq!(
@@ -401,9 +404,7 @@ async fn setup_key_loss_before_commit_rolls_back_both_initialization_and_existin
                 .await
                 .unwrap();
         assert_eq!(fixture.vault.expert_registry().await.unwrap(), before);
-        let result = fixture
-            .vault
-            .install_calendar_expert(request, Cancellation::default())
+        let result = install_calendar(&fixture, request, Cancellation::default())
             .await
             .unwrap();
         assert_eq!(result.registry.revision, revision + 1);
@@ -432,10 +433,7 @@ async fn setup_post_commit_key_failure_reconciles_the_durable_receipt_after_reop
             .fail_on_read
             .store(fail_on_read, Ordering::Release);
         assert_eq!(
-            fixture
-                .vault
-                .install_calendar_expert(request.clone(), Cancellation::default())
-                .await,
+            install_calendar(&fixture, request.clone(), Cancellation::default()).await,
             Err(AgentFailure::VaultUnavailable)
         );
         drop(fixture.vault);
@@ -446,9 +444,7 @@ async fn setup_post_commit_key_failure_reconciles_the_durable_receipt_after_reop
                 .unwrap();
         let committed = fixture.vault.expert_registry().await.unwrap().unwrap();
         assert_eq!(committed.revision, 1);
-        let replay = fixture
-            .vault
-            .install_calendar_expert(request, Cancellation::default())
+        let replay = install_calendar(&fixture, request, Cancellation::default())
             .await
             .unwrap();
         assert_eq!(replay.setup, committed.calendar_setups[0]);
@@ -500,11 +496,13 @@ async fn staged_setup_cancellation_rolls_back_initial_tables_and_existing_regist
         assert_eq!(result, Err(AgentFailure::Cancelled));
         assert_eq!(checks.load(Ordering::Acquire), 2);
         assert_eq!(fixture.vault.expert_registry().await.unwrap(), before);
-        fixture
-            .vault
-            .install_calendar_expert(setup_request(&fixture, revision), Cancellation::default())
-            .await
-            .unwrap();
+        install_calendar(
+            &fixture,
+            setup_request(&fixture, revision),
+            Cancellation::default(),
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -512,9 +510,7 @@ async fn staged_setup_cancellation_rolls_back_initial_tables_and_existing_regist
 async fn registry_cas_rejects_setup_receipt_removal_replacement_appropriation_and_preenablement() {
     let fixture = Fixture::new().await;
     let request = setup_request(&fixture, 0);
-    fixture
-        .vault
-        .install_calendar_expert(request.clone(), Cancellation::default())
+    install_calendar(&fixture, request.clone(), Cancellation::default())
         .await
         .unwrap();
     let before = fixture.vault.expert_registry().await.unwrap().unwrap();

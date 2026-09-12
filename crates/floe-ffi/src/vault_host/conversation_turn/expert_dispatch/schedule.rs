@@ -7,7 +7,10 @@ use floe_core::{
     CalendarReadAccessStamp, CalendarTimelineGrant, ProjectedCalendarItem,
     ProjectedCalendarObservation, VaultKeyProvider,
 };
-use floe_domain::{CalendarConnection, CalendarProvider, PersonId};
+use floe_domain::{
+    CalendarConnection, CalendarProvider, GrantAuthority, GrantConsumer, GrantPurpose, PersonId,
+    ProcessingRestriction,
+};
 use floe_protocol::PROTOCOL_VERSION;
 use uuid::Uuid;
 
@@ -108,6 +111,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
             vault,
             &BoundAccess {
                 core,
+                vault,
                 setup,
                 binding,
                 request_device_id: &request.device_id,
@@ -124,6 +128,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     core,
                     binding.source_authority,
                 ),
+                grant_pin: std::sync::Mutex::new(None),
             },
             &model,
             CalendarAgentTurnRequest {
@@ -172,17 +177,19 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     Ok(Some(result.session))
 }
 
-struct BoundAccess<'host> {
+struct BoundAccess<'host, Keys: VaultKeyProvider> {
     core: &'host floe_core::FloeCore,
+    vault: &'host floe_core::EncryptedAgentVault<Keys>,
     setup: &'host floe_agent::CalendarExpertSetupReceipt,
     binding: &'host floe_agent::CalendarViewBinding,
     request_device_id: &'host str,
     remote_route: Option<&'host floe_protocol::AgentRemoteRouteDto>,
     ambiguous: bool,
     access: Access<'host>,
+    grant_pin: std::sync::Mutex<Option<GrantAuthority>>,
 }
 
-impl BoundAccess<'_> {
+impl<Keys: VaultKeyProvider> BoundAccess<'_, Keys> {
     async fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
         if person_id != self.setup.person_id || person_id != self.binding.person_id {
             return Err(AgentFailure::CapabilityDenied);
@@ -202,11 +209,53 @@ impl BoundAccess<'_> {
             &connection,
             self.request_device_id,
             self.remote_route,
-        )
+        )?;
+        if matches!(
+            self.binding.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            if self.remote_route.is_some() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let authority = self
+                .binding
+                .source_authority
+                .ok_or(AgentFailure::AccessReviewRequired)?;
+            let consumer = GrantConsumer::builtin("calendar.expert")
+                .map_err(|_| AgentFailure::CapabilityDenied)?;
+            let admission = self
+                .vault
+                .authorize_calendar_grant(
+                    self.setup.setup_id,
+                    self.binding.handle,
+                    &connection.connection_id,
+                    self.binding.provider,
+                    self.request_device_id,
+                    &self.binding.calendar_ids,
+                    authority,
+                    floe_domain::GrantOperation::Read,
+                    GrantPurpose::Assistant,
+                    consumer,
+                    ProcessingRestriction::LocalOnly,
+                )
+                .await?;
+            let mut grant_pin = self
+                .grant_pin
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            if let Some(previous) = *grant_pin {
+                if previous != admission.authority {
+                    return Err(AgentFailure::StaleContext);
+                }
+            } else {
+                *grant_pin = Some(admission.authority);
+            }
+        }
+        Ok(())
     }
 }
 
-impl CalendarReadAccess for BoundAccess<'_> {
+impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
     async fn check(
         &self,
         request: CalendarReadAccessRequest,
@@ -239,8 +288,6 @@ fn validate_active_connection(
     request_device_id: &str,
     remote_route: Option<&floe_protocol::AgentRemoteRouteDto>,
 ) -> Result<(), AgentFailure> {
-    let connection_id =
-        Uuid::parse_str(&connection.connection_id).map_err(|_| AgentFailure::StaleContext)?;
     let calendar_ids: Vec<_> = connection
         .calendars
         .iter()
@@ -262,7 +309,6 @@ fn validate_active_connection(
     }
     if connection.disconnected
         || connection.revision == 0
-        || setup.setup_id != connection_id
         || setup.view_handle != binding.handle
         || setup.connection_scope != connection.scope
         || connection.device_id != binding.device_id
@@ -273,6 +319,11 @@ fn validate_active_connection(
             .iter()
             .all(|identifier| calendar_ids.contains(identifier))
         || binding.connection_scope != connection.scope
+    {
+        return Err(AgentFailure::StaleContext);
+    }
+    if let Ok(connection_id) = Uuid::parse_str(&connection.connection_id)
+        && setup.setup_id != connection_id
     {
         return Err(AgentFailure::StaleContext);
     }

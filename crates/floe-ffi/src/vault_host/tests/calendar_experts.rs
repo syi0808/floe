@@ -7,9 +7,7 @@ use super::*;
 #[test]
 fn native_grants_capture_authority_only_on_explicit_review() {
     use floe_agent::{CalendarAccessChange, CalendarAccessConfiguration};
-    use floe_domain::{
-        CalendarFailure, CalendarProvider, CalendarScope, CalendarSelection, SourceAuthority,
-    };
+    use floe_domain::{CalendarFailure, CalendarProvider, CalendarScope, CalendarSelection};
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -66,7 +64,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         calendar_ids: vec!["home".into()],
         connection_scope: CalendarScope::Selected,
         connection_revision: 1,
-        source_authority: Some(SourceAuthority::new()),
+        source_authority: Some(authority),
     };
     let mut invalid = request.clone();
     invalid.calendar_ids = vec!["ungranted".into()];
@@ -89,10 +87,27 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .unwrap();
     assert_eq!(installed.views[0].source_authority, Some(authority));
     assert_eq!(installed.setups[0].source_authority, Some(authority));
+    let initial_connection = runtime
+        .block_on(core.calendar_connection(person))
+        .unwrap()
+        .unwrap();
+    runtime
+        .block_on(core.set_calendar_scope(
+            person,
+            initial_connection.connection_id.clone(),
+            initial_connection.revision + 100,
+            initial_connection.device_id.clone(),
+            initial_connection.provider,
+            initial_connection.calendars.clone(),
+            initial_connection.scope,
+        ))
+        .unwrap();
+    let drift_retry = perform(&worker, person, action.clone());
+    assert_eq!(drift_retry.failure, None);
     runtime
         .block_on(core.record_calendar_failure(
             person,
-            1,
+            initial_connection.revision + 100,
             CalendarFailure::PermissionDenied,
             chrono::Utc::now(),
         ))
@@ -102,8 +117,8 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         .unwrap()
         .unwrap();
     assert_ne!(connection.source_authority, authority);
-    let retry = perform(&worker, person, action).calendar_experts.unwrap();
-    assert_eq!(retry, installed);
+    let retry = perform(&worker, person, action);
+    assert_eq!(retry.failure, Some(AgentFailure::AccessReviewRequired));
     let changed = perform(
         &worker,
         person,
@@ -119,6 +134,27 @@ fn native_grants_capture_authority_only_on_explicit_review() {
                     connection_scope: CalendarScope::Selected,
                     connection_revision: connection.revision,
                     source_authority: Some(authority),
+                },
+            })
+            .unwrap(),
+        },
+    );
+    assert_eq!(changed.failure, Some(AgentFailure::AccessReviewRequired));
+    let changed = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarAccess {
+            change: encode_contract(&CalendarAccessConfiguration {
+                instance_id: installed.registry.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetScope {
+                    provider: CalendarProvider::EventKit,
+                    device_id: "iphone".into(),
+                    calendar_ids: vec!["home".into()],
+                    connection_scope: CalendarScope::Selected,
+                    connection_revision: connection.revision,
+                    source_authority: Some(connection.source_authority),
                 },
             })
             .unwrap(),

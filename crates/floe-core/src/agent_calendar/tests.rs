@@ -307,6 +307,7 @@ struct Fixture {
     session: AgentSession,
     grant: CalendarTimelineGrant,
     assignment: Uuid,
+    expert_id: String,
     revision: u64,
     root: tempfile::TempDir,
 }
@@ -465,6 +466,59 @@ impl Fixture {
             .initialize_expert_registry(&registry.snapshot())
             .await
             .unwrap();
+        let mut fixture_handle = handle;
+        let mut fixture_assignment = assignment_id;
+        let mut fixture_revision = revision;
+        let mut fixture_device_id = "test-device".to_owned();
+        let mut fixture_connection_revision = 2;
+        let mut fixture_calendar_ids = vec!["private-calendar-id".to_owned()];
+        let mut fixture_expert_id = "schedule".to_owned();
+        if provider == CalendarProvider::EventKit {
+            let connection = core.calendar_connection(person).await.unwrap().unwrap();
+            let request = CalendarExpertSetup {
+                instance_id: vault.registry_instance_id(),
+                expected_revision: fixture_revision,
+                setup_id: Uuid::new_v4(),
+                provider,
+                device_id: connection.device_id.clone(),
+                calendar_ids: connection
+                    .calendars
+                    .iter()
+                    .map(|calendar| calendar.calendar_id.clone())
+                    .collect(),
+                connection_scope: connection.scope,
+                connection_revision: connection.revision,
+                source_authority: Some(connection.source_authority),
+            };
+            let installed = vault
+                .install_calendar_expert_with_connection(
+                    request.clone(),
+                    connection.connection_id.clone(),
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap();
+            let enabled = vault
+                .configure_calendar_access_with_connection(
+                    CalendarAccessConfiguration {
+                        instance_id: request.instance_id,
+                        expected_revision: installed.registry.revision,
+                        setup_id: installed.setup.setup_id,
+                        change: CalendarAccessChange::SetEnabled { enabled: true },
+                    },
+                    connection.connection_id,
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap();
+            fixture_handle = installed.setup.view_handle;
+            fixture_assignment = installed.setup.expert_assignment_id;
+            fixture_revision = enabled.registry.revision;
+            fixture_device_id = request.device_id;
+            fixture_connection_revision = request.connection_revision;
+            fixture_calendar_ids = request.calendar_ids;
+            fixture_expert_id = "floe.builtin.schedule".to_owned();
+        }
         let session = if class == DataClass::Personal {
             vault.create_session().await.unwrap()
         } else {
@@ -475,16 +529,17 @@ impl Fixture {
             core,
             keys,
             session,
-            assignment: assignment_id,
-            revision,
+            assignment: fixture_assignment,
+            expert_id: fixture_expert_id,
+            revision: fixture_revision,
             root,
             grant: CalendarTimelineGrant {
                 person_id: person,
-                handle,
+                handle: fixture_handle,
                 provider,
-                device_id: "test-device".into(),
-                calendar_ids: vec!["private-calendar-id".into()],
-                connection_revision: 2,
+                device_id: fixture_device_id,
+                calendar_ids: fixture_calendar_ids,
+                connection_revision: fixture_connection_revision,
                 day,
                 starts_at: now() + TimeDelta::hours(1),
                 ends_at: now() + TimeDelta::hours(3),
@@ -537,6 +592,16 @@ impl Fixture {
     async fn state(&self) -> RegistrySnapshot {
         self.vault.expert_registry().await.unwrap().unwrap()
     }
+
+    fn configure_model(&self, model: &Model<'_>) {
+        if self.expert_id == "schedule" {
+            return;
+        }
+        let mut steps = model.steps.lock().unwrap();
+        if let Some(ModelStep::Delegate { agent_id, .. }) = steps.front_mut() {
+            *agent_id = self.expert_id.clone();
+        }
+    }
 }
 
 #[tokio::test]
@@ -544,12 +609,14 @@ async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_wit
 {
     for class in [DataClass::Synthetic, DataClass::Personal] {
         let fixture = Fixture::with_class(class).await;
+        let model = Model::default();
+        fixture.configure_model(&model);
         let result = fixture
             .core
             .run_calendar_agent_turn(
                 &fixture.vault,
                 &Access::default(),
-                &Model::default(),
+                &model,
                 fixture.request(),
                 now,
                 |_| {},
@@ -622,25 +689,68 @@ async fn recorded_calendar_action_remains_inspectable_after_scope_revocation_wit
 async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_governed_turn_path() {
     for class in [DataClass::Synthetic, DataClass::Personal] {
         let mut fixture = Fixture::with_class(class).await;
-        let request = CalendarExpertSetup {
-            instance_id: fixture.vault.registry_instance_id(),
-            expected_revision: fixture.revision,
-            setup_id: Uuid::new_v4(),
-            provider: fixture.grant.provider,
-            device_id: "test-device".into(),
-            calendar_ids: fixture.grant.calendar_ids.clone(),
-            connection_scope: floe_domain::CalendarScope::Selected,
-            connection_revision: fixture.grant.connection_revision,
-            source_authority: Some(floe_domain::SourceAuthority::new()),
+        let (request, connection_id) = if fixture.grant.provider == CalendarProvider::EventKit {
+            let connection = fixture
+                .core
+                .calendar_connection(fixture.session.person_id)
+                .await
+                .unwrap()
+                .unwrap();
+            (
+                CalendarExpertSetup {
+                    instance_id: fixture.vault.registry_instance_id(),
+                    expected_revision: fixture.revision,
+                    setup_id: Uuid::new_v4(),
+                    provider: connection.provider,
+                    device_id: connection.device_id,
+                    calendar_ids: connection
+                        .calendars
+                        .into_iter()
+                        .map(|calendar| calendar.calendar_id)
+                        .collect(),
+                    connection_scope: connection.scope,
+                    connection_revision: connection.revision,
+                    source_authority: Some(connection.source_authority),
+                },
+                connection.connection_id,
+            )
+        } else {
+            (
+                CalendarExpertSetup {
+                    instance_id: fixture.vault.registry_instance_id(),
+                    expected_revision: fixture.revision,
+                    setup_id: Uuid::new_v4(),
+                    provider: fixture.grant.provider,
+                    device_id: "test-device".into(),
+                    calendar_ids: fixture.grant.calendar_ids.clone(),
+                    connection_scope: floe_domain::CalendarScope::Selected,
+                    connection_revision: fixture.grant.connection_revision,
+                    source_authority: None,
+                },
+                String::new(),
+            )
         };
-        let installed = fixture
-            .vault
-            .install_calendar_expert(request.clone(), Cancellation::default())
-            .await
-            .unwrap();
+        let installed = if request.provider == CalendarProvider::EventKit {
+            fixture
+                .vault
+                .install_calendar_expert_with_connection(
+                    request.clone(),
+                    connection_id.clone(),
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap()
+        } else {
+            fixture
+                .vault
+                .install_calendar_expert(request.clone(), Cancellation::default())
+                .await
+                .unwrap()
+        };
         fixture.assignment = installed.setup.expert_assignment_id;
         fixture.grant.handle = installed.setup.view_handle;
         let model = Model::default();
+        fixture.configure_model(&model);
         let access = Access::default();
         assert!(matches!(
             fixture
@@ -659,49 +769,73 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
         assert_eq!(access.calls.load(Ordering::Acquire), 0);
         assert!(model.requests.lock().unwrap().is_empty());
         let setup = &installed.setup;
-        let mut revision = installed.registry.revision;
-        for target in [
-            RegistryConfigurationTarget::Installation {
-                id: setup.tool_installation_id,
-                enabled: true,
-            },
-            RegistryConfigurationTarget::Installation {
-                id: setup.expert_installation_id,
-                enabled: true,
-            },
-            RegistryConfigurationTarget::Assignment {
-                id: setup.tool_assignment_id,
-                enabled: true,
-            },
-            RegistryConfigurationTarget::Assignment {
-                id: setup.expert_assignment_id,
-                enabled: true,
-            },
-        ] {
-            revision = fixture
+        let registry = if request.provider == CalendarProvider::EventKit {
+            fixture
                 .vault
-                .configure_registry(
-                    RegistryConfiguration {
+                .configure_calendar_access_with_connection(
+                    CalendarAccessConfiguration {
                         instance_id: request.instance_id,
-                        expected_revision: revision,
-                        target,
+                        expected_revision: installed.registry.revision,
+                        setup_id: setup.setup_id,
+                        change: CalendarAccessChange::SetEnabled { enabled: true },
                     },
+                    connection_id,
                     Cancellation::default(),
                 )
                 .await
-                .unwrap()
-                .revision;
-        }
-        let mut registry =
-            AgentRegistry::restore(fixture.state().await, request.instance_id).unwrap();
-        registry
-            .set_calendar_view_enabled(revision, fixture.session.person_id, setup.view_handle, true)
-            .unwrap();
-        fixture
-            .vault
-            .save_expert_registry(revision, &registry.snapshot())
-            .await
-            .unwrap();
+                .unwrap();
+            AgentRegistry::restore(fixture.state().await, request.instance_id).unwrap()
+        } else {
+            let mut revision = installed.registry.revision;
+            for target in [
+                RegistryConfigurationTarget::Installation {
+                    id: setup.tool_installation_id,
+                    enabled: true,
+                },
+                RegistryConfigurationTarget::Installation {
+                    id: setup.expert_installation_id,
+                    enabled: true,
+                },
+                RegistryConfigurationTarget::Assignment {
+                    id: setup.tool_assignment_id,
+                    enabled: true,
+                },
+                RegistryConfigurationTarget::Assignment {
+                    id: setup.expert_assignment_id,
+                    enabled: true,
+                },
+            ] {
+                revision = fixture
+                    .vault
+                    .configure_registry(
+                        RegistryConfiguration {
+                            instance_id: request.instance_id,
+                            expected_revision: revision,
+                            target,
+                        },
+                        Cancellation::default(),
+                    )
+                    .await
+                    .unwrap()
+                    .revision;
+            }
+            let mut registry =
+                AgentRegistry::restore(fixture.state().await, request.instance_id).unwrap();
+            registry
+                .set_calendar_view_enabled(
+                    revision,
+                    fixture.session.person_id,
+                    setup.view_handle,
+                    true,
+                )
+                .unwrap();
+            fixture
+                .vault
+                .save_expert_registry(revision, &registry.snapshot())
+                .await
+                .unwrap();
+            registry
+        };
         let card = registry
             .expert_card(
                 fixture.session.person_id,
@@ -739,11 +873,29 @@ async fn installed_calendar_setup_requires_explicit_enablement_then_uses_the_gov
             .find(|entry| entry.id == fixture.assignment)
             .unwrap();
         assert_eq!(assignment.private_state.completed_invocations, 1);
-        let replay = fixture
-            .vault
-            .install_calendar_expert(request, Cancellation::default())
-            .await
-            .unwrap();
+        let replay = if request.provider == CalendarProvider::EventKit {
+            fixture
+                .vault
+                .install_calendar_expert_with_connection(
+                    request,
+                    fixture
+                        .core
+                        .calendar_connection(fixture.session.person_id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .connection_id,
+                    Cancellation::default(),
+                )
+                .await
+                .unwrap()
+        } else {
+            fixture
+                .vault
+                .install_calendar_expert(request, Cancellation::default())
+                .await
+                .unwrap()
+        };
         assert_eq!(replay.setup, installed.setup);
         assert_eq!(fixture.state().await, committed);
     }
@@ -903,6 +1055,7 @@ async fn schedule_expert_consumes_bounded_floe_native_tasks_and_notes() {
         .await
         .unwrap();
     let model = Model::default();
+    fixture.configure_model(&model);
 
     fixture
         .core
@@ -1519,6 +1672,7 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
 {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let model = Model::default();
+    fixture.configure_model(&model);
     let mut request = fixture.request();
     request.destination = None;
     let result = fixture
@@ -1538,7 +1692,7 @@ async fn personal_class_uses_encrypted_session_and_eventkit_shaped_fixture_not_s
     assert!(result.proposals.is_empty());
     let requests = model.requests.lock().unwrap();
     assert!(requests[0].capabilities.is_empty());
-    assert_eq!(requests[0].active_agents[0].id, "schedule");
+    assert_eq!(requests[0].active_agents[0].id, fixture.expert_id);
     let AgentMessage::Delegation { task, .. } = &requests[1].messages[1] else {
         panic!("missing projection")
     };

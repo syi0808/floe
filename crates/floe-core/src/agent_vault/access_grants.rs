@@ -23,6 +23,10 @@ pub struct AccessGrantCleanup {
 
 #[derive(Clone)]
 pub(super) enum AccessGrantMutation {
+    Review {
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    },
     Activate {
         source: GrantSourceBinding,
         scope: GrantScope,
@@ -163,6 +167,64 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }.await;
         self.finish_access_grant_transaction(transaction, result)
             .await
+    }
+
+    pub(super) async fn create_data_access_grant_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        id: GrantId,
+        source: GrantSourceBinding,
+        scope: GrantScope,
+    ) -> Result<DataAccessGrant, AgentFailure> {
+        if source.person_id() != self.person_id {
+            return Err(AgentFailure::NotFound);
+        }
+        source.validate().map_err(grant_input)?;
+        scope.validate().map_err(grant_input)?;
+        let grant = DataAccessGrant::new(id, self.vault_id, source, scope).map_err(grant_input)?;
+        let payload = grant_payload(&grant)?;
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
+        let mut existing = transaction
+            .query(
+                "SELECT 1 FROM data_access_grants WHERE grant_id = ?",
+                [id.as_uuid().to_string()],
+            )
+            .await
+            .map_err(storage)?;
+        if existing.next().await.map_err(storage)?.is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut count_rows = transaction
+            .query("SELECT COUNT(*) FROM data_access_grants", ())
+            .await
+            .map_err(storage)?;
+        let count = count_rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::VaultUnavailable)?
+            .get::<i64>(0)
+            .map_err(storage)?;
+        if count < 0
+            || usize::try_from(count).map_err(|_| AgentFailure::VaultUnavailable)?
+                >= MAX_ACCESS_GRANTS
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let inserted = transaction
+            .execute(
+                "INSERT INTO data_access_grants (grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                grant_values(&grant, payload)?,
+            )
+            .await;
+        if let Err(error) = inserted {
+            return Err(match error {
+                turso::Error::Constraint(_) => AgentFailure::Conflict,
+                other => storage(other),
+            });
+        }
+        Ok(grant)
     }
 
     pub async fn get_data_access_grant(
@@ -322,9 +384,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(failure);
             }
         };
-        let result = self
-            .mutate_data_access_grant_in_transaction(&transaction, id, expected, mutation)
-            .await;
+        let result = async {
+            let result = self
+                .mutate_data_access_grant_in_transaction(&transaction, id, expected, mutation)
+                .await?;
+            self.check_access()?;
+            Ok(result)
+        }
+        .await;
         self.finish_access_grant_transaction(transaction, result)
             .await
     }
@@ -347,6 +414,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut grant = decode_grant(&row)?;
         let previous = grant.clone();
         let changed = match mutation {
+            AccessGrantMutation::Review { source, scope } => grant
+                .review(expected, source, scope)
+                .map_err(grant_transition)?,
             AccessGrantMutation::Activate { source, scope } => grant
                 .activate_review(expected, source, scope)
                 .map_err(grant_transition)?,
@@ -384,8 +454,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::Conflict);
             }
         }
-        self.check_access()?;
         Ok(grant)
+    }
+
+    pub(super) async fn read_data_access_grant_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        id: GrantId,
+    ) -> Result<DataAccessGrant, AgentFailure> {
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
+        let mut rows = transaction
+            .query("SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ? AND authority_owner = ?", (id.as_uuid().to_string(), self.person_id.to_string(), self.vault_id.to_string()))
+            .await
+            .map_err(storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::NotFound)?;
+        decode_grant(&row)
     }
 
     async fn ensure_access_grant_schema(
@@ -550,7 +638,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         failure
     }
 
-    async fn finish_access_grant_transaction<T>(
+    pub(super) async fn finish_access_grant_transaction<T>(
         &self,
         transaction: turso::transaction::Transaction<'_>,
         result: Result<T, AgentFailure>,
@@ -664,7 +752,7 @@ fn grant_values(
         grant.id().as_uuid().to_string(),
         grant.source().person_id().to_string(),
         grant.authority_owner().to_string(),
-        grant.source().connection_id().as_uuid().to_string(),
+        grant.source().connection_id().as_str().to_owned(),
         grant.source().connector().as_str().to_string(),
         grant.source().execution_owner().as_str().to_string(),
         grant.source().source_authority().incarnation().to_string(),
@@ -688,10 +776,8 @@ fn decode_grant(row: &Row) -> Result<DataAccessGrant, AgentFailure> {
         Uuid::parse_str(&row.get::<String>(1).map_err(storage)?).map_err(storage)?,
     );
     let owner = Uuid::parse_str(&row.get::<String>(2).map_err(storage)?).map_err(storage)?;
-    let connection = ConnectionId::from_uuid(
-        Uuid::parse_str(&row.get::<String>(3).map_err(storage)?).map_err(storage)?,
-    )
-    .ok_or(AgentFailure::VaultUnavailable)?;
+    let connection = ConnectionId::try_new(row.get::<String>(3).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
     let connector = ConnectorId::try_new(row.get::<String>(4).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     let execution_owner = ExecutionOwnerId::try_new(row.get::<String>(5).map_err(storage)?)

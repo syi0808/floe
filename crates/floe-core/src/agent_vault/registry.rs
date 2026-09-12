@@ -185,6 +185,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         request: floe_agent::CalendarExpertSetup,
         cancellation: floe_agent::Cancellation,
     ) -> Result<floe_agent::CalendarExpertSetupResult, AgentFailure> {
+        if matches!(
+            request.provider,
+            floe_domain::CalendarProvider::EventKit | floe_domain::CalendarProvider::Android
+        ) {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        let connection_id = request.setup_id.to_string();
+        self.install_calendar_expert_with_connection(request, connection_id, cancellation)
+            .await
+    }
+
+    pub async fn install_calendar_expert_with_connection(
+        &self,
+        request: floe_agent::CalendarExpertSetup,
+        connection_id: String,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::CalendarExpertSetupResult, AgentFailure> {
         let check = || {
             if cancellation.is_cancelled() {
                 Err(AgentFailure::Cancelled)
@@ -204,16 +221,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let revision = registry.revision();
         let setup = registry.install_calendar_expert(self.person_id, &request)?;
         if registry.revision() != revision {
-            match previous {
-                Some(_) => {
-                    self.save_expert_registry_checked(revision, &registry.snapshot(), &check)
-                        .await?
-                }
-                None => {
-                    self.initialize_expert_registry_checked(&registry.snapshot(), &check)
-                        .await?
-                }
-            }
+            self.persist_calendar_install(
+                previous.as_ref(),
+                &registry.snapshot(),
+                &request,
+                &setup,
+                &connection_id,
+                &check,
+            )
+            .await?;
         }
         self.check_access()?;
         check()?;
@@ -228,6 +244,44 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         configuration: floe_agent::CalendarAccessConfiguration,
         cancellation: floe_agent::Cancellation,
     ) -> Result<floe_agent::CalendarExpertOverview, AgentFailure> {
+        let native = self
+            .expert_registry()
+            .await?
+            .map(|snapshot| {
+                snapshot
+                    .calendar_setups
+                    .iter()
+                    .find(|setup| setup.setup_id == configuration.setup_id)
+                    .and_then(|setup| {
+                        snapshot
+                            .calendar_views
+                            .iter()
+                            .find(|view| view.handle == setup.view_handle)
+                    })
+                    .map(|view| {
+                        matches!(
+                            view.provider,
+                            floe_domain::CalendarProvider::EventKit
+                                | floe_domain::CalendarProvider::Android
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if native {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
+        let connection_id = configuration.setup_id.to_string();
+        self.configure_calendar_access_with_connection(configuration, connection_id, cancellation)
+            .await
+    }
+
+    pub async fn configure_calendar_access_with_connection(
+        &self,
+        configuration: floe_agent::CalendarAccessConfiguration,
+        connection_id: String,
+        cancellation: floe_agent::Cancellation,
+    ) -> Result<floe_agent::CalendarExpertOverview, AgentFailure> {
         if cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
         }
@@ -239,21 +293,52 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?
             .ok_or(AgentFailure::NotFound)?;
         let mut registry = AgentRegistry::restore(snapshot, self.vault_id)?;
+        let previous = registry.snapshot();
+        let native = previous
+            .calendar_setups
+            .iter()
+            .find(|setup| setup.setup_id == configuration.setup_id)
+            .and_then(|setup| {
+                previous
+                    .calendar_views
+                    .iter()
+                    .find(|view| view.handle == setup.view_handle)
+                    .map(|view| {
+                        matches!(
+                            view.provider,
+                            floe_domain::CalendarProvider::EventKit
+                                | floe_domain::CalendarProvider::Android
+                        )
+                    })
+            })
+            .unwrap_or(false);
         registry.configure_calendar_access(self.person_id, &configuration)?;
-        self.save_expert_registry_change_checked(
-            configuration.expected_revision,
-            &registry.snapshot(),
-            Some(configuration.setup_id),
-            None,
-            || {
-                if cancellation.is_cancelled() {
-                    Err(AgentFailure::Cancelled)
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .await?;
+        let check = || {
+            if cancellation.is_cancelled() {
+                Err(AgentFailure::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        if native {
+            self.persist_calendar_change(
+                &configuration,
+                &previous,
+                &registry.snapshot(),
+                &connection_id,
+                &check,
+            )
+            .await?;
+        } else {
+            self.save_expert_registry_change_checked(
+                configuration.expected_revision,
+                &registry.snapshot(),
+                Some(configuration.setup_id),
+                None,
+                &check,
+            )
+            .await?;
+        }
         self.check_access()?;
         if cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
@@ -401,7 +486,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    async fn save_expert_registry_change_checked(
+    pub(super) async fn save_expert_registry_change_checked(
         &self,
         expected_revision: u64,
         snapshot: &RegistrySnapshot,
@@ -826,6 +911,65 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         connection.query("SELECT invocation_id, session_id, assignment_id, registry_revision FROM agent_expert_receipts LIMIT 0", ()).await.map_err(unavailable)?;
         Ok(Some(snapshot))
+    }
+
+    pub(super) async fn write_registry_snapshot_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        expected_revision: Option<u64>,
+        snapshot: &RegistrySnapshot,
+    ) -> Result<(), AgentFailure> {
+        let payload = self.registry_payload(snapshot)?;
+        match expected_revision {
+            Some(expected_revision) => {
+                let previous = self
+                    .registry_on(transaction)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                if previous.revision != expected_revision {
+                    return Err(AgentFailure::Conflict);
+                }
+                self.update_registry(transaction, expected_revision, snapshot.revision, payload)
+                    .await
+            }
+            None => {
+                if self.registry_on(transaction).await?.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
+                transaction
+                    .execute(
+                        "CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)",
+                        (),
+                    )
+                    .await
+                    .map_err(storage)?;
+                transaction
+                    .execute(
+                        "CREATE TABLE agent_expert_receipts (invocation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, assignment_id TEXT NOT NULL, registry_revision INTEGER NOT NULL)",
+                        (),
+                    )
+                    .await
+                    .map_err(storage)?;
+                transaction
+                    .execute(
+                        "INSERT INTO agent_expert_registry VALUES (1, ?, ?)",
+                        (integer(snapshot.revision)?, payload),
+                    )
+                    .await
+                    .map_err(storage)?;
+                let changed = transaction
+                    .execute(
+                        "UPDATE vault_identity SET version = 2 WHERE id = 1 AND version = 1",
+                        (),
+                    )
+                    .await
+                    .map_err(storage)?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
+                Ok(())
+            }
+        }
     }
 
     pub(super) async fn session_on(

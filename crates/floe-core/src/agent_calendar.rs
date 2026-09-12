@@ -8,7 +8,9 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use floe_agent::*;
-use floe_domain::PersonId;
+use floe_domain::{
+    CalendarProvider, GrantConsumer, GrantOperation, GrantPurpose, PersonId, ProcessingRestriction,
+};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -89,7 +91,15 @@ impl FloeCore {
             if saved.scope.is_some() {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let views = CalendarTimelineViews::new(self, access, request.grant, clock)?;
+            let guarded_access = GrantBoundCalendarAccess {
+                core: self,
+                vault,
+                access,
+                grant: request.grant.clone(),
+                grant_pin: Mutex::new(None),
+                remote_processing: model.placement() == ModelPlacement::Remote,
+            };
+            let views = CalendarTimelineViews::new(self, &guarded_access, request.grant, clock)?;
             vault.check_access()?;
             let snapshot = tokio::select! {
                 biased;
@@ -358,6 +368,133 @@ struct CancelTurn(Cancellation);
 impl Drop for CancelTurn {
     fn drop(&mut self) {
         self.0.cancel();
+    }
+}
+
+struct GrantBoundCalendarAccess<'host, Keys, Access> {
+    core: &'host FloeCore,
+    vault: &'host EncryptedAgentVault<Keys>,
+    access: &'host Access,
+    grant: CalendarTimelineGrant,
+    grant_pin: Mutex<Option<floe_domain::GrantAuthority>>,
+    remote_processing: bool,
+}
+
+impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
+    GrantBoundCalendarAccess<'_, Keys, Access>
+{
+    async fn authorize_native(
+        &self,
+        request: &CalendarReadAccessRequest,
+    ) -> Result<(), AgentFailure> {
+        if !matches!(
+            self.grant.provider,
+            CalendarProvider::EventKit | CalendarProvider::Android
+        ) {
+            return Ok(());
+        }
+        if self.remote_processing {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        if request.person_id != self.grant.person_id
+            || request.provider != self.grant.provider
+            || request.device_id != self.grant.device_id
+            || request.calendar_ids != self.grant.calendar_ids
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let snapshot = self
+            .vault
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::CapabilityDenied)?;
+        let registry = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
+        let registry_snapshot = registry.snapshot();
+        let setup = registry_snapshot
+            .calendar_setups
+            .iter()
+            .find(|setup| {
+                setup.person_id == self.grant.person_id && setup.view_handle == self.grant.handle
+            })
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let binding = registry
+            .calendar_view(self.grant.person_id, self.grant.handle)
+            .map_err(|_| AgentFailure::AccessReviewRequired)?;
+        let connection = self
+            .core
+            .calendar_connection(self.grant.person_id)
+            .await
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        if connection.disconnected
+            || connection.provider != self.grant.provider
+            || connection.device_id != self.grant.device_id
+            || connection.scope != binding.connection_scope
+            || binding.source_authority != Some(connection.source_authority)
+            || !self.grant.calendar_ids.iter().all(|calendar_id| {
+                connection
+                    .calendars
+                    .iter()
+                    .any(|calendar| calendar.calendar_id == *calendar_id)
+            })
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        let source_authority = binding
+            .source_authority
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let admission = self
+            .vault
+            .authorize_calendar_grant(
+                setup.setup_id,
+                binding.handle,
+                &connection.connection_id,
+                self.grant.provider,
+                &self.grant.device_id,
+                &self.grant.calendar_ids,
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert")
+                    .map_err(|_| AgentFailure::CapabilityDenied)?,
+                ProcessingRestriction::LocalOnly,
+            )
+            .await?;
+        let mut grant_pin = self
+            .grant_pin
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if grant_pin.is_some_and(|authority| authority != admission.authority) {
+            return Err(AgentFailure::StaleContext);
+        }
+        *grant_pin = Some(admission.authority);
+        Ok(())
+    }
+}
+
+impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
+    for GrantBoundCalendarAccess<'_, Keys, Access>
+{
+    async fn check(
+        &self,
+        request: CalendarReadAccessRequest,
+    ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+        self.authorize_native(&request).await?;
+        self.access.check(request).await
+    }
+
+    async fn observe(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<CalendarObservation>, AgentFailure> {
+        self.access.observe(request).await
+    }
+
+    async fn observe_projected(
+        &self,
+        request: CalendarObserveRequest,
+    ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
+        self.access.observe_projected(request).await
     }
 }
 

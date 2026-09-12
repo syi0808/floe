@@ -609,17 +609,20 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             if let Some(request) = setup {
                 let mut request: floe_agent::CalendarExpertSetup = decode_contract(request)?;
-                let existing = vault.calendar_expert_overview().await?;
-                request.source_authority = match existing
-                    .setups
-                    .iter()
-                    .find(|setup| setup.setup_id == request.setup_id)
-                {
-                    Some(setup) => setup.source_authority,
-                    None => calendar_grant_authority(core, job.person, &request).await?,
-                };
+                let connection_id =
+                    match calendar_grant_authority(core, job.person, &request).await? {
+                        Some((connection_id, source_authority)) => {
+                            request.source_authority = Some(source_authority);
+                            connection_id
+                        }
+                        None => request.setup_id.to_string(),
+                    };
                 vault
-                    .install_calendar_expert(request, job.cancellation.clone())
+                    .install_calendar_expert_with_connection(
+                        request,
+                        connection_id,
+                        job.cancellation.clone(),
+                    )
                     .await?;
             }
             let overview = vault.calendar_expert_overview().await?;
@@ -634,6 +637,85 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
         AgentVaultActionDto::CalendarAccess { change } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
             let mut change: floe_agent::CalendarAccessConfiguration = decode_contract(change)?;
+            let overview = vault.calendar_expert_overview().await?;
+            let native_setup = overview
+                .setups
+                .iter()
+                .find(|setup| setup.setup_id == change.setup_id)
+                .and_then(|setup| {
+                    overview
+                        .views
+                        .iter()
+                        .find(|view| view.handle == setup.view_handle)
+                        .filter(|view| {
+                            matches!(
+                                view.provider,
+                                floe_domain::CalendarProvider::EventKit
+                                    | floe_domain::CalendarProvider::Android
+                            )
+                        })
+                        .map(|view| (setup, view))
+                });
+            if let Some((setup, view)) = native_setup {
+                let source_request = match &change.change {
+                    floe_agent::CalendarAccessChange::SetScope {
+                        provider,
+                        device_id,
+                        calendar_ids,
+                        connection_scope,
+                        connection_revision,
+                        source_authority,
+                    } => floe_agent::CalendarExpertSetup {
+                        instance_id: change.instance_id,
+                        expected_revision: change.expected_revision,
+                        setup_id: setup.setup_id,
+                        provider: *provider,
+                        device_id: device_id.clone(),
+                        calendar_ids: calendar_ids.clone(),
+                        connection_scope: *connection_scope,
+                        connection_revision: *connection_revision,
+                        source_authority: *source_authority,
+                    },
+                    _ => floe_agent::CalendarExpertSetup {
+                        instance_id: change.instance_id,
+                        expected_revision: change.expected_revision,
+                        setup_id: setup.setup_id,
+                        provider: view.provider,
+                        device_id: view.device_id.clone(),
+                        calendar_ids: view.calendar_ids.clone(),
+                        connection_scope: view.connection_scope,
+                        connection_revision: view.connection_revision,
+                        source_authority: setup.source_authority.or(view.source_authority),
+                    },
+                };
+                let requires_live_source = matches!(
+                    &change.change,
+                    floe_agent::CalendarAccessChange::SetEnabled { enabled: true }
+                        | floe_agent::CalendarAccessChange::SetScope { .. }
+                );
+                let connection_id = if !requires_live_source {
+                    vault.calendar_grant_connection_id(setup.setup_id).await?
+                } else {
+                    calendar_grant_authority(core, job.person, &source_request)
+                        .await?
+                        .ok_or(AgentFailure::AccessReviewRequired)?
+                        .0
+                };
+                let overview = vault
+                    .configure_calendar_access_with_connection(
+                        change,
+                        connection_id,
+                        job.cancellation.clone(),
+                    )
+                    .await?;
+                if job.cancellation.is_cancelled() {
+                    return Err(AgentFailure::Cancelled);
+                }
+                return Ok(VaultExecutionResult {
+                    calendar_experts: Some(overview),
+                    ..VaultExecutionResult::ready()
+                });
+            }
             if let floe_agent::CalendarAccessChange::SetScope {
                 provider,
                 device_id,
@@ -643,7 +725,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                 source_authority,
             } = &mut change.change
             {
-                *source_authority = calendar_grant_authority(
+                if let Some((connection_id, authority)) = calendar_grant_authority(
                     core,
                     job.person,
                     &floe_agent::CalendarExpertSetup {
@@ -655,10 +737,27 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
                         calendar_ids: calendar_ids.clone(),
                         connection_scope: *connection_scope,
                         connection_revision: *connection_revision,
-                        source_authority: None,
+                        source_authority: *source_authority,
                     },
                 )
-                .await?;
+                .await?
+                {
+                    *source_authority = Some(authority);
+                    let overview = vault
+                        .configure_calendar_access_with_connection(
+                            change,
+                            connection_id,
+                            job.cancellation.clone(),
+                        )
+                        .await?;
+                    if job.cancellation.is_cancelled() {
+                        return Err(AgentFailure::Cancelled);
+                    }
+                    return Ok(VaultExecutionResult {
+                        calendar_experts: Some(overview),
+                        ..VaultExecutionResult::ready()
+                    });
+                }
             }
             let overview = vault
                 .configure_calendar_access(change, job.cancellation.clone())
@@ -928,7 +1027,7 @@ async fn calendar_grant_authority(
     core: &FloeCore,
     person_id: PersonId,
     request: &floe_agent::CalendarExpertSetup,
-) -> Result<Option<floe_domain::SourceAuthority>, AgentFailure> {
+) -> Result<Option<(String, floe_domain::SourceAuthority)>, AgentFailure> {
     if !matches!(
         request.provider,
         floe_domain::CalendarProvider::EventKit | floe_domain::CalendarProvider::Android
@@ -941,11 +1040,9 @@ async fn calendar_grant_authority(
         .map_err(|_| AgentFailure::StorageUnavailable)?
         .ok_or(AgentFailure::AccessReviewRequired)?;
     if connection.disconnected
-        || connection.connection_id != request.setup_id.to_string()
         || connection.device_id != request.device_id
         || connection.provider != request.provider
         || connection.scope != request.connection_scope
-        || connection.revision != request.connection_revision
         || !request.calendar_ids.iter().all(|identifier| {
             connection
                 .calendars
@@ -958,7 +1055,13 @@ async fn calendar_grant_authority(
     if !connection.source_authority.is_valid() {
         return Err(AgentFailure::AccessReviewRequired);
     }
-    Ok(Some(connection.source_authority))
+    let reviewed_authority = request
+        .source_authority
+        .ok_or(AgentFailure::AccessReviewRequired)?;
+    if reviewed_authority != connection.source_authority {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(Some((connection.connection_id, reviewed_authority)))
 }
 
 async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
