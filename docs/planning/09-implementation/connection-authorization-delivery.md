@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1/P2a and P3a/P4a/P5a/P5b accepted as bounded milestones; P2b/P4b/P5c integration continues. P7 is not complete.
+> Status: P1/P2a and P3a/P4a/P4b/P5a/P5b accepted as bounded milestones; P2b/P5c/P7a integration continues. P7 is not complete.
 
 ## 1. Scope and completion rule
 
@@ -382,7 +382,17 @@ persisted timestamps. Recovery may reacquire authority but cannot silently exten
 - Native harness `8fd6f5b`: serialized expensive synthetic Swift fixture workloads across test
   processes to prevent default-parallel deadline contention. Two default-parallel suites passed.
 - P4a `f52460d`: bounded dependency types and transactional encrypted sidecar accepted. This is
-  persistence, not permission to replay source context. P4b production projection remains in review.
+  persistence, not permission to replay source context.
+- P4b `776b12a`: governed general-session CAS and model projection, compaction union and independent
+  learner evidence gates accepted. Root Core suite passed 127 tests and vault integration passed 18.
+  Unknown coverage is monotonic, ungoverned results cannot borrow another invocation's dependency,
+  and current/restored unknown generated content is filtered without deleting displayed history.
+  Opaque provider replay is always cleared until it has verifiable coverage; this deliberately disables
+  a replay optimization and is not durable replay adoption. Calendar/private-state lineage and positive
+  production source resolvers remain pending.
+- Worker regression `e07b144`: root reproduced an isolated native-grant job stack overflow and verified
+  heap-pinning top-level worker futures resolves it without enlarging thread stacks. Full FFI library
+  suite then passed 47 tests, including the previously crashing case.
 - P5b `71b5c89`: durable console issuer enrollment, explicit administrator approval, terminal
   revocation, strict trust quarantine, and source-lock release validation accepted. Root reran fresh
   authorization/console tests and their race suites; all passed. Post-rename durability uncertainty
