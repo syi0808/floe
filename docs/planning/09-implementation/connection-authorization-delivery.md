@@ -336,3 +336,31 @@ The server authorization foundation is delegated separately from route adoption.
 These are implementation decisions, not acceptance evidence. The Go foundation must still be wired
 to durable console enrollment, exact provider identities and protected routes; Rust owner verification,
 shared negative vectors and consent UI are required before P5 is accepted.
+
+### P2b and P4 integration review checkpoints
+
+Per-consumer invalidation must replace both the turn's global registry revision comparison and the
+expert-session commit's global expected-revision rejection. Commit only the selected assignment's
+private-state delta against the current snapshot, validating its base state and selected policy stamps;
+preserve unrelated installations/assignments added during the turn. Disabling then re-enabling the
+same consumer must advance a durable epoch, even when its final enabled flag equals the original.
+Storage revisions remain CAS values, not authority. A stale review DTO must be rejected rather than
+having its source stamp replaced by the current host stamp during submission.
+
+The lineage implementation must cover these existing transaction boundaries, not just model filtering:
+- `EncryptedAgentVault::compare_and_swap`: ordinary source-independent turns also record explicit
+  coverage, while a turn consuming retained history inherits its validated dependencies.
+- `commit_expert_session_with_hook`: dependency coverage, appended message, expert result receipt and
+  selected private-state update commit together. Failed/cancelled tasks with data are dependent too.
+- `compact_session`: summary coverage is the union of archived turn coverage, with unknown propagating
+  as unknown. Reusing `through_turn_id` must not replace its old coverage with a weaker record.
+- `with_proposal_evidence`: publishing requires current dependency/action admission; inspection of
+  durable user-visible history is not permission to execute its proposal or feed it to a model.
+- `validate_learner_source` and personal-memory projection: evidence references resolve turn coverage;
+  unknown/source-derived evidence cannot become independent accepted memory through review alone.
+
+Raw session/archive search remains a user-visible encrypted history facility. If a model/tool consumes
+search excerpts, that path needs the same dependency projection rather than treating search as an
+authority bypass. Provider replay must be cleared whenever the retained message set is filtered, and
+must carry dependency coverage when retained. Expired process-local leases cannot be resurrected from
+persisted timestamps. Recovery may reacquire authority but cannot silently extend observation validity.
