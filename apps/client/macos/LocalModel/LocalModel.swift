@@ -180,14 +180,22 @@ final class LocalModelHost: @unchecked Sendable {
   }
 }
 
+#if os(macOS)
 @available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
 @Generable
 private struct GeneratedAnswer {
   @Guide(description: "A complete user-visible response. Never hidden reasoning.")
   var text: String
 }
 
+#if os(macOS)
 @available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
 @Generable
 private enum GeneratedStep {
   case answer(text: String)
@@ -195,7 +203,13 @@ private enum GeneratedStep {
 }
 
 func foundationModelAvailability() -> String {
+  #if os(macOS)
   guard #available(macOS 26.0, *) else { return "unsupported_os" }
+  #elseif os(iOS)
+  guard #available(iOS 26.0, *) else { return "unsupported_os" }
+  #else
+  return "unsupported_os"
+  #endif
   guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26 else {
     return "unsupported_profile"
   }
@@ -209,9 +223,17 @@ func foundationModelAvailability() -> String {
 }
 
 private func foundationGenerate(_ input: LocalModelInput) async throws -> LocalModelStep {
+  #if os(macOS)
   guard #available(macOS 26.0, *), foundationModelAvailability() == "available" else {
     throw LocalModelFailure("model_unavailable")
   }
+  #elseif os(iOS)
+  guard #available(iOS 26.0, *), foundationModelAvailability() == "available" else {
+    throw LocalModelFailure("model_unavailable")
+  }
+  #else
+  throw LocalModelFailure("model_unavailable")
+  #endif
   let session = LanguageModelSession(model: .default, tools: [], instructions: input.instructions)
   do {
     let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: input.maxResponseTokens)

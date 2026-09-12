@@ -295,12 +295,12 @@ impl Transport for NativeTransport {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn native_call(_: Value) -> Result<Reply, AgentFailure> {
     Err(AgentFailure::ModelUnavailable)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn native_call(request: Value) -> Result<Reply, AgentFailure> {
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
     unsafe extern "C" {
@@ -315,10 +315,11 @@ fn native_call(request: Value) -> Result<Reply, AgentFailure> {
     let (invoke, release) = *FUNCTIONS
         .get_or_init(|| {
             let executable = std::env::current_exe().map_err(|_| AgentFailure::ModelUnavailable)?;
-            let directory = executable
-                .parent()
-                .and_then(|path| path.parent())
-                .ok_or(AgentFailure::ModelUnavailable)?;
+            let app_bundle = executable.parent().ok_or(AgentFailure::ModelUnavailable)?;
+            #[cfg(target_os = "macos")]
+            let directory = app_bundle.parent().ok_or(AgentFailure::ModelUnavailable)?;
+            #[cfg(target_os = "ios")]
+            let directory = app_bundle;
             let path = CString::new(
                 directory
                     .join("Frameworks/libfloe_local_model.dylib")
