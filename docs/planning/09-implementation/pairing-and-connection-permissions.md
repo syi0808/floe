@@ -1,6 +1,6 @@
 # Pairing and connection-scoped permissions implementation plan
 
-- **Status:** active; device-connection permission consolidation in progress
+- **Status:** implemented for Apple targets; live pairing acceptance pending
 - **Date:** 2026-09-13
 - **Decision:** [ADR 0028](../../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
 
@@ -187,3 +187,9 @@ information architecture. The Apple-first follow-up adds these reviewable units:
 Android connection-detail parity is deferred by the repository's Apple-first platform policy. Its
 existing conditional controls remain functional and must not block macOS delivery. Moving them requires
 an explicit Android implementation task and Android validation; this follow-up does not claim parity.
+
+P6 and P7 shipped in `7d16ba8`. Focused Flutter tests and the macOS Debug build pass. Direct macOS
+inspection confirmed Calendar and Attention appear in Connections, while **Data & privacy** contains
+only connection navigation, Memory and AI processing controls. Apple Contacts, Location/ETA/Weather,
+Wellbeing and unsupported Screen Time use the same connection-detail composition on supported Apple
+devices; iPhone/iPad execution remains unverified.
