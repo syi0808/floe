@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1 accepted; P2a implementation in progress; P3/P5 integration audits in progress.
+> Status: P1 accepted; P2 implementation/review in progress; P3a/P5a foundations accepted; integration continues.
 
 ## 1. Scope and completion rule
 
@@ -236,10 +236,10 @@ dependent milestone edits against unreviewed authority APIs. Update this ledger 
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | P1 | Accepted foundation | Domain 9 tests, grant-store 8 tests, full Rust workspace and formatting passed; no runtime adoption |
-| P2 | In progress: P2a | Luna/high: atomic native grant/projection and actual read admission; P2b review/policy work follows |
-| P3 | Architecture audit | Separate Luna/high read-only native host/worker lifecycle audit; implementation not yet accepted |
-| P4 | Pending | — |
-| P5 | Architecture audit | Separate Luna/high read-only enrollment/verification audit; no paired-bearer authorization shortcut |
+| P2 | Backend review; client review accepted | Client `5290dcd`, 30 focused tests pass; backend atomic grant/projection and consumer-policy work remain |
+| P3 | Adapter accepted, integration pending | `c5adbe2`; 12 synthetic native/action tests passed; no live OS permission acceptance |
+| P4 | Lineage foundation delegated | Isolated typed sidecar and transactional helpers; runtime lineage not yet adopted |
+| P5 | Foundation accepted; console integration delegated | `08c3ab9`; Go suite and authorization race tests pass; protected routes/owner signer not yet adopted |
 | P6 | Pending | — |
 | P7 | Pending | Live environment gates remain explicit |
 
@@ -364,3 +364,16 @@ search excerpts, that path needs the same dependency projection rather than trea
 authority bypass. Provider replay must be cleared whenever the retained message set is filtered, and
 must carry dependency coverage when retained. Expired process-local leases cannot be resurrected from
 persisted timestamps. Recovery may reacquire authority but cannot silently extend observation validity.
+
+### Continued validation evidence
+
+- P3a adapter `c5adbe2`: root reran the complete serial native action/read fixture suite, 12 passed.
+  Synthetic dylib tests include cancellation, late response, generation change, wrong identity,
+  duplicate/partial results and output bounds; this is not real EventKit account/permission testing.
+- P5a owner engine `08c3ab9`: root reran `go test ./...` and authorization-package race tests.
+  Console enrollment and provider route integration are subsequent acceptance gates.
+- P2b client `5290dcd`: root reran 30 focused consent/controller/dialog tests, all passed. After
+  `cargo build -p floe-ffi`, the full Flutter suite reported 267 passed and 14 failed. All 14 failing
+  action UI/execution and golden cases also failed in an isolated archived pre-client-change tree
+  (`HEAD` before `5290dcd`). They are pre-existing failures, not silently accepted as new regressions.
+  No goldens were regenerated. Backend reviewed-stamp enforcement remains a separate required gate.
