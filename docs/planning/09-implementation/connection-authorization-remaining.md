@@ -10,6 +10,29 @@ Finish explicit producer review and positive FFI enrollment before remote route 
 Assign one implementation owner to `vault_host/conversation_turn.rs` at a time; other agents submit
 narrow coordinated changes. Do not run broad formatters or selectively stage zero-context patches.
 
+## P4c live history resolution
+
+The current `CalendarLeaseRegistry` accounts for quota only; the actual lease entries belong to one
+`CalendarTimelineViews` invocation. A persisted `ContextDependency` is not proof that an observation
+is still live. Do not authorize historical output merely because its wall-clock expiry is in the
+future or because a newly acquired view has the same resource IDs.
+
+1. Retain bounded host-owned observation evidence, keyed by process/observation identity, until its
+   monotonic expiry. It must match the full immutable dependency and reviewed subject, not just a
+   serialized UUID. This evidence is distinct from the invocation-bound tool lease: it cannot grant
+   a different invocation permission to reuse the tool handle or read its payload. Prefer metadata
+   rather than a second raw-source cache; enforce count/byte quotas and expiry cleanup.
+2. Resolve a historical dependency through that live evidence, current encrypted source/grant and
+   consumer policy, actual model recipient and current host presence/subject. Revalidate the union
+   before every later model request and final dependent commit. Missing old-process evidence denies
+   historical derived context while retaining the user-visible history and independent turns.
+3. Use `GovernedDependencyResolver` and the existing sidecar/accumulator. Replace Calendar's text
+   heuristic only when positive current-process history and negative restart/revoke/expiry tests
+   exercise the real adapter. A fresh acquisition may generate new output but must not restamp old
+   summaries or model responses as newly authorized observations.
+4. Keep opaque provider replay disabled until individual replay entries have verifiable turn/source
+   coverage. Metadata-only expert private state needs no fictitious source-payload resolver.
+
 ## P6a personal projections
 
 The actual acquisition boundary is `PersonalViewSource` in
