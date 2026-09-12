@@ -4,6 +4,9 @@ This ledger records implemented paths, not just available types. Last reviewed 2
 P7 is incomplete while required production paths below remain pending. Live OS/provider checks
 require separate explicit consent and disposable resources; synthetic tests do not replace them.
 
+Apple ecosystem devices are the first delivery target. Android results below are historical
+evidence only; Android implementation, parity work and validation are deferred by `AGENTS.md`.
+
 ## Active development checkpoint
 
 The feature-first workflow in `AGENTS.md` supersedes the exhaustive test matrices in older planning
@@ -23,9 +26,20 @@ not a requirement to recreate every test before implementing the next feature.
 - Attention uses a trusted host broker and final-save liveness validation. Contacts now has native
   selected-identity inspection, explicit review and encrypted selected-handle persistence; the
   generic display publication remains insufficient to authorize a model read.
-- Governed Wellbeing acquisition remains unimplemented. Feasibility now binds an explicit event,
+- Feasibility now binds an explicit event,
   destination, time window and travel mode to an encrypted grant and native permission subject;
   background acquisition never requests new OS permission.
+- Wellbeing now connects Settings review/pause, the publishing gateway, native HealthKit acquisition
+  and the governed FFI conversation reader. Grants admit only derived device-local Assistant data;
+  native identity binds installation/device, sleep/steps/exercise and the bounded 36-hour window.
+  Fresh validated observations carry grant dependencies through model and final-save checks.
+  FFI library compilation and targeted Dart analysis pass; the updated iOS channel typechecks.
+  One focused settings regression passes for publishing-wrapper visibility, zero permission
+  requests during inspection, explicit review and pause; Apple native gateway tests also pass.
+- HealthKit authorization-request completion is not proof of per-type read permission. Empty or
+  failed fresh acquisition remains unavailable rather than replaying an old summary. The native
+  fingerprint represents the reviewed capability, not hidden OS read-grant state; immediate
+  detection of every HealthKit read revocation is not claimed. App-level pause/revoke remains fenced.
 - Contacts capability and Relationships expert now resolve the unique active reviewed grant,
   reload the saved selection, acquire through the broker and record the dependency for model/CAS
   validation. Contacts OS/provider behavior still needs a separately consented mobile run.
@@ -57,10 +71,14 @@ not a requirement to recreate every test before implementing the next feature.
   The Go server suite passes;
   native source fixture checks and signed Calendar exchange are synthetic checks, separate
   from the direct macOS startup/settings exercise and unperformed external provider writes.
-- Remaining implementation includes governed Wellbeing and the mobile local-model bridge
-  (`local_model.rs` still only loads its native model on macOS). Feasibility's local-only grants
-  are not permission to bypass this limitation by forwarding context to a remote model.
-  Real location/MapKit/WeatherKit acquisition and external provider writes remain unverified.
+- The shared FoundationModels bridge is now packaged for iPhone/iPad and loaded from the iOS
+  application Frameworks directory. Both device and simulator Swift builds pass with deployment
+  target iOS 16 and a weak FoundationModels link; the focused Rust model group passes 8 tests.
+  Actual macOS model availability and synthetic on-device generation pass. iOS device generation
+  remains unverified; unsupported OS/model availability stays explicit, without remote fallback.
+- Real HealthKit, location/MapKit/WeatherKit acquisition and external provider writes remain
+  unverified. Full iOS application execution still needs an eligible simulator runtime or device;
+  direct native compilation is not an end-to-end device run.
 
 ## Historical checkpoints
 

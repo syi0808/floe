@@ -7,6 +7,12 @@ The active-development workflow in `AGENTS.md` takes precedence over the histori
 test lists below: implement the end-to-end feature, exercise it, and retain only useful regression
 coverage. Disposable Floe-owned local test data may be reset; connected provider data is excluded.
 
+Apple ecosystem delivery takes priority. Android items in older notes are deferred and must not
+block macOS, iPhone or iPad implementation or validation. Apple local-model packaging and governed
+HealthKit-derived Wellbeing are now connected; the active acceptance checkpoint records validation
+and remaining real-device/provider checks. Detailed contracts below are historical requirements,
+not a fresh list of missing implementations. Android parity is explicitly out of scope.
+
 ## Ordering and shared files
 
 Finish and review P3b/P4c Calendar lineage and P4d cleanup before generalizing their resolver.
