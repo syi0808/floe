@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1 delegated; P2–P7 not implemented by this plan.
+> Status: P1 foundation implemented and reviewed; P2–P7 pending.
 
 ## 1. Scope and completion rule
 
@@ -235,10 +235,32 @@ dependent milestone edits against unreviewed authority APIs. Update this ledger 
 
 | Milestone | State | Evidence |
 | --- | --- | --- |
-| P1 | Delegated | Foundation only; no runtime adoption claimed |
+| P1 | Accepted foundation | Domain 9 tests, grant-store 8 tests, full Rust workspace and formatting passed; no runtime adoption |
 | P2 | Pending | — |
 | P3 | Pending | — |
 | P4 | Pending | — |
 | P5 | Pending | Enrollment/verification decision required before implementation |
 | P6 | Pending | — |
 | P7 | Pending | Live environment gates remain explicit |
+
+### P1 review evidence and limitations
+
+The Luna/high implementation received primary review and correction passes for nested deserialization,
+canonical recipient scope, indexed cleanup identity, terminal revoke, partial-schema rejection and
+write-failure handling. A real SQL uniqueness failure after outbox insertion verifies rollback of both
+authority and cleanup; a precommit key failure verifies the same boundary. True persistence failures
+latch the vault unavailable in the current process; normal CAS/known write-lock contention does not.
+Tests also exercise competing mutations, reopen, retained cleanup, schema/payload corruption,
+capacity limits and absence of a resource sentinel in database/WAL files.
+
+Validation on the reviewed tree: `cargo test --workspace`, domain 9 tests, focused Core grant tests 8,
+`cargo fmt --all -- --check`, and `git diff --check` pass. No OS permission or real provider mutation
+was performed. `serde_json` reuses the existing workspace version for scope-byte validation and tests.
+
+The store is initialized empty in the existing encrypted vault and is not populated from Calendar
+receipts. Runtime still uses the current registry authority path. Creation is paused/unreviewed;
+reviewed activation clears that marker, and Active+unreviewed stored payloads are rejected. Dynamic
+source mismatch/needs-review admission, consumer/policy epochs, native refresh, output fences,
+cleanup execution and server issuer verification are not implemented by P1. The initial retained-grant
+capacity is 128 records including terminal identities; P2 must account for that explicit quota in UI
+and lifecycle integration, not delete tombstones to make room silently.

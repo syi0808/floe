@@ -22,6 +22,18 @@ impl SourceAuthority {
         !self.incarnation.is_nil()
     }
 
+    pub fn incarnation(self) -> Uuid {
+        self.incarnation
+    }
+
+    pub fn epoch(self) -> NonZeroU64 {
+        self.epoch
+    }
+
+    pub fn from_parts(incarnation: Uuid, epoch: NonZeroU64) -> Option<Self> {
+        (!incarnation.is_nil()).then_some(Self { incarnation, epoch })
+    }
+
     pub fn advance(self) -> Option<Self> {
         Some(Self {
             incarnation: self.incarnation,

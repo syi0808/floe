@@ -28,7 +28,8 @@
 - connection observation은 최대 128개 source와 총 10,000개 record를 받되 AI grant의 4개 제한은 유지한다.
   read adapter는 허용된 subset만 projection하고, 같은 turn에서는 첫 observation을 pin한다. 매 check에서
   현재 source authority·철회·permission failure·observation 유효성을 다시 확인하며 부분 실패를 빈 성공으로 바꾸지 않는다.
-- 이 단계는 기존 encrypted registry를 grant 저장소로 사용한다. 별도 `DataAccessGrant` store, policy epochs,
+- 실제 Calendar 실행 경로는 기존 encrypted registry를 grant authority로 사용한다. 별도
+  `DataAccessGrant` store의 기반은 후속 P1에서 구현했지만 아직 runtime과 연결하지 않았다. policy epochs,
   headless native acquisition/refresh, cross-device owner verification, durable lineage cleanup,
   action lifecycle 통합은 아직 구현하지 않았다. OS revoke는
   native sync 결과가 Core에 반영된 이후 검증하며 즉시 OS notification/fence를 구현했다고 주장하지 않는다.
@@ -66,6 +67,22 @@ server로 확인하는 테스트, 이전 결과/요약 projection, 엄격한 저
 `cargo test --workspace`, `cargo fmt --all -- --check`, `cargo build -p floe-ffi`가 통과했다.
 Flutter analyze, 관련 UI/observation 42개 테스트와 재빌드한 bridge의 Dart/C ABI 8개 테스트도 통과했다.
 native 테스트 서버의 accepted socket은 명시적으로 blocking mode로 전환하며 FFI suite를 반복 검증했다.
+
+### 공통 권한 저장 기반: P1
+
+[전체 전달 계획](connection-authorization-delivery.md)의 P1은 Luna/high 구현과 primary review를 거쳤다.
+typed grant/source identity, 독립적인 grant incarnation/access epoch, 명시적 범위·category·consumer·
+recipient 제한을 추가했다. 신규 grant는 paused/unreviewed이며 명시적 review로만 활성화한다.
+동일 grant ID의 source identity 교체와 terminal revoke 이후 재활성화는 허용하지 않는다.
+
+grant와 이전 권한 정리 outbox는 기존 encrypted vault 안의 단일 transaction으로 저장한다.
+잘못된 schema/중첩 payload/index identity는 거부하며 pause/revoke 저장 실패 시 현재 process의
+vault 접근을 닫는다. SQL 제약 위반 및 precommit 키 상실을 주입하여 state/outbox rollback을 검증했다.
+전체 Rust workspace, domain 9개 및 grant store 8개 테스트, format/diff 검사가 통과했다.
+
+이는 실제 source 접근을 새 store로 전환한 것이 아니다. 기존 receipt 자동 이관, registry와의
+원자적 consent projection, native 획득·lease/fence, 동적 review 상태, 정리 worker 및 remote permit은
+후속 P2–P7에 남아 있다. 전체 설계의 acceptance 완료로 간주하지 않는다.
 
 ## 1. 최초 분석 시점의 코드와 설계 간 차이
 

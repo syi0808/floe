@@ -16,11 +16,13 @@ use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod access_grants;
 mod expert_actions;
 mod keyring;
 mod learning;
 mod registry;
 mod session_archive;
+pub use access_grants::AccessGrantCleanup;
 pub use keyring::KeyringVaultKeys;
 pub use session_archive::*;
 
@@ -138,6 +140,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection.execute("CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(unavailable)?;
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
+        vault.initialize_access_grant_store().await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -211,6 +214,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(unavailable)?;
         vault.initialize_session_archive().await?;
         vault.initialize_learning_store().await?;
+        vault.initialize_access_grant_store().await?;
         vault.expert_registry().await?;
         Ok(vault)
     }
