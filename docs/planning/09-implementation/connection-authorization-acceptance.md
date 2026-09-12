@@ -6,13 +6,13 @@ require separate explicit consent and disposable resources; synthetic tests do n
 
 | Production path | Reviewed implementation | Outstanding acceptance gate |
 | --- | --- | --- |
-| Native Calendar consent | Exact reviewed source stamp; finite selected subset; no automatic activation | Per-consumer backend epoch and scoped commit tests under review |
+| Native Calendar consent | Exact reviewed source stamp, finite subset, durable consumer epoch and scoped commit tests | Broader non-Calendar policy adoption |
 | Native Calendar admission | Encrypted grant and atomic registry mapping; lazy source admission | Immutable invocation/query-bound lease; cleanup worker |
-| macOS native read | Bounded direct EventKit adapter, cancellation and generation fixtures | Runtime wiring under review; pinned payload renewal and real OS validation |
+| macOS native read | Bounded direct EventKit adapter wired at tool invocation, cancellation and generation fixtures | Pinned immutable lease and real OS validation |
 | iOS/Android native read | Existing platform publication remains | Tool-time acquisition broker, disposal/late-callback protocol and lifecycle tests |
-| General conversation | Existing conversation runtime; governed store projection under review | Monotonic unknown coverage, restored-turn/replay fences and lineage integration tests |
+| General conversation | Governed store CAS/projection; monotonic unknown; restored-turn filtering | Positive production source resolvers; opaque replay optimization disabled |
 | Calendar history/private state | Conservative history filtering remains | Real consumed-view dependencies in result/session/private-state transaction |
-| Compaction and learning | Transactional sidecar available; integration under review | Unknown propagation, independent evidence positive tests, accepted-memory negative tests |
+| Compaction and learning | Transactional coverage union and independent evidence gates; positive/negative tests | Source-learning consent/retention policy; no implicit Read-to-Learning permission |
 | Remote issuer enrollment | Durable console approval, proof of possession, revocation and quarantine | Producer pinning, encrypted owner signer and explicit client review flow |
 | Remote Calendar route | Existing exact connection and mirror revision checks | Online owner admission/release, authoritative provider subject and source epoch adoption |
 | Remote Mail route | Existing Person ownership checks | Exact source selection; remove Gmail-to-Microsoft fallback; owner admission/release |
