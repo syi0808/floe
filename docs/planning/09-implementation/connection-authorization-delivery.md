@@ -236,12 +236,12 @@ dependent milestone edits against unreviewed authority APIs. Update this ledger 
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | P1 | Accepted foundation | Domain 9 tests, grant-store 8 tests, full Rust workspace and formatting passed; no runtime adoption |
-| P2 | Backend review; client review accepted | Client `5290dcd`, 30 focused tests pass; backend atomic grant/projection and consumer-policy work remain |
-| P3 | Adapter accepted, integration pending | `c5adbe2`; 12 synthetic native/action tests passed; no live OS permission acceptance |
-| P4 | Lineage foundation delegated | Isolated typed sidecar and transactional helpers; runtime lineage not yet adopted |
-| P5 | Foundation accepted; console integration delegated | `08c3ab9`; Go suite and authorization race tests pass; protected routes/owner signer not yet adopted |
+| P2 | Native Calendar accepted | Atomic grant/projection, reviewed client stamps and per-consumer epochs; other domains remain P6 |
+| P3 | Adapter accepted; leases under review | Immutable leases implemented with synthetic tests; native subject stability review and mobile broker remain |
+| P4 | General lineage accepted; Calendar/cleanup integration ongoing | P4a/P4b accepted; Calendar consumed dependencies delegated; cleanup scan bounds and integration regressions under review |
+| P5 | Engine/console accepted; mutual identity under review | Owner signer fault tests reported passing; explicit client review and protected route adoption remain |
 | P6 | Pending | — |
-| P7 | Pending | Live environment gates remain explicit |
+| P7 | Recovery UI accepted; final acceptance pending | P7a accepted; new fixture regressions and full route matrix remain; live environment gates explicit |
 
 ### P1 review evidence and limitations
 
