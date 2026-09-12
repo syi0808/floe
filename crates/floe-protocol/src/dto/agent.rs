@@ -338,7 +338,7 @@ pub struct AgentVaultResultDto {
     pub memory: Option<AgentMemoryOverviewDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections: Option<Vec<ConnectorSnapshotDto>>,
-    pub failure: Option<AgentFailureDto>,
+    pub failure: Option<AgentVaultFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -405,7 +405,7 @@ pub struct AgentFixtureRunDto {
     pub next_sequence: usize,
     pub done: bool,
     pub session: Option<AgentSessionDto>,
-    pub failure: Option<AgentVaultFailureDto>,
+    pub failure: Option<AgentFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
