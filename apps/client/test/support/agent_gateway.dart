@@ -7,9 +7,12 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   Map<String, Object?>? saved;
   bool hold = false;
   bool failLoad = false;
+  Object? loadError;
   bool failPoll = false;
   String? responseFailure;
+  String? responseRecoveryAction;
   bool omitSessionOnFailure = false;
+  bool includeSessionWithFailure = false;
   String? capabilityOutput;
   int begins = 0;
   int stops = 0;
@@ -40,6 +43,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   @override
   Future<AgentFixtureResult> resumeAgentFixture(String personId) async {
     if (failLoad) throw StateError('synthetic load failure');
+    if (loadError != null) throw loadError!;
     return saved == null ? startAgentFixture(personId) : _result();
   }
 
@@ -186,9 +190,18 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
     'next_sequence': _events.length,
     'events': _events.skip(afterSequence).toList(),
     'done': _done,
-    'session': _done && !(omitSessionOnFailure && responseFailure != null)
+    'session':
+        _done &&
+            (includeSessionWithFailure ||
+                !(omitSessionOnFailure && responseFailure != null))
         ? saved
         : null,
-    'failure': _done && omitSessionOnFailure ? responseFailure : null,
+    'failure': _done && (omitSessionOnFailure || includeSessionWithFailure)
+        ? responseFailure
+        : null,
+    'recovery_action':
+        _done && (omitSessionOnFailure || includeSessionWithFailure)
+        ? responseRecoveryAction
+        : null,
   });
 }

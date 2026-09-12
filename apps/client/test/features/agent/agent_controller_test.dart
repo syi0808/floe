@@ -93,13 +93,9 @@ void main() {
     await run;
     expect(controller.failure, 'cancelled');
     expect(controller.messages, hasLength(1));
-    expect(controller.canRetry, isTrue);
+    expect(controller.canRetry, isFalse);
     expect(gateway.releases, 1);
-    gateway.hold = false;
-    await controller.retry();
-    expect(controller.messages, hasLength(4));
-    expect(controller.failure, isNull);
-    expect(gateway.begins, 2);
+    expect(gateway.begins, 1);
   });
 
   test(
@@ -159,29 +155,77 @@ void main() {
     },
   );
 
-  test('load errors and typed model failure preserve retry intent across controller restart', () async {
-    final gateway = TestAgentGateway()..failLoad = true;
+  test(
+    'load errors do not manufacture retry intent across controller restart',
+    () async {
+      final gateway = TestAgentGateway()..failLoad = true;
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      await controller.load();
+      expect(controller.needsReload, isTrue);
+      gateway.failLoad = false;
+      gateway.responseFailure = 'model_unavailable';
+      await controller.load();
+      await controller.send(AgentFixturePrompt.followUp);
+      expect(controller.failure, 'model_unavailable');
+      controller.dispose();
+      final restored = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(restored.dispose);
+      await restored.load();
+      expect(restored.canRetry, isFalse);
+    },
+  );
+
+  test(
+    'source-local review failure preserves the conversation session',
+    () async {
+      final gateway = TestAgentGateway()
+        ..omitSessionOnFailure = true
+        ..includeSessionWithFailure = true
+        ..responseFailure = 'capability_unavailable'
+        ..responseRecoveryAction = 'review_source';
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      await controller.send(AgentFixturePrompt.today);
+      expect(controller.failure, 'capability_unavailable');
+      expect(controller.recoveryAction, 'review_source');
+      expect(controller.needsReload, isFalse);
+      expect(controller.session, isNotNull);
+      expect(controller.canRetry, isFalse);
+    },
+  );
+
+  test(
+    'non-read recovery action cannot retry a possibly effectful turn',
+    () async {
+      final gateway = TestAgentGateway()
+        ..omitSessionOnFailure = true
+        ..responseFailure = 'deadline_exceeded'
+        ..responseRecoveryAction = 'none';
+      final controller = AgentController(gateway: gateway, personId: 'test');
+      addTearDown(controller.dispose);
+      await controller.load();
+      await controller.send(AgentFixturePrompt.today);
+      expect(controller.recoveryAction, 'none');
+      expect(controller.canRetry, isFalse);
+    },
+  );
+
+  test('explicit safe read recovery is the only retryable action', () async {
+    final gateway = TestAgentGateway()
+      ..omitSessionOnFailure = true
+      ..includeSessionWithFailure = true
+      ..responseFailure = 'capability_unavailable'
+      ..responseRecoveryAction = 'retry_read';
     final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
     await controller.load();
-    expect(controller.needsReload, isTrue);
-    gateway.failLoad = false;
-    gateway.responseFailure = 'model_unavailable';
-    await controller.load();
-    await controller.send(AgentFixturePrompt.followUp);
-    expect(controller.failure, 'model_unavailable');
-    controller.dispose();
-    final restored = AgentController(gateway: gateway, personId: 'test');
-    addTearDown(restored.dispose);
-    await restored.load();
-    expect(restored.canRetry, isTrue);
+    await controller.send(AgentFixturePrompt.today);
+    expect(controller.canRetry, isTrue);
     gateway.responseFailure = null;
-    await restored.retry();
-    final questions = restored.messages.whereType<AgentTextMessage>().where(
-      (message) => message.kind == AgentMessageKind.user,
-    );
-    expect(
-      questions.map((message) => message.text),
-      everyElement(AgentFixturePrompt.followUp.sampleText),
-    );
+    gateway.responseRecoveryAction = null;
+    await controller.retry();
+    expect(controller.failure, isNull);
+    expect(gateway.begins, 2);
   });
 }

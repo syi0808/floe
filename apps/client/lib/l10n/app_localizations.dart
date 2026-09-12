@@ -334,6 +334,12 @@ abstract class AppLocalizations {
   /// **'Calendar context is no longer current. Reload and try again.'**
   String get agentConnectedStale;
 
+  /// No description provided for @agentContextRefreshRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Context is no longer current. Refresh context before trying again.'**
+  String get agentContextRefreshRequired;
+
   /// No description provided for @agentAccessReviewRequired.
   ///
   /// In en, this message translates to:

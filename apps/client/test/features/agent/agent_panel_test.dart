@@ -2,6 +2,7 @@ import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_panel.dart';
+import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/personal_day_screen.dart';
@@ -93,8 +94,7 @@ void main() {
   );
 
   for (final failure in {
-    'access_review_required':
-        'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.',
+    'access_review_required': 'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.',
     'server_model_timeout': 'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.',
     'server_model_request_rejected': 'The configured server model rejected this request. Check the latest server trace and model compatibility.',
   }.entries) {
@@ -112,7 +112,7 @@ void main() {
         app(AgentPanel(controller: controller, onClose: () {})),
       );
       expect(find.text(failure.value), findsOneWidget);
-      expect(find.text('Try again'), findsOneWidget);
+      expect(find.text('Try again'), findsNothing);
     });
   }
 
@@ -141,6 +141,57 @@ void main() {
     );
     expect(find.textContaining('couldn’t access secure storage'), findsNothing);
     expect(find.byTooltip('Reload conversation'), findsOneWidget);
+  });
+
+  testWidgets('stale context shows generic refresh guidance without reload', (
+    tester,
+  ) async {
+    final gateway = TestAgentGateway()
+      ..loadError = const AgentVaultException(
+        'stale_context',
+        recoveryAction: 'refresh_context',
+      );
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      app(AgentPanel(controller: controller, onClose: () {})),
+    );
+    expect(
+      find.text(
+        'Context is no longer current. Refresh context before trying again.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Calendar context'), findsNothing);
+    expect(find.byTooltip('Reload conversation'), findsNothing);
+  });
+
+  testWidgets('source review guidance opens the explicit review surface', (
+    tester,
+  ) async {
+    final gateway = TestAgentGateway()
+      ..loadError = const AgentVaultException(
+        'capability_unavailable',
+        recoveryAction: 'review_source',
+      );
+    var opened = false;
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      app(
+        AgentPanel(
+          controller: controller,
+          onClose: () {},
+          onOpenSourceReview: () => opened = true,
+        ),
+      ),
+    );
+    final review = find.text('View Calendar source');
+    expect(review, findsOneWidget);
+    await tester.tap(review);
+    expect(opened, isTrue);
   });
 
   for (final width in [1280.0, 390.0]) {
@@ -184,48 +235,49 @@ void main() {
     );
   }
 
-  testWidgets('Today keeps conversation storage open across lifecycle changes', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1280, 900);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final gateway = TestVaultGateway();
-    await gateway.createVault('test');
-    final date = DateTime(2026, 9, 7, 9);
-    await tester.pumpWidget(
-      app(
-        PersonalDayScreen(
-          gateway: FakeDayGateway(),
-          agentGateway: gateway,
-          query: DayQuery(
-            personId: 'test',
-            date: date,
-            now: date,
-            timezoneOffsetSeconds: 0,
+  testWidgets(
+    'Today keeps conversation storage open across lifecycle changes',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final gateway = TestVaultGateway();
+      await gateway.createVault('test');
+      final date = DateTime(2026, 9, 7, 9);
+      await tester.pumpWidget(
+        app(
+          PersonalDayScreen(
+            gateway: FakeDayGateway(),
+            agentGateway: gateway,
+            query: DayQuery(
+              personId: 'test',
+              date: date,
+              now: date,
+              timezoneOffsetSeconds: 0,
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Floe is here to help'));
-    await tester.pumpAndSettle();
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    await tester.pumpAndSettle();
-    expect(gateway.locks, 0);
-    expect(find.text('Reload conversation'), findsNothing);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    await tester.pumpAndSettle();
-    expect(gateway.locks, 0);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(gateway.locks, 0);
-    expect(gateway.unlocks, 0);
-    expect(find.text('Reload conversation'), findsNothing);
-    await tester.tap(find.byTooltip('Close').last);
-    await tester.pumpAndSettle();
-    expect(gateway.locks, 0);
-  });
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Floe is here to help'));
+      await tester.pumpAndSettle();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pumpAndSettle();
+      expect(gateway.locks, 0);
+      expect(find.text('Reload conversation'), findsNothing);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pumpAndSettle();
+      expect(gateway.locks, 0);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(gateway.locks, 0);
+      expect(gateway.unlocks, 0);
+      expect(find.text('Reload conversation'), findsNothing);
+      await tester.tap(find.byTooltip('Close').last);
+      await tester.pumpAndSettle();
+      expect(gateway.locks, 0);
+    },
+  );
 }

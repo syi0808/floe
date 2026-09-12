@@ -23,11 +23,13 @@ class AgentPanel extends StatefulWidget {
     required this.controller,
     required this.onClose,
     this.onOpenAction,
+    this.onOpenSourceReview,
   });
 
   final AgentController controller;
   final VoidCallback onClose;
   final Future<void> Function(String actionId)? onOpenAction;
+  final VoidCallback? onOpenSourceReview;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -331,6 +333,15 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
+          if (controller.recoveryAction == 'review_source' &&
+              widget.onOpenSourceReview != null) ...[
+            FloeButton.outlined(
+              onPressed: widget.onOpenSourceReview,
+              size: FloeButtonSize.compact,
+              child: Text(strings.agentConnectedSourceDetails),
+            ),
+            const SizedBox(height: FloeSpace.md),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -436,10 +447,18 @@ class _AgentPanelState extends State<AgentPanel> {
       'credential_expired' => strings.agentRemoteCredentialExpired,
       'quota_exceeded' => strings.agentRemoteQuotaExceeded,
       'policy_denied' => strings.agentModelPolicyDenied,
+      'conflict' =>
+        controller.recoveryAction == 'refresh_session'
+            ? strings.agentReloadNeeded
+            : strings.agentFailure,
       'transport_unavailable' => strings.agentTransportUnavailable,
       'stalled' => strings.agentConnectedStalled,
-      'stale_context' => strings.agentConnectedStale,
+      'stale_context' => strings.agentContextRefreshRequired,
       'access_review_required' => strings.agentAccessReviewRequired,
+      'capability_unavailable' =>
+        controller.recoveryAction == 'review_source'
+            ? strings.agentAccessReviewRequired
+            : strings.agentConnectedUnavailable,
       'budget_exceeded' ||
       'deadline_exceeded' => strings.agentConversationBudget,
       _ => strings.agentFailure,

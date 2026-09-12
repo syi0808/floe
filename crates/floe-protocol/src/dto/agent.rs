@@ -19,6 +19,30 @@ response_payload!(EpistemicStatusDto);
 response_payload!(KnowledgeCandidateDto);
 response_payload!(KnowledgeDecisionResultDto);
 response_payload!(PersonalMemoryKindDto);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentVaultFailureDto {
+    pub schema_version: u32,
+    pub kind: String,
+    pub stage: String,
+    pub affected_refs: Vec<String>,
+    pub retryable: bool,
+    pub recovery_action: AgentVaultRecoveryActionDto,
+    pub correlation_request_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentVaultRecoveryActionDto {
+    None,
+    RefreshSession,
+    RefreshContext,
+    ReviewSource,
+    ReopenVault,
+    Reconcile,
+    RetryRead,
+}
 response_payload!(RegistryOverviewDto);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -381,7 +405,7 @@ pub struct AgentFixtureRunDto {
     pub next_sequence: usize,
     pub done: bool,
     pub session: Option<AgentSessionDto>,
-    pub failure: Option<AgentFailureDto>,
+    pub failure: Option<AgentVaultFailureDto>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

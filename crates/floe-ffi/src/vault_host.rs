@@ -13,7 +13,7 @@ use std::{
 };
 
 use floe_agent::{
-    AgentEvent, AgentFailure, AgentSession, BuiltinContextSource, BuiltinExpertKind,
+    AgentEvent, AgentFailure, AgentOutcome, AgentSession, BuiltinContextSource, BuiltinExpertKind,
     BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState, Cancellation, ConnectionState,
     KnowledgeActor, KnowledgeDecisionKind, KnowledgeKind, SessionStore,
 };
@@ -166,11 +166,12 @@ struct VaultJobResult {
     connections: Option<Vec<floe_agent::ConnectorSnapshot>>,
     failure: Option<AgentFailure>,
 }
+    stage: String,
 
 impl VaultJobResult {
     fn into_protocol(self) -> Result<AgentVaultResultDto, AgentFailure> {
         Ok(AgentVaultResultDto {
-            request_id: self.request_id,
+            request_id,
             events: encode_contracts(self.events)?,
             next_sequence: self.next_sequence,
             done: self.done,
@@ -184,9 +185,21 @@ impl VaultJobResult {
                 .transpose()?,
             proposal: self.proposal,
             memory_review: self.memory_review,
+        let request_id = self.request_id.clone();
+        let failure = self.failure.as_ref().or_else(|| {
+            match self
+                .session
+                .as_ref()
+                .and_then(|session| session.last_outcome.as_ref())
+            {
+                Some(AgentOutcome::Halted { reason }) => Some(reason),
+                _ => None,
+            }
+        });
             memory: self.memory,
             connections: self.connections.map(encode_contracts).transpose()?,
-            failure: self.failure.as_ref().map(encode_contract).transpose()?,
+            failure: failure
+                .map(|failure| failure_envelope(failure, &self.stage, &self.request_id)),
         })
     }
 }
@@ -429,6 +442,7 @@ impl Worker {
                 return Err(AgentFailure::Conflict);
             }
             *active = None;
+            stage: action_name(&job.action).into(),
         }
         Ok(response)
     }
@@ -1406,6 +1420,42 @@ mod tests {
                 AgentVaultOperationDto::Submit {
                     action: AgentVaultActionDto::Status {},
                 },
+fn failure_envelope(failure: &AgentFailure, stage: &str, request_id: &str) -> AgentVaultFailureDto {
+    let kind = serde_json::to_value(failure)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    AgentVaultFailureDto {
+        schema_version: PROTOCOL_VERSION,
+        kind: kind.clone(),
+        stage: stage.into(),
+        affected_refs: vec![],
+        retryable: false,
+        recovery_action: recovery_action(failure, stage),
+        correlation_request_id: request_id.into(),
+    }
+}
+
+fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryActionDto {
+    match failure {
+        AgentFailure::Conflict if matches!(stage, "conversation_session" | "conversation_turn") => {
+            AgentVaultRecoveryActionDto::RefreshSession
+        }
+        AgentFailure::Conflict | AgentFailure::StaleContext => {
+            AgentVaultRecoveryActionDto::RefreshContext
+        }
+        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired
+            if matches!(stage, "calendar_access" | "calendar_experts") =>
+        {
+            AgentVaultRecoveryActionDto::ReviewSource
+        }
+        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
+            AgentVaultRecoveryActionDto::ReopenVault
+        }
+        _ => AgentVaultRecoveryActionDto::None,
+    }
+}
+
             )
             .unwrap();
 
@@ -1518,6 +1568,44 @@ mod tests {
                     expected_revision: 0,
                     prompt: AgentFixturePromptDto::Today,
                 },
+    #[test]
+    fn failure_recovery_is_stage_aware_and_conservative() {
+        let conversation =
+            failure_envelope(&AgentFailure::Conflict, "conversation_turn", "request");
+        assert_eq!(
+            conversation.recovery_action,
+            AgentVaultRecoveryActionDto::RefreshSession
+        );
+        assert!(!conversation.retryable);
+
+        let setup = failure_envelope(&AgentFailure::Conflict, "calendar_access", "request");
+        assert_eq!(
+            setup.recovery_action,
+            AgentVaultRecoveryActionDto::RefreshContext
+        );
+
+        let review = failure_envelope(
+            &AgentFailure::AccessReviewRequired,
+            "calendar_access",
+            "request",
+        );
+        assert_eq!(
+            review.recovery_action,
+            AgentVaultRecoveryActionDto::ReviewSource
+        );
+
+        for failure in [
+            AgentFailure::CapabilityUnavailable,
+            AgentFailure::Cancelled,
+            AgentFailure::Interrupted,
+            AgentFailure::DeadlineExceeded,
+        ] {
+            let envelope = failure_envelope(&failure, "calendar_experts", "request");
+            assert_eq!(envelope.recovery_action, AgentVaultRecoveryActionDto::None);
+            assert!(!envelope.retryable);
+        }
+    }
+
             },
         );
         let before = perform(

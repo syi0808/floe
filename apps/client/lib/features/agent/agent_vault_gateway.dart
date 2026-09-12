@@ -19,24 +19,34 @@ class AgentVaultException implements Exception {
     this.requestId,
     this.stage,
     this.metadata = const {},
+    this.recoveryAction,
+    this.affectedRefs = const [],
+    this.correlationRequestId,
+    this.retryableOverride,
   });
 
   final String failure;
   final String? requestId;
   final String? stage;
   final Map<String, String> metadata;
+  final String? recoveryAction;
+  final List<String> affectedRefs;
+  final String? correlationRequestId;
+  final bool? retryableOverride;
 
-  bool get retryable => const {
-    'model_unavailable',
-    'local_model_unavailable',
-    'server_model_unavailable',
-    'server_model_timeout',
-    'quota_exceeded',
-    'stalled',
-    'deadline_exceeded',
-    'interrupted',
-    'transport_unavailable',
-  }.contains(failure);
+  bool get retryable =>
+      retryableOverride ??
+      const {
+        'model_unavailable',
+        'local_model_unavailable',
+        'server_model_unavailable',
+        'server_model_timeout',
+        'quota_exceeded',
+        'stalled',
+        'deadline_exceeded',
+        'interrupted',
+        'transport_unavailable',
+      }.contains(failure);
 
   @override
   String toString() => requestId == null
@@ -246,6 +256,8 @@ final class NativeAgentVaultGateway
     Map<String, dynamic> result,
   ) => AgentRunUpdate.fromJson({
     ...result,
+    'failure': _failureKind(result['failure']),
+    'recovery_action': _failureRecoveryAction(result['failure']),
     'session_id': turn.session.id,
     'expected_revision': turn.session.revision,
   });
@@ -460,12 +472,8 @@ final class NativeAgentVaultGateway
       await _call(job, {'kind': 'submit', 'action': action}),
     );
     await _release(job);
-    if (result['failure'] case final String failure) {
-      throw AgentVaultException(
-        failure,
-        requestId: result['request_id']?.toString() ?? job.id,
-        stage: action['kind']?.toString(),
-      );
+    if (result['failure'] != null) {
+      throw _failureException(result['failure'], job);
     }
     return result;
   }
@@ -557,6 +565,8 @@ final class NativeAgentVaultGateway
   AgentRunUpdate _update(AgentSession session, Map<String, dynamic> result) =>
       AgentRunUpdate.fromJson({
         ...result,
+        'failure': _failureKind(result['failure']),
+        'recovery_action': _failureRecoveryAction(result['failure']),
         'session_id': session.id,
         'expected_revision': session.revision,
       });
@@ -580,6 +590,10 @@ final class NativeAgentVaultGateway
         requestId: source?.requestId ?? job.id,
         stage: source?.stage ?? job.stage,
         metadata: source?.metadata ?? const {},
+        recoveryAction: source?.recoveryAction,
+        affectedRefs: source?.affectedRefs ?? const [],
+        correlationRequestId: source?.correlationRequestId,
+        retryableOverride: source?.retryableOverride,
       );
       AppDiagnostics.error(
         component: 'agent_gateway',
@@ -598,25 +612,118 @@ final class NativeAgentVaultGateway
         result['next_sequence'] is! int) {
       throw const FormatException('Invalid vault response');
     }
+    _validateFailure(result['failure'], job);
     if (operation['kind'] != 'release' && result['done'] == true) {
-      if (result['failure'] case final String failure) {
-        final completedError = AgentVaultException(
-          failure,
-          requestId: job.id,
-          stage: job.stage,
-        );
+      if (result['failure'] != null) {
+        final completedError = _failureException(result['failure'], job);
         AppDiagnostics.error(
           component: 'agent_gateway',
           operation: job.stage,
           error: completedError,
           stackTrace: StackTrace.current,
-          failure: failure,
+          failure: completedError.failure,
           requestId: job.id,
           retryable: completedError.retryable,
         );
       }
     }
     return result;
+  }
+
+  AgentVaultException _failureException(Object? raw, _VaultJob job) {
+    final envelope = _failureEnvelope(raw, job);
+    return AgentVaultException(
+      envelope.kind,
+      requestId: envelope.correlationRequestId,
+      stage: envelope.stage,
+      recoveryAction: envelope.recoveryAction,
+      affectedRefs: envelope.affectedRefs,
+      correlationRequestId: envelope.correlationRequestId,
+      retryableOverride: envelope.retryable,
+    );
+  }
+
+  void _validateFailure(Object? raw, _VaultJob job) {
+    if (raw != null) _failureEnvelope(raw, job);
+  }
+
+  _VaultFailureEnvelope _failureEnvelope(Object? raw, _VaultJob job) {
+    if (raw is! Map) {
+      throw const FormatException('Invalid vault failure envelope');
+    }
+    late final Map<String, Object?> value;
+    try {
+      value = Map<String, Object?>.from(raw);
+    } on Object {
+      throw const FormatException('Invalid vault failure envelope');
+    }
+    const fields = {
+      'schema_version',
+      'kind',
+      'stage',
+      'affected_refs',
+      'retryable',
+      'recovery_action',
+      'correlation_request_id',
+    };
+    if (value.length != fields.length ||
+        !value.keys.toSet().containsAll(fields)) {
+      throw const FormatException('Invalid vault failure envelope fields');
+    }
+    if (value['schema_version'] != agentSchemaVersion ||
+        value['kind'] is! String ||
+        value['stage'] != job.stage ||
+        (value['stage'] as String).isEmpty ||
+        (value['stage'] as String).length > 64 ||
+        (value['kind'] as String).isEmpty ||
+        (value['kind'] as String).length > 128 ||
+        value['retryable'] is! bool ||
+        value['recovery_action'] is! String ||
+        value['correlation_request_id'] != job.id) {
+      throw const FormatException('Invalid vault failure envelope');
+    }
+    final refs = value['affected_refs'];
+    if (refs is! List ||
+        refs.length > 32 ||
+        refs.any((ref) => ref is! String || ref.isEmpty || ref.length > 256)) {
+      throw const FormatException('Invalid vault failure references');
+    }
+    final action = value['recovery_action']! as String;
+    if (!const {
+      'none',
+      'retry_read',
+      'refresh_session',
+      'refresh_context',
+      'review_source',
+      'reopen_vault',
+      'reconcile',
+    }.contains(action)) {
+      throw const FormatException('Invalid vault recovery action');
+    }
+    final retryable = value['retryable']! as bool;
+    if (retryable != (action == 'retry_read')) {
+      throw const FormatException('Invalid vault recovery retry contract');
+    }
+    return _VaultFailureEnvelope(
+      kind: value['kind']! as String,
+      stage: value['stage']! as String,
+      affectedRefs: List.unmodifiable(refs.cast<String>()),
+      retryable: retryable,
+      recoveryAction: action,
+      correlationRequestId: value['correlation_request_id']! as String,
+    );
+  }
+
+  String? _failureKind(Object? raw) {
+    if (raw == null) return null;
+    if (raw is String) return raw;
+    if (raw is Map && raw['kind'] is String) return raw['kind'] as String;
+    throw const FormatException('Invalid vault failure envelope');
+  }
+
+  String? _failureRecoveryAction(Object? raw) {
+    if (raw is! Map) return null;
+    return raw['recovery_action'] as String?;
   }
 
   Future<void> _release(_VaultJob job) async {
@@ -633,6 +740,24 @@ final class NativeAgentVaultGateway
         'expected_revision': session.revision,
         'prompt': prompt.wireName,
       };
+}
+
+final class _VaultFailureEnvelope {
+  const _VaultFailureEnvelope({
+    required this.kind,
+    required this.stage,
+    required this.affectedRefs,
+    required this.retryable,
+    required this.recoveryAction,
+    required this.correlationRequestId,
+  });
+
+  final String kind;
+  final String stage;
+  final List<String> affectedRefs;
+  final bool retryable;
+  final String recoveryAction;
+  final String correlationRequestId;
 }
 
 final class _VaultJob {

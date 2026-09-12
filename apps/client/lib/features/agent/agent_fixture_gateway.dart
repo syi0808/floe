@@ -56,6 +56,7 @@ final class AgentRunUpdate {
           ? null
           : AgentSession.fromJson(_object(json['session'])),
       failure = json['failure'] as String?,
+      recoveryAction = json['recovery_action'] as String?,
       events = List.unmodifiable(
         (json['events']! as List).map(
           (value) => AgentEvent.fromJson(_object(value)),
@@ -63,7 +64,7 @@ final class AgentRunUpdate {
       ) {
     if (nextSequence < events.length ||
         done != (session != null || failure != null) ||
-        session != null && failure != null) {
+        !done && recoveryAction != null) {
       throw const FormatException('Invalid Agent run state.');
     }
   }
@@ -75,6 +76,7 @@ final class AgentRunUpdate {
   final bool done;
   final AgentSession? session;
   final String? failure;
+  final String? recoveryAction;
   final List<AgentEvent> events;
 }
 

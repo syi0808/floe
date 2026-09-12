@@ -139,7 +139,15 @@ void main() {
         'next_sequence': 0,
         'state': 'ready',
         'session': null,
-        'failure': 'model_unavailable',
+        'failure': {
+          'schema_version': 1,
+          'kind': 'model_unavailable',
+          'stage': 'status',
+          'affected_refs': <String>[],
+          'retryable': false,
+          'recovery_action': 'none',
+          'correlation_request_id': requestId,
+        },
       };
     }, deviceId: 'test-device');
 
@@ -153,7 +161,7 @@ void main() {
               isTrue,
             )
             .having((error) => error.stage, 'stage', 'status')
-            .having((error) => error.retryable, 'retryable', isTrue),
+            .having((error) => error.retryable, 'retryable', isFalse),
       ),
     );
     final diagnostic = AppDiagnostics.records.single;
@@ -161,6 +169,74 @@ void main() {
     expect(diagnostic.operation, 'status');
     expect(diagnostic.failure, 'model_unavailable');
   });
+
+  test('native failures require the versioned envelope', () async {
+    final gateway = NativeAgentVaultGateway((request) async {
+      final id = request['request_id']! as String;
+      return {
+        'request_id': id,
+        'done': true,
+        'events': <Object?>[],
+        'next_sequence': 0,
+        'state': 'ready',
+        'session': null,
+        'failure': 'capability_unavailable',
+      };
+    }, deviceId: 'test-device');
+    await expectLater(gateway.vaultStatus('test'), throwsFormatException);
+  });
+
+  test('retryability is valid only for an explicit read retry', () async {
+    Future<Map<String, dynamic>> response(Map<String, Object?> request) async {
+      final id = request['request_id']! as String;
+      return {
+        'request_id': id,
+        'done': true,
+        'events': <Object?>[],
+        'next_sequence': 0,
+        'state': 'ready',
+        'session': null,
+        'failure': {
+          'schema_version': 1,
+          'kind': 'capability_unavailable',
+          'stage': 'status',
+          'affected_refs': <String>[],
+          'retryable': true,
+          'recovery_action': 'none',
+          'correlation_request_id': id,
+        },
+      };
+    }
+
+    final gateway = NativeAgentVaultGateway(response, deviceId: 'test-device');
+    await expectLater(gateway.vaultStatus('test'), throwsFormatException);
+  });
+
+  test(
+    'failure stage and correlation cannot be rewritten by transport',
+    () async {
+      final gateway = NativeAgentVaultGateway((request) async {
+        return {
+          'request_id': request['request_id'],
+          'done': true,
+          'events': <Object?>[],
+          'next_sequence': 0,
+          'state': 'ready',
+          'session': null,
+          'failure': {
+            'schema_version': 1,
+            'kind': 'conflict',
+            'stage': 'conversation_turn',
+            'affected_refs': <String>[],
+            'retryable': false,
+            'recovery_action': 'refresh_session',
+            'correlation_request_id': 'wrong-request',
+          },
+        };
+      }, deviceId: 'test-device');
+      await expectLater(gateway.vaultStatus('test'), throwsFormatException);
+    },
+  );
 }
 
 class _Transport {

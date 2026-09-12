@@ -108,6 +108,7 @@ final class AgentController extends ChangeNotifier {
   List<AgentMessage> messages = [];
   AgentProgress progress = AgentProgress.idle;
   String? failure;
+  String? recoveryAction;
   bool needsReload = false;
   bool _busy = false;
   bool _disposed = false;
@@ -351,6 +352,7 @@ final class AgentController extends ChangeNotifier {
       canSend &&
       !canContinue &&
       failure != null &&
+      recoveryAction == 'retry_read' &&
       (isGeneralConversation
           ? _lastConversationText != null
           : _lastPrompt != null);
@@ -395,6 +397,9 @@ final class AgentController extends ChangeNotifier {
       _recordError('load', error, stackTrace);
       _fail(
         error is AgentVaultException ? error.failure : 'storage_unavailable',
+        recoveryAction: error is AgentVaultException
+            ? error.recoveryAction
+            : null,
       );
     } finally {
       _end();
@@ -423,6 +428,9 @@ final class AgentController extends ChangeNotifier {
       _recordError('recover', error, stackTrace, sessionId: session?.id);
       _fail(
         error is AgentVaultException ? error.failure : 'storage_unavailable',
+        recoveryAction: error is AgentVaultException
+            ? error.recoveryAction
+            : null,
       );
     } finally {
       _end();
@@ -492,12 +500,17 @@ final class AgentController extends ChangeNotifier {
           _runSession = null;
           if (update.session case final saved?) {
             _acceptSession(saved);
-            needsReload = false;
+            if (update.failure == null) {
+              needsReload = false;
+            } else {
+              _fail(update.failure!, recoveryAction: update.recoveryAction);
+            }
           } else {
             final resultError = AgentVaultException(
               update.failure ?? 'storage_unavailable',
               requestId: update.requestId,
               stage: 'conversation_turn',
+              recoveryAction: update.recoveryAction,
             );
             _recordError(
               'conversation_turn',
@@ -505,7 +518,10 @@ final class AgentController extends ChangeNotifier {
               StackTrace.current,
               sessionId: original.id,
             );
-            _fail(update.failure ?? 'storage_unavailable');
+            _fail(
+              update.failure ?? 'storage_unavailable',
+              recoveryAction: update.recoveryAction,
+            );
           }
           break;
         }
@@ -522,6 +538,9 @@ final class AgentController extends ChangeNotifier {
       );
       _fail(
         error is AgentVaultException ? error.failure : 'transport_unavailable',
+        recoveryAction: error is AgentVaultException
+            ? error.recoveryAction
+            : null,
       );
     } finally {
       try {
@@ -579,9 +598,16 @@ final class AgentController extends ChangeNotifier {
           _runSession = null;
           if (update.session case final saved?) {
             _acceptSession(saved);
-            needsReload = false;
+            if (update.failure == null) {
+              needsReload = false;
+            } else {
+              _fail(update.failure!, recoveryAction: update.recoveryAction);
+            }
           } else {
-            _fail(update.failure ?? 'storage_unavailable');
+            _fail(
+              update.failure ?? 'storage_unavailable',
+              recoveryAction: update.recoveryAction,
+            );
           }
           break;
         }
@@ -592,6 +618,9 @@ final class AgentController extends ChangeNotifier {
       _recordError('fixture_turn', error, stackTrace, sessionId: original.id);
       _fail(
         error is AgentVaultException ? error.failure : 'transport_unavailable',
+        recoveryAction: error is AgentVaultException
+            ? error.recoveryAction
+            : null,
       );
     } finally {
       try {
@@ -645,6 +674,7 @@ final class AgentController extends ChangeNotifier {
     session = saved;
     messages = List.of(saved.messages);
     failure = saved.lastOutcome?.failure;
+    recoveryAction = null;
     final lastUser = messages
         .whereType<AgentTextMessage>()
         .where((message) => message.kind == AgentMessageKind.user)
@@ -728,7 +758,12 @@ final class AgentController extends ChangeNotifier {
       _acceptSession((await vault.resumeAgentFixture(personId)).session);
       needsReload = false;
     } on Object catch (error) {
-      _fail(error is AgentVaultException ? error.failure : 'vault_unavailable');
+      _fail(
+        error is AgentVaultException ? error.failure : 'vault_unavailable',
+        recoveryAction: error is AgentVaultException
+            ? error.recoveryAction
+            : null,
+      );
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -781,10 +816,15 @@ final class AgentController extends ChangeNotifier {
     _operationDone = null;
   }
 
-  void _fail(String reason) {
+  void _fail(String reason, {String? recoveryAction}) {
     _clearProposals();
     failure = reason;
-    needsReload = true;
+    this.recoveryAction = recoveryAction;
+    needsReload = !const {
+      'retry_read',
+      'review_source',
+      'refresh_context',
+    }.contains(recoveryAction);
     if (usesVault &&
         const {
           'vault_unavailable',

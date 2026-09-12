@@ -153,6 +153,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Calendar context is no longer current. Reload and try again.';
 
   @override
+  String get agentContextRefreshRequired =>
+      'Context is no longer current. Refresh context before trying again.';
+
+  @override
   String get agentAccessReviewRequired =>
       'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.';
 

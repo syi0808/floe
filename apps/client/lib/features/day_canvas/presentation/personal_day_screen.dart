@@ -453,6 +453,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             return AgentPanel(
               controller: agentController!,
               onOpenAction: actionController == null ? null : _openAgentAction,
+              onOpenSourceReview: _openAgentSourceReview,
               onClose: _closeAssistant,
             );
           }
@@ -481,6 +482,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                       onOpenAction: actionController == null
                           ? null
                           : _openAgentAction,
+                      onOpenSourceReview: _openAgentSourceReview,
                       onClose: _closeAssistant,
                     )
                   : SingleChildScrollView(child: rail),
@@ -519,6 +521,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         child: AgentPanel(
           controller: agent,
           onOpenAction: actionController == null ? null : _openAgentAction,
+          onOpenSourceReview: _openAgentSourceReview,
           onClose: () => Navigator.pop(context),
         ),
       ),
@@ -544,6 +547,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             : null,
       ),
     );
+  }
+
+  void _openAgentSourceReview() {
+    if (MediaQuery.sizeOf(context).width <= 960) {
+      Navigator.of(context).maybePop();
+    }
+    _selectDestination(_DestinationView.settings);
   }
 
   AgentCalendarSources? _agentCalendarSources() {
