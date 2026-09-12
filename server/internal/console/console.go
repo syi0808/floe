@@ -106,6 +106,18 @@ type ConnectorOAuthRuntime interface {
 	Ready() bool
 }
 
+type ProviderIdentityRuntime interface {
+	ProviderIdentity(context.Context) (string, error)
+}
+
+type ProviderIdentityStatusRuntime interface {
+	ProviderIdentityStatus() (string, bool)
+}
+
+type ProviderIdentityFenceRuntime interface {
+	WithVerifiedProviderIdentity(string, string, func() error) error
+}
+
 type CommunicationRuntime interface {
 	ConnectionSnapshot(context.Context) (any, error)
 	ReadCommunicationView(context.Context, string, int, int) (any, error)

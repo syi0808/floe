@@ -23,6 +23,28 @@ func (console *Console) WithCurrentSource(principal authorization.Principal, ref
 	if !exists || record.ConnectorID != reference.ConnectorID || record.PersonID != principal.PersonID || record.Incarnation != reference.Incarnation || record.Epoch != reference.Epoch || record.Epoch == 0 || record.Incarnation == "" || record.ProviderIdentity == "" || record.IdentityUnverified || record.Device != nil && record.Device.DeviceID != principal.DeviceID || reference.ExecutionOwner != console.state.ExecutionOwnerID {
 		return errors.New("source unavailable")
 	}
+	if record.ConnectorID == "calendar.google" || record.ConnectorID == "calendar.microsoft" {
+		identityRuntime := console.calendarIdentityRuntimeLocked(record.ConnectorID)
+		fenceRuntime, ok := identityRuntime.(ProviderIdentityFenceRuntime)
+		if !ok {
+			return errors.New("source identity unavailable")
+		}
+		return fenceRuntime.WithVerifiedProviderIdentity(record.Credential, record.ProviderIdentity, func() error {
+			snapshot := authorization.SourceSnapshot{SourceReference: reference, PersonID: record.PersonID, Active: true}
+			return consume(snapshot)
+		})
+	}
 	snapshot := authorization.SourceSnapshot{SourceReference: reference, PersonID: record.PersonID, Active: true}
 	return consume(snapshot)
+}
+
+func (console *Console) calendarIdentityRuntimeLocked(connectorID string) ConnectorOAuthRuntime {
+	switch connectorID {
+	case "calendar.google":
+		return console.calendarAuth
+	case "calendar.microsoft":
+		return console.microsoftCalendarAuth
+	default:
+		return nil
+	}
 }

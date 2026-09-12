@@ -26,6 +26,8 @@ const (
 	readonlyScope         = "https://www.googleapis.com/auth/gmail.readonly"
 	driveReadonlyScope    = "https://www.googleapis.com/auth/drive.readonly"
 	calendarReadonlyScope = "https://www.googleapis.com/auth/calendar.readonly"
+	openidScope           = "openid"
+	defaultUserInfoURL    = "https://openidconnect.googleapis.com/v1/userinfo"
 )
 
 var ErrUnavailable = errors.New("Google authentication unavailable")
@@ -45,11 +47,14 @@ type Config struct {
 }
 
 type tokenBundle struct {
-	ClientID     string    `json:"client_id"`
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token"`
-	Scope        string    `json:"scope"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	ClientID               string    `json:"client_id"`
+	AccessToken            string    `json:"access_token"`
+	RefreshToken           string    `json:"refresh_token"`
+	Scope                  string    `json:"scope"`
+	ExpiresAt              time.Time `json:"expires_at"`
+	ProviderIdentity       string    `json:"provider_identity,omitempty"`
+	IdentityVerified       bool      `json:"identity_verified,omitempty"`
+	IdentityReviewRequired bool      `json:"identity_review_required,omitempty"`
 }
 
 type loginFlow struct {
@@ -61,6 +66,7 @@ type loginFlow struct {
 
 type Runtime struct {
 	operation                    sync.Mutex
+	identityFence                sync.RWMutex
 	mu                           sync.RWMutex
 	store                        Store
 	config                       Config
@@ -71,7 +77,10 @@ type Runtime struct {
 	callbackAddress              string
 	credentialName               string
 	credentialNamespace          string
+	credentialGeneration         uint64
 	scopes                       []string
+	userinfoURL                  string
+	allowTestEndpoints           bool
 }
 
 func New(store Store, config Config) (*Runtime, error) {
@@ -86,7 +95,7 @@ func New(store Store, config Config) (*Runtime, error) {
 		return nil, ErrUnavailable
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 5 * time.Second, MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, callbackAddress: "127.0.0.1:0", credentialName: name, credentialNamespace: name, scopes: scopes}, nil
+	return &Runtime{store: store, config: config, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, authURL: defaultAuthURL, tokenURL: defaultTokenURL, revokeURL: defaultRevokeURL, userinfoURL: defaultUserInfoURL, callbackAddress: "127.0.0.1:0", credentialName: name, credentialNamespace: name, scopes: scopes}, nil
 }
 
 func NewDrive(store Store, config Config) (*Runtime, error) {
@@ -97,7 +106,7 @@ func NewDrive(store Store, config Config) (*Runtime, error) {
 
 func NewCalendar(store Store, config Config) (*Runtime, error) {
 	config.CredentialName = "FLOE_GOOGLE_CALENDAR_OAUTH"
-	config.Scopes = []string{calendarReadonlyScope}
+	config.Scopes = []string{calendarReadonlyScope, openidScope}
 	return New(store, config)
 }
 
@@ -110,10 +119,13 @@ func (runtime *Runtime) BindCredential(name string) error {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
 	runtime.cancelLogin()
+	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.credentialName = name
+	runtime.credentialGeneration++
 	runtime.tokens = nil
 	runtime.mu.Unlock()
+	runtime.identityFence.Unlock()
 	return nil
 }
 
@@ -131,19 +143,122 @@ func (runtime *Runtime) Token(ctx context.Context) (string, error) {
 		return "", ErrCredentialExpired
 	}
 	if current.ExpiresAt.After(time.Now().Add(time.Minute)) {
+		if runtime.requiresProviderIdentity() {
+			if !hasScope(current.Scope, openidScope) {
+				return "", ErrCredentialExpired
+			}
+			if current.IdentityVerified && current.ProviderIdentity != "" && !current.IdentityReviewRequired {
+				return current.AccessToken, nil
+			}
+			identity, identityErr := runtime.identityForToken(ctx, current.AccessToken)
+			identityChanged := current.ProviderIdentity != "" && current.ProviderIdentity != identity
+			if identityErr != nil || identityChanged || current.IdentityReviewRequired {
+				if identityChanged {
+					current.ProviderIdentity = identity
+					current.IdentityReviewRequired = true
+				}
+				current.IdentityVerified = false
+				_ = runtime.save(current)
+				return "", ErrCredentialExpired
+			}
+			if current.ProviderIdentity != identity || !current.IdentityVerified {
+				current.ProviderIdentity, current.IdentityVerified = identity, true
+				if runtime.save(current) != nil {
+					return "", ErrCredentialExpired
+				}
+			}
+		}
 		return current.AccessToken, nil
 	}
 	refreshed, err := runtime.tokenRequest(ctx, url.Values{"grant_type": {"refresh_token"}, "client_id": {runtime.config.ClientID}, "refresh_token": {current.RefreshToken}, "client_secret": {runtime.config.ClientSecret}}, current)
 	if errors.Is(err, ErrCredentialExpired) {
 		_ = runtime.store.Delete(runtime.credentialKey())
+		runtime.identityFence.Lock()
 		runtime.mu.Lock()
 		runtime.tokens = nil
 		runtime.mu.Unlock()
+		runtime.identityFence.Unlock()
 	}
-	if err != nil || runtime.save(refreshed) != nil {
+	if err != nil {
+		return "", ErrCredentialExpired
+	}
+	if runtime.requiresProviderIdentity() {
+		identity, identityErr := runtime.identityForToken(ctx, refreshed.AccessToken)
+		refreshed.ProviderIdentity = identity
+		if identityErr != nil || current.ProviderIdentity != "" && current.ProviderIdentity != identity || current.IdentityReviewRequired {
+			if identityErr != nil {
+				refreshed.ProviderIdentity = current.ProviderIdentity
+			}
+			refreshed.IdentityVerified = false
+			refreshed.IdentityReviewRequired = current.IdentityReviewRequired || identityErr == nil && current.ProviderIdentity != "" && current.ProviderIdentity != identity
+			_ = runtime.save(refreshed)
+			return "", ErrCredentialExpired
+		}
+		refreshed.ProviderIdentity, refreshed.IdentityVerified = identity, true
+	}
+	if runtime.save(refreshed) != nil {
 		return "", ErrCredentialExpired
 	}
 	return refreshed.AccessToken, nil
+}
+
+func (runtime *Runtime) ProviderIdentity(ctx context.Context) (string, error) {
+	runtime.operation.Lock()
+	defer runtime.operation.Unlock()
+	current := runtime.load()
+	if current == nil || !runtime.requiresProviderIdentity() || !hasScope(current.Scope, openidScope) {
+		return "", ErrCredentialExpired
+	}
+	if current.IdentityVerified && current.ProviderIdentity != "" && !current.IdentityReviewRequired {
+		return current.ProviderIdentity, nil
+	}
+	if current.IdentityReviewRequired {
+		return "", ErrCredentialExpired
+	}
+	identity, err := runtime.identityForToken(ctx, current.AccessToken)
+	if err != nil {
+		current.IdentityVerified = false
+		_ = runtime.save(current)
+		return "", err
+	}
+	if current.ProviderIdentity != "" && current.ProviderIdentity != identity {
+		current.IdentityVerified = false
+		current.IdentityReviewRequired = true
+		_ = runtime.save(current)
+		return "", ErrCredentialExpired
+	}
+	current.ProviderIdentity, current.IdentityVerified, current.IdentityReviewRequired = identity, true, false
+	if err := runtime.save(current); err != nil {
+		return "", err
+	}
+	return identity, nil
+}
+
+func (runtime *Runtime) ProviderIdentityStatus() (string, bool) {
+	runtime.identityFence.RLock()
+	defer runtime.identityFence.RUnlock()
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if runtime.tokens == nil {
+		return "", false
+	}
+	return runtime.tokens.ProviderIdentity, runtime.tokens.IdentityVerified && !runtime.tokens.IdentityReviewRequired
+}
+
+func (runtime *Runtime) WithVerifiedProviderIdentity(expectedCredential, expectedIdentity string, consume func() error) error {
+	if consume == nil {
+		return ErrCredentialExpired
+	}
+	runtime.identityFence.RLock()
+	defer runtime.identityFence.RUnlock()
+	runtime.mu.RLock()
+	current := runtime.tokens
+	verified := runtime.credentialName == expectedCredential && current != nil && current.ProviderIdentity == expectedIdentity && current.IdentityVerified && !current.IdentityReviewRequired
+	runtime.mu.RUnlock()
+	if !verified {
+		return ErrCredentialExpired
+	}
+	return consume()
 }
 
 func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) {
@@ -165,7 +280,7 @@ func (runtime *Runtime) Action(ctx context.Context, action string) (any, error) 
 	if action == "cancel" {
 		runtime.cancelLogin()
 	}
-	if action == "login" && runtime.load() == nil {
+	if action == "login" && (runtime.load() == nil || runtime.requiresProviderIdentity() && !runtime.identityReady()) {
 		runtime.mu.RLock()
 		pending := runtime.flow != nil && runtime.flow.expires.After(time.Now())
 		runtime.mu.RUnlock()
@@ -317,6 +432,7 @@ func (runtime *Runtime) logout(ctx context.Context) error {
 	runtime.cancelLogin()
 	current := runtime.load()
 	if current != nil {
+		runtime.publishIdentityDeny()
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, runtime.revokeURL, strings.NewReader(url.Values{"token": {current.RefreshToken}}.Encode()))
 		if err != nil {
 			return ErrUnavailable
@@ -330,13 +446,17 @@ func (runtime *Runtime) logout(ctx context.Context) error {
 		if response.StatusCode != http.StatusOK {
 			return ErrUnavailable
 		}
+		runtime.publishIdentityDeny()
 	}
 	if runtime.store.Delete(runtime.credentialKey()) != nil {
+		runtime.publishIdentityDeny()
 		return ErrUnavailable
 	}
+	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.tokens = nil
 	runtime.mu.Unlock()
+	runtime.identityFence.Unlock()
 	return nil
 }
 
@@ -348,30 +468,130 @@ func (runtime *Runtime) load() *tokenBundle {
 		copy := *current
 		return &copy
 	}
-	encoded, err := runtime.store.Get(runtime.credentialKey())
+	runtime.mu.RLock()
+	credentialName := runtime.credentialName
+	credentialGeneration := runtime.credentialGeneration
+	runtime.mu.RUnlock()
+	encoded, err := runtime.store.Get(credentialName)
 	if err != nil || encoded == "" || len(encoded) > 32768 {
 		return nil
 	}
 	var value tokenBundle
-	if json.Unmarshal([]byte(encoded), &value) != nil || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasAllScopes(value.Scope, runtime.scopes) || value.ExpiresAt.IsZero() {
+	if !decodePersistedTokenBundle(encoded, &value) || value.ClientID != runtime.config.ClientID || !validCredential(value.AccessToken, 16384) || !validCredential(value.RefreshToken, 16384) || !hasAllScopes(value.Scope, runtime.resourceScopes()) || value.ExpiresAt.IsZero() || !runtime.validPersistedIdentity(value) {
 		return nil
 	}
+	if runtime.requiresProviderIdentity() && !hasScope(value.Scope, openidScope) {
+		value.ProviderIdentity, value.IdentityVerified = "", false
+	} else if runtime.requiresProviderIdentity() && value.IdentityVerified && !value.IdentityReviewRequired {
+		value.IdentityVerified = false
+	}
+	runtime.identityFence.Lock()
+	runtime.mu.RLock()
+	if runtime.credentialName != credentialName || runtime.credentialGeneration != credentialGeneration {
+		current := runtime.tokens
+		if current == nil {
+			runtime.mu.RUnlock()
+			runtime.identityFence.Unlock()
+			return nil
+		}
+		copy := *current
+		runtime.mu.RUnlock()
+		runtime.identityFence.Unlock()
+		return &copy
+	}
+	if current := runtime.tokens; current != nil {
+		copy := *current
+		runtime.mu.RUnlock()
+		runtime.identityFence.Unlock()
+		return &copy
+	}
+	runtime.mu.RUnlock()
 	runtime.mu.Lock()
 	runtime.tokens = &value
 	runtime.mu.Unlock()
+	runtime.identityFence.Unlock()
 	return &value
 }
 
+func decodePersistedTokenBundle(encoded string, value *tokenBundle) bool {
+	if value == nil || len(encoded) == 0 || len(encoded) > 32768 || rejectDuplicateJSON([]byte(encoded)) != nil {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(encoded), &fields) != nil {
+		return false
+	}
+	allowed := map[string]bool{"client_id": true, "access_token": true, "refresh_token": true, "scope": true, "expires_at": true, "provider_identity": true, "identity_verified": true, "identity_review_required": true}
+	for key := range fields {
+		if !allowed[key] {
+			return false
+		}
+		for known := range allowed {
+			if key != known && strings.EqualFold(key, known) {
+				return false
+			}
+		}
+	}
+	return json.Unmarshal([]byte(encoded), value) == nil
+}
+
+func (runtime *Runtime) validPersistedIdentity(value tokenBundle) bool {
+	if !runtime.requiresProviderIdentity() {
+		return value.ProviderIdentity == "" && !value.IdentityVerified && !value.IdentityReviewRequired
+	}
+	if value.ProviderIdentity != "" && (!strings.HasPrefix(value.ProviderIdentity, "google:") || !validSubject(strings.TrimPrefix(value.ProviderIdentity, "google:"))) {
+		return false
+	}
+	if value.IdentityVerified && (value.ProviderIdentity == "" || value.IdentityReviewRequired) {
+		return false
+	}
+	return true
+}
+
+func (runtime *Runtime) resourceScopes() []string {
+	if !runtime.requiresProviderIdentity() {
+		return runtime.scopes
+	}
+	return []string{calendarReadonlyScope}
+}
+
+func (runtime *Runtime) identityReady() bool {
+	current := runtime.load()
+	return current != nil && current.IdentityVerified && !current.IdentityReviewRequired && current.ProviderIdentity != "" && hasScope(current.Scope, openidScope)
+}
+
 func (runtime *Runtime) save(value *tokenBundle) error {
+	if value == nil || !runtime.validPersistedIdentity(*value) {
+		return ErrUnavailable
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil || runtime.store.Put(runtime.credentialKey(), string(encoded)) != nil {
+		runtime.publishIdentityDeny()
 		return ErrUnavailable
 	}
 	copy := *value
+	runtime.identityFence.Lock()
 	runtime.mu.Lock()
 	runtime.tokens = &copy
 	runtime.mu.Unlock()
+	runtime.identityFence.Unlock()
 	return nil
+}
+
+func (runtime *Runtime) publishIdentityDeny() {
+	runtime.identityFence.Lock()
+	defer runtime.identityFence.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.tokens == nil {
+		return
+	}
+	denied := *runtime.tokens
+	denied.IdentityVerified = false
+	if denied.ProviderIdentity != "" {
+		denied.IdentityReviewRequired = true
+	}
+	runtime.tokens = &denied
 }
 
 func (runtime *Runtime) finishLogin(flow *loginFlow) {
@@ -426,7 +646,7 @@ func hasAllScopes(value string, required []string) bool {
 func validGoogleCredentialProfile(name string, scopes []string) bool {
 	return name == credentialName && len(scopes) == 1 && scopes[0] == readonlyScope ||
 		name == "FLOE_DRIVE_OAUTH" && len(scopes) == 1 && scopes[0] == driveReadonlyScope ||
-		name == "FLOE_GOOGLE_CALENDAR_OAUTH" && len(scopes) == 1 && scopes[0] == calendarReadonlyScope
+		name == "FLOE_GOOGLE_CALENDAR_OAUTH" && len(scopes) == 2 && scopes[0] == calendarReadonlyScope && scopes[1] == openidScope
 }
 
 func validBoundCredential(namespace, name string) bool {

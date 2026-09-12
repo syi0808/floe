@@ -761,17 +761,50 @@ func isOAuthAuthKind(value string) bool {
 
 func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	console.mu.Lock()
-	defer console.mu.Unlock()
 	attempt := console.connectorAttempts[attemptID]
 	durable, durableExists := console.state.Attempts[attemptID]
 	if attempt == nil || !durableExists || attempt.Status != "pending" && attempt.Status != "connected" || durable.ConnectionID != attempt.ConnectionID {
+		console.mu.Unlock()
 		return false
 	}
-	record := connectionRecord{ConnectionID: attempt.ConnectionID, Revision: 1, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential, Incarnation: durable.Incarnation, Epoch: durable.Epoch, IdentityUnverified: true}
+	definition, definitionExists := clientConnectorDefinitionFor(attempt.ConnectorID)
+	providerRuntime := ConnectorOAuthRuntime(nil)
+	if definitionExists && definition.OAuthRuntime != nil {
+		providerRuntime = definition.OAuthRuntime(console)
+	}
+	attemptConnectionID := attempt.ConnectionID
+	attemptConnectorID := attempt.ConnectorID
+	attemptPersonID := attempt.PersonID
+	attemptScope := cloneConnectorScope(attempt.Scope)
+	attemptCredential := attempt.Credential
+	incarnation, epoch := durable.Incarnation, durable.Epoch
+	console.mu.Unlock()
+
+	providerIdentity := ""
+	identityUnverified := true
+	if providerRuntime != nil {
+		if identityProvider, ok := providerRuntime.(ProviderIdentityRuntime); ok {
+			identityContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			providerIdentity, _ = identityProvider.ProviderIdentity(identityContext)
+			cancel()
+			identityUnverified = providerIdentity == ""
+		}
+	}
+
+	console.mu.Lock()
+	attempt = console.connectorAttempts[attemptID]
+	durable, durableExists = console.state.Attempts[attemptID]
+	if attempt == nil || !durableExists || attempt.ConnectionID != attemptConnectionID || attempt.ConnectorID != attemptConnectorID || attempt.PersonID != attemptPersonID || durable.Incarnation != incarnation || durable.Epoch != epoch {
+		console.mu.Unlock()
+		return false
+	}
+	record := connectionRecord{ConnectionID: attemptConnectionID, Revision: 1, ConnectorID: attemptConnectorID, PersonID: attemptPersonID, Scope: attemptScope, Credential: attemptCredential, Incarnation: incarnation, Epoch: epoch, ProviderIdentity: providerIdentity, IdentityUnverified: identityUnverified}
 	if !console.connectionCredentialReady(record) {
+		console.mu.Unlock()
 		return false
 	}
 	if existing, exists := console.connectionForPerson(record.ConnectorID, record.PersonID); exists && existing.ConnectionID != record.ConnectionID {
+		console.mu.Unlock()
 		return false
 	}
 	next := cloneState(console.state)
@@ -782,9 +815,11 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	if console.rebuildConnectorRuntimes() != nil || console.save(next) != nil {
 		console.state = previous
 		_ = console.rebuildConnectorRuntimes()
+		console.mu.Unlock()
 		return false
 	}
 	attempt.Status, attempt.AuthorizationURL, attempt.ErrorCode = "connected", "", ""
+	console.mu.Unlock()
 	return true
 }
 
