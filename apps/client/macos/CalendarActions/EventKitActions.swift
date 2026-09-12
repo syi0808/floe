@@ -4,6 +4,8 @@ import CryptoKit
 
 private let actionLock = NSLock()
 private let localPerson = "00000000-0000-4000-8000-000000000001"
+private let maxCalendarReadItems = 128
+private let maxCalendarReadBytes = 65_536
 
 private final class CalendarViewGeneration: @unchecked Sendable {
   private let lock = NSLock()
@@ -156,6 +158,14 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
                         contains: (String) -> Bool, generation: () -> String) throws -> [String: Any] {
   guard request["schema_version"] as? Int == 1,
         request["person_id"] as? String == localPerson,
+        let deviceID = request["device_id"] as? String,
+        !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        deviceID.utf8.count <= 128,
+        let connectionID = request["connection_id"] as? String,
+        !connectionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        connectionID.utf8.count <= 128,
+        let connectionRevision = request["connection_revision"] as? Int,
+        connectionRevision > 0,
         request["provider"] as? String == "event_kit",
         let identifiers = request["calendar_ids"] as? [String],
         !identifiers.isEmpty, identifiers.count <= 4,
@@ -163,6 +173,7 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
         identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 512 }) else {
     throw NativeFailure("permission_denied")
   }
+  _ = (deviceID, connectionID, connectionRevision)
   let deadline = try timestamp(request["deadline"])
   guard Date() < deadline, deadline.timeIntervalSinceNow <= 30 else { throw NativeFailure("timeout") }
   try permission()
@@ -170,8 +181,8 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
   guard identifiers.allSatisfy(contains) else { throw NativeFailure("provider_unavailable") }
   try permission()
   guard before == generation(), Date() < deadline else { throw NativeFailure("timeout") }
-  return ["schema_version": 1, "person_id": localPerson, "provider": "event_kit",
-          "calendar_ids": identifiers.sorted(), "generation": before]
+  return ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
+          "provider": "event_kit", "calendar_ids": identifiers.sorted(), "generation": before]
 }
 
 private func observationRecord(_ event: EKEvent, calendarID: String) -> [String: Any] {
@@ -231,14 +242,28 @@ private func normalizedObservationAllDayEnd(start: Date, end: Date, calendar: Ca
 private func calendarObservation(_ request: [String: Any]) throws -> [String: Any] {
   guard request["schema_version"] as? Int == 1,
         request["person_id"] as? String == localPerson,
+        let deviceID = request["device_id"] as? String,
+        !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        deviceID.utf8.count <= 128,
+        let connectionID = request["connection_id"] as? String,
+        !connectionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        connectionID.utf8.count <= 128,
+        let connectionRevision = request["connection_revision"] as? Int,
+        connectionRevision > 0,
         request["provider"] as? String == "event_kit",
         let identifiers = request["calendar_ids"] as? [String],
         !identifiers.isEmpty, identifiers.count <= 4,
         Set(identifiers).count == identifiers.count,
+        identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 512 }),
         let startText = request["starts_at"] as? String,
-        let endText = request["ends_at"] as? String else {
+        let endText = request["ends_at"] as? String,
+        let itemLimit = request["item_limit"] as? Int,
+        itemLimit > 0, itemLimit <= maxCalendarReadItems,
+        let byteLimit = request["byte_limit"] as? Int,
+        byteLimit > 0, byteLimit <= maxCalendarReadBytes else {
     throw NativeFailure("permission_denied")
   }
+  _ = (deviceID, connectionID, connectionRevision)
   let start = try timestamp(startText)
   let end = try timestamp(endText)
   let deadline = try timestamp(request["deadline"])
@@ -251,11 +276,15 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
   let store = EKEventStore()
   let calendars = identifiers.compactMap { store.calendar(withIdentifier: $0) }
   guard calendars.count == identifiers.count else { throw NativeFailure("provider_unavailable") }
-  let batches = calendars.map { calendar -> [String: Any] in
+  var totalItems = 0
+  let batches = try calendars.map { calendar -> [String: Any] in
     let predicate = store.predicateForEvents(withStart: start, end: end, calendars: [calendar])
+    let events = store.events(matching: predicate)
+    totalItems += events.count
+    if totalItems > itemLimit { throw NativeFailure("budget_exceeded") }
     return [
       "calendar_id": calendar.calendarIdentifier,
-      "records": store.events(matching: predicate).map {
+      "records": events.map {
         observationRecord($0, calendarID: calendar.calendarIdentifier)
       }
     ]
@@ -266,12 +295,16 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
   }
   let formatter = ISO8601DateFormatter()
   formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  return [
-    "stamp": ["schema_version": 1, "person_id": localPerson, "provider": "event_kit",
+  let response: [String: Any] = [
+    "stamp": ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
+      "provider": "event_kit",
       "calendar_ids": identifiers.sorted(), "generation": before],
     "observed_at": formatter.string(from: Date()),
     "batches": batches
   ]
+  guard let encoded = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]),
+        encoded.count <= byteLimit else { throw NativeFailure("budget_exceeded") }
+  return response
 }
 
 private func runAction(_ request: [String: Any]) throws -> Any {
