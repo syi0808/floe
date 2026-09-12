@@ -1,6 +1,7 @@
 mod calendar;
 mod capture;
 mod connection_authority;
+mod context_dependency;
 mod data_access_grant;
 mod entity;
 mod id;
@@ -13,6 +14,12 @@ pub use calendar::{
 };
 pub use capture::{Capture, CaptureProcessing, CaptureSource, DomainRef};
 pub use connection_authority::SourceAuthority;
+pub use context_dependency::{
+    ConsumerPolicyAuthority, ContextDependency, ContextDependencyError, CoverageAccumulator,
+    DependencyCoverage, MAX_CONTEXT_DEPENDENCIES, MAX_CONTEXT_DEPENDENCY_BYTES,
+    MAX_QUERY_FINGERPRINT_BYTES, ReplayRequest, ReplayTrust, admit_replay,
+    validate_dependency_freshness, validate_stored_dependency,
+};
 pub use data_access_grant::{
     ConnectionId, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority, GrantConsumer,
     GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding,

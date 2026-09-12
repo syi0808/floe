@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 
 mod access_grants;
 mod calendar_grants;
+mod context_dependencies;
 mod expert_actions;
 mod keyring;
 mod learning;
@@ -144,6 +145,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_calendar_grant_store().await?;
+        vault.initialize_context_dependencies().await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -219,6 +221,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_learning_store().await?;
         vault.initialize_access_grant_store().await?;
         vault.initialize_calendar_grant_store().await?;
+        vault.initialize_context_dependencies().await?;
         vault.expert_registry().await?;
         Ok(vault)
     }
@@ -299,6 +302,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         while rows.next().await.map_err(storage)?.is_some() {}
         Ok(())
+    }
+
+    async fn initialize_context_dependencies(&self) -> Result<(), AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| match error {
+                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
+                _ => AgentFailure::StorageUnavailable,
+            })?;
+        let result = context_dependencies::initialize_context_dependency_store(&transaction).await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await
     }
 
     fn connection(&self) -> Result<turso::Connection, AgentFailure> {
