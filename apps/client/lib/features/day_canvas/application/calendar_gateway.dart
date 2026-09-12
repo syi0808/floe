@@ -23,6 +23,12 @@ abstract interface class CalendarGateway {
   Future<void> openCalendarSettings();
 }
 
+enum CalendarSystemAccess { allowed, denied, unavailable }
+
+abstract interface class CalendarSystemAccessGateway {
+  Future<CalendarSystemAccess> inspectCalendarAccess();
+}
+
 final class CalendarChoice {
   const CalendarChoice(this.id, this.name, {this.provider = 'event_kit'});
   final String id;

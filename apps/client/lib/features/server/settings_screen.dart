@@ -12,10 +12,8 @@ import '../../app/floe_loading.dart';
 import '../../app/floe_input.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
-import '../agent/agent_calendar_sources.dart';
 import '../agent/agent_connections.dart';
 import '../agent/agent_connection_settings.dart';
-import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_memory_settings.dart';
 import '../agent/agent_personal_access_settings.dart';
@@ -44,8 +42,6 @@ class SettingsScreen extends StatefulWidget {
     this.agentVaultGateway,
     this.actionController,
     this.agentController,
-    this.calendarSources,
-    this.calendarSourceChanges,
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
@@ -55,8 +51,6 @@ class SettingsScreen extends StatefulWidget {
   final NativeAgentVaultGateway? agentVaultGateway;
   final CalendarActionController? actionController;
   final AgentController? agentController;
-  final AgentCalendarSources? Function()? calendarSources;
-  final Listenable? calendarSourceChanges;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
@@ -103,8 +97,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       androidContext: widget.androidContext,
       appleContext: widget.appleContext,
       daySnapshot: widget.daySnapshot,
-      calendarSources: widget.calendarSources,
-      calendarSourceChanges: widget.calendarSourceChanges,
       personalAccessGateway: widget.agentVaultGateway,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),

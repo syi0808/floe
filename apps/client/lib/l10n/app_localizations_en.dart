@@ -158,7 +158,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentAccessReviewRequired =>
-      'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.';
+      'Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.';
 
   @override
   String agentConnectedCommitment(String title, String start, String end) {

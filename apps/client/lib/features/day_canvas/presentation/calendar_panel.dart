@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'calendar_layout.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -113,6 +115,55 @@ class CalendarPanel extends StatefulWidget {
 class _CalendarPanelState extends State<CalendarPanel> {
   bool busy = false;
   String? error;
+  CalendarSystemAccess? systemAccess;
+  bool systemAccessBusy = false;
+  int systemAccessGeneration = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_inspectSystemAccess());
+  }
+
+  @override
+  void didUpdateWidget(CalendarPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.gateway != widget.gateway ||
+        oldWidget.platform != widget.platform) {
+      unawaited(_inspectSystemAccess());
+    }
+  }
+
+  Future<void> _inspectSystemAccess() async {
+    final generation = ++systemAccessGeneration;
+    final accessGateway = widget.gateway is CalendarSystemAccessGateway
+        ? widget.gateway as CalendarSystemAccessGateway
+        : null;
+    if (accessGateway == null) {
+      if (mounted) {
+        setState(() {
+          systemAccess = null;
+          systemAccessBusy = false;
+        });
+      }
+      return;
+    }
+    if (mounted) setState(() => systemAccessBusy = true);
+    try {
+      final status = await accessGateway.inspectCalendarAccess();
+      if (mounted && generation == systemAccessGeneration) {
+        setState(() => systemAccess = status);
+      }
+    } on Object {
+      if (mounted && generation == systemAccessGeneration) {
+        setState(() => systemAccess = CalendarSystemAccess.unavailable);
+      }
+    } finally {
+      if (mounted && generation == systemAccessGeneration) {
+        setState(() => systemAccessBusy = false);
+      }
+    }
+  }
 
   Future<void> _run(Future<void> Function() operation) async {
     if (busy) return;
@@ -358,11 +409,73 @@ class _CalendarPanelState extends State<CalendarPanel> {
                 color: FloePalette.neutral600,
               ),
             ),
+            if (platform == TargetPlatform.macOS) ...[
+              SizedBox(height: FloeSpace.lg),
+              FloeSquircle(
+                key: const ValueKey('calendar-system-access'),
+                size: FloeSquircleSize.md,
+                fill: FloePalette.neutral50,
+                borderWidth: 0,
+                padding: const EdgeInsets.all(FloeSpace.base),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'System access',
+                            style: FloeType.controlLabel,
+                          ),
+                        ),
+                        if (systemAccessBusy)
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        else
+                          FloeBadge(
+                            key: const ValueKey(
+                              'calendar-system-access-status',
+                            ),
+                            label: _systemAccessLabel(systemAccess),
+                            tone: _systemAccessTone(systemAccess),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: FloeSpace.xs),
+                    Text(
+                      platform == TargetPlatform.macOS
+                          ? 'macOS Calendar access makes calendars available to Floe. It does not grant any Floe feature permission.'
+                          : 'System Calendar access makes calendars available to Floe. It does not grant any Floe feature permission.',
+                      style: FloeType.bodySmall.copyWith(
+                        color: FloePalette.neutral600,
+                        height: 1.5,
+                      ),
+                    ),
+                    if (systemAccess == CalendarSystemAccess.denied) ...[
+                      const SizedBox(height: FloeSpace.sm),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: FloeButton.outlined(
+                          key: const ValueKey('calendar-system-access-recover'),
+                          onPressed: busy
+                              ? null
+                              : () => _run(widget.gateway.openCalendarSettings),
+                          child: Text(strings.manageAccess),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
             SizedBox(height: 28),
             FloeDivider(),
             SizedBox(height: 28),
             Text(
-              AppLocalizations.of(context).connectedCalendar,
+              'Calendars available to Floe',
               style: FloeType.caption.copyWith(color: FloePalette.neutral600),
             ),
             SizedBox(height: FloeSpace.md),
@@ -472,12 +585,6 @@ class _CalendarPanelState extends State<CalendarPanel> {
                         : AppLocalizations.of(context).reconnectOrChange,
                   ),
                 ),
-                FloeButton.text(
-                  onPressed: busy
-                      ? null
-                      : () => _run(widget.gateway.openCalendarSettings),
-                  child: Text(AppLocalizations.of(context).manageAccess),
-                ),
                 if (connection != null)
                   FloeButton.text(
                     onPressed: busy ? null : _disconnect,
@@ -493,6 +600,20 @@ class _CalendarPanelState extends State<CalendarPanel> {
     );
   }
 }
+
+String _systemAccessLabel(CalendarSystemAccess? status) => switch (status) {
+  CalendarSystemAccess.allowed => 'Allowed',
+  CalendarSystemAccess.denied => 'Needs attention',
+  CalendarSystemAccess.unavailable => 'Unavailable',
+  null => 'Not checked',
+};
+
+FloeBadgeTone _systemAccessTone(CalendarSystemAccess? status) =>
+    switch (status) {
+      CalendarSystemAccess.allowed => FloeBadgeTone.success,
+      CalendarSystemAccess.denied => FloeBadgeTone.warning,
+      CalendarSystemAccess.unavailable || null => FloeBadgeTone.neutral,
+    };
 
 String _calendarName(AppLocalizations strings, TargetPlatform platform) =>
     switch (platform) {

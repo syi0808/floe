@@ -343,7 +343,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentAccessReviewRequired.
   ///
   /// In en, this message translates to:
-  /// **'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.'**
+  /// **'Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.'**
   String get agentAccessReviewRequired;
 
   /// No description provided for @agentConnectedCommitment.

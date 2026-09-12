@@ -40,6 +40,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   String? _editingSetupId;
   bool _editing = false;
   bool _connectionChanged = false;
+  bool _calendarLoadRequested = false;
 
   AgentController get controller => widget.controller;
 
@@ -55,6 +56,13 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   void initState() {
     super.initState();
     _listen();
+    _ensureCalendarExpertsLoaded();
+  }
+
+  void _ensureCalendarExpertsLoaded() {
+    if (_calendarLoadRequested || !controller.canManageCalendarExperts) return;
+    _calendarLoadRequested = true;
+    unawaited(controller.loadCalendarExperts());
   }
 
   void _listen() {
@@ -72,6 +80,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
   }
 
   void _changed() {
+    _ensureCalendarExpertsLoaded();
     final current = _sources?.fingerprint;
     if (current != _fingerprint ||
         controller.vaultState != AgentVaultState.ready) {

@@ -8,7 +8,7 @@ import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_calendar_sources.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
-import 'package:floe_client/features/server/settings_screen.dart';
+import 'package:floe_client/features/day_canvas/presentation/connector_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -51,8 +51,18 @@ Widget app(
   supportedLocales: AppLocalizations.supportedLocales,
   home: Scaffold(
     body: SingleChildScrollView(
-      child: SettingsScreen(
-        client: null,
+      child: ConnectorScreen(
+        gateway: null,
+        query: DayQuery(
+          personId: registryPerson,
+          date: DateTime.utc(2026, 9, 4),
+          now: DateTime.utc(2026, 9, 4),
+          timezoneOffsetSeconds: 0,
+        ),
+        connection: null,
+        onChanged: () async {},
+        platform: TargetPlatform.macOS,
+        initialDeviceCalendarDetail: true,
         agentController: controller,
         calendarSources: () => source.value,
         calendarSourceChanges: source,
@@ -152,7 +162,6 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final (controller, gateway, _) = await open(tester);
 
-      expect(find.text('Data & privacy'), findsNWidgets(2));
       expect(
         find.textContaining('Apple Calendar is connected'),
         findsOneWidget,

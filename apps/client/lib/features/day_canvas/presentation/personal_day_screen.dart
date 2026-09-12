@@ -86,6 +86,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   CalendarActionController? actionController;
   AgentController? agentController;
   bool assistantOpen = false;
+  bool openDeviceCalendarDetail = false;
   final assistantEntryFocus = FocusNode();
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
@@ -270,6 +271,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         onChanged: _reloadCalendarConnection,
         serverClient: widget.serverClient,
         deviceId: widget.serverClient?.deviceId,
+        agentController: agentController,
+        calendarSources: _agentCalendarSources,
+        calendarSourceChanges: controller,
+        initialDeviceCalendarDetail: openDeviceCalendarDetail,
       );
     }
     if (destination == _DestinationView.settings) {
@@ -283,8 +288,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
         daySnapshot: controller.snapshot,
-        calendarSources: _agentCalendarSources,
-        calendarSourceChanges: controller,
       );
     }
     if (destination == _DestinationView.activity) {
@@ -497,14 +500,23 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  void _selectDestination(_DestinationView value) {
+  void _selectDestination(
+    _DestinationView value, {
+    bool openCalendarDetail = false,
+  }) {
     if (value == _DestinationView.settings) {
+      if (agentController?.session == null && agentController?.busy == false) {
+        unawaited(agentController?.load());
+      }
+    }
+    if (value == _DestinationView.connections) {
       if (agentController?.session == null && agentController?.busy == false) {
         unawaited(agentController?.load());
       }
     }
     setState(() {
       assistantOpen = false;
+      openDeviceCalendarDetail = openCalendarDetail;
       destination = value;
       selectedTaskId = null;
     });
@@ -557,7 +569,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     if (MediaQuery.sizeOf(context).width <= 960) {
       Navigator.of(context).maybePop();
     }
-    _selectDestination(_DestinationView.settings);
+    _selectDestination(_DestinationView.connections, openCalendarDetail: true);
   }
 
   AgentCalendarSources? _agentCalendarSources() {

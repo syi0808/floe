@@ -39,6 +39,7 @@ final class FfiDayGateway
     implements
         DayGateway,
         CalendarGateway,
+        CalendarSystemAccessGateway,
         CalendarActionExecutionGateway,
         CalendarDirectActionGateway,
         AgentFixtureStreamingGateway {
@@ -396,6 +397,21 @@ final class FfiDayGateway
 
   @override
   Future<List<CalendarChoice>> calendars() => _calendarAdapter.calendars();
+
+  @override
+  Future<CalendarSystemAccess> inspectCalendarAccess() async {
+    try {
+      await _calendarAdapter.calendars(requestAccess: false);
+      return CalendarSystemAccess.allowed;
+    } on PlatformException catch (error) {
+      if (error.code == 'permission_denied') {
+        return CalendarSystemAccess.denied;
+      }
+      return CalendarSystemAccess.unavailable;
+    } on Object {
+      return CalendarSystemAccess.unavailable;
+    }
+  }
 
   @override
   Future<void> openCalendarSettings() => _calendarAdapter.openSettings();

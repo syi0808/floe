@@ -43,7 +43,7 @@
   "agentConnectedStalled": "The Calendar read repeated without progress, so Floe stopped it.",
   "agentConnectedStale": "Calendar context is no longer current. Reload and try again.",
   "agentContextRefreshRequired": "Context is no longer current. Refresh context before trying again.",
-  "agentAccessReviewRequired": "Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.",
+  "agentAccessReviewRequired": "Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.",
   "agentConnectedCommitment": "{title}: {start}–{end}",
   "@agentConnectedCommitment": { "placeholders": { "title": {"type": "String"}, "start": {"type": "String"}, "end": {"type": "String"} } },
   "agentConnectedFocusTime": "Possible focus time: {start}–{end}",

@@ -17,6 +17,9 @@ import '../domain/day_models.dart';
 import 'calendar_panel.dart';
 import 'connector_status_presentation.dart';
 import 'server_connector_panel.dart';
+import '../../agent/agent_calendar_expert_dialog.dart';
+import '../../agent/agent_calendar_sources.dart';
+import '../../agent/agent_controller.dart';
 
 class ConnectorScreen extends StatefulWidget {
   const ConnectorScreen({
@@ -28,6 +31,10 @@ class ConnectorScreen extends StatefulWidget {
     this.serverClient,
     this.deviceId,
     this.platform,
+    this.agentController,
+    this.calendarSources,
+    this.calendarSourceChanges,
+    this.initialDeviceCalendarDetail = false,
   });
 
   final CalendarGateway? gateway;
@@ -37,6 +44,10 @@ class ConnectorScreen extends StatefulWidget {
   final LocalServerClient? serverClient;
   final String? deviceId;
   final TargetPlatform? platform;
+  final AgentController? agentController;
+  final AgentCalendarSources? Function()? calendarSources;
+  final Listenable? calendarSourceChanges;
+  final bool initialDeviceCalendarDetail;
 
   @override
   State<ConnectorScreen> createState() => _ConnectorScreenState();
@@ -80,6 +91,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   @override
   void initState() {
     super.initState();
+    deviceCalendarDetail = widget.initialDeviceCalendarDetail;
     unawaited(_loadCatalog());
   }
 
@@ -88,6 +100,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.serverClient != widget.serverClient) {
       unawaited(_loadCatalog());
+    }
+    if (oldWidget.initialDeviceCalendarDetail !=
+        widget.initialDeviceCalendarDetail) {
+      deviceCalendarDetail = widget.initialDeviceCalendarDetail;
     }
   }
 
@@ -505,6 +521,18 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 .calendarIntegrationIsUnavailableInThisPreview,
           ),
         ),
+      if (effectivePlatform == TargetPlatform.macOS &&
+          widget.agentController != null) ...[
+        const SizedBox(height: FloeSpace.lg),
+        FloeSquircle(
+          padding: const EdgeInsets.all(FloeSpace.lg),
+          child: AgentCalendarSettings(
+            controller: widget.agentController!,
+            sources: widget.calendarSources,
+            sourceChanges: widget.calendarSourceChanges,
+          ),
+        ),
+      ],
       SizedBox(height: FloeSpace.lg),
       FloeInfoNote(
         text: effectivePlatform == TargetPlatform.android

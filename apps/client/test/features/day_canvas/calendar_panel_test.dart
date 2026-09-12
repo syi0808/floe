@@ -8,9 +8,15 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class PanelCalendarGateway implements CalendarGateway {
+class PanelCalendarGateway
+    implements CalendarGateway, CalendarSystemAccessGateway {
   List<CalendarChoice> selected = [];
   int syncCount = 0;
+  int settingsCount = 0;
+  CalendarSystemAccess systemAccess = CalendarSystemAccess.allowed;
+
+  @override
+  Future<CalendarSystemAccess> inspectCalendarAccess() async => systemAccess;
 
   @override
   Future<DaySnapshot> bindCalendarConnection({
@@ -53,7 +59,9 @@ class PanelCalendarGateway implements CalendarGateway {
   }
 
   @override
-  Future<void> openCalendarSettings() async {}
+  Future<void> openCalendarSettings() async {
+    settingsCount++;
+  }
 }
 
 void main() {
@@ -191,4 +199,52 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('shows EventKit access state and recovery action', (
+    tester,
+  ) async {
+    final gateway = PanelCalendarGateway()
+      ..systemAccess = CalendarSystemAccess.denied;
+    final date = DateTime.utc(2026, 9, 4);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: CalendarPanel(
+              gateway: gateway,
+              platform: TargetPlatform.macOS,
+              query: DayQuery(
+                personId: 'test',
+                date: date,
+                now: date,
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: const CalendarConnection(
+                connectionId: '00000000-0000-4000-8000-000000000010',
+                deviceId: 'test-device',
+                provider: 'event_kit',
+                revision: 1,
+                calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+              ),
+              onChanged: () async {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-system-access')),
+      findsOneWidget,
+    );
+    expect(find.text('Needs attention'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-system-access-recover')),
+    );
+    await tester.pumpAndSettle();
+    expect(gateway.settingsCount, 1);
+  });
 }

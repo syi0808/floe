@@ -6,6 +6,9 @@ import 'package:floe_client/features/day_canvas/application/calendar_gateway.dar
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/connector_screen.dart';
+import 'package:floe_client/features/agent/agent_calendar_sources.dart';
+import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
+import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:figma_squircle/figma_squircle.dart';
@@ -13,6 +16,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/server_credentials.dart';
+import '../../support/agent_calendar_experts.dart';
+import '../../support/agent_registry.dart';
 
 void main() {
   testWidgets('service has only an icon surface and still opens details', (
@@ -75,6 +80,77 @@ void main() {
     expect(find.text(strings.availableServices), findsOneWidget);
     expect(find.text('Remote server connection'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('macOS detail composes system, selected, and consumer access', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestCalendarExpertGateway(),
+      personId: registryPerson,
+    );
+    final source = ValueNotifier<AgentCalendarSources?>(
+      AgentCalendarSources(
+        personId: registryPerson,
+        connection: const CalendarConnection(
+          connectionId: '00000000-0000-4000-8000-000000000010',
+          deviceId: 'test-device',
+          provider: 'event_kit',
+          revision: 1,
+          sourceAuthority: CalendarSourceAuthority(
+            incarnation: '00000000-0000-4000-8000-000000000009',
+            epoch: 1,
+          ),
+          calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+        ),
+      ),
+    );
+    addTearDown(controller.dispose);
+    addTearDown(source.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ConnectorScreen(
+              gateway: _DeviceCalendarGateway(),
+              query: DayQuery(
+                personId: registryPerson,
+                date: DateTime.utc(2026, 9, 4),
+                now: DateTime.utc(2026, 9, 4),
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: const CalendarConnection(
+                connectionId: '00000000-0000-4000-8000-000000000010',
+                deviceId: 'test-device',
+                provider: 'event_kit',
+                revision: 1,
+                calendars: [ConnectedCalendar(id: 'home', name: 'Home')],
+              ),
+              onChanged: () async {},
+              platform: TargetPlatform.macOS,
+              initialDeviceCalendarDetail: true,
+              agentController: controller,
+              calendarSources: () => source.value,
+              calendarSourceChanges: source,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-system-access')),
+      findsOneWidget,
+    );
+    expect(find.text('Allowed'), findsOneWidget);
+    expect(find.text('Calendars available to Floe'), findsOneWidget);
+    expect(find.byType(AgentCalendarSettings), findsOneWidget);
+    expect(find.text('Data Floe can use'), findsOneWidget);
+    expect(find.byKey(const ValueKey('calendar-access-setup')), findsOneWidget);
   });
 
   testWidgets('device-native and disconnected server catalog are composed', (
@@ -503,7 +579,11 @@ final class _RecordingCalendarGateway extends _DeviceCalendarGateway {
   }
 }
 
-class _DeviceCalendarGateway implements CalendarGateway {
+class _DeviceCalendarGateway
+    implements CalendarGateway, CalendarSystemAccessGateway {
+  @override
+  Future<CalendarSystemAccess> inspectCalendarAccess() async =>
+      CalendarSystemAccess.allowed;
   @override
   Future<DaySnapshot> bindCalendarConnection({
     required String connectionId,

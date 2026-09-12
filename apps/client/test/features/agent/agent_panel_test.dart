@@ -94,7 +94,7 @@ void main() {
   );
 
   for (final failure in {
-    'access_review_required': 'Calendar access needs your review. Open Calendar access settings and save the calendars you allow Floe to read, then reload the conversation.',
+    'access_review_required': 'Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.',
     'server_model_timeout': 'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.',
     'server_model_request_rejected': 'The configured server model rejected this request. Check the latest server trace and model compatibility.',
   }.entries) {

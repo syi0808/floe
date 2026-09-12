@@ -8,8 +8,6 @@ class _DataPrivacy extends StatefulWidget {
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
-    this.calendarSources,
-    this.calendarSourceChanges,
     this.personalAccessGateway,
   });
 
@@ -19,8 +17,6 @@ class _DataPrivacy extends StatefulWidget {
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
-  final AgentCalendarSources? Function()? calendarSources;
-  final Listenable? calendarSourceChanges;
   final NativeAgentVaultGateway? personalAccessGateway;
 
   @override
@@ -30,7 +26,6 @@ class _DataPrivacy extends StatefulWidget {
 class _DataPrivacyState extends State<_DataPrivacy> {
   bool loading = false;
   bool registryRequested = false;
-  bool calendarRequested = false;
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
   bool connectionsRequested = false;
@@ -67,7 +62,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       oldWidget.controller.removeListener(_controllerChanged);
       controller.addListener(_controllerChanged);
       registryRequested = false;
-      calendarRequested = false;
       memoryRequested = false;
       savedMemoryRequested = false;
       connectionsRequested = false;
@@ -112,12 +106,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     if (controller.canManageRegistry && !registryRequested) {
       registryRequested = true;
       await controller.loadRegistry();
-    }
-    if (controller.hasCalendarExpertManagement &&
-        !calendarRequested &&
-        controller.canManageCalendarExperts) {
-      calendarRequested = true;
-      await controller.loadCalendarExperts();
     }
     if (controller.hasMemoryReview &&
         !memoryRequested &&
@@ -644,21 +632,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
-                if ((controller.hasConnections ||
-                        widget.serverClient != null ||
-                        widget.androidContext != null ||
-                        widget.appleContext != null) &&
-                    controller.hasCalendarExpertManagement)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: FloeSpace.lg),
-                    child: FloeDivider(height: 1),
-                  ),
-                if (controller.hasCalendarExpertManagement)
-                  AgentCalendarSettings(
-                    controller: controller,
-                    sources: widget.calendarSources,
-                    sourceChanges: widget.calendarSourceChanges,
-                  ),
                 if (widget.personalAccessGateway != null) ...[
                   const SizedBox(height: FloeSpace.lg),
                   PersonalAttentionAccessCard(

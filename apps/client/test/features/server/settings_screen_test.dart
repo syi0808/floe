@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
@@ -21,6 +22,7 @@ import 'package:flutter_test/flutter_test.dart';
 import '../day_canvas/calendar_action_execution_test.dart' show Executor;
 import '../../support/server_credentials.dart';
 import '../../support/agent_registry.dart';
+import '../../support/agent_calendar_experts.dart';
 
 void main() {
   testWidgets('assistant permission management lives in Settings', (
@@ -60,6 +62,33 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Schedule planning'), findsNothing);
+  });
+
+  testWidgets('Calendar consumer grants are absent from Data & privacy', (
+    tester,
+  ) async {
+    final controller = AgentController(
+      gateway: TestCalendarExpertGateway(),
+      personId: registryPerson,
+    );
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SettingsScreen(client: null, agentController: controller),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(AgentCalendarSettings), findsNothing);
+    expect(find.text('Data Floe can use'), findsNothing);
+    expect(find.text('AI processing'), findsOneWidget);
   });
 
   testWidgets('Android Health consent and derived refresh live in settings', (
