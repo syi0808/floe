@@ -229,14 +229,14 @@ impl Worker {
                             let _guard = span.enter();
                             tracing::info!(request_id, operation, "agent_job_started");
                             let result = match catch_unwind(AssertUnwindSafe(|| match &runtime {
-                                Ok(runtime) => runtime.block_on(execute(
+                                Ok(runtime) => runtime.block_on(Box::pin(execute(
                                     &root,
                                     &keys,
                                     &core,
                                     &local_context,
                                     &mut vault,
                                     &job,
-                                )),
+                                ))),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
                             })) {
                                 Ok(result) => result,
@@ -321,9 +321,10 @@ impl Worker {
                                 continue;
                             }
                             let result = catch_unwind(AssertUnwindSafe(|| match &runtime {
-                                Ok(runtime) => {
-                                    runtime.block_on(learner_worker::run(open_vault, cancellation))
-                                }
+                                Ok(runtime) => runtime.block_on(Box::pin(learner_worker::run(
+                                    open_vault,
+                                    cancellation,
+                                ))),
                                 Err(_) => Err(AgentFailure::VaultUnavailable),
                             }))
                             .unwrap_or(Err(AgentFailure::Interrupted));
