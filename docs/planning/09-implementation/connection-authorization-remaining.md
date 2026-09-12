@@ -64,6 +64,36 @@ permission loss, expired presence, rollback, source replacement, scope expansion
 without remote fallback, and revoke between acquisition/model/final output. Retained user history
 and an unrelated independent conversation must survive every source-local failure.
 
+### Personal adapter completion sequence
+
+Complete and test trusted Attention acquisition first, then reuse only the broker lifecycle for the
+other typed adapters. Generic publication remains for display, never an admission source. A broker
+response must match a pending host-owned request; copying a view into a DTO is not native evidence.
+
+- Contacts: the iOS channel currently calls `readPeopleView(limit:)` and Android queries the first
+  N contacts. Neither is exact selected-resource acquisition. Add an explicit contact selection
+  review, bind finite provider-native identities to host-owned opaque handles, and query only those
+  selected identities before projection. Apple provider filtering after broad enumeration does not
+  establish least-privilege acquisition. Check permission and selected identity resolution before
+  and after the read; contact label edits are not new account identities. Limited OS contact access
+  and deleted contacts need explicit partial/unavailable coverage, not an unrelated replacement.
+- Wellbeing: authorize a finite set of typed derived capabilities and bounded windows. Do not
+  serialize raw health samples into broker/model responses. HealthKit request completion is not
+  proof of read permission, and no samples can mean either no data or denied access. Preserve that
+  ambiguity as unknown/unavailable; do not manufacture a positive permission claim or a healthy
+  empty projection. Android must check the exact granted Health Connect permissions at read time.
+- Feasibility: require a current Calendar event dependency as well as explicit location/directions/
+  weather processing consent. The existing iOS provider sends coordinates to MapKit/WeatherKit;
+  `LocalOnly` model processing does not authorize that separate source acquisition transfer.
+  Bind each request to its event, destination, travel mode, time window and provider set. Keep raw
+  coordinates out of persisted assistant lineage and final model projection. Optional enrichment
+  failure must not silently gain permission from the Calendar grant or appear as successful empty
+  evidence. Unsupported native platforms stay explicit capability failures, not simulated providers.
+
+Each adapter needs real host-path positive fixtures and a provider-call counter proving that absent
+consent, wrong selection and replaced native identity deny before protected reads. Reuse the same
+current-grant/consumer, monotonic evidence, model-egress and final-commit barriers as Attention.
+
 ## P6b action admission
 
 Extend existing `calendar_action.rs`, `action_authority.rs`, `agent_action.rs` and
