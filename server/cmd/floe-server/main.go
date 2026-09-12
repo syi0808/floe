@@ -168,7 +168,7 @@ func serve(handler http.Handler, address string) {
 	}()
 	log.Printf("Floe inference gateway listening on %s", address)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal("Inference gateway stopped unexpectedly")
+		log.Fatalf("Inference gateway stopped unexpectedly: %v", err)
 	}
 	<-shutdownComplete
 }

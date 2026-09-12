@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_PID=""
 CLIENT_PID=""
+SERVER_BUILD_DIR=""
 
 for command_name in go flutter; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -26,16 +27,27 @@ cleanup() {
       wait "$process_id" 2>/dev/null || true
     fi
   done
+
+  if [[ -n "$SERVER_BUILD_DIR" ]]; then
+    rm -rf "$SERVER_BUILD_DIR"
+  fi
 }
 
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+SERVER_BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/floe-server.XXXXXX")"
+SERVER_BINARY="$SERVER_BUILD_DIR/floe-server"
+(
+  cd "$ROOT/server"
+  go build -o "$SERVER_BINARY" ./cmd/floe-server
+)
+
 (
   cd "$ROOT/server"
   unset FLOE_INFERENCE_CONFIG FLOE_INFERENCE_TOKEN
-  exec go run ./cmd/floe-server
+  exec "$SERVER_BINARY"
 ) &
 SERVER_PID=$!
 
