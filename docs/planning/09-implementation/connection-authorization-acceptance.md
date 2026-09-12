@@ -6,7 +6,7 @@ require separate explicit consent and disposable resources; synthetic tests do n
 
 | Production path | Reviewed implementation | Outstanding acceptance gate |
 | --- | --- | --- |
-| Native Calendar consent | Exact reviewed source stamp, finite subset, durable consumer epoch and scoped commit tests | Broader non-Calendar policy adoption |
+| Native Calendar consent | Exact reviewed Core source stamp, finite subset, durable consumer epoch and scoped commit tests | Persist actual OS subject fingerprint in explicit consent; broader non-Calendar policy adoption |
 | Native Calendar admission | Encrypted grant and atomic registry mapping; lazy source admission | Immutable invocation/query-bound lease; cleanup worker |
 | macOS native read | Bounded direct EventKit adapter wired at tool invocation, cancellation and generation fixtures | Pinned immutable lease and real OS validation |
 | iOS/Android native read | Existing platform publication remains | Tool-time acquisition broker, disposal/late-callback protocol and lifecycle tests |
@@ -46,3 +46,10 @@ a new private-state payload mechanism merely to implement a resolver for it. Cur
 must instead cover the actual session delegation/result/proposal bytes and their receipt transaction.
 The metadata-only private state remains a CAS/deduplication mechanism, never an authorization proof.
 Any future source-bearing private state requires dependency coverage before reuse.
+
+The native subject audit found a remaining cross-conversation gap: a lease's EventKit subject
+fingerprint is invocation-local, while the durable grant currently records only Core's mirror source
+authority. A native account/source replacement preserving the selected calendar IDs can therefore
+escape that durable comparison. Required correction: persist the explicitly reviewed host fingerprint
+in the encrypted grant mapping and compare fresh host evidence before acquisition. First-read pinning
+is not consent. The P2 Core source-authority milestone does not close this OS identity gate.
