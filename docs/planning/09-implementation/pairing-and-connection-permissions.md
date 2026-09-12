@@ -1,6 +1,6 @@
 # Pairing and connection-scoped permissions implementation plan
 
-- **Status:** implemented; live pairing acceptance pending
+- **Status:** active; device-connection permission consolidation in progress
 - **Date:** 2026-09-13
 - **Decision:** [ADR 0028](../../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
 
@@ -159,3 +159,31 @@ EventKit permission mutation, live remote grant use and iPhone/iPad behavior rem
 The current Go connector catalog still supports one connection per connector and Person. Client tests
 prove grant isolation for multiple fixture connections, but real same-provider multi-account creation
 requires a separate server catalog/runtime expansion before that final ADR scenario can be accepted.
+
+## Follow-up correction: remaining device permissions
+
+The first implementation moved macOS Calendar and remote server grants but left other device-owned
+controls in **Data & privacy**. That was partial delivery, not completion of the connection-scoped
+information architecture. The Apple-first follow-up adds these reviewable units:
+
+### P6 — Apple device connection details
+
+- List Apple Contacts, Attention, Location/ETA/Weather and Wellbeing beside macOS Calendar in
+  **Connections**, using their reported `AgentConnection` identities and states.
+- Give each source a connection detail that owns OS access/recovery, bounded subject selection and
+  its **Use in Floe** grant controls.
+- Reuse the existing personal-access Core/FFI operations; moving widgets must not merge OS access,
+  source selection or consumer-grant authority.
+- Remove the corresponding editable controls and duplicate connection inventory from **Data & privacy**.
+
+### P7 — Data & privacy boundary
+
+- Keep Person memory, AI processing/transfer policy and a non-expanding permission summary or link.
+- Do not create, enable, broaden or reconnect a connector from **Data & privacy**.
+- Route missing-source recovery to the exact owning connection detail when its identity is known.
+
+### P8 — Remaining platforms
+
+Android connection-detail parity is deferred by the repository's Apple-first platform policy. Its
+existing conditional controls remain functional and must not block macOS delivery. Moving them requires
+an explicit Android implementation task and Android validation; this follow-up does not claim parity.
