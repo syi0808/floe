@@ -9,6 +9,17 @@ abstract interface class AgentPersonalAccessGateway {
     String personId,
     bool enabled,
   );
+  Future<PersonalAccessOverview> inspectPersonalFeasibility(String personId);
+  Future<PersonalAccessOverview> reviewPersonalFeasibility(
+    String personId, {
+    required PersonalFeasibilityQuery query,
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  });
+  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
+    String personId,
+    bool enabled,
+  );
   Future<PersonalAccessOverview> inspectPersonalContacts(
     String personId,
     List<String> selectedHandles,
@@ -19,6 +30,36 @@ abstract interface class AgentPersonalAccessGateway {
     required PersonalAccessOverview reviewedPreview,
     required List<String> consumers,
   });
+}
+
+final class PersonalFeasibilityQuery {
+  const PersonalFeasibilityQuery({
+    required this.eventHandle,
+    required this.evidenceHandles,
+    required this.destinationLatitude,
+    required this.destinationLongitude,
+    required this.eventStartUnixMs,
+    required this.eventEndUnixMs,
+    required this.travelMode,
+  });
+
+  final String eventHandle;
+  final List<String> evidenceHandles;
+  final double destinationLatitude;
+  final double destinationLongitude;
+  final int eventStartUnixMs;
+  final int eventEndUnixMs;
+  final String travelMode;
+
+  Map<String, Object?> toJson() => {
+    'event_handle': eventHandle,
+    'evidence_handles': List<String>.unmodifiable(evidenceHandles),
+    'destination_latitude': destinationLatitude,
+    'destination_longitude': destinationLongitude,
+    'event_start_unix_ms': eventStartUnixMs,
+    'event_end_unix_ms': eventEndUnixMs,
+    'travel_mode': travelMode,
+  };
 }
 
 final class PersonalAccessOverview {

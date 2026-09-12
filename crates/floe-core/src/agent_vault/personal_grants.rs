@@ -2,13 +2,57 @@ use chrono::Utc;
 use floe_domain::{
     ConsumerPolicyAuthority, DataAccessGrant, GrantConsumer, GrantId, SourceAuthority,
 };
+use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 
 use super::access_grants::AccessGrantMutation;
 use super::*;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const ATTENTION_CONNECTOR: &str = "attention.macos";
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FeasibilityGrantQuery {
+    pub event_handle: String,
+    pub evidence_handles: Vec<String>,
+    pub destination_latitude: f64,
+    pub destination_longitude: f64,
+    pub event_start_unix_ms: i64,
+    pub event_end_unix_ms: i64,
+    pub travel_mode: String,
+}
+
+impl FeasibilityGrantQuery {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.event_handle.is_empty()
+            || self.event_handle.len() > 128
+            || self.event_handle.chars().any(char::is_whitespace)
+            || self.evidence_handles.is_empty()
+            || self.evidence_handles.len() > 8
+            || self
+                .evidence_handles
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || self.evidence_handles.iter().any(|handle| {
+                handle.is_empty() || handle.len() > 128 || handle.chars().any(char::is_whitespace)
+            })
+            || !self.destination_latitude.is_finite()
+            || !(-90.0..=90.0).contains(&self.destination_latitude)
+            || !self.destination_longitude.is_finite()
+            || !(-180.0..=180.0).contains(&self.destination_longitude)
+            || self.event_start_unix_ms < 0
+            || self.event_end_unix_ms <= self.event_start_unix_ms
+            || self.event_end_unix_ms - self.event_start_unix_ms > 86_400_000
+            || !matches!(
+                self.travel_mode.as_str(),
+                "automobile" | "transit" | "walking"
+            )
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
 
 async fn transaction_start<'a>(
     connection: &'a mut turso::Connection,
@@ -577,6 +621,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected: Option<(GrantId, floe_domain::GrantAuthority)>,
         selected_handles: &[String],
     ) -> Result<DataAccessGrant, AgentFailure> {
+        self.review_personal_grant_with_selection_and_query(
+            source,
+            scope,
+            reviewed_subject_fingerprint,
+            expected,
+            selected_handles,
+            None,
+        )
+        .await
+    }
+
+    pub async fn review_personal_grant_with_feasibility_query(
+        &self,
+        source: floe_domain::GrantSourceBinding,
+        scope: floe_domain::GrantScope,
+        reviewed_subject_fingerprint: &str,
+        expected: Option<(GrantId, floe_domain::GrantAuthority)>,
+        query: FeasibilityGrantQuery,
+    ) -> Result<DataAccessGrant, AgentFailure> {
+        query.validate()?;
+        self.review_personal_grant_with_selection_and_query(
+            source,
+            scope,
+            reviewed_subject_fingerprint,
+            expected,
+            &[],
+            Some(query),
+        )
+        .await
+    }
+
+    async fn review_personal_grant_with_selection_and_query(
+        &self,
+        source: floe_domain::GrantSourceBinding,
+        scope: floe_domain::GrantScope,
+        reviewed_subject_fingerprint: &str,
+        expected: Option<(GrantId, floe_domain::GrantAuthority)>,
+        selected_handles: &[String],
+        feasibility_query: Option<FeasibilityGrantQuery>,
+    ) -> Result<DataAccessGrant, AgentFailure> {
         if source.person_id() != self.person_id {
             return Err(AgentFailure::NotFound);
         }
@@ -683,6 +767,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 selected_handles,
             )
             .await?;
+            if let Some(query) = feasibility_query.as_ref() {
+                self.upsert_feasibility_query_in_transaction(&transaction, &grant, query)
+                    .await?;
+            }
             Ok(grant)
         }
         .await;
@@ -729,6 +817,63 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let values = serde_json::from_str(&row.get::<String>(0).map_err(storage)?)
             .map_err(|_| AgentFailure::VaultUnavailable)?;
         Ok(values)
+    }
+
+    pub async fn personal_feasibility_query(
+        &self,
+        grant_id: GrantId,
+    ) -> Result<FeasibilityGrantQuery, AgentFailure> {
+        let connection = self.connection()?;
+        let mut rows = connection
+            .query(
+                "SELECT event_handle, evidence_handles, destination_latitude, destination_longitude, event_start_unix_ms, event_end_unix_ms, travel_mode FROM personal_feasibility_queries WHERE grant_id = ? AND person_id = ?",
+                (grant_id.as_uuid().to_string(), self.person_id.to_string()),
+            )
+            .await
+            .map_err(storage)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(storage)?
+            .ok_or(AgentFailure::NotFound)?;
+        let query = FeasibilityGrantQuery {
+            event_handle: row.get::<String>(0).map_err(storage)?,
+            evidence_handles: serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
+                .map_err(|_| AgentFailure::VaultUnavailable)?,
+            destination_latitude: row.get::<f64>(2).map_err(storage)?,
+            destination_longitude: row.get::<f64>(3).map_err(storage)?,
+            event_start_unix_ms: row.get::<i64>(4).map_err(storage)?,
+            event_end_unix_ms: row.get::<i64>(5).map_err(storage)?,
+            travel_mode: row.get::<String>(6).map_err(storage)?,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    async fn upsert_feasibility_query_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        grant: &DataAccessGrant,
+        query: &FeasibilityGrantQuery,
+    ) -> Result<(), AgentFailure> {
+        query.validate()?;
+        let evidence_handles = serde_json::to_string(&query.evidence_handles)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        transaction
+            .execute(
+                "DELETE FROM personal_feasibility_queries WHERE grant_id = ? AND person_id = ?",
+                (grant.id().as_uuid().to_string(), self.person_id.to_string()),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "INSERT INTO personal_feasibility_queries (grant_id, person_id, event_handle, evidence_handles, destination_latitude, destination_longitude, event_start_unix_ms, event_end_unix_ms, travel_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (grant.id().as_uuid().to_string(), self.person_id.to_string(), query.event_handle.clone(), evidence_handles, query.destination_latitude, query.destination_longitude, query.event_start_unix_ms, query.event_end_unix_ms, query.travel_mode.clone()),
+            )
+            .await
+            .map_err(storage)?;
+        Ok(())
     }
 
     async fn personal_grant_mapping_in_transaction(
@@ -850,7 +995,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('personal_grant_schema', 'personal_grant_policies')",
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('personal_grant_schema', 'personal_grant_policies', 'personal_feasibility_queries')",
                 (),
             )
             .await
@@ -870,7 +1015,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "CREATE TABLE personal_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
+                    "CREATE TABLE personal_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 4))",
                     (),
                 )
                 .await
@@ -884,7 +1029,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(storage)?;
             transaction
                 .execute(
-                    "INSERT INTO personal_grant_schema (id, version) VALUES (1, 3)",
+                    "CREATE TABLE personal_feasibility_queries (grant_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, event_handle TEXT NOT NULL, evidence_handles TEXT NOT NULL, destination_latitude REAL NOT NULL, destination_longitude REAL NOT NULL, event_start_unix_ms INTEGER NOT NULL, event_end_unix_ms INTEGER NOT NULL, travel_mode TEXT NOT NULL, UNIQUE(grant_id, person_id))",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            transaction
+                .execute(
+                    "INSERT INTO personal_grant_schema (id, version) VALUES (1, 4)",
                     (),
                 )
                 .await
@@ -892,9 +1044,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.commit().await.map_err(storage)?;
             return Ok(());
         }
-        if names.len() != 2
+        if names.len() != 3
             || !names.iter().any(|name| name == "personal_grant_schema")
             || !names.iter().any(|name| name == "personal_grant_policies")
+            || !names
+                .iter()
+                .any(|name| name == "personal_feasibility_queries")
         {
             return Err(AgentFailure::VaultUnavailable);
         }

@@ -6,7 +6,8 @@ use floe_agent::{
     validate_people_view,
 };
 use floe_core::{
-    EncryptedAgentVault, GovernedDependencyLiveness, GovernedDependencyResolver, VaultKeyProvider,
+    EncryptedAgentVault, FeasibilityGrantQuery, GovernedDependencyLiveness,
+    GovernedDependencyResolver, VaultKeyProvider,
 };
 use floe_domain::{
     ConnectionId, ConnectorId, ContextDependency, DataAccessGrant, ExecutionOwnerId, GrantConsumer,
@@ -14,7 +15,7 @@ use floe_domain::{
     PersonId, ProcessingRestriction, ResourceHandle, SourceAuthority,
 };
 use floe_protocol::{
-    ContactsAccessChangeDto, ContactsAccessConfigurationDto,
+    ContactsAccessChangeDto, ContactsAccessConfigurationDto, FeasibilityGrantQueryDto,
     LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionRequestDto,
     LocalContextPersonalAcquisitionRequestDto, LocalContextPersonalAcquisitionResultDto,
     LocalContextPersonalDomainDto, PersonalAccessChangeDto, PersonalAccessConfigurationDto,
@@ -27,6 +28,9 @@ pub(crate) const ATTENTION_CONNECTOR: &str = "attention.macos";
 const ATTENTION_CONNECTION: &str = "attention.macos.local";
 const ATTENTION_RESOURCE: &str = "attention.coarse";
 const PEOPLE_RESOURCE: &str = "people.identity";
+const FEASIBILITY_CONNECTOR: &str = "feasibility.apple";
+const FEASIBILITY_CONNECTION: &str = "feasibility.apple.local";
+const FEASIBILITY_RESOURCE: &str = "schedule.feasibility";
 pub(crate) const ATTENTION_ASSISTANT_CONSUMER: &str = "assistant";
 pub(crate) const ATTENTION_EXPERT_CONSUMER: &str = "attention.expert";
 
@@ -208,6 +212,200 @@ pub(crate) async fn read_people<Keys: VaultKeyProvider>(
         dependency_fingerprint,
     )?;
     Ok((view, dependency))
+}
+
+pub(crate) async fn read_feasibility<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    device_id: &str,
+    consumer_name: &str,
+    lease_invocation_id: Uuid,
+    deadline: tokio::time::Instant,
+    cancellation: &floe_agent::Cancellation,
+) -> Result<(floe_agent::FeasibilityView, ContextDependency), AgentFailure> {
+    check_read_window(deadline, cancellation)?;
+    let consumer = GrantConsumer::builtin(consumer_name).map_err(|_| AgentFailure::InvalidInput)?;
+    let source = feasibility_source(person_id, device_id)?;
+    let grants = vault.list_data_access_grants(128).await?;
+    let grant = active_feasibility_grant(&grants, &source, &consumer)?;
+    let query = vault.personal_feasibility_query(grant.id()).await?;
+    let reviewed_subject = vault.personal_grant_subject_fingerprint(grant.id()).await?;
+    let result = local_context
+        .acquire_personal(
+            feasibility_acquisition_request(
+                person_id,
+                device_id,
+                local_context.personal_acquisition_host_epoch(person_id)?,
+                &query,
+                reviewed_subject.clone(),
+                deadline,
+            )?,
+            cancellation.clone(),
+        )
+        .await?;
+    check_read_window(deadline, cancellation)?;
+    if result.native_subject_fingerprint_before != reviewed_subject
+        || result.native_subject_fingerprint_after != reviewed_subject
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    let view: floe_agent::FeasibilityView =
+        serde_json::from_value(result.view.ok_or(AgentFailure::CapabilityUnavailable)?)
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    floe_agent::validate_feasibility_view(&view, Utc::now().timestamp_millis())
+        .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    let current = active_feasibility_grant(
+        &vault.list_data_access_grants(128).await?,
+        &source,
+        &consumer,
+    )?;
+    if current.id() != grant.id()
+        || current.authority() != grant.authority()
+        || current.source() != grant.source()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let observed = DateTime::<Utc>::from_timestamp_millis(view.observed_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    let expires = DateTime::<Utc>::from_timestamp_millis(view.expires_at_unix_ms)
+        .ok_or(AgentFailure::StaleContext)?;
+    let process = local_context.process_incarnation();
+    let observation_id = Uuid::new_v4();
+    let dependency_fingerprint =
+        feasibility_query_fingerprint(&view, &query, &reviewed_subject, observation_id, process);
+    let dependency = ContextDependency::try_new(
+        person_id,
+        current.id(),
+        current.authority(),
+        current.source().clone(),
+        vec![
+            ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        ],
+        vec![GrantDataCategory::Derived],
+        GrantOperation::Read,
+        GrantPurpose::Assistant,
+        consumer,
+        ProcessingRestriction::LocalOnly,
+        vault.personal_grant_consumer_policy(current.id()).await?,
+        observation_id,
+        dependency_fingerprint.clone(),
+        lease_invocation_id,
+        process,
+        observed,
+        expires,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)?;
+    local_context.commit_trusted_personal_observation(
+        person_id,
+        device_id,
+        observation_id,
+        process,
+        &reviewed_subject,
+        view.observed_at_unix_ms,
+        view.expires_at_unix_ms,
+        dependency_fingerprint,
+    )?;
+    Ok((view, dependency))
+}
+
+fn feasibility_acquisition_request(
+    person_id: PersonId,
+    device_id: &str,
+    host_epoch: String,
+    query: &FeasibilityGrantQuery,
+    expected_native_subject_fingerprint: String,
+    deadline: tokio::time::Instant,
+) -> Result<LocalContextPersonalAcquisitionRequestDto, AgentFailure> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    Ok(LocalContextPersonalAcquisitionRequestDto {
+        request_id: Uuid::new_v4().to_string(),
+        host_epoch,
+        person_id: person_id.to_string(),
+        device_id: device_id.to_owned(),
+        domain: LocalContextPersonalDomainDto::Feasibility,
+        selected_handles: Vec::new(),
+        event_handle: Some(query.event_handle.clone()),
+        evidence_handles: query.evidence_handles.clone(),
+        destination_latitude: Some(query.destination_latitude),
+        destination_longitude: Some(query.destination_longitude),
+        event_start_unix_ms: Some(query.event_start_unix_ms),
+        event_end_unix_ms: Some(query.event_end_unix_ms),
+        travel_mode: Some(query.travel_mode.clone()),
+        deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(
+            i64::try_from(remaining.as_millis()).map_err(|_| AgentFailure::DeadlineExceeded)?,
+        ),
+        expected_native_subject_fingerprint: Some(expected_native_subject_fingerprint),
+    })
+}
+
+fn feasibility_query_fingerprint(
+    view: &floe_agent::FeasibilityView,
+    query: &FeasibilityGrantQuery,
+    native_subject_fingerprint: &str,
+    observation: Uuid,
+    process: Uuid,
+) -> Vec<u8> {
+    sha2::Sha256::digest(
+        format!(
+            "feasibility.query\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+            view.source_handle,
+            query.event_handle,
+            query.evidence_handles.join("\0"),
+            query.destination_latitude,
+            query.destination_longitude,
+            query.event_start_unix_ms,
+            query.event_end_unix_ms,
+            query.travel_mode,
+            native_subject_fingerprint,
+            observation,
+            process,
+            view.observed_at_unix_ms,
+            view.expires_at_unix_ms,
+        )
+        .as_bytes(),
+    )
+    .to_vec()
+}
+
+fn active_feasibility_grant(
+    grants: &[DataAccessGrant],
+    source: &GrantSourceBinding,
+    consumer: &GrantConsumer,
+) -> Result<DataAccessGrant, AgentFailure> {
+    let mut matching = grants.iter().filter(|grant| {
+        feasibility_source_matches(grant, source) && grant.state() != GrantState::Revoked
+    });
+    let grant = matching.next().ok_or(AgentFailure::AccessReviewRequired)?;
+    if matching.next().is_some()
+        || grant.state() != GrantState::Active
+        || grant.review_required()
+        || !grant
+            .scope()
+            .resources()
+            .iter()
+            .any(|resource| resource.as_str() == FEASIBILITY_RESOURCE)
+        || !grant
+            .scope()
+            .categories()
+            .contains(&GrantDataCategory::Derived)
+        || !grant.scope().operations().contains(&GrantOperation::Read)
+        || !grant.scope().purposes().contains(&GrantPurpose::Assistant)
+        || !grant.scope().consumers().contains(consumer)
+        || grant.scope().processing() != &ProcessingRestriction::LocalOnly
+    {
+        return Err(AgentFailure::AccessReviewRequired);
+    }
+    Ok(grant.clone())
+}
+
+fn feasibility_source_matches(grant: &DataAccessGrant, source: &GrantSourceBinding) -> bool {
+    let binding = grant.source();
+    binding.person_id() == source.person_id()
+        && binding.connector() == source.connector()
+        && binding.connection_id() == source.connection_id()
+        && binding.execution_owner() == source.execution_owner()
 }
 
 fn active_people_grant(
@@ -472,6 +670,36 @@ impl GovernedDependencyLiveness for PersonalDependencyLiveness<'_> {
             }
             return Ok(());
         }
+        if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
+            if dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+                || dependency.source().execution_owner().as_str()
+                    != format!("apple:{}", self.device_id)
+                || dependency.consumer().identifier() != ATTENTION_ASSISTANT_CONSUMER
+                || dependency.operation() != GrantOperation::Read
+                || dependency.purpose() != GrantPurpose::Assistant
+                || dependency.processing() != &ProcessingRestriction::LocalOnly
+                || dependency.resources()
+                    != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                        .map_err(|_| AgentFailure::PolicyDenied)?]
+                || dependency.categories() != [GrantDataCategory::Derived]
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let observation = self.local_context.trusted_personal_observation(
+                self.person_id,
+                self.device_id,
+                dependency.observation_id(),
+                dependency.process_incarnation_id(),
+            )?;
+            if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+                || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+                || dependency.query_fingerprint() != observation.query_fingerprint
+                || observation.native_subject_fingerprint.is_empty()
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            return Ok(());
+        }
         if !matches!(
             dependency.source().connector().as_str(),
             "contacts.apple" | "contacts.android"
@@ -582,6 +810,62 @@ impl<Keys: VaultKeyProvider> GovernedDependencyResolver for PersonalDependencyRe
                     .personal_grant_consumer_policy(grant.id())
                     .await?;
                 if dependency.consumer_policy() != policy {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                return Ok(());
+            }
+            if dependency.source().connector().as_str() == FEASIBILITY_CONNECTOR {
+                if request.policy.allowed_placements != [ModelPlacement::DeviceLocal]
+                    || dependency.source().connection_id().as_str() != FEASIBILITY_CONNECTION
+                    || dependency.source().execution_owner().as_str()
+                        != format!("apple:{}", self.device_id)
+                    || dependency.consumer().identifier() != ATTENTION_ASSISTANT_CONSUMER
+                    || dependency.operation() != GrantOperation::Read
+                    || dependency.purpose() != GrantPurpose::Assistant
+                    || dependency.processing() != &ProcessingRestriction::LocalOnly
+                    || dependency.resources()
+                        != [ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                            .map_err(|_| AgentFailure::PolicyDenied)?]
+                    || dependency.categories() != [GrantDataCategory::Derived]
+                    || dependency.lease_invocation_id().is_nil()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let grants = self.vault.list_data_access_grants(128).await?;
+                let grant =
+                    active_feasibility_grant(&grants, dependency.source(), dependency.consumer())?;
+                if dependency.grant_id() != grant.id()
+                    || dependency.grant_authority() != grant.authority()
+                    || dependency.source() != grant.source()
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let observation = self
+                    .local_context
+                    .trusted_personal_observation(
+                        self.person_id,
+                        self.device_id,
+                        dependency.observation_id(),
+                        dependency.process_incarnation_id(),
+                    )
+                    .map_err(|_| AgentFailure::PolicyDenied)?;
+                if dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
+                    || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
+                    || dependency.query_fingerprint() != observation.query_fingerprint
+                    || observation.native_subject_fingerprint
+                        != self
+                            .vault
+                            .personal_grant_subject_fingerprint(grant.id())
+                            .await?
+                {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                if dependency.consumer_policy()
+                    != self
+                        .vault
+                        .personal_grant_consumer_policy(grant.id())
+                        .await?
+                {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 return Ok(());
@@ -698,6 +982,9 @@ pub(crate) async fn apply<Keys: VaultKeyProvider>(
     cancellation: floe_agent::Cancellation,
 ) -> Result<PersonalAccessOverviewDto, AgentFailure> {
     validate_request(&request)?;
+    if request.connector == FEASIBILITY_CONNECTOR {
+        return apply_feasibility(vault, local_context, person_id, request, cancellation).await;
+    }
     if request.connector != ATTENTION_CONNECTOR {
         return Err(AgentFailure::CapabilityUnavailable);
     }
@@ -744,6 +1031,7 @@ pub(crate) async fn apply<Keys: VaultKeyProvider>(
         PersonalAccessChangeDto::Review {
             expected_native_subject_fingerprint,
             consumers,
+            feasibility_query: None,
             expected_grant_id,
             expected_grant_authority,
         } => {
@@ -813,6 +1101,10 @@ pub(crate) async fn apply<Keys: VaultKeyProvider>(
                 Some(expected_native_subject_fingerprint),
             ))
         }
+        PersonalAccessChangeDto::Review {
+            feasibility_query: Some(_),
+            ..
+        } => Err(AgentFailure::InvalidInput),
         PersonalAccessChangeDto::SetEnabled { enabled } => {
             let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
             if enabled {
@@ -871,6 +1163,139 @@ pub(crate) async fn apply<Keys: VaultKeyProvider>(
                     None,
                 ))
             }
+        }
+    }
+}
+
+async fn apply_feasibility<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    request: PersonalAccessConfigurationDto,
+    cancellation: floe_agent::Cancellation,
+) -> Result<PersonalAccessOverviewDto, AgentFailure> {
+    let source = feasibility_source(person_id, &request.device_id)?;
+    let grants = vault.list_data_access_grants(128).await?;
+    let existing = grants
+        .iter()
+        .find(|grant| {
+            feasibility_source_matches(grant, &source) && grant.state() != GrantState::Revoked
+        })
+        .cloned();
+    match request.change {
+        PersonalAccessChangeDto::Inspect {} => Ok(feasibility_overview(
+            person_id,
+            &request.device_id,
+            existing.as_ref(),
+            None,
+        )),
+        PersonalAccessChangeDto::Review {
+            expected_native_subject_fingerprint,
+            consumers,
+            feasibility_query: Some(query),
+            expected_grant_id,
+            expected_grant_authority,
+        } => {
+            let query = feasibility_query(&query)?;
+            let consumers = reviewed_feasibility_consumers(&consumers)?;
+            let inspected = acquire_feasibility(
+                local_context,
+                person_id,
+                &request.device_id,
+                &query,
+                Some(expected_native_subject_fingerprint.clone()),
+                cancellation,
+            )
+            .await?;
+            if inspected.native_subject_fingerprint_before != expected_native_subject_fingerprint
+                || inspected.native_subject_fingerprint_after != expected_native_subject_fingerprint
+            {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let expected = match (expected_grant_id, expected_grant_authority) {
+                (Some(id), Some(authority)) => Some((id, authority)),
+                (None, None) => None,
+                _ => return Err(AgentFailure::InvalidInput),
+            };
+            let authority = existing
+                .as_ref()
+                .map(|grant| grant.source().source_authority())
+                .unwrap_or_else(SourceAuthority::new);
+            let source =
+                feasibility_source_with_authority(person_id, &request.device_id, authority)?;
+            let scope = feasibility_scope(consumers)?;
+            let grant = vault
+                .review_personal_grant_with_feasibility_query(
+                    source,
+                    scope,
+                    &expected_native_subject_fingerprint,
+                    expected,
+                    query,
+                )
+                .await?;
+            Ok(feasibility_overview(
+                person_id,
+                &request.device_id,
+                Some(&grant),
+                Some(expected_native_subject_fingerprint),
+            ))
+        }
+        PersonalAccessChangeDto::Review { .. } => Err(AgentFailure::InvalidInput),
+        PersonalAccessChangeDto::SetEnabled { enabled } => {
+            let grant = existing.ok_or(AgentFailure::AccessReviewRequired)?;
+            if !enabled {
+                let grant = vault
+                    .pause_personal_grant(grant.id(), grant.authority())
+                    .await?;
+                return Ok(feasibility_overview(
+                    person_id,
+                    &request.device_id,
+                    Some(&grant),
+                    None,
+                ));
+            }
+            let query = vault.personal_feasibility_query(grant.id()).await?;
+            let fingerprint = vault.personal_grant_subject_fingerprint(grant.id()).await?;
+            let inspected = acquire_feasibility(
+                local_context,
+                person_id,
+                &request.device_id,
+                &query,
+                Some(fingerprint.clone()),
+                cancellation,
+            )
+            .await?;
+            if inspected.native_subject_fingerprint_before != fingerprint
+                || inspected.native_subject_fingerprint_after != fingerprint
+            {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let consumers = grant
+                .scope()
+                .consumers()
+                .iter()
+                .map(|consumer| consumer.identifier().to_owned())
+                .collect();
+            let source = feasibility_source_with_authority(
+                person_id,
+                &request.device_id,
+                grant.source().source_authority(),
+            )?;
+            let grant = vault
+                .review_personal_grant_with_feasibility_query(
+                    source,
+                    feasibility_scope(consumers)?,
+                    &fingerprint,
+                    Some((grant.id(), grant.authority())),
+                    query,
+                )
+                .await?;
+            Ok(feasibility_overview(
+                person_id,
+                &request.device_id,
+                Some(&grant),
+                Some(fingerprint),
+            ))
         }
     }
 }
@@ -1083,6 +1508,155 @@ async fn acquire_people_subject(
         .await
 }
 
+fn feasibility_query(
+    query: &FeasibilityGrantQueryDto,
+) -> Result<FeasibilityGrantQuery, AgentFailure> {
+    let mut evidence_handles = query.evidence_handles.clone();
+    evidence_handles.sort();
+    let query = FeasibilityGrantQuery {
+        event_handle: query.event_handle.clone(),
+        evidence_handles,
+        destination_latitude: query.destination_latitude,
+        destination_longitude: query.destination_longitude,
+        event_start_unix_ms: query.event_start_unix_ms,
+        event_end_unix_ms: query.event_end_unix_ms,
+        travel_mode: query.travel_mode.clone(),
+    };
+    query.validate().map(|()| query)
+}
+
+async fn acquire_feasibility(
+    local_context: &crate::local_context::LocalContextStore,
+    person_id: PersonId,
+    device_id: &str,
+    query: &FeasibilityGrantQuery,
+    expected_native_subject_fingerprint: Option<String>,
+    cancellation: floe_agent::Cancellation,
+) -> Result<LocalContextPersonalAcquisitionResultDto, AgentFailure> {
+    let host_epoch = local_context.personal_acquisition_host_epoch(person_id)?;
+    local_context
+        .acquire_personal(
+            LocalContextPersonalAcquisitionRequestDto {
+                request_id: Uuid::new_v4().to_string(),
+                host_epoch,
+                person_id: person_id.to_string(),
+                device_id: device_id.to_owned(),
+                domain: LocalContextPersonalDomainDto::Feasibility,
+                selected_handles: Vec::new(),
+                event_handle: Some(query.event_handle.clone()),
+                evidence_handles: query.evidence_handles.clone(),
+                destination_latitude: Some(query.destination_latitude),
+                destination_longitude: Some(query.destination_longitude),
+                event_start_unix_ms: Some(query.event_start_unix_ms),
+                event_end_unix_ms: Some(query.event_end_unix_ms),
+                travel_mode: Some(query.travel_mode.clone()),
+                deadline_unix_ms: Utc::now().timestamp_millis().saturating_add(30_000),
+                expected_native_subject_fingerprint,
+            },
+            cancellation,
+        )
+        .await
+}
+
+fn feasibility_source(
+    person_id: PersonId,
+    device_id: &str,
+) -> Result<GrantSourceBinding, AgentFailure> {
+    feasibility_source_with_authority(person_id, device_id, SourceAuthority::new())
+}
+
+fn feasibility_source_with_authority(
+    person_id: PersonId,
+    device_id: &str,
+    authority: SourceAuthority,
+) -> Result<GrantSourceBinding, AgentFailure> {
+    GrantSourceBinding::try_new(
+        person_id,
+        ConnectionId::try_new(FEASIBILITY_CONNECTION).map_err(|_| AgentFailure::InvalidInput)?,
+        ConnectorId::try_new(FEASIBILITY_CONNECTOR).map_err(|_| AgentFailure::InvalidInput)?,
+        ExecutionOwnerId::try_new(format!("apple:{device_id}"))
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        authority,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn feasibility_scope(consumer_names: Vec<String>) -> Result<GrantScope, AgentFailure> {
+    if consumer_names.is_empty()
+        || consumer_names.len() > 1
+        || consumer_names
+            .iter()
+            .any(|consumer| consumer != "assistant")
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let consumers = consumer_names
+        .into_iter()
+        .map(GrantConsumer::builtin)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AgentFailure::InvalidInput)?;
+    GrantScope::try_new(
+        vec![
+            ResourceHandle::try_new(FEASIBILITY_RESOURCE)
+                .map_err(|_| AgentFailure::InvalidInput)?,
+        ],
+        vec![GrantDataCategory::Derived],
+        vec![GrantOperation::Read],
+        vec![GrantPurpose::Assistant],
+        consumers,
+        ProcessingRestriction::LocalOnly,
+    )
+    .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn reviewed_feasibility_consumers(consumers: &[String]) -> Result<Vec<String>, AgentFailure> {
+    if consumers == ["assistant"] {
+        Ok(vec!["assistant".into()])
+    } else {
+        Err(AgentFailure::InvalidInput)
+    }
+}
+
+fn feasibility_overview(
+    person_id: PersonId,
+    device_id: &str,
+    grant: Option<&DataAccessGrant>,
+    native_subject_fingerprint: Option<String>,
+) -> PersonalAccessOverviewDto {
+    PersonalAccessOverviewDto {
+        schema_version: 1,
+        person_id: person_id.to_string(),
+        connector: FEASIBILITY_CONNECTOR.into(),
+        device_id: device_id.into(),
+        connection_id: FEASIBILITY_CONNECTION.into(),
+        source_authority: grant.map(|value| value.source().source_authority()),
+        grant_id: grant.map(DataAccessGrant::id),
+        grant_authority: grant.map(DataAccessGrant::authority),
+        state: grant.map_or_else(
+            || "needs_review".into(),
+            |grant| match grant.state() {
+                GrantState::Paused => "paused".into(),
+                GrantState::Active => "active".into(),
+                GrantState::Revoked => "revoked".into(),
+            },
+        ),
+        review_required: grant.is_none_or(DataAccessGrant::review_required),
+        presence_available: false,
+        consumers: grant
+            .map(|value| {
+                value
+                    .scope()
+                    .consumers()
+                    .iter()
+                    .map(|consumer| consumer.identifier().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        native_subject_fingerprint,
+        process_incarnation: None,
+    }
+}
+
 fn validate_contacts_request(request: &ContactsAccessConfigurationDto) -> Result<(), AgentFailure> {
     if !matches!(
         request.connector.as_str(),
@@ -1206,8 +1780,10 @@ fn contacts_overview(
 pub(crate) fn validate_request(
     request: &PersonalAccessConfigurationDto,
 ) -> Result<(), AgentFailure> {
-    if request.connector != ATTENTION_CONNECTOR
-        || request.device_id.is_empty()
+    if !matches!(
+        request.connector.as_str(),
+        ATTENTION_CONNECTOR | FEASIBILITY_CONNECTOR
+    ) || request.device_id.is_empty()
         || request.device_id.len() > 128
         || request.device_id.chars().any(char::is_whitespace)
     {

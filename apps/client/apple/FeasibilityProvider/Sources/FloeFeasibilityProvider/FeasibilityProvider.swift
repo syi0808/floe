@@ -535,10 +535,12 @@ public final class CoreLocationOneShotProvider: NSObject, CurrentLocationProvidi
   @preconcurrency CLLocationManagerDelegate, @unchecked Sendable
 {
   private let manager: CLLocationManager
+  private let allowPermissionRequest: Bool
   private var continuation: CheckedContinuation<LocationReading, Error>?
   private var timeoutTask: Task<Void, Never>?
 
-  public override init() {
+  public init(allowPermissionRequest: Bool = true) {
+    self.allowPermissionRequest = allowPermissionRequest
     manager = CLLocationManager()
     super.init()
     manager.delegate = self
@@ -560,6 +562,9 @@ public final class CoreLocationOneShotProvider: NSObject, CurrentLocationProvidi
     case .authorizedAlways, .authorizedWhenInUse:
       needsAuthorization = false
     case .notDetermined:
+      guard allowPermissionRequest else {
+        throw FeasibilityFailure(code: .permissionDenied, provider: "core_location")
+      }
       needsAuthorization = true
     case .denied, .restricted:
       throw FeasibilityFailure(code: .permissionDenied, provider: "core_location")

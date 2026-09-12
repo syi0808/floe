@@ -960,6 +960,58 @@ final class NativeAgentVaultGateway
   }
 
   @override
+  Future<PersonalAccessOverview> inspectPersonalFeasibility(
+    String personId,
+  ) async {
+    return _personalAccess(
+      personId,
+      {'kind': 'inspect'},
+      connector: 'feasibility.apple',
+    );
+  }
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalFeasibility(
+    String personId, {
+    required PersonalFeasibilityQuery query,
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async {
+    final fingerprint = reviewedPreview.nativeSubjectFingerprint;
+    if (fingerprint == null ||
+        reviewedPreview.personId != personId ||
+        reviewedPreview.deviceId != deviceId ||
+        consumers.isEmpty ||
+        consumers.toSet().length != consumers.length) {
+      throw const FormatException('Feasibility review scope changed');
+    }
+    return _personalAccess(
+      personId,
+      {
+        'kind': 'review',
+        'expected_native_subject_fingerprint': fingerprint,
+        'consumers': List<String>.unmodifiable(consumers),
+        'expected_grant_id': reviewedPreview.grantId,
+        'expected_grant_authority': reviewedPreview.grantAuthority,
+        'feasibility_query': query.toJson(),
+      },
+      connector: 'feasibility.apple',
+    );
+  }
+
+  @override
+  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
+    String personId,
+    bool enabled,
+  ) async {
+    return _personalAccess(
+      personId,
+      {'kind': 'set_enabled', 'enabled': enabled},
+      connector: 'feasibility.apple',
+    );
+  }
+
+  @override
   Future<PersonalAccessOverview> inspectPersonalContacts(
     String personId,
     List<String> selectedHandles,
@@ -999,11 +1051,11 @@ final class NativeAgentVaultGateway
   Future<PersonalAccessOverview> _personalAccess(
     String personId,
     Map<String, Object?> change,
-  ) async {
+  {String connector = 'attention.macos'}) async {
     final result = await _perform(personId, {
       'kind': 'personal_access',
       'change': {
-        'connector': 'attention.macos',
+        'connector': connector,
         'device_id': deviceId,
         'change': change,
       },

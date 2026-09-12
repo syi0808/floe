@@ -132,7 +132,7 @@ pub enum CalendarAccessChangeDto {
     Remove {},
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentVaultRequestDto {
     pub schema_version: u32,
@@ -141,7 +141,7 @@ pub struct AgentVaultRequestDto {
     pub operation: AgentVaultOperationDto,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentVaultOperationDto {
     Submit { action: AgentVaultActionDto },
@@ -150,7 +150,7 @@ pub enum AgentVaultOperationDto {
     Release {},
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentVaultActionDto {
     Status {},
@@ -258,7 +258,7 @@ pub enum AgentVaultActionDto {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersonalAccessConfigurationDto {
     pub connector: String,
@@ -266,13 +266,15 @@ pub struct PersonalAccessConfigurationDto {
     pub change: PersonalAccessChangeDto,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersonalAccessChangeDto {
     Inspect {},
     Review {
         expected_native_subject_fingerprint: String,
         consumers: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feasibility_query: Option<FeasibilityGrantQueryDto>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_grant_id: Option<floe_domain::GrantId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +283,18 @@ pub enum PersonalAccessChangeDto {
     SetEnabled {
         enabled: bool,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeasibilityGrantQueryDto {
+    pub event_handle: String,
+    pub evidence_handles: Vec<String>,
+    pub destination_latitude: f64,
+    pub destination_longitude: f64,
+    pub event_start_unix_ms: i64,
+    pub event_end_unix_ms: i64,
+    pub travel_mode: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

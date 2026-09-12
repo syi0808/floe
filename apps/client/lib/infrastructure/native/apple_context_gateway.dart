@@ -23,6 +23,11 @@ abstract interface class AppleContextSubjectApi {
   );
 }
 
+abstract interface class AppleFeasibilitySubjectApi {
+  Future<Map<String, dynamic>> inspectFeasibilitySubject();
+  Future<bool> requestFeasibilityPermission();
+}
+
 enum AppleContextSource { contacts, health }
 
 final class AppleFeasibilityQuery {
@@ -52,7 +57,10 @@ final class AppleFeasibilityQuery {
 enum AppleTravelMode { automobile, transit, walking }
 
 final class AppleContextGateway
-    implements AppleContextApi, AppleContextSubjectApi {
+    implements
+        AppleContextApi,
+        AppleContextSubjectApi,
+        AppleFeasibilitySubjectApi {
   AppleContextGateway({required String deviceId}) : _deviceId = deviceId {
     validateAppleDeviceId(deviceId);
   }
@@ -144,25 +152,70 @@ final class AppleContextGateway
 
   @override
   Future<Map<String, dynamic>> readFeasibility(
-    AppleFeasibilityQuery query,
-  ) async {
+    AppleFeasibilityQuery query, {
+    bool governed = false,
+  }) async {
     _requireAppleMobile();
     final view = _strictMap(
-      await _channel.invokeMapMethod<Object?, Object?>('readFeasibility', {
-        'device_id': _deviceId,
-        'event_handle': query.eventHandle,
-        'evidence_handles': query.evidenceHandles,
-        'destination_latitude': query.latitude,
-        'destination_longitude': query.longitude,
-        'event_start_unix_ms': query.eventStart.toUtc().millisecondsSinceEpoch,
-        'event_end_unix_ms': query.eventEnd.toUtc().millisecondsSinceEpoch,
-        'travel_mode': query.travelMode.name,
-        'source_handle': query.sourceHandle,
-        'timeout_ms': query.timeout.inMilliseconds,
-      }),
+      await _channel.invokeMapMethod<Object?, Object?>(
+        governed ? 'readGovernedFeasibility' : 'readFeasibility',
+        {
+          'device_id': _deviceId,
+          'event_handle': query.eventHandle,
+          'evidence_handles': query.evidenceHandles,
+          'destination_latitude': query.latitude,
+          'destination_longitude': query.longitude,
+          'event_start_unix_ms': query.eventStart
+              .toUtc()
+              .millisecondsSinceEpoch,
+          'event_end_unix_ms': query.eventEnd.toUtc().millisecondsSinceEpoch,
+          'travel_mode': query.travelMode.name,
+          'source_handle': query.sourceHandle,
+          'timeout_ms': query.timeout.inMilliseconds,
+        },
+      ),
     );
     validateAppleFeasibilityResult(view);
     return view;
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectFeasibilitySubject() async {
+    _requireAppleMobile();
+    final value = _strictMap(
+      await _channel.invokeMapMethod<Object?, Object?>(
+        'inspectFeasibilitySubject',
+        appleNativeArguments(_deviceId, const {}),
+      ),
+    );
+    const fields = {
+      'schema_version',
+      'subject_fingerprint',
+      'permission_class',
+    };
+    if (value.keys.toSet().difference(fields).isNotEmpty ||
+        !value.keys.toSet().containsAll(fields) ||
+        value['schema_version'] != 1 ||
+        value['subject_fingerprint'] is! String ||
+        !RegExp(r'^[0-9a-f]{64}$')
+            .hasMatch(value['subject_fingerprint'] as String) ||
+        !{
+          'location_precise',
+          'location_reduced',
+        }.contains(value['permission_class'])) {
+      throw const FormatException('Invalid Apple Feasibility subject.');
+    }
+    return value;
+  }
+
+  @override
+  Future<bool> requestFeasibilityPermission() async {
+    _requireAppleMobile();
+    final value = await _channel.invokeMethod<bool>(
+      'requestFeasibilityPermission',
+      appleNativeArguments(_deviceId, const {}),
+    );
+    return value == true;
   }
 
   @override

@@ -158,6 +158,39 @@ void main() {
       personId: registryPerson,
     );
     final appleContext = _AppleContext();
+    Map<String, Object?>? reviewedQuery;
+    final personalGateway = NativeAgentVaultGateway((request) async {
+      final operation = request['operation']! as Map;
+      if (operation['kind'] == 'submit') {
+        final action = operation['action']! as Map;
+        final change = action['change']! as Map;
+        final personalChange = change['change']! as Map;
+        if (personalChange['kind'] == 'review') {
+          reviewedQuery = Map<String, Object?>.from(
+            personalChange['feasibility_query']! as Map,
+          );
+        }
+        final reviewed = personalChange['kind'] == 'review';
+        return {
+          'request_id': request['request_id'],
+          'done': true,
+          'events': const <Object?>[],
+          'next_sequence': 0,
+          'state': 'ready',
+          'personal_access': _personalAccessOverview(
+            state: reviewed ? 'active' : 'needs_review',
+            reviewRequired: !reviewed,
+            grantId: reviewed ? 'grant-id' : null,
+          ),
+        };
+      }
+      return {
+        'request_id': request['request_id'],
+        'done': true,
+        'events': const <Object?>[],
+        'next_sequence': 0,
+      };
+    }, deviceId: 'apple-test');
     addTearDown(controller.dispose);
     await controller.load();
     final event = EventItem(
@@ -189,6 +222,7 @@ void main() {
               agentController: controller,
               appleContext: appleContext,
               daySnapshot: snapshot,
+              agentVaultGateway: personalGateway,
             ),
           ),
         ),
@@ -196,9 +230,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final refresh = find.byKey(const ValueKey('apple-feasibility-refresh'));
-    await tester.ensureVisible(refresh);
-    await tester.tap(refresh);
+    expect(find.text('Trip feasibility access'), findsOneWidget);
+    final review = find.byKey(const ValueKey('personal-feasibility-review'));
+    await tester.ensureVisible(review);
+    await tester.tap(review);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('feasibility-latitude')),
@@ -211,10 +246,17 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('feasibility-refresh-confirm')));
     await tester.pumpAndSettle();
 
-    expect(appleContext.query?.eventStart, event.startsAt);
-    expect(appleContext.query?.latitude, 37.5665);
-    expect(appleContext.query?.longitude, 126.978);
-    expect(appleContext.query?.travelMode, AppleTravelMode.transit);
+    expect(appleContext.feasibilityPermissionRequests, 1);
+    expect(reviewedQuery?['event_handle'], 'event:${event.id}');
+    expect(reviewedQuery?['evidence_handles'], ['calendar.event:${event.id}']);
+    expect(reviewedQuery?['destination_latitude'], 37.5665);
+    expect(reviewedQuery?['destination_longitude'], 126.978);
+    expect(
+      reviewedQuery?['event_start_unix_ms'],
+      event.startsAt.millisecondsSinceEpoch,
+    );
+    expect(reviewedQuery?['event_end_unix_ms'], event.endsAt.millisecondsSinceEpoch);
+    expect(reviewedQuery?['travel_mode'], 'transit');
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -638,8 +680,10 @@ final class _AndroidContext implements AndroidContextApi {
   }
 }
 
-final class _AppleContext implements AppleContextApi {
+final class _AppleContext
+    implements AppleContextApi, AppleFeasibilitySubjectApi {
   AppleFeasibilityQuery? query;
+  int feasibilityPermissionRequests = 0;
 
   @override
   Future<List<Map<String, dynamic>>> connections() async => [
@@ -652,6 +696,19 @@ final class _AppleContext implements AppleContextApi {
   ) async {
     this.query = query;
     return <String, dynamic>{};
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectFeasibilitySubject() async => {
+    'schema_version': 1,
+    'subject_fingerprint': 'a' * 64,
+    'permission_class': 'location_precise',
+  };
+
+  @override
+  Future<bool> requestFeasibilityPermission() async {
+    feasibilityPermissionRequests += 1;
+    return true;
   }
 
   @override
@@ -669,6 +726,29 @@ final class _AppleContext implements AppleContextApi {
   @override
   Future<Map<String, dynamic>> screenTimeCapability() async => {};
 }
+
+Map<String, dynamic> _personalAccessOverview({
+  required String state,
+  required bool reviewRequired,
+  required String? grantId,
+}) => {
+  'schema_version': 1,
+  'person_id': registryPerson,
+  'connector': 'feasibility.apple',
+  'device_id': 'apple-test',
+  'connection_id': 'feasibility.apple.local',
+  'source_authority': null,
+  'grant_id': grantId,
+  'grant_authority': grantId == null
+      ? null
+      : {'incarnation': 'authority', 'epoch': 1},
+  'state': state,
+  'review_required': reviewRequired,
+  'presence_available': false,
+  'consumers': grantId == null ? <String>[] : ['assistant'],
+  'native_subject_fingerprint': null,
+  'process_incarnation': null,
+};
 
 Map<String, dynamic> _healthConnection({required bool ready}) => {
   'descriptor': {

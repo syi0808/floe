@@ -155,6 +155,11 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         local_context,
         device_id: &request.device_id,
     };
+    let feasibility_reader = PersonalFeasibilityReader {
+        vault,
+        local_context,
+        device_id: &request.device_id,
+    };
     let result_recorder = StoreResultRecorder {
         store: &governed_store,
     };
@@ -177,6 +182,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         local_context,
         attention: Some(&attention_reader),
         people_reader: Some(&people_reader),
+        feasibility_reader: Some(&feasibility_reader),
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
@@ -189,6 +195,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         local_context,
         attention: Some(&attention_reader),
         people_reader: Some(&people_reader),
+        feasibility_reader: Some(&feasibility_reader),
         recorder: Some(&result_recorder),
         remote_reader: remote_reader
             .as_ref()
@@ -412,6 +419,7 @@ struct PersonalViewSource<'a> {
     policy: &'a InferencePolicyDecision,
     person_id: PersonId,
     people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
+    feasibility_reader: Option<&'a dyn PersonalFeasibilityReaderApi>,
     remote_reader: Option<&'a dyn RemoteViewReaderApi>,
     recorder: Option<&'a dyn ResultRecorder>,
     dependency_turn_id: Uuid,
@@ -441,8 +449,31 @@ impl PersonalViewSource<'_> {
         Ok(view)
     }
 
-    async fn feasibility_view(&self) -> Result<FeasibilityView, AgentFailure> {
-        Err(AgentFailure::CapabilityUnavailable)
+    async fn feasibility_view(
+        &self,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<FeasibilityView, AgentFailure> {
+        let reader = self
+            .feasibility_reader
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let (view, dependency) = reader
+            .read(
+                self.person_id,
+                self.consumer_name,
+                self.dependency_result_id,
+                deadline,
+                cancellation,
+            )
+            .await?;
+        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+            recorder.record(
+                self.dependency_turn_id,
+                self.dependency_result_id,
+                dependency,
+            )?;
+        }
+        Ok(view)
     }
 
     async fn attention_view(
@@ -592,6 +623,7 @@ struct ConversationCapabilities<'model> {
     local_context: &'model LocalContextStore,
     attention: Option<&'model dyn PersonalAttentionReaderApi>,
     people_reader: Option<&'model dyn PersonalPeopleReaderApi>,
+    feasibility_reader: Option<&'model dyn PersonalFeasibilityReaderApi>,
     recorder: Option<&'model dyn ResultRecorder>,
     remote_reader: Option<&'model dyn RemoteViewReaderApi>,
 }
@@ -656,6 +688,27 @@ trait PersonalPeopleReaderApi: Send + Sync {
     >;
 }
 
+trait PersonalFeasibilityReaderApi: Send + Sync {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        call_id: Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (FeasibilityView, floe_domain::ContextDependency),
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
 struct PersonalAttentionReader<'a, Keys: VaultKeyProvider> {
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextStore,
@@ -708,6 +761,44 @@ struct PersonalPeopleReader<'a, Keys: VaultKeyProvider> {
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextStore,
     device_id: &'a str,
+}
+
+struct PersonalFeasibilityReader<'a, Keys: VaultKeyProvider> {
+    vault: &'a EncryptedAgentVault<Keys>,
+    local_context: &'a LocalContextStore,
+    device_id: &'a str,
+}
+
+impl<Keys: VaultKeyProvider> PersonalFeasibilityReaderApi for PersonalFeasibilityReader<'_, Keys> {
+    fn read<'a>(
+        &'a self,
+        person_id: PersonId,
+        consumer: &'a str,
+        call_id: Uuid,
+        deadline: tokio::time::Instant,
+        cancellation: &'a floe_agent::Cancellation,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        (FeasibilityView, floe_domain::ContextDependency),
+                        AgentFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(personal_grants::read_feasibility(
+            self.vault,
+            self.local_context,
+            person_id,
+            self.device_id,
+            consumer,
+            call_id,
+            deadline,
+            cancellation,
+        ))
+    }
 }
 
 impl<Keys: VaultKeyProvider> PersonalPeopleReaderApi for PersonalPeopleReader<'_, Keys> {
@@ -879,6 +970,7 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                     policy: self.policy,
                     person_id: invocation.person_id,
                     people_reader: self.people_reader,
+                    feasibility_reader: self.feasibility_reader,
                     remote_reader: self.remote_reader,
                     recorder: self.recorder,
                     dependency_turn_id: invocation.turn_id,
@@ -927,9 +1019,11 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                             .people_view(invocation.deadline, &invocation.cancellation)
                             .await?,
                     ),
-                    "schedule.feasibility.read" => {
-                        serde_json::to_value(personal.feasibility_view().await?)
-                    }
+                    "schedule.feasibility.read" => serde_json::to_value(
+                        personal
+                            .feasibility_view(invocation.deadline, &invocation.cancellation)
+                            .await?,
+                    ),
                     "attention.coarse.read" => {
                         if !matches!(self.model, Model::Foundation(_)) {
                             return Err(AgentFailure::CapabilityUnavailable);
@@ -1509,6 +1603,7 @@ mod tests {
                 change: PersonalAccessChangeDto::Review {
                     expected_native_subject_fingerprint: subject.clone(),
                     consumers: vec![personal_grants::ATTENTION_ASSISTANT_CONSUMER.into()],
+                    feasibility_query: None,
                     expected_grant_id: None,
                     expected_grant_authority: None,
                 },
@@ -1543,6 +1638,7 @@ mod tests {
             local_context: &local_context,
             attention: Some(&reader),
             people_reader: None,
+            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: None,
         };
@@ -1725,6 +1821,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],
@@ -1790,6 +1887,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
         };
@@ -1832,6 +1930,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
         };
@@ -1872,6 +1971,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],
@@ -1908,6 +2008,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],
@@ -1959,6 +2060,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
         };
@@ -2094,6 +2196,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             task_views: &[],
@@ -2305,6 +2408,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             task_views: &tasks,
@@ -2491,6 +2595,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: Some(&recorder),
             remote_reader: Some(&remote_reader),
             task_views: &[],
@@ -2753,6 +2858,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],
@@ -2816,6 +2922,7 @@ mod tests {
             local_context: &local_context,
             attention: None,
             people_reader: None,
+            feasibility_reader: None,
             recorder: None,
             remote_reader: None,
             task_views: &[],

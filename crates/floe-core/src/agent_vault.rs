@@ -40,6 +40,7 @@ pub use access_grants::AccessGrantCleanup;
 pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use keyring::KeyringVaultKeys;
+pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{
     RemoteCalendarAuthorizationExpectation, RemoteCalendarSourceReference,
     RemoteEnrollmentSignature, RemoteOwnerPublicKey, RemoteProducerIdentity,

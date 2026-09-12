@@ -19,7 +19,7 @@ pub use dto::{
     CaptureSourceDto, ClassificationDto, CommandDto, CommandRequestDto, ConnectorSnapshotDto,
     ContactsAccessChangeDto, ContactsAccessConfigurationDto, DayQueryDto, DaySnapshotDto,
     DomainRefDto, EpistemicStatusDto, ErrorCodeDto, ErrorDto, EventDto, EventScheduleDto,
-    KnowledgeCandidateDto, KnowledgeDecisionResultDto, LoadDayRequestDto,
+    FeasibilityGrantQueryDto, KnowledgeCandidateDto, KnowledgeDecisionResultDto, LoadDayRequestDto,
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAcquisitionResultDto, LocalContextAttentionAcquisitionModeDto,
     LocalContextAttentionAcquisitionRequestDto, LocalContextAttentionAcquisitionResultDto,

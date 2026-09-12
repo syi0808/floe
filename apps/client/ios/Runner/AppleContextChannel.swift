@@ -1,4 +1,5 @@
 import CoreLocation
+import CryptoKit
 import FloeAppleContacts
 import FloeAppleHealth
 import FloeFeasibilityProvider
@@ -16,10 +17,13 @@ final class AppleContextChannel {
 
   private let channel: FlutterMethodChannel
   private let contacts: AppleContactsProvider
+  private let nativeSubjectKey: SymmetricKey
   private let health = HealthKitWellbeingProvider.currentHostProvider(
     sourceHandle: "wellbeing:apple-health"
   )
   private let feasibility: AppleFeasibilityProvider
+  private let governedFeasibility: AppleFeasibilityProvider
+  private let feasibilityPermission = CoreLocationOneShotProvider()
   private var contactsLastView: [String: Any]?
   private var contactsLastSuccess: Int64?
   private var healthLastView: [String: Any]?
@@ -30,9 +34,16 @@ final class AppleContextChannel {
 
   init(messenger: FlutterBinaryMessenger) throws {
     channel = FlutterMethodChannel(name: Self.channelName, binaryMessenger: messenger)
-    contacts = try AppleContactsProvider(handleSecret: try Self.contactsHandleSecret())
+    let handleSecret = try Self.contactsHandleSecret()
+    nativeSubjectKey = SymmetricKey(data: handleSecret)
+    contacts = try AppleContactsProvider(handleSecret: handleSecret)
     feasibility = AppleFeasibilityProvider(
       location: CoreLocationOneShotProvider(),
+      directions: MapKitDirectionsProvider(),
+      weather: WeatherKitEventWeatherProvider()
+    )
+    governedFeasibility = AppleFeasibilityProvider(
+      location: CoreLocationOneShotProvider(allowPermissionRequest: false),
       directions: MapKitDirectionsProvider(),
       weather: WeatherKitEventWeatherProvider()
     )
@@ -63,6 +74,19 @@ final class AppleContextChannel {
         result(try inspectContactsSubject(arguments))
       case "readFeasibility":
         result(try await readFeasibility(arguments))
+      case "readGovernedFeasibility":
+        _ = try inspectFeasibilitySubject(deviceID: deviceID)
+        result(try await readFeasibility(arguments, governed: true))
+      case "inspectFeasibilitySubject":
+        try requireExactKeys(arguments, ["device_id"])
+        result(try inspectFeasibilitySubject(deviceID: deviceID))
+      case "requestFeasibilityPermission":
+        try requireExactKeys(arguments, ["device_id"])
+        if CLLocationManager().authorizationStatus == .notDetermined {
+          _ = try? await feasibilityPermission.currentLocation(deadline: Date().addingTimeInterval(20))
+        }
+        let authorization = CLLocationManager().authorizationStatus
+        result(authorization == .authorizedAlways || authorization == .authorizedWhenInUse)
       case "readWellbeing":
         try requireExactKeys(arguments, ["device_id"])
         result(try await readWellbeing())
@@ -140,7 +164,21 @@ final class AppleContextChannel {
     ]
   }
 
-  private func readFeasibility(_ arguments: [String: Any]) async throws -> [String: Any] {
+  private func inspectFeasibilitySubject(deviceID: String) throws -> [String: Any] {
+    let manager = CLLocationManager()
+    guard CLLocationManager.locationServicesEnabled(),
+          manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse else {
+      throw ChannelFailure(code: "permission_denied", message: "Location access requires explicit review.")
+    }
+    let permissionClass = manager.accuracyAuthorization == .fullAccuracy ? "location_precise" : "location_reduced"
+    let identity = ["floe.feasibility.subject.v1", deviceID, String(manager.authorizationStatus.rawValue), permissionClass]
+    let data = try JSONSerialization.data(withJSONObject: identity)
+    let fingerprint = HMAC<SHA256>.authenticationCode(for: data, using: nativeSubjectKey)
+      .map { String(format: "%02x", $0) }.joined()
+    return ["schema_version": 1, "subject_fingerprint": fingerprint, "permission_class": permissionClass]
+  }
+
+  private func readFeasibility(_ arguments: [String: Any], governed: Bool = false) async throws -> [String: Any] {
     let keys: Set<String> = [
       "device_id",
       "event_handle", "evidence_handles", "destination_latitude", "destination_longitude",
@@ -163,7 +201,7 @@ final class AppleContextChannel {
           (1...30_000).contains(timeoutMs)
     else { throw ChannelFailure.invalidInput }
     let now = Date()
-    let result = try await feasibility.feasibility(
+    let result = try await (governed ? governedFeasibility : feasibility).feasibility(
       for: FeasibilityRequest(
         eventHandle: eventHandle,
         evidenceHandles: evidenceHandles,

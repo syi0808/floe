@@ -19,6 +19,7 @@ import '../agent/agent_calendar_expert_dialog.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_memory_settings.dart';
 import '../agent/agent_personal_access_settings.dart';
+import '../agent/agent_personal_access.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';

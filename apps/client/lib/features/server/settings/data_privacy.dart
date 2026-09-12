@@ -41,7 +41,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool androidContactsBusy = false;
   bool appleContactsBusy = false;
   bool appleHealthBusy = false;
-  bool appleFeasibilityBusy = false;
   bool androidCalendarBusy = false;
   List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
@@ -406,10 +405,16 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
-  Future<void> _refreshAppleFeasibility() async {
-    final gateway = widget.appleContext;
+  Future<AppleFeasibilityQuery?> _feasibilityQuery(EventItem event) async {
+    return showFloeDialog<AppleFeasibilityQuery>(
+      context,
+      (_) => _FeasibilityDialog(event: event),
+    );
+  }
+
+  Future<PersonalFeasibilityQuery?> _personalFeasibilityQuery() async {
     final snapshot = widget.daySnapshot;
-    if (gateway == null || snapshot == null || appleFeasibilityBusy) return;
+    if (snapshot == null) return null;
     EventItem? event;
     for (final item in snapshot.items.whereType<EventItem>()) {
       if (item.id == snapshot.nextEventId && !item.isAllDay) {
@@ -417,38 +422,17 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         break;
       }
     }
-    if (event == null) {
-      setState(() {
-        appleConnectionFailure = StateError(
-          'A timed next event is required for feasibility.',
-        );
-      });
-      return;
-    }
+    if (event == null) return null;
     final query = await _feasibilityQuery(event);
-    if (query == null || !mounted) return;
-    setState(() {
-      appleFeasibilityBusy = true;
-      appleConnectionFailure = null;
-    });
-    try {
-      await gateway.readFeasibility(query);
-    } on Object catch (error) {
-      appleConnectionFailure = error;
-    } finally {
-      appleConnectionsRequested = false;
-      try {
-        await _load();
-      } finally {
-        if (mounted) setState(() => appleFeasibilityBusy = false);
-      }
-    }
-  }
-
-  Future<AppleFeasibilityQuery?> _feasibilityQuery(EventItem event) async {
-    return showFloeDialog<AppleFeasibilityQuery>(
-      context,
-      (_) => _FeasibilityDialog(event: event),
+    if (query == null) return null;
+    return PersonalFeasibilityQuery(
+      eventHandle: query.eventHandle,
+      evidenceHandles: query.evidenceHandles,
+      destinationLatitude: query.latitude,
+      destinationLongitude: query.longitude,
+      eventStartUnixMs: query.eventStart.toUtc().millisecondsSinceEpoch,
+      eventEndUnixMs: query.eventEnd.toUtc().millisecondsSinceEpoch,
+      travelMode: query.travelMode.name,
     );
   }
 
@@ -717,30 +701,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
-                if (appleFeasibilityConnection != null) ...[
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    'Location is read only when you request feasibility for the next timed event. Enter its destination explicitly; Floe does not retain location history.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FloeButton.outlined(
-                      key: const ValueKey('apple-feasibility-refresh'),
-                      onPressed:
-                          appleFeasibilityConnection.state ==
-                                  AgentConnectionState.unsupported ||
-                              widget.daySnapshot?.nextEventId == null
-                          ? null
-                          : _refreshAppleFeasibility,
-                      loading: appleFeasibilityBusy,
-                      child: const Text('Refresh next trip'),
-                    ),
-                  ),
-                ],
                 if ((controller.hasConnections ||
                         widget.serverClient != null ||
                         widget.androidContext != null ||
@@ -786,6 +746,21 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                           'Contacts selection is unsupported on this device.',
                         );
                       },
+                    ),
+                  ],
+                  if (appleFeasibilityConnection != null &&
+                      widget.appleContext is AppleFeasibilitySubjectApi) ...[
+                    const SizedBox(height: FloeSpace.lg),
+                    PersonalFeasibilityAccessCard(
+                      gateway: widget.personalAccessGateway!,
+                      personId: controller.personId,
+                      requestQuery: _personalFeasibilityQuery,
+                      requestPermission: () =>
+                          (widget.appleContext! as AppleFeasibilitySubjectApi)
+                              .requestFeasibilityPermission(),
+                      inspectSubject: () =>
+                          (widget.appleContext! as AppleFeasibilitySubjectApi)
+                              .inspectFeasibilitySubject(),
                     ),
                   ],
                 ],
@@ -846,7 +821,7 @@ class _FeasibilityDialogState extends State<_FeasibilityDialog> {
 
   @override
   Widget build(BuildContext context) => FloeDialog(
-    title: const Text('Refresh trip feasibility'),
+    title: const Text('Review trip feasibility'),
     content: SizedBox(
       width: 420,
       child: Column(
@@ -904,7 +879,7 @@ class _FeasibilityDialogState extends State<_FeasibilityDialog> {
       FloeButton.filled(
         key: const ValueKey('feasibility-refresh-confirm'),
         onPressed: _submit,
-        child: const Text('Refresh'),
+        child: const Text('Review access'),
       ),
     ],
   );
@@ -913,9 +888,11 @@ class _FeasibilityDialogState extends State<_FeasibilityDialog> {
     final parsedLatitude = double.tryParse(latitude.text.trim());
     final parsedLongitude = double.tryParse(longitude.text.trim());
     if (parsedLatitude == null ||
+        !parsedLatitude.isFinite ||
         parsedLatitude < -90 ||
         parsedLatitude > 90 ||
         parsedLongitude == null ||
+        !parsedLongitude.isFinite ||
         parsedLongitude < -180 ||
         parsedLongitude > 180) {
       return;

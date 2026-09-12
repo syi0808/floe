@@ -176,7 +176,7 @@ Future<void> _start() async {
           );
     PersonalAcquisitionService? personalAcquisition;
     final personalReader = appleNativeGateway != null
-        ? _appleContactsReader(appleNativeGateway, device.id)
+        ? _applePersonalReader(appleNativeGateway, device.id)
         : androidNative != null
         ? _androidContactsReader(androidNative, device.id)
         : null;
@@ -263,10 +263,53 @@ void _recordOptionalContextFailure(Object error, StackTrace stackTrace) {
   );
 }
 
-PersonalAcquisitionReader _appleContactsReader(
+PersonalAcquisitionReader _applePersonalReader(
   AppleContextGateway native,
   String deviceId,
 ) => (request) async {
+  if (request['domain'] == 'feasibility' && request['device_id'] == deviceId) {
+    final before = await native.inspectFeasibilitySubject();
+    final expected = request['expected_native_subject_fingerprint'];
+    if (expected != null && before['subject_fingerprint'] != expected) {
+      throw PlatformException(code: 'permission_denied');
+    }
+    final remaining =
+        (request['deadline_unix_ms'] as int) -
+        DateTime.now().toUtc().millisecondsSinceEpoch;
+    if (remaining <= 0) throw PlatformException(code: 'cancelled');
+    final result = await native.readFeasibility(
+      AppleFeasibilityQuery(
+        eventHandle: request['event_handle'] as String,
+        evidenceHandles: (request['evidence_handles'] as List).cast<String>(),
+        latitude: (request['destination_latitude'] as num).toDouble(),
+        longitude: (request['destination_longitude'] as num).toDouble(),
+        eventStart: DateTime.fromMillisecondsSinceEpoch(
+          request['event_start_unix_ms'] as int,
+          isUtc: true,
+        ),
+        eventEnd: DateTime.fromMillisecondsSinceEpoch(
+          request['event_end_unix_ms'] as int,
+          isUtc: true,
+        ),
+        travelMode: AppleTravelMode.values.byName(
+          request['travel_mode'] as String,
+        ),
+        timeout: Duration(milliseconds: remaining.clamp(1, 20000)),
+      ),
+      governed: true,
+    );
+    final after = await native.inspectFeasibilitySubject();
+    if (after['subject_fingerprint'] != before['subject_fingerprint']) {
+      throw PlatformException(code: 'permission_denied');
+    }
+    return _personalPeopleResult(
+      request,
+      before,
+      after,
+      Map<String, dynamic>.from(result['view'] as Map),
+      'apple_feasibility',
+    );
+  }
   final selected = request['selected_handles'];
   if (request['domain'] != 'people' ||
       request['device_id'] != deviceId ||

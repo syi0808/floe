@@ -31,12 +31,12 @@ pub use agent_fixture::{
 #[cfg(unix)]
 pub use agent_vault::{
     AccessGrantCleanup, AgentActionAdmission, AgentActionEnvelope, CalendarGrantAdmission,
-    EncryptedAgentVault, GovernedAgentSessionStore, GovernedDependencyLiveness,
-    GovernedDependencyResolver, KeyringVaultKeys, RemoteCalendarAuthorizationExpectation,
-    RemoteCalendarGrantBinding, RemoteCalendarSourceReference, RemoteEnrollmentSignature,
-    RemoteOwnerPublicKey, RemoteProducerIdentity, RemoteViewGrantBinding,
-    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit, VaultKey,
-    VaultKeyProvider,
+    EncryptedAgentVault, FeasibilityGrantQuery, GovernedAgentSessionStore,
+    GovernedDependencyLiveness, GovernedDependencyResolver, KeyringVaultKeys,
+    RemoteCalendarAuthorizationExpectation, RemoteCalendarGrantBinding,
+    RemoteCalendarSourceReference, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
+    RemoteProducerIdentity, RemoteViewGrantBinding, RemoteViewSourceReference,
+    SessionCompactionResult, SessionSearchHit, VaultKey, VaultKeyProvider,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,

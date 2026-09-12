@@ -37,7 +37,10 @@ final class LocalDeviceIdentity {
 }
 
 final class PublishingAppleContextGateway
-    implements AppleContextApi, AppleContextSubjectApi {
+    implements
+        AppleContextApi,
+        AppleContextSubjectApi,
+        AppleFeasibilitySubjectApi {
   factory PublishingAppleContextGateway({
     required AppleContextApi gateway,
     required LocalContextTransport transport,
@@ -121,6 +124,27 @@ final class PublishingAppleContextGateway
     return (gateway as AppleContextSubjectApi).inspectContactsSubject(
       selectedHandles,
     );
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectFeasibilitySubject() {
+    final gateway = _gateway;
+    if (gateway is! AppleFeasibilitySubjectApi) {
+      throw UnsupportedError('Feasibility subject inspection is unavailable.');
+    }
+    return (gateway as AppleFeasibilitySubjectApi).inspectFeasibilitySubject();
+  }
+
+  @override
+  Future<bool> requestFeasibilityPermission() async {
+    final gateway = _gateway;
+    if (gateway is! AppleFeasibilitySubjectApi) {
+      throw UnsupportedError('Feasibility permission is unavailable.');
+    }
+    final granted = await (gateway as AppleFeasibilitySubjectApi)
+        .requestFeasibilityPermission();
+    if (!granted) await _revoke(_feasibilityViewId);
+    return granted;
   }
 
   @override
