@@ -9,6 +9,7 @@ import 'package:floe_client/features/day_canvas/presentation/connector_screen.da
 import 'package:floe_client/features/agent/agent_calendar_sources.dart';
 import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
+import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:figma_squircle/figma_squircle.dart';
@@ -20,6 +21,61 @@ import '../../support/agent_calendar_experts.dart';
 import '../../support/agent_registry.dart';
 
 void main() {
+  testWidgets('Apple connections expose status and exact connection detail', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ConnectorScreen(
+              gateway: null,
+              query: DayQuery(
+                personId: 'test',
+                date: DateTime.utc(2026, 9, 4),
+                now: DateTime.utc(2026, 9, 4),
+                timezoneOffsetSeconds: 0,
+              ),
+              connection: null,
+              onChanged: () async {},
+              appleContext: _AppleConnections(),
+              platform: TargetPlatform.iOS,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('connector-contacts.apple')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('connector-attention.apple')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('connector-feasibility.apple')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('connector-health.apple')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('connector-contacts.apple')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Connection contacts.apple'), findsOneWidget);
+    expect(find.textContaining('apple-test'), findsOneWidget);
+    expect(find.text('System access'), findsOneWidget);
+    expect(find.text('Allow access'), findsOneWidget);
+    expect(find.text('Review selection'), findsNothing);
+  });
+
   testWidgets('service has only an icon surface and still opens details', (
     tester,
   ) async {
@@ -745,3 +801,106 @@ const _microsoftCalendarConnector = ServerConnector(
   connectionId: '3d2e7a71-194b-4b47-84cc-b58c5ce17772',
   connectionRevision: 11,
 );
+
+final class _AppleConnections implements AppleContextApi {
+  @override
+  Future<List<Map<String, dynamic>>> connections() async => [
+    _appleConnection('contacts.apple', 'apple_contacts', 'revoked'),
+    _appleConnection('attention.apple', 'apple_screen_time', 'unsupported'),
+    _appleConnection('feasibility.apple', 'apple_feasibility', 'pending'),
+    _appleConnection('health.apple', 'apple_health', 'pending'),
+  ];
+
+  @override
+  Future<bool> requestPermission(AppleContextSource source) async => false;
+
+  @override
+  Future<Map<String, dynamic>> readContacts({
+    int limit = 64,
+    List<String>? selectedHandles,
+  }) async => {};
+
+  @override
+  Future<Map<String, dynamic>> readFeasibility(
+    AppleFeasibilityQuery query,
+  ) async => {};
+
+  @override
+  Future<Map<String, dynamic>> readWellbeing() async => {};
+
+  @override
+  Future<Map<String, dynamic>> screenTimeCapability() async => {};
+}
+
+Map<String, dynamic> _appleConnection(
+  String id,
+  String provider,
+  String state,
+) {
+  final viewId = switch (provider) {
+    'apple_contacts' => 'people.identity',
+    'apple_feasibility' => 'schedule.feasibility',
+    'apple_health' || 'apple_screen_time' => 'wellbeing.derived',
+    _ => 'attention.coarse',
+  };
+  final capability = switch (provider) {
+    'apple_contacts' => 'contacts.identity.read',
+    'apple_feasibility' => 'schedule.feasibility.read',
+    'apple_health' => 'health.derived.read',
+    _ => 'attention.coarse.read',
+  };
+  final scopes = switch (provider) {
+    'apple_contacts' => ['CNContactStore.contacts.read'],
+    'apple_feasibility' => ['CLLocationManager.whenInUse'],
+    'apple_health' => ['HKHealthStore.derived.read'],
+    _ => ['FamilyControls.authorization'],
+  };
+  final descriptor = {
+    'schema_version': 1,
+    'id': id,
+    'version': '1.0.0',
+    'provider': provider,
+    'execution': {'kind': 'device', 'device_id': 'apple-test'},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': capability,
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': scopes,
+        'output_view_id': viewId,
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': viewId,
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'ephemeral',
+        'freshness_ttl_ms': 300000,
+        'max_items': 64,
+        'max_bytes': 32768,
+        'provenance_required': true,
+      },
+    ],
+  };
+  final connection = <String, dynamic>{
+    'schema_version': 1,
+    'connector_id': id,
+    'state': state,
+    'granted_scopes': state == 'revoked' ? <String>[] : scopes,
+    'observed_at_unix_ms': 2000,
+  };
+  if (state == 'revoked' || state == 'unsupported') {
+    connection['last_failure'] = {
+      'kind': state == 'unsupported' ? 'unsupported' : 'permission_denied',
+      'observed_at_unix_ms': 2000,
+    };
+  }
+  return {
+    'descriptor': descriptor,
+    'connection': connection,
+    'views': <Object?>[],
+  };
+}

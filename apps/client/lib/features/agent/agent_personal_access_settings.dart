@@ -10,10 +10,14 @@ final class PersonalAttentionAccessCard extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.personId,
+    this.requestPermission,
+    this.inspectSubject,
   });
 
   final AgentPersonalAccessGateway gateway;
   final String personId;
+  final Future<bool> Function()? requestPermission;
+  final Future<Map<String, dynamic>> Function()? inspectSubject;
 
   @override
   State<PersonalAttentionAccessCard> createState() =>
@@ -65,6 +69,32 @@ final class _PersonalAttentionAccessCardState
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  Future<void> _review() async {
+    await _change(() async {
+      final requestPermission = widget.requestPermission;
+      if (requestPermission != null && !await requestPermission()) {
+        throw const FormatException('Attention permission was not granted.');
+      }
+      final inspectSubject = widget.inspectSubject;
+      if (inspectSubject != null) {
+        final subject = await inspectSubject();
+        final fingerprint = subject['subject_fingerprint'];
+        if (fingerprint is! String || fingerprint.isEmpty) {
+          throw const FormatException('Attention subject is unavailable.');
+        }
+      }
+      final current = overview;
+      if (current == null) {
+        throw const FormatException('Attention preview unavailable.');
+      }
+      return widget.gateway.reviewPersonalAttention(
+        widget.personId,
+        reviewedPreview: current,
+        consumers: selectedConsumers.toList()..sort(),
+      );
+    });
   }
 
   @override
@@ -129,13 +159,7 @@ final class _PersonalAttentionAccessCardState
                         current?.nativeSubjectFingerprint == null ||
                         selectedConsumers.isEmpty
                     ? null
-                    : () => _change(
-                        () => widget.gateway.reviewPersonalAttention(
-                          widget.personId,
-                          reviewedPreview: current!,
-                          consumers: selectedConsumers.toList()..sort(),
-                        ),
-                      ),
+                    : _review,
                 loading: busy,
                 child: Text(enabled ? 'Review again' : 'Review and enable'),
               ),
@@ -309,10 +333,7 @@ final class _PersonalFeasibilityAccessCardState
             style: FloeType.bodySmall,
           ),
           if (failure != null)
-            Text(
-              'Review could not be completed.',
-              style: FloeType.bodySmall,
-            ),
+            Text('Review could not be completed.', style: FloeType.bodySmall),
           const SizedBox(height: FloeSpace.sm),
           Row(
             children: [

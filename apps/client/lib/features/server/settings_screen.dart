@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -9,15 +10,12 @@ import '../../app/floe_button.dart';
 import '../../app/floe_feedback.dart';
 import '../../app/floe_primitives.dart';
 import '../../app/floe_loading.dart';
-import '../../app/floe_input.dart';
 import '../../app/floe_selection.dart';
 import '../../app/floe_squircle.dart';
 import '../agent/agent_connections.dart';
 import '../agent/agent_connection_settings.dart';
 import '../agent/agent_controller.dart';
 import '../agent/agent_memory_settings.dart';
-import '../agent/agent_personal_access_settings.dart';
-import '../agent/agent_personal_access.dart';
 import '../agent/agent_vault_gateway.dart';
 import '../day_canvas/application/calendar_action_controller.dart';
 import '../day_canvas/domain/calendar_action.dart';
@@ -44,6 +42,8 @@ class SettingsScreen extends StatefulWidget {
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
+    this.onManageConnections,
+    this.platform,
   });
 
   final LocalServerClient? client;
@@ -53,6 +53,8 @@ class SettingsScreen extends StatefulWidget {
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
+  final VoidCallback? onManageConnections;
+  final TargetPlatform? platform;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -97,6 +99,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appleContext: widget.appleContext,
       daySnapshot: widget.daySnapshot,
       personalAccessGateway: widget.agentVaultGateway,
+      onManageConnections: widget.onManageConnections,
+      platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
     _SettingsPage.memory => AgentMemorySettings(

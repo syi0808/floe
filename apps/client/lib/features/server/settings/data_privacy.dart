@@ -5,19 +5,23 @@ class _DataPrivacy extends StatefulWidget {
     required this.controller,
     required this.serverClient,
     required this.onManageMemory,
+    this.onManageConnections,
     this.androidContext,
     this.appleContext,
     this.daySnapshot,
     this.personalAccessGateway,
+    this.platform,
   });
 
   final AgentController controller;
   final LocalServerClient? serverClient;
   final VoidCallback onManageMemory;
+  final VoidCallback? onManageConnections;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
   final DaySnapshot? daySnapshot;
   final NativeAgentVaultGateway? personalAccessGateway;
+  final TargetPlatform? platform;
 
   @override
   State<_DataPrivacy> createState() => _DataPrivacyState();
@@ -29,24 +33,21 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   bool memoryRequested = false;
   bool savedMemoryRequested = false;
   bool connectionsRequested = false;
-  bool serverConnectionsRequested = false;
   bool androidConnectionsRequested = false;
-  bool appleConnectionsRequested = false;
   bool androidHealthBusy = false;
   bool androidContactsBusy = false;
-  bool appleContactsBusy = false;
   bool androidCalendarBusy = false;
-  List<AgentConnection>? serverConnections;
   List<AgentConnection>? androidConnections;
-  List<AgentConnection>? appleConnections;
   List<AndroidCalendarOption>? androidCalendars;
   Set<String> androidSelectedCalendars = {};
-  Object? serverConnectionFailure;
   Object? androidConnectionFailure;
-  Object? appleConnectionFailure;
   Object? androidCalendarFailure;
 
   AgentController get controller => widget.controller;
+  AndroidContextApi? get _androidContext =>
+      (widget.platform ?? defaultTargetPlatform) == TargetPlatform.macOS
+      ? null
+      : widget.androidContext;
 
   @override
   void initState() {
@@ -66,23 +67,14 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       savedMemoryRequested = false;
       connectionsRequested = false;
     }
-    if (oldWidget.serverClient != widget.serverClient) {
-      serverConnectionsRequested = false;
-      serverConnections = null;
-      serverConnectionFailure = null;
-    }
-    if (oldWidget.androidContext != widget.androidContext) {
+    if (oldWidget.androidContext != widget.androidContext ||
+        oldWidget.platform != widget.platform) {
       androidConnectionsRequested = false;
       androidConnections = null;
       androidConnectionFailure = null;
       androidCalendars = null;
       androidSelectedCalendars = {};
       androidCalendarFailure = null;
-    }
-    if (oldWidget.appleContext != widget.appleContext) {
-      appleConnectionsRequested = false;
-      appleConnections = null;
-      appleConnectionFailure = null;
     }
     _load();
   }
@@ -97,9 +89,8 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             !controller.canReviewMemory &&
             !controller.canReadMemory &&
             !controller.canReadConnections &&
-            widget.serverClient == null &&
-            widget.androidContext == null &&
-            widget.appleContext == null) {
+            _androidContext == null &&
+            widget.personalAccessGateway == null) {
       return;
     }
     loading = true;
@@ -125,27 +116,10 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       connectionsRequested = true;
       await controller.loadConnections();
     }
-    if (!serverConnectionsRequested && widget.serverClient != null) {
-      serverConnectionsRequested = true;
-      try {
-        final connection = await widget.serverClient!.connection();
-        final values = connection == null
-            ? const <Map<String, dynamic>>[]
-            : await widget.serverClient!.connections(connection);
-        serverConnections = List.unmodifiable(
-          values.map(AgentConnection.fromJson),
-        );
-        serverConnectionFailure = null;
-      } on Object catch (error) {
-        serverConnections = const [];
-        serverConnectionFailure = error;
-      }
-      if (mounted) setState(() {});
-    }
-    if (!androidConnectionsRequested && widget.androidContext != null) {
+    if (!androidConnectionsRequested && _androidContext != null) {
       androidConnectionsRequested = true;
       try {
-        final values = await widget.androidContext!.connections();
+        final values = await _androidContext!.connections();
         androidConnections = List.unmodifiable(
           values.map(AgentConnection.fromJson),
         );
@@ -157,42 +131,13 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       }
       if (mounted) setState(() {});
     }
-    if (!appleConnectionsRequested && widget.appleContext != null) {
-      appleConnectionsRequested = true;
-      try {
-        final values = await widget.appleContext!.connections();
-        appleConnections = List.unmodifiable(
-          values.map(AgentConnection.fromJson),
-        );
-        appleConnectionFailure = null;
-      } on Object catch (error) {
-        appleConnections = const [];
-        appleConnectionFailure = error;
-      }
-      if (mounted) setState(() {});
-    }
     loading = false;
-  }
-
-  Future<void> _refreshConnections() async {
-    connectionsRequested = false;
-    serverConnectionsRequested = false;
-    serverConnectionFailure = null;
-    androidConnectionsRequested = false;
-    androidConnectionFailure = null;
-    appleConnectionsRequested = false;
-    appleConnectionFailure = null;
-    androidCalendarFailure = null;
-    if (widget.serverClient != null) serverConnections = null;
-    if (widget.androidContext != null) androidConnections = null;
-    if (widget.appleContext != null) appleConnections = null;
-    await _load();
   }
 
   Future<void> _loadAndroidCalendarConfiguration(
     List<AgentConnection> connections,
   ) async {
-    final gateway = widget.androidContext;
+    final gateway = _androidContext;
     AgentConnection? calendar;
     for (final connection in connections) {
       if (connection.descriptor.provider == 'android_calendar') {
@@ -222,7 +167,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _allowAndroidCalendar(AgentConnection connection) async {
-    final gateway = widget.androidContext;
+    final gateway = _androidContext;
     if (gateway == null || androidCalendarBusy) return;
     setState(() {
       androidCalendarBusy = true;
@@ -247,7 +192,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _toggleAndroidCalendar(AndroidCalendarOption calendar) async {
-    final gateway = widget.androidContext;
+    final gateway = _androidContext;
     if (gateway == null || androidCalendarBusy) return;
     final selected = {...androidSelectedCalendars};
     if (!selected.remove(calendar.id)) {
@@ -279,7 +224,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _refreshAndroidWellbeing(AgentConnection connection) async {
-    final gateway = widget.androidContext;
+    final gateway = _androidContext;
     if (gateway == null || androidHealthBusy) return;
     setState(() {
       androidHealthBusy = true;
@@ -308,7 +253,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _refreshAndroidContacts(AgentConnection connection) async {
-    final gateway = widget.androidContext;
+    final gateway = _androidContext;
     if (gateway == null || androidContactsBusy) return;
     setState(() {
       androidContactsBusy = true;
@@ -336,66 +281,6 @@ class _DataPrivacyState extends State<_DataPrivacy> {
     }
   }
 
-  Future<void> _allowAppleContacts(AgentConnection connection) async {
-    final gateway = widget.appleContext;
-    if (gateway == null || appleContactsBusy) return;
-    setState(() {
-      appleContactsBusy = true;
-      appleConnectionFailure = null;
-    });
-    try {
-      if (connection.state == AgentConnectionState.revoked) {
-        final granted = await gateway.requestPermission(
-          AppleContextSource.contacts,
-        );
-        if (!granted) {
-          throw StateError('Apple Contacts access was not granted.');
-        }
-      }
-      await gateway.readContacts();
-    } on Object catch (error) {
-      appleConnectionFailure = error;
-    } finally {
-      appleConnectionsRequested = false;
-      try {
-        await _load();
-      } finally {
-        if (mounted) setState(() => appleContactsBusy = false);
-      }
-    }
-  }
-
-  Future<AppleFeasibilityQuery?> _feasibilityQuery(EventItem event) async {
-    return showFloeDialog<AppleFeasibilityQuery>(
-      context,
-      (_) => _FeasibilityDialog(event: event),
-    );
-  }
-
-  Future<PersonalFeasibilityQuery?> _personalFeasibilityQuery() async {
-    final snapshot = widget.daySnapshot;
-    if (snapshot == null) return null;
-    EventItem? event;
-    for (final item in snapshot.items.whereType<EventItem>()) {
-      if (item.id == snapshot.nextEventId && !item.isAllDay) {
-        event = item;
-        break;
-      }
-    }
-    if (event == null) return null;
-    final query = await _feasibilityQuery(event);
-    if (query == null) return null;
-    return PersonalFeasibilityQuery(
-      eventHandle: query.eventHandle,
-      evidenceHandles: query.evidenceHandles,
-      destinationLatitude: query.latitude,
-      destinationLongitude: query.longitude,
-      eventStartUnixMs: query.eventStart.toUtc().millisecondsSinceEpoch,
-      eventEndUnixMs: query.eventEnd.toUtc().millisecondsSinceEpoch,
-      travelMode: query.travelMode.name,
-    );
-  }
-
   @override
   void dispose() {
     controller.removeListener(_controllerChanged);
@@ -409,46 +294,20 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       final localConnections = controller.hasConnections
           ? controller.connections
           : const <AgentConnection>[];
-      final remoteConnections = widget.serverClient == null
-          ? const <AgentConnection>[]
-          : serverConnections;
-      final deviceConnections = widget.androidContext == null
+      final deviceConnections = _androidContext == null
           ? const <AgentConnection>[]
           : androidConnections;
-      final appleDeviceConnections = widget.appleContext == null
-          ? const <AgentConnection>[]
-          : appleConnections;
-      final connections = [
-        ...?localConnections,
-        ...?deviceConnections,
-        ...?appleDeviceConnections,
-        ...?remoteConnections,
-      ];
-      final connectionLoading =
-          controller.hasConnections && localConnections == null ||
-          widget.androidContext != null && deviceConnections == null ||
-          widget.appleContext != null && appleDeviceConnections == null ||
-          widget.serverClient != null && remoteConnections == null;
+      final connections = [...?localConnections, ...?deviceConnections];
+      final androidConnectionLoading =
+          _androidContext != null && deviceConnections == null;
       AgentConnection? healthConnection;
       AgentConnection? androidContactsConnection;
       AgentConnection? androidCalendarConnection;
-      AgentConnection? appleContactsConnection;
-      AgentConnection? appleHealthConnection;
-      AgentConnection? appleFeasibilityConnection;
       for (final connection in connections) {
         if (connection.descriptor.provider == 'health_connect') {
           healthConnection = connection;
         } else if (connection.descriptor.provider == 'android_contacts') {
           androidContactsConnection = connection;
-        }
-      }
-      for (final connection in connections) {
-        if (connection.descriptor.provider == 'apple_contacts') {
-          appleContactsConnection = connection;
-        } else if (connection.descriptor.provider == 'apple_health') {
-          appleHealthConnection = connection;
-        } else if (connection.descriptor.provider == 'apple_feasibility') {
-          appleFeasibilityConnection = connection;
         }
       }
       for (final connection in connections) {
@@ -475,20 +334,35 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (controller.hasConnections ||
-                    widget.serverClient != null ||
-                    widget.androidContext != null ||
-                    widget.appleContext != null)
+                if (widget.onManageConnections != null)
+                  FloeSquircle(
+                    key: const ValueKey('data-privacy-connections-summary'),
+                    padding: const EdgeInsets.all(FloeSpace.base),
+                    fill: FloePalette.neutral50,
+                    borderWidth: 0,
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Connections are managed in Connections.',
+                          ),
+                        ),
+                        FloeButton.text(
+                          key: const ValueKey('data-privacy-open-connections'),
+                          onPressed: widget.onManageConnections,
+                          child: const Text('Open Connections'),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (_androidContext != null && deviceConnections != null)
                   AgentConnectionSettings(
-                    connections: connections,
-                    loading: connectionLoading,
+                    connections: deviceConnections,
+                    loading: androidConnectionLoading,
                     failed:
-                        controller.connectionFailure != null ||
-                        serverConnectionFailure != null ||
                         androidConnectionFailure != null ||
-                        appleConnectionFailure != null ||
                         androidCalendarFailure != null,
-                    onRefresh: _refreshConnections,
+                    onRefresh: _load,
                   ),
                 if (androidCalendarConnection != null) ...[
                   const SizedBox(height: FloeSpace.base),
@@ -604,99 +478,9 @@ class _DataPrivacyState extends State<_DataPrivacy> {
                     ),
                   ),
                 ],
-                if (appleContactsConnection != null) ...[
-                  const SizedBox(height: FloeSpace.sm),
-                  Text(
-                    'Apple Contacts stay on this device. Floe exposes only bounded identity handles and selected aliases.',
-                    style: FloeType.bodySmall.copyWith(
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
-                  const SizedBox(height: FloeSpace.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FloeButton.outlined(
-                      key: const ValueKey('apple-contacts-refresh'),
-                      onPressed:
-                          appleContactsConnection.state ==
-                              AgentConnectionState.unsupported
-                          ? null
-                          : () => _allowAppleContacts(appleContactsConnection!),
-                      loading: appleContactsBusy,
-                      child: Text(
-                        appleContactsConnection.state ==
-                                AgentConnectionState.revoked
-                            ? 'Allow Apple Contacts'
-                            : 'Refresh contacts',
-                      ),
-                    ),
-                  ),
-                ],
-                if (widget.personalAccessGateway != null) ...[
-                  const SizedBox(height: FloeSpace.lg),
-                  PersonalAttentionAccessCard(
-                    gateway: widget.personalAccessGateway!,
-                    personId: controller.personId,
-                  ),
-                  if (widget.appleContext is AppleContextSubjectApi ||
-                      widget.androidContext is AndroidContextSubjectApi) ...[
-                    const SizedBox(height: FloeSpace.lg),
-                    PersonalContactsAccessCard(
-                      gateway: widget.personalAccessGateway!,
-                      personId: controller.personId,
-                      readContacts: () => widget.appleContext != null
-                          ? widget.appleContext!.readContacts()
-                          : widget.androidContext!.readContacts(),
-                      inspectSubject: (handles) {
-                        final apple = widget.appleContext;
-                        if (apple is AppleContextSubjectApi) {
-                          return (apple as AppleContextSubjectApi)
-                              .inspectContactsSubject(handles);
-                        }
-                        final android = widget.androidContext;
-                        if (android is AndroidContextSubjectApi) {
-                          return (android as AndroidContextSubjectApi)
-                              .inspectContactsSubject(handles);
-                        }
-                        throw UnsupportedError(
-                          'Contacts selection is unsupported on this device.',
-                        );
-                      },
-                    ),
-                  ],
-                  if (appleFeasibilityConnection != null &&
-                      widget.appleContext is AppleFeasibilitySubjectApi) ...[
-                    const SizedBox(height: FloeSpace.lg),
-                    PersonalFeasibilityAccessCard(
-                      gateway: widget.personalAccessGateway!,
-                      personId: controller.personId,
-                      requestQuery: _personalFeasibilityQuery,
-                      requestPermission: () =>
-                          (widget.appleContext! as AppleFeasibilitySubjectApi)
-                              .requestFeasibilityPermission(),
-                      inspectSubject: () =>
-                          (widget.appleContext! as AppleFeasibilitySubjectApi)
-                              .inspectFeasibilitySubject(),
-                    ),
-                  ],
-                  if (appleHealthConnection != null &&
-                      widget.appleContext is AppleHealthSubjectApi) ...[
-                    const SizedBox(height: FloeSpace.lg),
-                    PersonalWellbeingAccessCard(
-                      gateway: widget.personalAccessGateway!,
-                      personId: controller.personId,
-                      requestPermission: () =>
-                          (widget.appleContext! as AppleHealthSubjectApi)
-                              .requestWellbeingPermission(),
-                      inspectSubject: () =>
-                          (widget.appleContext! as AppleHealthSubjectApi)
-                              .inspectWellbeingSubject(),
-                    ),
-                  ],
-                ],
                 if (!controller.hasConnections &&
                     widget.serverClient == null &&
-                    widget.androidContext == null &&
+                    _androidContext == null &&
                     widget.appleContext == null &&
                     !controller.hasCalendarExpertManagement)
                   const Text('No connected data sources are available yet.'),
@@ -726,119 +510,4 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       );
     },
   );
-}
-
-class _FeasibilityDialog extends StatefulWidget {
-  const _FeasibilityDialog({required this.event});
-
-  final EventItem event;
-
-  @override
-  State<_FeasibilityDialog> createState() => _FeasibilityDialogState();
-}
-
-class _FeasibilityDialogState extends State<_FeasibilityDialog> {
-  final latitude = TextEditingController();
-  final longitude = TextEditingController();
-  AppleTravelMode travelMode = AppleTravelMode.transit;
-
-  @override
-  void dispose() {
-    latitude.dispose();
-    longitude.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => FloeDialog(
-    title: const Text('Review trip feasibility'),
-    content: SizedBox(
-      width: 420,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            widget.event.title,
-            style: FloeType.body.copyWith(color: FloePalette.neutral600),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeInput(
-            key: const ValueKey('feasibility-latitude'),
-            label: 'Destination latitude',
-            controller: latitude,
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-              signed: true,
-            ),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeInput(
-            key: const ValueKey('feasibility-longitude'),
-            label: 'Destination longitude',
-            controller: longitude,
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-              signed: true,
-            ),
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          FloeRadioGroup<AppleTravelMode>(
-            value: travelMode,
-            onChanged: (value) {
-              if (value != null) setState(() => travelMode = value);
-            },
-            child: Column(
-              children: [
-                for (final mode in AppleTravelMode.values)
-                  FloeRadioTile<AppleTravelMode>(
-                    value: mode,
-                    title: Text(mode.name),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    ),
-    actions: [
-      FloeButton.text(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FloeButton.filled(
-        key: const ValueKey('feasibility-refresh-confirm'),
-        onPressed: _submit,
-        child: const Text('Review access'),
-      ),
-    ],
-  );
-
-  void _submit() {
-    final parsedLatitude = double.tryParse(latitude.text.trim());
-    final parsedLongitude = double.tryParse(longitude.text.trim());
-    if (parsedLatitude == null ||
-        !parsedLatitude.isFinite ||
-        parsedLatitude < -90 ||
-        parsedLatitude > 90 ||
-        parsedLongitude == null ||
-        !parsedLongitude.isFinite ||
-        parsedLongitude < -180 ||
-        parsedLongitude > 180) {
-      return;
-    }
-    final event = widget.event;
-    Navigator.pop(
-      context,
-      AppleFeasibilityQuery(
-        eventHandle: 'event:${event.id}',
-        evidenceHandles: ['calendar.event:${event.id}'],
-        latitude: parsedLatitude,
-        longitude: parsedLongitude,
-        eventStart: event.startsAt,
-        eventEnd: event.endsAt,
-        travelMode: travelMode,
-      ),
-    );
-  }
 }

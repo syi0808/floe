@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/design_tokens.dart';
@@ -42,6 +43,7 @@ import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_panel.dart';
 import '../../../infrastructure/native/android_context_gateway.dart';
 import '../../../infrastructure/native/apple_context_gateway.dart';
+import '../../../infrastructure/native/macos_context_gateway.dart';
 
 part 'personal_day/navigation.dart';
 part 'personal_day/tasks.dart';
@@ -68,6 +70,7 @@ class PersonalDayScreen extends StatefulWidget {
     this.serverClient,
     this.androidContext,
     this.appleContext,
+    this.macOSContext,
   });
   final DayGateway gateway;
   final DayQuery query;
@@ -75,6 +78,7 @@ class PersonalDayScreen extends StatefulWidget {
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
+  final MacOSContextApi? macOSContext;
   @override
   State<PersonalDayScreen> createState() => _PersonalDayScreenState();
 }
@@ -271,6 +275,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         onChanged: _reloadCalendarConnection,
         serverClient: widget.serverClient,
         deviceId: widget.serverClient?.deviceId,
+        appleContext: widget.appleContext,
+        macOSContext: widget.macOSContext,
+        daySnapshot: controller.snapshot,
         agentController: agentController,
         agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
             ? widget.agentGateway as NativeAgentVaultGateway
@@ -291,6 +298,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
         daySnapshot: controller.snapshot,
+        onManageConnections: () =>
+            _selectDestination(_DestinationView.connections),
+        platform: defaultTargetPlatform,
       );
     }
     if (destination == _DestinationView.activity) {

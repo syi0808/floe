@@ -8,13 +8,10 @@ import 'package:floe_client/features/agent/agent_calendar_expert_dialog.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/calendar_action_controller.dart';
 import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
-import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/features/server/settings_screen.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
-import 'package:floe_client/infrastructure/native/local_context_publication.dart';
-import 'package:floe_client/infrastructure/native/native_transport.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -181,65 +178,16 @@ void main() {
     expect(find.text('Ready'), findsOneWidget);
   });
 
-  testWidgets('Apple feasibility requires an explicit next-event destination', (
+  testWidgets('Apple access controls move out of Data & privacy', (
     tester,
   ) async {
+    final appleContext = _AppleContext();
     final controller = AgentController(
       gateway: TestRegistryGateway(),
       personId: registryPerson,
     );
-    final appleContext = _AppleContext();
-    Map<String, Object?>? reviewedQuery;
-    final personalGateway = NativeAgentVaultGateway((request) async {
-      final operation = request['operation']! as Map;
-      if (operation['kind'] == 'submit') {
-        final action = operation['action']! as Map;
-        final change = action['change']! as Map;
-        final personalChange = change['change']! as Map;
-        if (personalChange['kind'] == 'review') {
-          reviewedQuery = Map<String, Object?>.from(
-            personalChange['feasibility_query']! as Map,
-          );
-        }
-        final reviewed = personalChange['kind'] == 'review';
-        return {
-          'request_id': request['request_id'],
-          'done': true,
-          'events': const <Object?>[],
-          'next_sequence': 0,
-          'state': 'ready',
-          'personal_access': _personalAccessOverview(
-            state: reviewed ? 'active' : 'needs_review',
-            reviewRequired: !reviewed,
-            grantId: reviewed ? 'grant-id' : null,
-          ),
-        };
-      }
-      return {
-        'request_id': request['request_id'],
-        'done': true,
-        'events': const <Object?>[],
-        'next_sequence': 0,
-      };
-    }, deviceId: 'apple-test');
     addTearDown(controller.dispose);
     await controller.load();
-    final event = EventItem(
-      id: '00000000-0000-4000-8000-000000000099',
-      title: 'Planning review',
-      revision: 1,
-      createdAt: DateTime.utc(2026, 9, 11),
-      startsAt: DateTime.utc(2026, 9, 11, 3),
-      endsAt: DateTime.utc(2026, 9, 11, 4),
-    );
-    final snapshot = DaySnapshot(
-      personId: registryPerson,
-      date: DateTime.utc(2026, 9, 11),
-      generatedAt: DateTime.utc(2026, 9, 11),
-      timezoneOffsetSeconds: 0,
-      items: [event],
-      nextEventId: event.id,
-    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -252,8 +200,7 @@ void main() {
               client: null,
               agentController: controller,
               appleContext: appleContext,
-              daySnapshot: snapshot,
-              agentVaultGateway: personalGateway,
+              onManageConnections: () {},
             ),
           ),
         ),
@@ -261,131 +208,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Trip feasibility access'), findsOneWidget);
-    final review = find.byKey(const ValueKey('personal-feasibility-review'));
-    await tester.ensureVisible(review);
-    await tester.tap(review);
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const ValueKey('feasibility-latitude')),
-      '37.5665',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('feasibility-longitude')),
-      '126.9780',
-    );
-    await tester.tap(find.byKey(const ValueKey('feasibility-refresh-confirm')));
-    await tester.pumpAndSettle();
-
-    expect(appleContext.feasibilityPermissionRequests, 1);
-    expect(reviewedQuery?['event_handle'], 'event:${event.id}');
-    expect(reviewedQuery?['evidence_handles'], ['calendar.event:${event.id}']);
-    expect(reviewedQuery?['destination_latitude'], 37.5665);
-    expect(reviewedQuery?['destination_longitude'], 126.978);
-    expect(
-      reviewedQuery?['event_start_unix_ms'],
-      event.startsAt.millisecondsSinceEpoch,
-    );
-    expect(
-      reviewedQuery?['event_end_unix_ms'],
-      event.endsAt.millisecondsSinceEpoch,
-    );
-    expect(reviewedQuery?['travel_mode'], 'transit');
-  });
-
-  testWidgets('Apple Wellbeing review requests permission and can pause', (
-    tester,
-  ) async {
-    final controller = AgentController(
-      gateway: TestRegistryGateway(),
-      personId: registryPerson,
-    );
-    final appleContext = _AppleContext()..exposeHealthConnection = true;
-    var enabled = false;
-    var paused = false;
-    final personalGateway = NativeAgentVaultGateway((request) async {
-      final operation = request['operation']! as Map;
-      if (operation['kind'] == 'submit') {
-        final action = operation['action']! as Map;
-        final change = action['change']! as Map;
-        final personalChange = change['change']! as Map;
-        final kind = personalChange['kind'];
-        if (kind == 'review') {
-          enabled = true;
-          paused = false;
-        }
-        if (kind == 'set_enabled') {
-          enabled = personalChange['enabled'] == true;
-          paused = !enabled;
-        }
-        return {
-          'request_id': request['request_id'],
-          'done': true,
-          'events': const <Object?>[],
-          'next_sequence': 0,
-          'state': 'ready',
-          'personal_access': _personalAccessOverview(
-            connector: 'health.apple',
-            connectionId: 'health.apple.local',
-            state: paused
-                ? 'paused'
-                : enabled
-                ? 'active'
-                : 'needs_review',
-            reviewRequired: !enabled && !paused,
-            grantId: enabled ? 'wellbeing-grant' : null,
-          ),
-        };
-      }
-      return {
-        'request_id': request['request_id'],
-        'done': true,
-        'events': const <Object?>[],
-        'next_sequence': 0,
-      };
-    }, deviceId: 'apple-test');
-    final publishing = PublishingAppleContextGateway(
-      gateway: appleContext,
-      transport: _NoopLocalContextTransport(),
-      personId: registryPerson,
-      deviceId: 'apple-test',
-    );
-    addTearDown(controller.dispose);
-    await controller.load();
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: FloeTheme.light,
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: SettingsScreen(
-              client: null,
-              agentController: controller,
-              appleContext: publishing,
-              agentVaultGateway: personalGateway,
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Wellbeing access'), findsOneWidget);
-    expect(appleContext.wellbeingPermissionRequests, 0);
-
-    final review = find.byKey(const ValueKey('personal-wellbeing-review'));
-    await tester.ensureVisible(review);
-    await tester.tap(review);
-    await tester.pumpAndSettle();
-    expect(appleContext.wellbeingPermissionRequests, 1);
-
-    final pause = find.byKey(const ValueKey('personal-wellbeing-pause'));
-    await tester.ensureVisible(pause);
-    await tester.tap(pause);
-    await tester.pumpAndSettle();
-    expect(find.text('Paused.'), findsOneWidget);
+    expect(find.text('Wellbeing access'), findsNothing);
+    expect(find.text('Apple Contacts'), findsNothing);
+    expect(find.text('Open Connections'), findsOneWidget);
+    expect(appleContext.connectionsCalls, 0);
+    expect(appleContext.feasibilityReads, 0);
+    expect(appleContext.wellbeingReads, 0);
   });
 
   testWidgets('settings navigation switches between separate pages', (
@@ -535,7 +363,7 @@ void main() {
     expect(find.text('Needs consent'), findsNothing);
   });
 
-  testWidgets('server Gmail health joins shared Connections settings', (
+  testWidgets('server connection inventory stays out of Data & privacy', (
     tester,
   ) async {
     final store = MemoryServerCredentials();
@@ -575,13 +403,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Gmail'), findsOneWidget);
-    expect(find.text('Ready'), findsOneWidget);
-    expect(find.textContaining('Runs on server'), findsOneWidget);
-    expect(
-      find.textContaining('Actions require separate approval.'),
-      findsOneWidget,
-    );
+    expect(find.text('Gmail'), findsNothing);
+    expect(find.text('Ready'), findsNothing);
+    expect(find.text('Open Connections'), findsNothing);
   });
 
   for (final width in [390.0, 1200.0]) {
@@ -815,21 +639,28 @@ final class _AppleContext
         AppleFeasibilitySubjectApi,
         AppleHealthSubjectApi {
   AppleFeasibilityQuery? query;
+  int connectionsCalls = 0;
+  int feasibilityReads = 0;
+  int wellbeingReads = 0;
   int feasibilityPermissionRequests = 0;
   bool exposeHealthConnection = false;
   int wellbeingPermissionRequests = 0;
 
   @override
-  Future<List<Map<String, dynamic>>> connections() async => [
-    if (exposeHealthConnection) _appleHealthConnection(),
-    if (!exposeHealthConnection) _appleFeasibilityConnection(),
-  ];
+  Future<List<Map<String, dynamic>>> connections() async {
+    connectionsCalls += 1;
+    return [
+      if (exposeHealthConnection) _appleHealthConnection(),
+      if (!exposeHealthConnection) _appleFeasibilityConnection(),
+    ];
+  }
 
   @override
   Future<Map<String, dynamic>> readFeasibility(
     AppleFeasibilityQuery query,
   ) async {
     this.query = query;
+    feasibilityReads += 1;
     return <String, dynamic>{};
   }
 
@@ -869,36 +700,14 @@ final class _AppleContext
   }) async => {};
 
   @override
-  Future<Map<String, dynamic>> readWellbeing() async => {};
+  Future<Map<String, dynamic>> readWellbeing() async {
+    wellbeingReads += 1;
+    return {};
+  }
 
   @override
   Future<Map<String, dynamic>> screenTimeCapability() async => {};
 }
-
-Map<String, dynamic> _personalAccessOverview({
-  required String state,
-  required bool reviewRequired,
-  required String? grantId,
-  String connector = 'feasibility.apple',
-  String connectionId = 'feasibility.apple.local',
-}) => {
-  'schema_version': 1,
-  'person_id': registryPerson,
-  'connector': connector,
-  'device_id': 'apple-test',
-  'connection_id': connectionId,
-  'source_authority': null,
-  'grant_id': grantId,
-  'grant_authority': grantId == null
-      ? null
-      : {'incarnation': 'authority', 'epoch': 1},
-  'state': state,
-  'review_required': reviewRequired,
-  'presence_available': false,
-  'consumers': grantId == null ? <String>[] : ['assistant'],
-  'native_subject_fingerprint': null,
-  'process_incarnation': null,
-};
 
 Map<String, dynamic> _healthConnection({required bool ready}) => {
   'descriptor': {
@@ -1110,13 +919,6 @@ Map<String, dynamic> _appleFeasibilityConnection() => {
   },
   'views': <Object>[],
 };
-
-final class _NoopLocalContextTransport implements LocalContextTransport {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => throw StateError(
-    'Unexpected context transport call: ${invocation.memberName}',
-  );
-}
 
 final class _SettingsServerClient extends LocalServerClient {
   _SettingsServerClient(

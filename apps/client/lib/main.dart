@@ -17,10 +17,10 @@ import 'features/day_canvas/application/calendar_gateway.dart';
 import 'features/server/local_server_client.dart';
 import 'infrastructure/native/android_context_gateway.dart';
 import 'infrastructure/native/apple_context_gateway.dart';
+import 'infrastructure/native/macos_context_gateway.dart';
 import 'infrastructure/native/attention_acquisition_broker.dart';
 import 'infrastructure/native/calendar_acquisition_broker.dart';
 import 'infrastructure/native/local_context_publication.dart';
-import 'infrastructure/native/macos_context_gateway.dart';
 import 'infrastructure/native/personal_acquisition_broker.dart';
 import 'infrastructure/diagnostics/app_diagnostics.dart';
 import 'preview/design_feedback_overlay.dart';
@@ -96,9 +96,10 @@ Future<void> _start() async {
         calendarAcquisition = null;
       }
     }
+    final macOSContextGateway = Platform.isMacOS ? MacOSContextGateway() : null;
     AttentionAcquisitionService? attentionAcquisition;
     if (Platform.isMacOS) {
-      final attentionGateway = MacOSContextGateway();
+      final attentionGateway = macOSContextGateway!;
       final broker = AttentionAcquisitionBroker(
         transport: gateway.localContextTransport,
         personId: localPersonId,
@@ -199,7 +200,7 @@ Future<void> _start() async {
     }
     if (Platform.isMacOS) {
       final macOSContext = PublishingMacOSContextGateway(
-        gateway: MacOSContextGateway(),
+        gateway: macOSContextGateway!,
         transport: gateway.localContextTransport,
         personId: localPersonId,
         deviceId: device.id,
@@ -228,6 +229,7 @@ Future<void> _start() async {
         serverClient: gateway.serverClient,
         androidContext: androidContext,
         appleContext: appleContext,
+        macOSContext: macOSContextGateway,
         onDisposeGateway: () async {
           macOSContextRefresh?.cancel();
           await calendarAcquisition?.dispose();
@@ -321,13 +323,7 @@ PersonalAcquisitionReader _applePersonalReader(
     if (after['subject_fingerprint'] != before['subject_fingerprint']) {
       throw PlatformException(code: 'permission_denied');
     }
-    return _personalPeopleResult(
-      request,
-      before,
-      after,
-      view,
-      'apple_health',
-    );
+    return _personalPeopleResult(request, before, after, view, 'apple_health');
   }
   final selected = request['selected_handles'];
   if (request['domain'] != 'people' ||

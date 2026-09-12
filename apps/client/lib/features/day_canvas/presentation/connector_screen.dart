@@ -9,6 +9,8 @@ import '../../../app/design_tokens.dart';
 import '../../../app/floe_badge.dart';
 import '../../../app/floe_button.dart';
 import '../../../app/floe_feedback.dart';
+import '../../../app/floe_input.dart';
+import '../../../app/floe_selection.dart';
 import '../../../app/floe_primitives.dart';
 import '../../../app/floe_squircle.dart';
 import '../../server/local_server_client.dart';
@@ -21,6 +23,11 @@ import '../../agent/agent_calendar_expert_dialog.dart';
 import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_controller.dart';
 import '../../agent/agent_vault_gateway.dart';
+import '../../agent/agent_connections.dart';
+import '../../agent/agent_personal_access.dart';
+import '../../agent/agent_personal_access_settings.dart';
+import '../../../infrastructure/native/apple_context_gateway.dart';
+import '../../../infrastructure/native/macos_context_gateway.dart';
 
 class ConnectorScreen extends StatefulWidget {
   const ConnectorScreen({
@@ -36,6 +43,9 @@ class ConnectorScreen extends StatefulWidget {
     this.calendarSources,
     this.calendarSourceChanges,
     this.agentVaultGateway,
+    this.appleContext,
+    this.macOSContext,
+    this.daySnapshot,
     this.initialDeviceCalendarDetail = false,
   });
 
@@ -50,6 +60,9 @@ class ConnectorScreen extends StatefulWidget {
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
   final NativeAgentVaultGateway? agentVaultGateway;
+  final AppleContextApi? appleContext;
+  final MacOSContextApi? macOSContext;
+  final DaySnapshot? daySnapshot;
   final bool initialDeviceCalendarDetail;
 
   @override
@@ -63,8 +76,12 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   ServerConnectorCatalog? catalog;
   String? catalogError;
   bool loadingCatalog = false;
+  bool loadingLocalConnections = false;
+  List<AgentConnection>? localConnections;
+  String? localConnectionFailure;
   String? activatingCalendarConnectorId;
   String? calendarSelectionError;
+  String? selectedLocalConnectionId;
 
   bool get supportsDeviceCalendar =>
       effectivePlatform == TargetPlatform.iOS ||
@@ -96,6 +113,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     super.initState();
     deviceCalendarDetail = widget.initialDeviceCalendarDetail;
     unawaited(_loadCatalog());
+    unawaited(_loadLocalConnections());
   }
 
   @override
@@ -104,9 +122,62 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     if (oldWidget.serverClient != widget.serverClient) {
       unawaited(_loadCatalog());
     }
+    if (oldWidget.agentController != widget.agentController ||
+        oldWidget.appleContext != widget.appleContext ||
+        oldWidget.macOSContext != widget.macOSContext ||
+        oldWidget.deviceId != widget.deviceId) {
+      unawaited(_loadLocalConnections());
+    }
     if (oldWidget.initialDeviceCalendarDetail !=
         widget.initialDeviceCalendarDetail) {
       deviceCalendarDetail = widget.initialDeviceCalendarDetail;
+    }
+  }
+
+  Future<void> _loadLocalConnections() async {
+    final controller = widget.agentController;
+    final apple = widget.appleContext;
+    if (controller == null && apple == null) {
+      if (mounted) setState(() => localConnections = const []);
+      return;
+    }
+    if (mounted) setState(() => loadingLocalConnections = true);
+    try {
+      if (controller != null) await controller.loadConnections();
+      final values = <AgentConnection>[];
+      if (effectivePlatform == TargetPlatform.macOS &&
+          controller?.connections != null &&
+          widget.macOSContext == null) {
+        values.addAll(
+          controller!.connections!.where(
+            (connection) => connection.descriptor.provider == 'attention.macos',
+          ),
+        );
+      }
+      final macOS = widget.macOSContext;
+      if (macOS != null) {
+        final deviceId = widget.deviceId ?? 'local-macos';
+        final view = await macOS.readAttention();
+        values.add(_macOSAttentionConnection(deviceId, view));
+      }
+      if (apple != null) {
+        values.addAll(
+          (await apple.connections()).map(AgentConnection.fromJson),
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        localConnections = List.unmodifiable(values);
+        localConnectionFailure = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        localConnections = const [];
+        localConnectionFailure = error.toString();
+      });
+    } finally {
+      if (mounted) setState(() => loadingLocalConnections = false);
     }
   }
 
@@ -293,6 +364,10 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
   @override
   Widget build(BuildContext context) {
     if (deviceCalendarDetail) return _deviceCalendarDetail(context);
+    final localConnection = _selectedLocalConnection;
+    if (localConnection != null) {
+      return _localConnectionDetail(context, localConnection);
+    }
     final serverConnector = selectedServerConnector;
     if (serverConnector != null && serverConnection != null) {
       return ServerConnectorPanel(
@@ -307,9 +382,34 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     return _catalog(context);
   }
 
+  AgentConnection? get _selectedLocalConnection {
+    final id = selectedLocalConnectionId;
+    if (id == null) return null;
+    for (final connection in localConnections ?? const <AgentConnection>[]) {
+      if (connection.descriptor.id == id) return connection;
+    }
+    return null;
+  }
+
+  Widget _localConnectionDetail(
+    BuildContext context,
+    AgentConnection connection,
+  ) => _AppleConnectionDetail(
+    connection: connection,
+    personId: widget.query.personId,
+    deviceId: connection.descriptor.execution.deviceId ?? widget.deviceId ?? '',
+    agentVaultGateway: widget.agentVaultGateway,
+    appleContext: widget.appleContext,
+    macOSContext: widget.macOSContext,
+    daySnapshot: widget.daySnapshot,
+    onBack: () => setState(() => selectedLocalConnectionId = null),
+    onChanged: _loadLocalConnections,
+  );
+
   Widget _catalog(BuildContext context) {
     final strings = AppLocalizations.of(context);
     final serverConnectors = catalog?.connectors ?? const <ServerConnector>[];
+    final nativeConnections = localConnections ?? const <AgentConnection>[];
     final connectedCount =
         serverConnectors
             .where((item) => item.status == ServerConnectorStatus.connected)
@@ -317,7 +417,13 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         (supportsDeviceCalendar &&
                 deviceCalendarStatus == ServerConnectorStatus.connected
             ? 1
-            : 0);
+            : 0) +
+        nativeConnections
+            .where(
+              (connection) =>
+                  connection.state != AgentConnectionState.unsupported,
+            )
+            .length;
     final cards = <({ServerConnectorStatus status, Widget card})>[
       if (supportsDeviceCalendar)
         (
@@ -346,6 +452,22 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
             status: connector.status,
             onPressed: () =>
                 setState(() => selectedServerConnectorId = connector.id),
+          ),
+        ),
+      for (final connection in nativeConnections)
+        (
+          status: _serverStatus(connection.state),
+          card: _ConnectorCard(
+            key: Key('connector-${connection.descriptor.id}'),
+            icon: _nativeConnectionIcon(connection.descriptor.provider),
+            name: _nativeConnectionName(connection.descriptor.provider),
+            description: _nativeConnectionDescription(
+              connection.descriptor.provider,
+            ),
+            status: _serverStatus(connection.state),
+            onPressed: () => setState(
+              () => selectedLocalConnectionId = connection.descriptor.id,
+            ),
           ),
         ),
     ];
@@ -381,6 +503,12 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
                 : 'Server services could not be loaded. Check the server connection in Settings.',
           ),
         ],
+        if (localConnectionFailure != null) ...[
+          SizedBox(height: FloeSpace.base),
+          const FloeInfoNote(
+            text: 'Apple connections could not be loaded. Check system access and try again.',
+          ),
+        ],
         if (connectedServerCalendars.isNotEmpty) ...[
           SizedBox(height: FloeSpace.lg),
           _calendarProviderSelection(context),
@@ -402,6 +530,12 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         if (loadingCatalog) ...[
           SizedBox(height: FloeSpace.lg),
           const LinearProgressIndicator(key: Key('connector-catalog-loading')),
+        ],
+        if (loadingLocalConnections) ...[
+          SizedBox(height: FloeSpace.lg),
+          const LinearProgressIndicator(
+            key: ValueKey('local-connections-loading'),
+          ),
         ],
       ],
     );
@@ -547,6 +681,582 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
     ],
   );
 }
+
+AgentConnection _macOSAttentionConnection(
+  String deviceId,
+  Map<String, dynamic> view,
+) => AgentConnection.fromJson({
+  'descriptor': {
+    'schema_version': 1,
+    'id': 'attention.macos',
+    'version': '1.0.0',
+    'provider': 'attention.macos',
+    'execution': {'kind': 'device', 'device_id': deviceId},
+    'capabilities': [
+      {
+        'schema_version': 1,
+        'id': 'attention.coarse.read',
+        'version': '1.0.0',
+        'authority': 'observe',
+        'required_scopes': ['session_observation'],
+        'output_view_id': 'attention.coarse',
+      },
+    ],
+    'views': [
+      {
+        'schema_version': 1,
+        'id': 'attention.coarse',
+        'version': '1.0.0',
+        'data_class': 'personal',
+        'retention': 'ephemeral',
+        'freshness_ttl_ms': 120000,
+        'max_items': 1,
+        'max_bytes': 8192,
+        'provenance_required': true,
+      },
+    ],
+  },
+  'connection': {
+    'schema_version': 1,
+    'connector_id': 'attention.macos',
+    'state': view['state'] == 'unknown' ? 'unavailable' : 'ready',
+    'granted_scopes': ['session_observation'],
+    'observed_at_unix_ms': view['observed_at_unix_ms'],
+    'last_success_at_unix_ms': view['observed_at_unix_ms'],
+    if (view['state'] == 'unknown')
+      'last_failure': {
+        'kind': 'permission_denied',
+        'observed_at_unix_ms': view['observed_at_unix_ms'],
+      },
+  },
+  'views': [
+    {
+      'schema_version': 1,
+      'view_id': 'attention.coarse',
+      'source_handle': view['source_handle'],
+      'observed_at_unix_ms': view['observed_at_unix_ms'],
+      'expires_at_unix_ms': view['expires_at_unix_ms'],
+      'item_count': view['state'] == 'unknown' ? 0 : 1,
+      'byte_count': 256,
+      'provenance_count': view['evidence_handles'] is List
+          ? (view['evidence_handles'] as List).length
+          : 0,
+    },
+  ],
+});
+
+final class _AppleConnectionDetail extends StatefulWidget {
+  const _AppleConnectionDetail({
+    required this.connection,
+    required this.personId,
+    required this.deviceId,
+    required this.agentVaultGateway,
+    required this.appleContext,
+    required this.macOSContext,
+    required this.daySnapshot,
+    required this.onBack,
+    required this.onChanged,
+  });
+
+  final AgentConnection connection;
+  final String personId;
+  final String deviceId;
+  final NativeAgentVaultGateway? agentVaultGateway;
+  final AppleContextApi? appleContext;
+  final MacOSContextApi? macOSContext;
+  final DaySnapshot? daySnapshot;
+  final VoidCallback onBack;
+  final Future<void> Function() onChanged;
+
+  @override
+  State<_AppleConnectionDetail> createState() => _AppleConnectionDetailState();
+}
+
+final class _AppleConnectionDetailState extends State<_AppleConnectionDetail> {
+  bool busy = false;
+  String? failure;
+
+  String get provider => widget.connection.descriptor.provider;
+  bool get blocked => {
+    AgentConnectionState.revoked,
+    AgentConnectionState.unavailable,
+    AgentConnectionState.unsupported,
+  }.contains(widget.connection.state);
+
+  bool _hasObserveCapability(String id) =>
+      widget.connection.descriptor.capabilities.any(
+        (capability) =>
+            capability.id == id && capability.authority == 'observe',
+      );
+
+  Future<void> _recover() async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      failure = null;
+    });
+    try {
+      final apple = widget.appleContext;
+      switch (provider) {
+        case 'apple_contacts':
+          if (apple == null) {
+            throw UnsupportedError('Apple Contacts unavailable.');
+          }
+          if (widget.connection.state == AgentConnectionState.revoked) {
+            if (!await apple.requestPermission(AppleContextSource.contacts)) {
+              throw StateError('Apple Contacts permission was not granted.');
+            }
+          }
+          await apple.readContacts();
+        case 'apple_feasibility':
+          if (apple is! AppleFeasibilitySubjectApi) {
+            throw UnsupportedError('Apple Location access unavailable.');
+          }
+          if (!await (apple as AppleFeasibilitySubjectApi)
+              .requestFeasibilityPermission()) {
+            throw StateError('Location permission was not granted.');
+          }
+        case 'apple_health':
+          if (apple is! AppleHealthSubjectApi) {
+            throw UnsupportedError('Apple Health unavailable.');
+          }
+          if (!await (apple as AppleHealthSubjectApi)
+              .requestWellbeingPermission()) {
+            throw StateError('Apple Health permission was not granted.');
+          }
+          await (apple as AppleContextApi).readWellbeing();
+        case 'apple_screen_time':
+          if (apple == null) {
+            throw UnsupportedError('Apple Screen Time unavailable.');
+          }
+          await apple.screenTimeCapability();
+        case 'attention.macos':
+          final macOS = widget.macOSContext;
+          if (macOS == null) throw UnsupportedError('Attention unavailable.');
+          await macOS.inspectAttentionSubject(widget.deviceId);
+          await macOS.readAttention();
+        default:
+          throw UnsupportedError('This connection is not editable.');
+      }
+      await widget.onChanged();
+    } on Object catch (error) {
+      if (mounted) setState(() => failure = error.toString());
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<PersonalFeasibilityQuery?> _requestQuery() async {
+    final snapshot = widget.daySnapshot;
+    final eventId = snapshot?.nextEventId;
+    if (snapshot == null || eventId == null) return null;
+    final event = snapshot.items
+        .whereType<EventItem>()
+        .where((item) => item.id == eventId)
+        .firstOrNull;
+    if (event == null || event.isAllDay) return null;
+    return showFloeDialog<PersonalFeasibilityQuery>(
+      context,
+      (_) => _PersonalFeasibilityDialog(event: event),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gateway = widget.agentVaultGateway;
+    final scoped = gateway == null
+        ? null
+        : _ScopedPersonalAccessGateway(
+            gateway,
+            personId: widget.personId,
+            connectionId: widget.connection.descriptor.id == 'contacts.apple'
+                ? 'contacts.apple.local'
+                : widget.connection.descriptor.id == 'feasibility.apple'
+                ? 'feasibility.apple.local'
+                : widget.connection.descriptor.id == 'health.apple'
+                ? 'health.apple.local'
+                : 'attention.macos.local',
+          );
+    final title = _nativeConnectionName(provider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FloeTextLink(
+            label: AppLocalizations.of(context).backToConnections,
+            icon: LucideIcons.arrowLeft,
+            onPressed: widget.onBack,
+          ),
+        ),
+        SizedBox(height: FloeSpace.lg),
+        Text(title, style: FloeType.headline),
+        SizedBox(height: FloeSpace.sm),
+        Text(
+          'Connection ${widget.connection.descriptor.id} · ${widget.deviceId}',
+          style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+        ),
+        SizedBox(height: FloeSpace.lg),
+        FloeSquircle(
+          padding: const EdgeInsets.all(FloeSpace.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('System access', style: FloeType.title),
+              const SizedBox(height: FloeSpace.xs),
+              Text(_connectionStateText(widget.connection.state)),
+              const SizedBox(height: FloeSpace.sm),
+              FloeButton.outlined(
+                key: const ValueKey('apple-connection-recover'),
+                onPressed:
+                    busy ||
+                        widget.connection.state ==
+                            AgentConnectionState.unsupported
+                    ? null
+                    : _recover,
+                loading: busy,
+                child: Text(blocked ? 'Allow access' : 'Refresh access'),
+              ),
+              if (failure != null) ...[
+                const SizedBox(height: FloeSpace.xs),
+                Text(failure!, style: FloeType.bodySmall),
+              ],
+            ],
+          ),
+        ),
+        if (!blocked &&
+            provider == 'apple_contacts' &&
+            _hasObserveCapability('contacts.identity.read') &&
+            scoped != null &&
+            widget.appleContext is AppleContextSubjectApi) ...[
+          SizedBox(height: FloeSpace.lg),
+          PersonalContactsAccessCard(
+            gateway: scoped,
+            personId: widget.personId,
+            readContacts: () => widget.appleContext!.readContacts(),
+            inspectSubject: (handles) =>
+                (widget.appleContext! as AppleContextSubjectApi)
+                    .inspectContactsSubject(handles),
+          ),
+        ],
+        if (!blocked &&
+            provider == 'attention.macos' &&
+            _hasObserveCapability('attention.coarse.read') &&
+            scoped != null &&
+            widget.macOSContext != null) ...[
+          SizedBox(height: FloeSpace.lg),
+          PersonalAttentionAccessCard(
+            gateway: scoped,
+            personId: widget.personId,
+            inspectSubject: () =>
+                widget.macOSContext!.inspectAttentionSubject(widget.deviceId),
+          ),
+        ],
+        if (!blocked &&
+            provider == 'apple_feasibility' &&
+            _hasObserveCapability('schedule.feasibility.read') &&
+            scoped != null &&
+            widget.appleContext is AppleFeasibilitySubjectApi) ...[
+          SizedBox(height: FloeSpace.lg),
+          PersonalFeasibilityAccessCard(
+            gateway: scoped,
+            personId: widget.personId,
+            requestQuery: _requestQuery,
+            requestPermission: () =>
+                (widget.appleContext! as AppleFeasibilitySubjectApi)
+                    .requestFeasibilityPermission(),
+            inspectSubject: () =>
+                (widget.appleContext! as AppleFeasibilitySubjectApi)
+                    .inspectFeasibilitySubject(),
+          ),
+        ],
+        if (!blocked &&
+            provider == 'apple_health' &&
+            _hasObserveCapability('health.derived.read') &&
+            scoped != null &&
+            widget.appleContext is AppleHealthSubjectApi) ...[
+          SizedBox(height: FloeSpace.lg),
+          PersonalWellbeingAccessCard(
+            gateway: scoped,
+            personId: widget.personId,
+            requestPermission: () =>
+                (widget.appleContext! as AppleHealthSubjectApi)
+                    .requestWellbeingPermission(),
+            inspectSubject: () =>
+                (widget.appleContext! as AppleHealthSubjectApi)
+                    .inspectWellbeingSubject(),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+final class _PersonalFeasibilityDialog extends StatefulWidget {
+  const _PersonalFeasibilityDialog({required this.event});
+
+  final EventItem event;
+
+  @override
+  State<_PersonalFeasibilityDialog> createState() =>
+      _PersonalFeasibilityDialogState();
+}
+
+final class _PersonalFeasibilityDialogState
+    extends State<_PersonalFeasibilityDialog> {
+  final latitude = TextEditingController();
+  final longitude = TextEditingController();
+  AppleTravelMode travelMode = AppleTravelMode.transit;
+
+  @override
+  void dispose() {
+    latitude.dispose();
+    longitude.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FloeDialog(
+    title: const Text('Review trip feasibility'),
+    content: SizedBox(
+      width: 420,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(widget.event.title, style: FloeType.body),
+          const SizedBox(height: FloeSpace.sm),
+          FloeInput(
+            key: const ValueKey('connection-feasibility-latitude'),
+            label: 'Destination latitude',
+            controller: latitude,
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          FloeInput(
+            key: const ValueKey('connection-feasibility-longitude'),
+            label: 'Destination longitude',
+            controller: longitude,
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+          ),
+          const SizedBox(height: FloeSpace.sm),
+          FloeRadioGroup<AppleTravelMode>(
+            value: travelMode,
+            onChanged: (value) {
+              if (value != null) setState(() => travelMode = value);
+            },
+            child: Column(
+              children: [
+                for (final mode in AppleTravelMode.values)
+                  FloeRadioTile(value: mode, title: Text(mode.name)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      FloeButton.text(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FloeButton.filled(
+        key: const ValueKey('connection-feasibility-confirm'),
+        onPressed: () {
+          final parsedLatitude = double.tryParse(latitude.text.trim());
+          final parsedLongitude = double.tryParse(longitude.text.trim());
+          if (parsedLatitude == null ||
+              parsedLatitude < -90 ||
+              parsedLatitude > 90 ||
+              parsedLongitude == null ||
+              parsedLongitude < -180 ||
+              parsedLongitude > 180) {
+            return;
+          }
+          Navigator.pop(
+            context,
+            PersonalFeasibilityQuery(
+              eventHandle: 'event:${widget.event.id}',
+              evidenceHandles: ['calendar.event:${widget.event.id}'],
+              destinationLatitude: parsedLatitude,
+              destinationLongitude: parsedLongitude,
+              eventStartUnixMs: widget.event.startsAt
+                  .toUtc()
+                  .millisecondsSinceEpoch,
+              eventEndUnixMs: widget.event.endsAt
+                  .toUtc()
+                  .millisecondsSinceEpoch,
+              travelMode: travelMode.name,
+            ),
+          );
+        },
+        child: const Text('Review access'),
+      ),
+    ],
+  );
+}
+
+final class _ScopedPersonalAccessGateway implements AgentPersonalAccessGateway {
+  _ScopedPersonalAccessGateway(
+    this.delegate, {
+    required this.personId,
+    required this.connectionId,
+  });
+
+  final AgentPersonalAccessGateway delegate;
+  final String personId;
+  final String connectionId;
+
+  PersonalAccessOverview _check(PersonalAccessOverview value) {
+    if (value.personId != personId || value.connectionId != connectionId) {
+      throw const FormatException('Personal access connection changed.');
+    }
+    return value;
+  }
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalAttention(String id) async =>
+      _check(await delegate.inspectPersonalAttention(id));
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalAttention(
+    String id, {
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async => _check(
+    await delegate.reviewPersonalAttention(
+      id,
+      reviewedPreview: reviewedPreview,
+      consumers: consumers,
+    ),
+  );
+
+  @override
+  Future<PersonalAccessOverview> setPersonalAttentionEnabled(
+    String id,
+    bool enabled,
+  ) async => _check(await delegate.setPersonalAttentionEnabled(id, enabled));
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalFeasibility(String id) async =>
+      _check(await delegate.inspectPersonalFeasibility(id));
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalFeasibility(
+    String id, {
+    required PersonalFeasibilityQuery query,
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async => _check(
+    await delegate.reviewPersonalFeasibility(
+      id,
+      query: query,
+      reviewedPreview: reviewedPreview,
+      consumers: consumers,
+    ),
+  );
+
+  @override
+  Future<PersonalAccessOverview> setPersonalFeasibilityEnabled(
+    String id,
+    bool enabled,
+  ) async => _check(await delegate.setPersonalFeasibilityEnabled(id, enabled));
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalWellbeing(String id) async =>
+      _check(await delegate.inspectPersonalWellbeing(id));
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalWellbeing(
+    String id, {
+    required PersonalAccessOverview reviewedPreview,
+    required String nativeSubjectFingerprint,
+  }) async => _check(
+    await delegate.reviewPersonalWellbeing(
+      id,
+      reviewedPreview: reviewedPreview,
+      nativeSubjectFingerprint: nativeSubjectFingerprint,
+    ),
+  );
+
+  @override
+  Future<PersonalAccessOverview> setPersonalWellbeingEnabled(
+    String id,
+    bool enabled,
+  ) async => _check(await delegate.setPersonalWellbeingEnabled(id, enabled));
+
+  @override
+  Future<PersonalAccessOverview> inspectPersonalContacts(
+    String id,
+    List<String> selectedHandles,
+  ) async =>
+      _check(await delegate.inspectPersonalContacts(id, selectedHandles));
+
+  @override
+  Future<PersonalAccessOverview> reviewPersonalContacts(
+    String id, {
+    required List<String> selectedHandles,
+    required PersonalAccessOverview reviewedPreview,
+    required List<String> consumers,
+  }) async => _check(
+    await delegate.reviewPersonalContacts(
+      id,
+      selectedHandles: selectedHandles,
+      reviewedPreview: reviewedPreview,
+      consumers: consumers,
+    ),
+  );
+}
+
+String _nativeConnectionName(String provider) => switch (provider) {
+  'apple_contacts' => 'Apple Contacts',
+  'attention.macos' || 'apple_screen_time' => 'Attention',
+  'apple_feasibility' => 'Apple Location, ETA & Weather',
+  'apple_health' => 'Wellbeing',
+  _ => 'Apple connection',
+};
+
+String _nativeConnectionDescription(String provider) => switch (provider) {
+  'apple_contacts' => 'Choose bounded contact identities for Floe.',
+  'attention.macos' ||
+  'apple_screen_time' => 'Use coarse device attention signals.',
+  'apple_feasibility' => 'Review location, route and weather estimates.',
+  'apple_health' => 'Use a derived wellbeing summary from Apple Health.',
+  _ => 'Manage this Apple connection.',
+};
+
+IconData _nativeConnectionIcon(String provider) => switch (provider) {
+  'apple_contacts' => LucideIcons.contact,
+  'attention.macos' || 'apple_screen_time' => LucideIcons.focus,
+  'apple_feasibility' => LucideIcons.map,
+  'apple_health' => LucideIcons.heartPulse,
+  _ => LucideIcons.circleHelp,
+};
+
+ServerConnectorStatus _serverStatus(AgentConnectionState state) =>
+    switch (state) {
+      AgentConnectionState.ready ||
+      AgentConnectionState.degraded => ServerConnectorStatus.connected,
+      AgentConnectionState.unsupported ||
+      AgentConnectionState.unavailable => ServerConnectorStatus.unavailable,
+      _ => ServerConnectorStatus.available,
+    };
+
+String _connectionStateText(AgentConnectionState state) => switch (state) {
+  AgentConnectionState.ready => 'Ready on this device.',
+  AgentConnectionState.degraded => 'Available with limited data.',
+  AgentConnectionState.pending => 'Waiting for the first successful read.',
+  AgentConnectionState.revoked => 'System access is revoked.',
+  AgentConnectionState.unavailable => 'The source needs recovery.',
+  AgentConnectionState.unsupported => 'This source is not supported here.',
+  AgentConnectionState.disconnected => 'The source is disconnected.',
+};
 
 class _CalendarProviderOption extends StatelessWidget {
   const _CalendarProviderOption({

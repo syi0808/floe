@@ -11,6 +11,7 @@ import '../features/agent/agent_fixture_gateway.dart';
 import '../features/server/local_server_client.dart';
 import '../infrastructure/native/android_context_gateway.dart';
 import '../infrastructure/native/apple_context_gateway.dart';
+import '../infrastructure/native/macos_context_gateway.dart';
 import 'floe_theme.dart';
 import 'floe_toast.dart';
 import 'local_identity.dart';
@@ -24,6 +25,7 @@ class FloeApp extends StatefulWidget {
     this.serverClient,
     this.androidContext,
     this.appleContext,
+    this.macOSContext,
     this.onDisposeGateway,
     this.locale = const Locale('en'),
     this.builder,
@@ -35,6 +37,7 @@ class FloeApp extends StatefulWidget {
   final LocalServerClient? serverClient;
   final AndroidContextApi? androidContext;
   final AppleContextApi? appleContext;
+  final MacOSContextApi? macOSContext;
   final Future<void> Function()? onDisposeGateway;
   final TransitionBuilder? builder;
 
@@ -68,6 +71,7 @@ class _FloeAppState extends State<FloeApp> {
         serverClient: widget.serverClient,
         androidContext: widget.androidContext,
         appleContext: widget.appleContext,
+        macOSContext: widget.macOSContext,
       ),
     );
     return MaterialApp(
