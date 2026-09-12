@@ -28,6 +28,10 @@ AgentCalendarSources sources({
     deviceId: 'test-device',
     provider: 'event_kit',
     revision: revision,
+    sourceAuthority: const CalendarSourceAuthority(
+      incarnation: '00000000-0000-4000-8000-000000000009',
+      epoch: 1,
+    ),
     includeAll: true,
     calendars: ids
         .map(
@@ -91,6 +95,10 @@ Future<void> installHome(WidgetTester tester) async {
   await tapKey(tester, 'calendar-access-setup');
   await tapKey(tester, 'calendar-choice-home');
   await tapKey(tester, 'calendar-access-save');
+  await tapKey(
+    tester,
+    'calendar-access-toggle-00000000-0000-4000-8000-000000000010',
+  );
 }
 
 void main() {
@@ -102,6 +110,10 @@ void main() {
         deviceId: 'test-device',
         provider: 'event_kit',
         revision: 2,
+        sourceAuthority: const CalendarSourceAuthority(
+          incarnation: '00000000-0000-4000-8000-000000000009',
+          epoch: 1,
+        ),
         calendars: [
           ConnectedCalendar(id: 'home', name: 'Personal home'),
           ConnectedCalendar(id: 'work', name: 'Work'),
@@ -164,7 +176,12 @@ void main() {
         controller.calendarExperts!.accessEnabled(
           controller.calendarExperts!.setups.single,
         ),
-        true,
+        false,
+      );
+      expect(find.text('Paused'), findsOneWidget);
+      await tapKey(
+        tester,
+        'calendar-access-toggle-${controller.calendarExperts!.setups.single.setupId}',
       );
       expect(find.text('Active'), findsOneWidget);
       expect(
@@ -270,6 +287,37 @@ void main() {
     expect(find.textContaining('connection changed'), findsOneWidget);
   });
 
+  testWidgets('review submits a finite two-of-eleven calendar subset', (
+    tester,
+  ) async {
+    final (controller, gateway, source) = await open(tester);
+    source.value = sources(
+      ids: [
+        'home',
+        'work',
+        'third',
+        'fourth',
+        'fifth',
+        'sixth',
+        'seventh',
+        'eighth',
+        'ninth',
+        'tenth',
+        'eleventh',
+      ],
+    );
+    await tester.pumpAndSettle();
+    await tapKey(tester, 'calendar-access-setup');
+    await tapKey(tester, 'calendar-choice-home');
+    await tapKey(tester, 'calendar-choice-work');
+    await tapKey(tester, 'calendar-access-save');
+    expect(gateway.requests.single.calendarIds, ['home', 'work']);
+    expect(controller.calendarExperts!.views.single.calendarIds, [
+      'home',
+      'work',
+    ]);
+  });
+
   testWidgets(
     'missing source blocks new grants but existing access is removable',
     (tester) async {
@@ -278,7 +326,7 @@ void main() {
       final setupId = controller.calendarExperts!.setups.single.setupId;
       source.value = null;
       await tester.pumpAndSettle();
-      expect(find.text('Needs attention'), findsOneWidget);
+      expect(find.text('Review required'), findsOneWidget);
       expect(
         tester
             .widget<FloeButton>(
@@ -308,7 +356,7 @@ void main() {
 
     await tapKey(tester, 'calendar-access-retry');
     expect(controller.pendingCalendarSetup, isNull);
-    expect(find.text('Active'), findsOneWidget);
+    expect(find.text('Paused'), findsOneWidget);
     expect(gateway.transport.installations, 1);
   });
 

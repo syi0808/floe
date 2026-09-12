@@ -17,6 +17,7 @@ import 'application/agent_registry_controller.dart';
 import 'application/agent_memory_controller.dart';
 import 'application/agent_calendar_expert_controller.dart';
 import 'application/agent_connection_controller.dart';
+import '../day_canvas/domain/day_models.dart';
 
 enum AgentProgress {
   idle,
@@ -238,15 +239,19 @@ final class AgentController extends ChangeNotifier {
   Future<void> installCalendarExpert({
     required String setupId,
     required String provider,
+    required String deviceId,
     required List<String> calendarIds,
     required String connectionScope,
     required int connectionRevision,
+    required CalendarSourceAuthority sourceAuthority,
   }) => calendarExpertController.install(
     setupId: setupId,
     provider: provider,
+    deviceId: deviceId,
     calendarIds: calendarIds,
     connectionScope: connectionScope,
     connectionRevision: connectionRevision,
+    sourceAuthority: sourceAuthority,
   );
 
   Future<void> retryCalendarSetup() => calendarExpertController.retrySetup();
@@ -263,15 +268,19 @@ final class AgentController extends ChangeNotifier {
   Future<void> changeCalendarAccessScope({
     required String setupId,
     required String provider,
+    required String deviceId,
     required List<String> calendarIds,
     required String connectionScope,
     required int connectionRevision,
+    required CalendarSourceAuthority sourceAuthority,
   }) => calendarExpertController.changeCalendarAccessScope(
     setupId: setupId,
     provider: provider,
+    deviceId: deviceId,
     calendarIds: calendarIds,
     connectionScope: connectionScope,
     connectionRevision: connectionRevision,
+    sourceAuthority: sourceAuthority,
   );
 
   Future<void> removeCalendarAccess(String setupId) =>

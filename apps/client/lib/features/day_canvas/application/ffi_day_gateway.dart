@@ -825,6 +825,7 @@ CalendarConnection _decodeCalendar(Map<String, dynamic> json) =>
       provider: json['provider']! as String,
       includeAll: json['scope'] == 'all',
       revision: json['revision']! as int,
+      sourceAuthority: _optionalSourceAuthority(json['source_authority']),
       lastSuccessAt: _optionalTimestamp(json['last_success_at']),
       error: json['error'] as String?,
       rangeStart: (json['last_range'] as Map?)?['start_date'] as String?,
@@ -840,6 +841,15 @@ TaskPriority _priority(String value) => switch (value) {
 
 DateTime? _optionalTimestamp(Object? value) =>
     value == null ? null : DateTime.parse(value as String);
+
+CalendarSourceAuthority? _optionalSourceAuthority(Object? value) {
+  if (value == null) return null;
+  try {
+    return CalendarSourceAuthority.fromJson(value);
+  } on FormatException {
+    return null;
+  }
+}
 
 Map<String, dynamic> _asMap(Object? value) =>
     Map<String, dynamic>.from(value! as Map);

@@ -294,8 +294,10 @@ final class NativeAgentVaultGateway
   Future<AgentCalendarExperts> installCalendarExpert(
     AgentCalendarSetup setup,
   ) async {
+    if (setup.deviceId != deviceId) {
+      throw const FormatException('Calendar setup device mismatch');
+    }
     final serialized = setup.toJson();
-    serialized['device_id'] = deviceId;
     final result = await _perform(setup.personId, {
       'kind': 'calendar_experts',
       'setup': serialized,
@@ -311,11 +313,11 @@ final class NativeAgentVaultGateway
   Future<AgentCalendarExperts> configureCalendarAccess(
     AgentCalendarAccessRequest request,
   ) async {
-    final serialized = request.toJson();
-    if (request.operation == AgentCalendarAccessOperation.setScope) {
-      final change = serialized['change']! as Map<String, Object>;
-      change['device_id'] = deviceId;
+    if (request.operation == AgentCalendarAccessOperation.setScope &&
+        request.deviceId != deviceId) {
+      throw const FormatException('Calendar scope device mismatch');
     }
+    final serialized = request.toJson();
     final result = await _perform(request.personId, {
       'kind': 'calendar_access',
       'change': serialized,
@@ -330,9 +332,7 @@ final class NativeAgentVaultGateway
     final overview = AgentCalendarExperts.fromJson(
       Map<String, dynamic>.from(result['calendar_experts'] as Map),
     );
-    if (overview.registry.personId != personId ||
-        result['state'] != 'ready' ||
-        overview.views.any((view) => view.deviceId != deviceId)) {
+    if (overview.registry.personId != personId || result['state'] != 'ready') {
       throw const FormatException('Calendar Expert Person or vault mismatch');
     }
     return overview;

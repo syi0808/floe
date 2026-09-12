@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../agent_calendar_experts.dart';
 import '../agent_registry.dart';
 import '../agent_vault_gateway.dart';
+import '../../day_canvas/domain/day_models.dart';
 import 'agent_registry_controller.dart';
 
 final class AgentCalendarExpertController extends ChangeNotifier {
@@ -38,9 +39,11 @@ final class AgentCalendarExpertController extends ChangeNotifier {
   Future<void> install({
     required String setupId,
     required String provider,
+    required String deviceId,
     required List<String> calendarIds,
     required String connectionScope,
     required int connectionRevision,
+    required CalendarSourceAuthority sourceAuthority,
   }) async {
     final current = experts;
     if (!canManage || current == null || _pendingSetup != null) {
@@ -53,9 +56,11 @@ final class AgentCalendarExpertController extends ChangeNotifier {
         expectedRevision: current.registry.revision,
         setupId: setupId,
         provider: provider,
+        deviceId: deviceId,
         calendarIds: calendarIds,
         connectionScope: connectionScope,
         connectionRevision: connectionRevision,
+        sourceAuthority: sourceAuthority,
       );
     } on FormatException {
       failure = 'invalid_input';
@@ -72,9 +77,6 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       () => gateway!.installCalendarExpert(pending),
       submitted: pending,
     );
-    if (_pendingSetup == null && experts != null) {
-      await setCalendarAccessEnabled(pending.setupId, true);
-    }
   }
 
   void discardUncommittedSetup() {
@@ -116,6 +118,8 @@ final class AgentCalendarExpertController extends ChangeNotifier {
           updated == null ||
           updated.enabled != enabled ||
           updated.provider != before.provider ||
+          updated.deviceId != before.deviceId ||
+          updated.sourceAuthority != before.sourceAuthority ||
           !listEquals(updated.calendarIds, before.calendarIds)) {
         throw const FormatException('Calendar configuration mismatch');
       }
@@ -133,17 +137,21 @@ final class AgentCalendarExpertController extends ChangeNotifier {
   Future<void> changeCalendarAccessScope({
     required String setupId,
     required String provider,
+    required String deviceId,
     required List<String> calendarIds,
     required String connectionScope,
     required int connectionRevision,
+    required CalendarSourceAuthority sourceAuthority,
   }) async {
     await _configureCalendarAccess(
       setupId,
       operation: AgentCalendarAccessOperation.setScope,
       provider: provider,
+      deviceId: deviceId,
       calendarIds: calendarIds,
       connectionScope: connectionScope,
       connectionRevision: connectionRevision,
+      sourceAuthority: sourceAuthority,
     );
   }
 
@@ -157,9 +165,11 @@ final class AgentCalendarExpertController extends ChangeNotifier {
     required AgentCalendarAccessOperation operation,
     bool? enabled,
     String? provider,
+    String? deviceId,
     List<String>? calendarIds,
     String? connectionScope,
     int? connectionRevision,
+    CalendarSourceAuthority? sourceAuthority,
   }) async {
     final current = experts;
     if (current == null ||
@@ -175,6 +185,8 @@ final class AgentCalendarExpertController extends ChangeNotifier {
       operation: operation,
       enabled: enabled,
       provider: provider,
+      deviceId: deviceId,
+      sourceAuthority: sourceAuthority,
       calendarIds: calendarIds,
       connectionScope: connectionScope,
       connectionRevision: connectionRevision,
@@ -201,10 +213,13 @@ final class AgentCalendarExpertController extends ChangeNotifier {
                     .singleOrNull;
           if (view == null ||
               view.provider != provider ||
+              view.deviceId != deviceId ||
+              view.sourceAuthority != sourceAuthority ||
               view.connectionScope != connectionScope ||
               view.connectionRevision != connectionRevision ||
               setup!.connectionScope != connectionScope ||
               setup.connectionRevision != connectionRevision ||
+              setup.sourceAuthority != sourceAuthority ||
               !listEquals(view.calendarIds, [...calendarIds!]..sort())) {
             throw const FormatException('Calendar access scope mismatch');
           }

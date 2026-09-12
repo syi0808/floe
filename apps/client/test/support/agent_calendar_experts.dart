@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:floe_client/features/agent/agent_calendar_experts.dart';
 import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 
 import 'agent_registry.dart';
 import 'agent_vault_gateway.dart';
@@ -12,6 +13,10 @@ const calendarSetupId = '00000000-0000-4000-8000-000000000005';
 const calendarViewId = '00000000-0000-4000-8000-000000000006';
 const calendarToolInstallation = '00000000-0000-4000-8000-000000000007';
 const calendarToolAssignment = '00000000-0000-4000-8000-000000000008';
+const calendarSourceAuthority = CalendarSourceAuthority(
+  incarnation: '00000000-0000-4000-8000-000000000009',
+  epoch: 1,
+);
 
 AgentCalendarSetup calendarSetupRequest({List<String>? calendarIds}) =>
     AgentCalendarSetup(
@@ -20,9 +25,11 @@ AgentCalendarSetup calendarSetupRequest({List<String>? calendarIds}) =>
       expectedRevision: 0,
       setupId: calendarSetupId,
       provider: 'event_kit',
+      deviceId: 'test-device',
       calendarIds: calendarIds ?? ['work', 'home'],
       connectionScope: 'selected',
       connectionRevision: 1,
+      sourceAuthority: calendarSourceAuthority,
     );
 
 Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
@@ -86,6 +93,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'calendar_ids': ['home', 'work'],
         'connection_scope': 'selected',
         'connection_revision': 1,
+        'source_authority': calendarSourceAuthority.toJson(),
         'enabled': false,
       },
   ],
@@ -97,6 +105,7 @@ Map<String, dynamic> calendarExpertsFixture({bool installed = true}) => {
         'expected_revision': 0,
         'connection_scope': 'selected',
         'connection_revision': 1,
+        'source_authority': calendarSourceAuthority.toJson(),
         'view_handle': calendarViewId,
         'tool_installation_id': calendarToolInstallation,
         'expert_installation_id': registryInstallation,

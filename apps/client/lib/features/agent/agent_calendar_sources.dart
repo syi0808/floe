@@ -9,6 +9,7 @@ final class AgentCalendarSources {
   }) : provider = connection.provider,
        connectionId = connection.connectionId,
        deviceId = connection.deviceId,
+       sourceAuthority = connection.sourceAuthority,
        revision = connection.revision,
        connectionScope = connection.includeAll ? 'all' : 'selected',
        calendars = List.unmodifiable(
@@ -25,6 +26,7 @@ final class AgentCalendarSources {
   final String provider;
   final String connectionId;
   final String deviceId;
+  final CalendarSourceAuthority? sourceAuthority;
   final int revision;
   final String connectionScope;
   final List<AgentCalendarSource> calendars;
@@ -39,6 +41,8 @@ final class AgentCalendarSources {
       }.contains(provider) &&
       calendars.isNotEmpty &&
       calendars.length <= 128 &&
+      sourceAuthority != null &&
+      sourceAuthority!.isValid &&
       calendars.map((entry) => entry.id).toSet().length == calendars.length &&
       calendars.every(
         (entry) =>
@@ -50,10 +54,9 @@ final class AgentCalendarSources {
     connectionId,
     deviceId,
     provider,
-    revision,
+    sourceAuthority?.toJson(),
     connectionScope,
-    for (final calendar in calendars)
-      [calendar.id, calendar.name, calendar.error],
+    ...(calendars.map((calendar) => calendar.id).toList()..sort()),
   ]);
 
   bool containsScope(String source, Iterable<String> identifiers) =>

@@ -117,9 +117,11 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
             await controller.installCalendarExpert(
               setupId: sources.connectionId,
               provider: sources.provider,
+              deviceId: sources.deviceId,
               calendarIds: selected.toList(),
               connectionScope: sources.connectionScope,
               connectionRevision: sources.revision,
+              sourceAuthority: sources.sourceAuthority!,
             );
             if (!dialogContext.mounted) return;
             if (controller.calendarExpertFailure == null) {
@@ -227,17 +229,21 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
       await controller.installCalendarExpert(
         setupId: sources.connectionId,
         provider: sources.provider,
+        deviceId: sources.deviceId,
         calendarIds: _selected.toList(),
         connectionScope: sources.connectionScope,
         connectionRevision: sources.revision,
+        sourceAuthority: sources.sourceAuthority!,
       );
     } else {
       await controller.changeCalendarAccessScope(
         setupId: setupId,
         provider: sources.provider,
+        deviceId: sources.deviceId,
         calendarIds: _selected.toList(),
         connectionScope: sources.connectionScope,
         connectionRevision: sources.revision,
+        sourceAuthority: sources.sourceAuthority!,
       );
     }
     if (mounted && controller.calendarExpertFailure == null) {
@@ -453,11 +459,21 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
     AgentCalendarSources? sources,
     bool canManage,
   ) {
+    final currentSources = sources;
     final connected =
-        sources?.containsScope(view.provider, view.calendarIds) ?? false;
+        currentSources != null &&
+        currentSources.containsScope(view.provider, view.calendarIds) &&
+        currentSources.deviceId == view.deviceId &&
+        currentSources.sourceAuthority == view.sourceAuthority;
+    final reviewRequired =
+        current.reviewRequired(setup) ||
+        view.sourceAuthority == null ||
+        sources?.sourceAuthority == null;
     final active = current.accessEnabled(setup);
     final scopeNames = _scopeNames(sources, view);
-    final status = !connected
+    final status = reviewRequired
+        ? 'Review required'
+        : !connected
         ? 'Needs attention'
         : active
         ? 'Active'
@@ -482,7 +498,7 @@ class _AgentCalendarSettingsState extends State<AgentCalendarSettings> {
               ),
               FloeBadge(
                 label: status,
-                tone: !connected
+                tone: reviewRequired || !connected
                     ? FloeBadgeTone.warning
                     : active
                     ? FloeBadgeTone.success

@@ -22,9 +22,11 @@ void main() {
     final operation = controller.installCalendarExpert(
       setupId: connectionId,
       provider: 'event_kit',
+      deviceId: 'test-device',
       calendarIds: ['work', 'home'],
       connectionScope: 'selected',
       connectionRevision: 1,
+      sourceAuthority: calendarSourceAuthority,
     );
     expect(controller.busy, true);
     expect(controller.canSend, false);
@@ -33,23 +35,27 @@ void main() {
     await controller.installCalendarExpert(
       setupId: connectionId,
       provider: 'event_kit',
+      deviceId: 'test-device',
       calendarIds: ['different'],
       connectionScope: 'selected',
       connectionRevision: 1,
+      sourceAuthority: calendarSourceAuthority,
     );
     await controller.retryCalendarSetup();
     expect(gateway.requests, hasLength(1));
     gateway.gate!.complete();
     await operation;
-    expect(controller.calendarExperts!.views.single.enabled, true);
+    expect(controller.calendarExperts!.views.single.enabled, false);
     expect(
       controller.calendarExperts!.accessEnabled(
         controller.calendarExperts!.setups.single,
       ),
-      true,
+      false,
     );
     expect(controller.pendingCalendarSetup, isNull);
-    expect(controller.registry!.revision, 2);
+    expect(controller.registry!.revision, 1);
+    await controller.setCalendarAccessEnabled(connectionId, true);
+    expect(controller.calendarExperts!.views.single.enabled, true);
     expect(controller.canSend, true);
   });
 
@@ -68,9 +74,11 @@ void main() {
       await controller.installCalendarExpert(
         setupId: connectionId,
         provider: 'event_kit',
+        deviceId: 'test-device',
         calendarIds: ['home', 'work'],
         connectionScope: 'selected',
         connectionRevision: 1,
+        sourceAuthority: calendarSourceAuthority,
       );
       final pending = controller.pendingCalendarSetup;
       expect(pending, isNotNull);
@@ -80,9 +88,11 @@ void main() {
       await controller.installCalendarExpert(
         setupId: connectionId,
         provider: 'event_kit',
+        deviceId: 'test-device',
         calendarIds: ['different'],
         connectionScope: 'selected',
         connectionRevision: 1,
+        sourceAuthority: calendarSourceAuthority,
       );
       expect(gateway.requests, hasLength(1));
       if (retry) {
@@ -115,9 +125,11 @@ void main() {
     await controller.installCalendarExpert(
       setupId: connectionId,
       provider: 'event_kit',
+      deviceId: 'test-device',
       calendarIds: ['home', 'work'],
       connectionScope: 'selected',
       connectionRevision: 1,
+      sourceAuthority: calendarSourceAuthority,
     );
     controller.discardUncommittedCalendarSetup();
     expect(controller.pendingCalendarSetup, isNotNull);
@@ -143,11 +155,14 @@ void main() {
       await controller.installCalendarExpert(
         setupId: connectionId,
         provider: 'event_kit',
+        deviceId: 'test-device',
         calendarIds: ['home', 'work'],
         connectionScope: 'selected',
         connectionRevision: 1,
+        sourceAuthority: calendarSourceAuthority,
       );
       final setupId = controller.calendarExperts!.setups.single.setupId;
+      await controller.setCalendarAccessEnabled(setupId, true);
       gateway.gate = Completer<void>();
       final operation = controller.setCalendarAccessEnabled(setupId, false);
       expect(controller.calendarExperts!.views.single.enabled, true);
@@ -183,9 +198,11 @@ void main() {
         await controller.installCalendarExpert(
           setupId: connectionId,
           provider: 'event_kit',
+          deviceId: 'test-device',
           calendarIds: ['home', 'work'],
           connectionScope: 'selected',
           connectionRevision: 1,
+          sourceAuthority: calendarSourceAuthority,
         );
       }
       final setupId = operationKind == 'configure'
@@ -197,9 +214,11 @@ void main() {
         'install' => controller.installCalendarExpert(
           setupId: connectionId,
           provider: 'event_kit',
+          deviceId: 'test-device',
           calendarIds: ['home', 'work'],
           connectionScope: 'selected',
           connectionRevision: 1,
+          sourceAuthority: calendarSourceAuthority,
         ),
         _ => controller.setCalendarAccessEnabled(setupId!, false),
       };
@@ -231,9 +250,11 @@ void main() {
     await controller.installCalendarExpert(
       setupId: connectionId,
       provider: 'event_kit',
+      deviceId: 'test-device',
       calendarIds: ['home', 'work'],
       connectionScope: 'selected',
       connectionRevision: 1,
+      sourceAuthority: calendarSourceAuthority,
     );
     expect(controller.vaultState, AgentVaultState.unavailable);
     expect(controller.session, isNull);

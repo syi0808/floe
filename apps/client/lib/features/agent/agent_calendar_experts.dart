@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'agent_registry.dart';
+import '../day_canvas/domain/day_models.dart';
 
 abstract interface class AgentCalendarExpertGateway {
   Future<AgentCalendarExperts> readCalendarExperts(String personId);
@@ -23,6 +24,8 @@ final class AgentCalendarAccessRequest {
     required this.operation,
     this.enabled,
     this.provider,
+    this.deviceId,
+    this.sourceAuthority,
     List<String>? calendarIds,
     this.connectionScope,
     this.connectionRevision,
@@ -37,6 +40,8 @@ final class AgentCalendarAccessRequest {
             enabled == null) ||
         (operation == AgentCalendarAccessOperation.setScope &&
             (provider == null ||
+                deviceId == null ||
+                sourceAuthority == null ||
                 this.calendarIds == null ||
                 !const {'selected', 'all'}.contains(connectionScope) ||
                 connectionRevision == null ||
@@ -44,12 +49,18 @@ final class AgentCalendarAccessRequest {
         (operation == AgentCalendarAccessOperation.remove &&
             (enabled != null ||
                 provider != null ||
+                deviceId != null ||
+                sourceAuthority != null ||
                 calendarIds != null ||
                 connectionScope != null ||
                 connectionRevision != null))) {
       throw const FormatException('Invalid Calendar access change');
     }
     if (provider != null) _provider(provider);
+    if (deviceId != null) _deviceIdentifier(deviceId);
+    if (sourceAuthority != null && !sourceAuthority!.isValid) {
+      throw const FormatException('Invalid Calendar source authority');
+    }
   }
 
   final String personId;
@@ -59,6 +70,8 @@ final class AgentCalendarAccessRequest {
   final AgentCalendarAccessOperation operation;
   final bool? enabled;
   final String? provider;
+  final String? deviceId;
+  final CalendarSourceAuthority? sourceAuthority;
   final List<String>? calendarIds;
   final String? connectionScope;
   final int? connectionRevision;
@@ -75,9 +88,11 @@ final class AgentCalendarAccessRequest {
       AgentCalendarAccessOperation.setScope => {
         'kind': 'set_scope',
         'provider': provider!,
+        'device_id': deviceId!,
         'calendar_ids': calendarIds!,
         'connection_scope': connectionScope!,
         'connection_revision': connectionRevision!,
+        'source_authority': sourceAuthority!.toJson(),
       },
       AgentCalendarAccessOperation.remove => {'kind': 'remove'},
     },
@@ -91,35 +106,46 @@ final class AgentCalendarSetup {
     required int expectedRevision,
     required String setupId,
     required String provider,
+    required String deviceId,
     required List<String> calendarIds,
     required String connectionScope,
     required int connectionRevision,
+    required this.sourceAuthority,
   }) : personId = _identifier(personId),
        instanceId = _identifier(instanceId),
        expectedRevision = _counter(expectedRevision),
        setupId = _identifier(setupId),
        provider = _provider(provider),
+       deviceId = _deviceIdentifier(deviceId),
        calendarIds = _scope(calendarIds, canonical: false),
        connectionScope = _connectionScope(connectionScope),
-       connectionRevision = _positiveCounter(connectionRevision);
+       connectionRevision = _positiveCounter(connectionRevision) {
+    if (!sourceAuthority.isValid) {
+      throw const FormatException('Invalid Calendar source authority');
+    }
+  }
 
   final String personId;
   final String instanceId;
   final int expectedRevision;
   final String setupId;
   final String provider;
+  final String deviceId;
   final List<String> calendarIds;
   final String connectionScope;
   final int connectionRevision;
+  final CalendarSourceAuthority sourceAuthority;
 
   Map<String, Object> toJson() => {
     'instance_id': instanceId,
     'expected_revision': expectedRevision,
     'setup_id': setupId,
     'provider': provider,
+    'device_id': deviceId,
     'calendar_ids': calendarIds,
     'connection_scope': connectionScope,
     'connection_revision': connectionRevision,
+    'source_authority': sourceAuthority.toJson(),
   };
 }
 
@@ -157,7 +183,10 @@ final class AgentCalendarExperts {
           setup.expectedRevision >= registry.revision ||
           view == null ||
           setup.connectionScope != view.connectionScope ||
-          setup.connectionRevision != view.connectionRevision) {
+          setup.connectionRevision != view.connectionRevision ||
+          (setup.sourceAuthority != null &&
+              view.sourceAuthority != null &&
+              setup.sourceAuthority != view.sourceAuthority)) {
         throw const FormatException('Invalid Calendar setup receipt');
       }
       for (final (kind, installationId, assignmentId, packageId, tools) in [
@@ -216,6 +245,16 @@ final class AgentCalendarExperts {
             .every((entry) => entry.enabled);
   }
 
+  bool reviewRequired(AgentCalendarSetupReceipt setup) {
+    final view = views.singleWhere((entry) => entry.handle == setup.viewHandle);
+    final nativeSource =
+        view.provider == 'event_kit' || view.provider == 'android';
+    return nativeSource &&
+        (view.sourceAuthority == null ||
+            setup.sourceAuthority == null ||
+            view.sourceAuthority != setup.sourceAuthority);
+  }
+
   AgentCalendarSetupReceipt? receiptFor(AgentCalendarSetup request) {
     if (registry.personId != request.personId ||
         registry.instanceId != request.instanceId) {
@@ -228,12 +267,19 @@ final class AgentCalendarExperts {
     final view = views.singleWhere(
       (entry) => entry.handle == receipt.viewHandle,
     );
+    final nativeSource =
+        request.provider == 'event_kit' || request.provider == 'android';
     if (receipt.expectedRevision != request.expectedRevision ||
         view.provider != request.provider ||
         receipt.connectionScope != request.connectionScope ||
-        receipt.connectionRevision != request.connectionRevision ||
+        (!nativeSource &&
+            receipt.connectionRevision != request.connectionRevision) ||
+        receipt.sourceAuthority != request.sourceAuthority ||
+        view.deviceId != request.deviceId ||
+        view.sourceAuthority != request.sourceAuthority ||
         view.connectionScope != request.connectionScope ||
-        view.connectionRevision != request.connectionRevision ||
+        (!nativeSource &&
+            view.connectionRevision != request.connectionRevision) ||
         view.calendarIds.length != request.calendarIds.length ||
         !List.generate(
           view.calendarIds.length,
@@ -254,6 +300,7 @@ final class AgentCalendarView {
       calendarIds = _scope(json['calendar_ids'], canonical: true),
       connectionScope = _connectionScope(json['connection_scope']),
       connectionRevision = _positiveCounter(json['connection_revision']),
+      sourceAuthority = _optionalSourceAuthority(json['source_authority']),
       enabled = _flag(json['enabled']);
 
   final String handle;
@@ -263,6 +310,7 @@ final class AgentCalendarView {
   final List<String> calendarIds;
   final String connectionScope;
   final int connectionRevision;
+  final CalendarSourceAuthority? sourceAuthority;
   final bool enabled;
 }
 
@@ -273,6 +321,7 @@ final class AgentCalendarSetupReceipt {
       expectedRevision = _counter(json['expected_revision']),
       connectionScope = _connectionScope(json['connection_scope']),
       connectionRevision = _positiveCounter(json['connection_revision']),
+      sourceAuthority = _optionalSourceAuthority(json['source_authority']),
       viewHandle = _identifier(json['view_handle']),
       toolInstallationId = _identifier(json['tool_installation_id']),
       expertInstallationId = _identifier(json['expert_installation_id']),
@@ -284,6 +333,7 @@ final class AgentCalendarSetupReceipt {
   final int expectedRevision;
   final String connectionScope;
   final int connectionRevision;
+  final CalendarSourceAuthority? sourceAuthority;
   final String viewHandle;
   final String toolInstallationId;
   final String expertInstallationId;
@@ -340,6 +390,15 @@ String _deviceIdentifier(Object? value) {
     throw const FormatException('Invalid Calendar device identifier');
   }
   return value;
+}
+
+CalendarSourceAuthority? _optionalSourceAuthority(Object? value) {
+  if (value == null) return null;
+  try {
+    return CalendarSourceAuthority.fromJson(value);
+  } on FormatException {
+    return null;
+  }
 }
 
 bool _flag(Object? value) {

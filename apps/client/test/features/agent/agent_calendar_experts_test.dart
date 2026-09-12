@@ -1,6 +1,7 @@
 import 'package:floe_client/features/agent/agent_calendar_experts.dart';
 import 'package:floe_client/features/agent/agent_registry.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/agent_calendar_experts.dart';
@@ -18,9 +19,11 @@ void main() {
       'expected_revision',
       'setup_id',
       'provider',
+      'device_id',
       'calendar_ids',
       'connection_scope',
       'connection_revision',
+      'source_authority',
     ]);
     final unicode = calendarSetupRequest(calendarIds: ['\u{10000}', '\ue000']);
     expect(unicode.calendarIds, ['\ue000', '\u{10000}']);
@@ -109,6 +112,69 @@ void main() {
     expect(transport.pending, isNull);
   });
 
+  test(
+    'native source authority fences review independently of sync revision',
+    () {
+      final overview = AgentCalendarExperts.fromJson(calendarExpertsFixture());
+      final request = AgentCalendarSetup(
+        personId: registryPerson,
+        instanceId: registryInstance,
+        expectedRevision: 0,
+        setupId: calendarSetupId,
+        provider: 'event_kit',
+        deviceId: 'test-device',
+        calendarIds: ['home', 'work'],
+        connectionScope: 'selected',
+        connectionRevision: 99,
+        sourceAuthority: calendarSourceAuthority,
+      );
+      expect(overview.receiptFor(request), isNotNull);
+      final changed = calendarExpertsFixture();
+      ((changed['views'] as List).single
+          as Map)['source_authority'] = const CalendarSourceAuthority(
+        incarnation: '00000000-0000-4000-8000-000000000011',
+        epoch: 1,
+      ).toJson();
+      expect(
+        () => AgentCalendarExperts.fromJson(changed).receiptFor(request),
+        throwsFormatException,
+      );
+      final missing = calendarExpertsFixture();
+      ((missing['views'] as List).single as Map).remove('source_authority');
+      final unavailable = AgentCalendarExperts.fromJson(missing);
+      expect(unavailable.reviewRequired(unavailable.setups.single), isTrue);
+      expect(() => unavailable.receiptFor(request), throwsFormatException);
+    },
+  );
+
+  test(
+    'gateway rejects a reviewed device different from its current device',
+    () async {
+      final transport = CalendarExpertTransport();
+      final gateway = NativeAgentVaultGateway(
+        transport.call,
+        deviceId: 'test-device',
+      );
+      final request = AgentCalendarSetup(
+        personId: registryPerson,
+        instanceId: registryInstance,
+        expectedRevision: 0,
+        setupId: calendarSetupId,
+        provider: 'event_kit',
+        deviceId: 'other-device',
+        calendarIds: ['home', 'work'],
+        connectionScope: 'selected',
+        connectionRevision: 1,
+        sourceAuthority: calendarSourceAuthority,
+      );
+      await expectLater(
+        gateway.installCalendarExpert(request),
+        throwsFormatException,
+      );
+      expect(transport.installations, 0);
+    },
+  );
+
   test('setup uses explicit stable identity and retries tolerate later revocation or state changes', () async {
     final transport = CalendarExpertTransport();
     final gateway = NativeAgentVaultGateway(
@@ -122,6 +188,11 @@ void main() {
       ...request.toJson(),
       'device_id': 'test-device',
     });
+    expect(
+      transport.committedSetup!['source_authority'],
+      calendarSourceAuthority.toJson(),
+    );
+    expect(transport.committedSetup!['device_id'], 'test-device');
     var registry = await gateway.configureRegistry(
       installed.registry,
       target: AgentRegistryTarget.calendarView,
