@@ -1,9 +1,13 @@
+import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 import 'package:floe_client/features/agent/agent_panel.dart';
 import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/features/day_canvas/application/day_gateway.dart';
 import 'package:floe_client/features/day_canvas/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day_canvas/domain/calendar_action.dart';
 import 'package:floe_client/features/day_canvas/domain/day_models.dart';
 import 'package:floe_client/features/day_canvas/presentation/personal_day_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -13,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/agent_gateway.dart';
 import '../../support/agent_vault_gateway.dart';
+import '../day_canvas/calendar_action_execution_test.dart' show Executor;
 
 Widget app(Widget child, {double scale = 1}) => MaterialApp(
   theme: FloeTheme.light,
@@ -236,6 +241,57 @@ void main() {
   }
 
   testWidgets(
+    'Settings reloads action permissions after opening the agent vault',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final vault = TestVaultGateway();
+      final day = _VaultBackedDayGateway(vault)..saved = [];
+      final date = DateTime(2026, 9, 7, 9);
+      await tester.pumpWidget(
+        app(
+          PersonalDayScreen(
+            gateway: day,
+            agentGateway: vault,
+            query: DayQuery(
+              personId: 'test',
+              date: date,
+              now: date,
+              timezoneOffsetSeconds: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(day.authorityLoads, 1);
+
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      await tester.pump(FloeLoading.minimumDuration);
+      await tester.pumpAndSettle();
+
+      expect(vault.creates, 1);
+      expect(day.authorityLoads, 2);
+      expect(
+        find.text(
+          'Open and unlock the agent vault to review or change action permissions.',
+        ),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<FloeSelect<ActionAuthorityMode>>(
+              find.byType(FloeSelect<ActionAuthorityMode>),
+            )
+            .enabled,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
     'Today keeps conversation storage open across lifecycle changes',
     (tester) async {
       tester.view.physicalSize = const Size(1280, 900);
@@ -280,4 +336,39 @@ void main() {
       expect(gateway.locks, 0);
     },
   );
+}
+
+final class _VaultBackedDayGateway extends Executor implements DayGateway {
+  _VaultBackedDayGateway(this.vault);
+
+  final TestVaultGateway vault;
+  final FakeDayGateway day = FakeDayGateway();
+  int authorityLoads = 0;
+
+  @override
+  Future<DaySnapshot> loadDay(DayQuery query) => day.loadDay(query);
+
+  @override
+  Future<ActionAuthority> loadActionAuthority(String personId) {
+    authorityLoads++;
+    if (vault.state != AgentVaultState.ready) {
+      throw const AgentVaultException('vault_unavailable');
+    }
+    return super.loadActionAuthority(personId);
+  }
+
+  @override
+  Future<ActionAuthority> setCalendarCreateAuthority(
+    String personId,
+    ActionAuthorityMode mode,
+  ) {
+    if (vault.state != AgentVaultState.ready) {
+      throw const AgentVaultException('vault_unavailable');
+    }
+    return super.setCalendarCreateAuthority(personId, mode);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('Unexpected day mutation');
 }

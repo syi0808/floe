@@ -128,7 +128,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       agentController = AgentController(
         gateway: agentGateway,
         personId: widget.query.personId,
-      );
+      )..addListener(_reloadActionAuthorityAfterVaultUnlock);
     }
   }
 
@@ -137,6 +137,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     WidgetsBinding.instance.removeObserver(this);
     calendarObservationRefresh?.dispose();
     controller.dispose();
+    agentController?.removeListener(_reloadActionAuthorityAfterVaultUnlock);
     actionController?.dispose();
     agentController?.dispose();
     assistantEntryFocus.dispose();
@@ -531,6 +532,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       destination = value;
       selectedTaskId = null;
     });
+  }
+
+  void _reloadActionAuthorityAfterVaultUnlock() {
+    final agent = agentController;
+    final actions = actionController;
+    if (agent?.vaultState == AgentVaultState.ready &&
+        actions?.authorityFailure != null &&
+        !actions!.busy) {
+      unawaited(actions.load());
+    }
   }
 
   Future<void> _openAssistant() async {
