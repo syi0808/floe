@@ -301,3 +301,38 @@ transactional per-turn dependency sidecar over adding fields to every AgentMessa
 
 This is an integration direction, not implemented behavior. Final P4 contracts must match the reviewed
 P2 admission record and P3 lease/observation identities before implementation is assigned.
+
+### Reviewed implementation boundaries for P3 and P5
+
+The native host audit confirms that `Worker::request` enqueues work and returns a pollable snapshot;
+it does not synchronously await the conversation worker. A raw Dart callback deadlock must therefore
+not be asserted from the C ABI alone. The preferred macOS implementation nevertheless uses the
+existing EventKit dylib's `view_access` and `observe` operations directly from Rust. The first delegated
+native milestone is a bounded read adapter with synthetic provider tests, not full host integration
+or mobile/background-lifecycle acceptance. Provider stamps cannot mint Core grant authority.
+
+The server authorization foundation is delegated separately from route adoption. Its initial contract:
+- One issuer key per local vault owner, separately generated and encrypted; enrollment binds the exact
+  paired client, Person and device. Pairing alone is not trust. Proof of possession, explicit dashboard
+  approval and signed local confirmation are all required. Durable trust changes precede success.
+- Producer-generated strict JSON challenge bytes are signed verbatim after the domain separator
+  `floe.remote.authorization.v1\0`. The owner parses and validates those exact bytes before signing;
+  it never signs opaque arbitrary producer data. Both implementations reject recursive duplicate
+  keys, unknown fields, trailing data, invalid identities/stamps and over-budget fields.
+- Challenges bind operation, nonce, issuer, transport principal, audience, purpose, consumer, policy,
+  exact connector/connection/execution owner/source, grant, finite resources, exact query digest and
+  output budgets. Release additionally binds the digest of the exact staged response bytes.
+- Start with one exact source per request; explicit Core aggregation can combine authorized results.
+  No provider fallback or iteration over unselected connections is authorized.
+- Admission and release use separate one-use challenges. Reads run outside authority locks; pairing,
+  enrollment and producer source are checked again at release. Staged bytes are not returned by the
+  admission endpoint. Restart discards transient challenges and staged data, never reconstructs permits.
+- Initial bounds: 128 pending challenges per client, 1 MiB per staged result, 16 MiB globally and
+  30-second monotonic challenge lifetime. Streaming and non-loopback transport remain unsupported.
+- Core signing is the local decision linearization point; producer release has its own serialized
+  source/enrollment check. Revocation cannot recall bytes whose release was already admitted. This
+  is not a claim of instantaneous distributed revocation.
+
+These are implementation decisions, not acceptance evidence. The Go foundation must still be wired
+to durable console enrollment, exact provider identities and protected routes; Rust owner verification,
+shared negative vectors and consent UI are required before P5 is accepted.
