@@ -24,6 +24,12 @@ does not grant abstract “Google Calendar” access; they grant access to speci
 to one connection. A server-wide consent form makes account identity less visible and becomes harder
 to navigate as connectors expose more capabilities.
 
+The same problem already exists for the device-owned macOS Calendar connection. Connections owns
+EventKit setup and calendar selection, while **Data & privacy** owns Calendar Expert access and saved
+Calendar scopes. The user must mentally join two screens to understand whether macOS granted source
+access, which calendars Floe selected and which features may use them. These controls describe layers
+of one connection and belong together on its detail screen.
+
 This ADR changes the product ceremony and information architecture. It does not remove proof of
 possession, mutual identity pinning, least privilege, durable revocation or runtime authorization.
 
@@ -89,6 +95,32 @@ Connection removal revokes its grants before credentials and connection metadata
 Pausing a connection or permission blocks later admissions and releases without claiming to recall
 data already released or provider actions already accepted.
 
+#### macOS Calendar first vertical move
+
+The macOS Calendar connection detail is the first connection to adopt the complete model. It brings
+together three distinct layers without conflating their authority:
+
+1. **System access** reports EventKit authorization and offers the operating-system permission or
+   recovery action.
+2. **Calendars available to Floe** selects the exact calendars exposed by this connection.
+3. **Use in Floe** manages saved Observe grants for Assistant, Schedule and other consumers, including
+   the Calendar access currently edited under **Data & privacy**.
+
+The screen explains that system access only makes calendars available, selection only establishes the
+maximum connection scope, and a consumer grant authorizes actual AI use. Effective access is their
+intersection. Grant resource choices cannot exceed the currently selected calendars, and expanding
+the connection selection does not expand an existing grant.
+
+Existing Calendar Tool/Expert installation state may be shown as implementation detail under the
+relevant Floe feature, but users grant a capability to a named feature rather than “installing a
+disabled Expert.” Package installation, source selection and grant mutation remain separate Core
+operations even when one connection screen coordinates them.
+
+**Data & privacy** removes its editable Calendar access section. It may show a Calendar permission
+summary and link to **Connections → macOS Calendar**, consistent with the global overview rule below.
+Memory, processing-location and other privacy controls that are not owned by one connection remain in
+**Data & privacy**.
+
 ### 4. Keep a global permissions overview
 
 Settings may retain a top-level **Permissions** screen for visibility, auditing and emergency
@@ -129,6 +161,12 @@ Connections
       Calendar events · Work calendar     · Commitments        Paused
       Mail search     · This account      · Work context       Active
 
+  macOS Calendar · This Mac
+    System access          Full access                             Allowed
+    Available to Floe      Personal, Work
+    Use in Floe
+      Calendar events      Personal          Assistant, Schedule  Active
+
 Settings → Permissions
   Cross-connection overview, navigation, pause and revoke only
 ```
@@ -150,10 +188,12 @@ Settings → Permissions
 
 1. Extend the pairing contract to bind producer and issuer identities to the approved attempt.
 2. Make pairing completion activate the issuer durably before returning an accepted connection.
-3. Add capability and grant management to each connection detail screen.
-4. Move Calendar and remote-view grant creation out of Remote server settings.
-5. Replace the enrollment section with pairing health and optional security details.
-6. Add the cross-connection permissions overview without scope-expansion controls.
+3. Move existing Calendar access management from Data & privacy to the macOS Calendar detail.
+4. Present EventKit state, selected calendars and consumer grants as separate layers on that screen.
+5. Add the same capability and grant-management pattern to other connection detail screens.
+6. Move Calendar and remote-view grant creation out of Remote server settings.
+7. Replace the enrollment section with pairing health and optional security details.
+8. Add the cross-connection permissions overview without scope-expansion controls.
 
 Existing local development state may be reset. No compatibility flow is required solely to preserve
 disposable pairings or grants. Migration must not reinterpret an old pairing as proof that a particular
@@ -167,6 +207,8 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
   protected remote source use and weaken the proof and revocation boundaries.
 - **Manage all grants only in Settings:** provides a compact implementation but obscures which account
   and resources own a permission, especially with multiple accounts of one connector type.
+- **Keep macOS Calendar access in Data & privacy:** keeps an existing screen stable but splits EventKit
+  health, calendar selection and AI-use grants across unrelated navigation paths.
 - **Manage grants only at first use:** improves contextual prompting but makes later inspection,
   changes and revocation difficult to discover.
 - **Allow grant expansion from the global overview:** recreates the detached account context that this
@@ -193,6 +235,10 @@ issuer fingerprint was approved; reset or explicit repair is preferred.
 - Permission creation and scope expansion occur only within the owning connection's detail context.
 - Two accounts of the same connector display and enforce independent resources and consumers.
 - The global permissions screen can explain, navigate, pause and revoke, but cannot expand access.
+- macOS Calendar system access, selected source scope and consumer grants are distinguishable and
+  manageable from the macOS Calendar connection detail.
+- Data & privacy no longer creates, enables or expands Calendar grants and links to the owning
+  connection when the user needs to change them.
+- Selecting an additional macOS calendar does not add it to any existing consumer grant.
 - Deleting a connection revokes its grants and prevents subsequent admission and release.
 - Focused end-to-end validation covers pair, grant, use, pause, revoke, identity change and re-pair.
-
