@@ -112,10 +112,13 @@ type deviceBinding struct {
 }
 
 type pairedClient struct {
-	ClientID  string `json:"client_id,omitempty"`
-	TokenHash string `json:"token_hash"`
-	PersonID  string `json:"person_id"`
-	DeviceID  string `json:"device_id"`
+	ClientID            string `json:"client_id,omitempty"`
+	TokenHash           string `json:"token_hash"`
+	PersonID            string `json:"person_id"`
+	DeviceID            string `json:"device_id"`
+	ProducerInstanceID  string `json:"producer_instance_id,omitempty"`
+	ProducerFingerprint string `json:"producer_fingerprint,omitempty"`
+	ProducerAudience    string `json:"producer_audience,omitempty"`
 }
 
 type trustedIssuerRecord struct {

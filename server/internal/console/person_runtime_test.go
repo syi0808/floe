@@ -2,6 +2,8 @@ package console
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"floe/server/internal/authorization"
 	"floe/server/internal/connectors/common"
 	"floe/server/internal/credentials"
 )
@@ -135,9 +138,16 @@ func TestRevokingLastClientRemovesPersonConnectorLifecycle(test *testing.T) {
 		test.Fatal("client revocation retained connector state, runtime, or credential")
 	}
 
-	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", map[string]string{"person_id": otherFixturePersonID, "device_id": "other-device"}, ""))
+	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", pairStartBody(otherFixturePersonID, "other-device"), ""))
 	proof := started["proof"].(string)
-	fixture.value(fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{"id": started["id"]}, ""))
+	issuer := started["issuer"].(map[string]any)
+	challenge, err := base64.RawURLEncoding.DecodeString(started["challenge_b64url"].(string))
+	if err != nil {
+		test.Fatal(err)
+	}
+	ownerPrivate := pairIssuerPrivateKey(issuer["key_id"].(string))
+	fixture.value(fixture.call(http.MethodPost, "/pair/confirm", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "proof": proof, "challenge_id": started["challenge_id"], "key_id": issuer["key_id"], "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(ownerPrivate, append([]byte(authorization.SignatureDomain), challenge...)))}, ""))
+	fixture.value(fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": issuer["fingerprint"]}, ""))
 	other := fixture.value(fixture.call(http.MethodPost, "/pair/poll", map[string]string{"proof": proof}, ""))
 	otherToken := other["token"].(string)
 	if response := fixture.call(http.MethodPost, "/v1/views/work.context", map[string]any{"schema_version": 1}, otherToken); response.Code != http.StatusBadRequest {
@@ -196,7 +206,7 @@ func TestLastClientCleanupFailurePersistsTombstoneAndRetriesBeforePairing(test *
 			restartedFixture.cookie = nil
 			restartedFixture.csrf = ""
 
-			blocked := restartedFixture.call(http.MethodPost, "/pair/start", map[string]string{"person_id": otherFixturePersonID, "device_id": "other-device"}, "")
+			blocked := restartedFixture.call(http.MethodPost, "/pair/start", pairStartBody(otherFixturePersonID, "other-device"), "")
 			if blocked.Code != http.StatusServiceUnavailable {
 				test.Fatalf("pairing did not fail closed: %d %s", blocked.Code, blocked.Body.String())
 			}
@@ -205,7 +215,7 @@ func TestLastClientCleanupFailurePersistsTombstoneAndRetriesBeforePairing(test *
 			}
 			delete(runtime.failures, "logout")
 			fixture.vault.failDeletes = 0
-			if response := restartedFixture.call(http.MethodPost, "/pair/start", map[string]string{"person_id": otherFixturePersonID, "device_id": "other-device"}, ""); response.Code != http.StatusOK {
+			if response := restartedFixture.call(http.MethodPost, "/pair/start", pairStartBody(otherFixturePersonID, "other-device"), ""); response.Code != http.StatusOK {
 				test.Fatalf("cleanup retry did not unblock pairing: %d %s", response.Code, response.Body.String())
 			}
 			restarted.mu.Lock()

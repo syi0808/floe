@@ -294,7 +294,7 @@ func TestLastClientRevocationWinsFailedSecretDisconnectRollback(test *testing.T)
 	if response := fixture.call(http.MethodGet, "/v1/connectors", nil, token); response.Code != http.StatusUnauthorized {
 		test.Fatalf("failed disconnect resurrected bearer: %d %s", response.Code, response.Body.String())
 	}
-	if response := fixture.call(http.MethodPost, "/pair/start", map[string]string{"person_id": otherFixturePersonID, "device_id": "other-device"}, ""); response.Code != http.StatusOK {
+	if response := fixture.call(http.MethodPost, "/pair/start", pairStartBody(otherFixturePersonID, "other-device"), ""); response.Code != http.StatusOK {
 		test.Fatalf("cleanup retry did not unblock pairing: %d %s", response.Code, response.Body.String())
 	}
 	fixture.console.mu.Lock()

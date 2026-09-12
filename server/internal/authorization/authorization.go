@@ -138,6 +138,10 @@ type TrustStore interface {
 	CommitIssuerRevocation(IssuerRecord) error
 }
 
+// ActivationCommitter persists an issuer activation and any state coupled to
+// it. The callback must return only after the durable commit succeeds.
+type ActivationCommitter func(IssuerRecord) error
+
 // SourceAuthority resolves the current source under the console owner lock.
 // It must reject unknown/inactive pairings, keep the owner lock held while
 // invoking consume, and return the current incarnation and epoch. Engine
@@ -549,6 +553,20 @@ func (engine *Engine) ForgetPrincipal(principal Principal) []string {
 // perform admin authentication and exact fingerprint confirmation before this
 // method; this package intentionally has no bearer/admin authority.
 func (engine *Engine) ApproveEnrollment(enrollmentID, fingerprint string, approved bool) error {
+	return engine.approveEnrollment(enrollmentID, fingerprint, approved, engine.store.CommitIssuerActivation, false)
+}
+
+// ApproveEnrollmentWithCommit approves a locally confirmed enrollment using a
+// caller-owned durable transaction. This is used by pairing so the client
+// credential and trusted issuer are committed together.
+func (engine *Engine) ApproveEnrollmentWithCommit(enrollmentID, fingerprint string, commit ActivationCommitter) error {
+	if commit == nil {
+		return fmt.Errorf("%w: activation commit required", ErrInvalid)
+	}
+	return engine.approveEnrollment(enrollmentID, fingerprint, true, commit, true)
+}
+
+func (engine *Engine) approveEnrollment(enrollmentID, fingerprint string, approved bool, commit ActivationCommitter, requireLocal bool) error {
 	if !approved {
 		engine.transitionMu.Lock()
 		defer engine.transitionMu.Unlock()
@@ -577,6 +595,10 @@ func (engine *Engine) ApproveEnrollment(enrollmentID, fingerprint string, approv
 		engine.mu.Unlock()
 		return fmt.Errorf("%w: fingerprint mismatch", ErrDenied)
 	}
+	if requireLocal && !enrollment.localConfirmed {
+		engine.mu.Unlock()
+		return fmt.Errorf("%w: local confirmation required", ErrDenied)
+	}
 	enrollment.adminApproved = true
 	activate := enrollment.localConfirmed
 	if activate {
@@ -587,10 +609,14 @@ func (engine *Engine) ApproveEnrollment(enrollmentID, fingerprint string, approv
 	if !activate {
 		return nil
 	}
-	return engine.commitActivation(enrollmentID, record)
+	return engine.commitActivationWith(enrollmentID, record, commit)
 }
 
 func (engine *Engine) commitActivation(enrollmentID string, record IssuerRecord) error {
+	return engine.commitActivationWith(enrollmentID, record, engine.store.CommitIssuerActivation)
+}
+
+func (engine *Engine) commitActivationWith(enrollmentID string, record IssuerRecord, commit ActivationCommitter) error {
 	engine.transitionMu.Lock()
 	defer engine.transitionMu.Unlock()
 	engine.mu.Lock()
@@ -617,7 +643,7 @@ func (engine *Engine) commitActivation(enrollmentID string, record IssuerRecord)
 		}
 	}
 	engine.mu.Unlock()
-	if err := engine.store.CommitIssuerActivation(record); err != nil {
+	if err := commit(record); err != nil {
 		engine.mu.Lock()
 		if enrollment := engine.enrollments[enrollmentID]; enrollment != nil {
 			enrollment.committing = false

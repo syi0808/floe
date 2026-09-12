@@ -2,7 +2,9 @@ package console
 
 import (
 	"context"
+	"crypto/ed25519"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -152,13 +154,26 @@ type session struct {
 	expires time.Time
 }
 type pairing struct {
-	ID       string    `json:"id"`
-	Code     string    `json:"code"`
-	Expires  time.Time `json:"expires"`
-	PersonID string    `json:"person_id"`
-	DeviceID string    `json:"device_id"`
-	proof    string
-	token    string
+	ID                  string    `json:"id"`
+	Code                string    `json:"code"`
+	Expires             time.Time `json:"expires"`
+	PersonID            string    `json:"person_id"`
+	DeviceID            string    `json:"device_id"`
+	IssuerKeyID         string    `json:"issuer_key_id"`
+	IssuerPublicKey     string    `json:"issuer_public_key"`
+	IssuerFingerprint   string    `json:"issuer_fingerprint"`
+	ProducerFingerprint string    `json:"producer_fingerprint"`
+	ProducerAudience    string    `json:"producer_audience"`
+	LocalConfirmed      bool      `json:"local_confirmed"`
+	AdminApproved       bool      `json:"admin_approved"`
+	status              string
+	enrollmentID        string
+	challengeID         string
+	challengeBytes      []byte
+	challengeB64        string
+	producerSignature   []byte
+	proof               string
+	token               string
 }
 
 type clientScope struct {
@@ -782,70 +797,251 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	var input struct {
-		Proof    string `json:"proof"`
-		PersonID string `json:"person_id"`
-		DeviceID string `json:"device_id"`
+		SchemaVersion   int    `json:"schema_version"`
+		PairingID       string `json:"pairing_id"`
+		Proof           string `json:"proof"`
+		PersonID        string `json:"person_id"`
+		DeviceID        string `json:"device_id"`
+		IssuerKeyID     string `json:"issuer_key_id"`
+		IssuerPublicKey string `json:"issuer_public_key"`
+		ChallengeID     string `json:"challenge_id"`
+		KeyID           string `json:"key_id"`
+		Signature       string `json:"signature"`
 	}
 	if !decode(writer, request, &input) {
 		failure(writer, 400, "validation")
 		return
 	}
-	console.mu.Lock()
-	defer console.mu.Unlock()
-	now := time.Now()
-	if request.URL.Path == "/pair/start" {
+	if request.URL.Path == "/pair/start" && input.SchemaVersion == 0 && input.IssuerKeyID == "" && input.IssuerPublicKey == "" {
 		if !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) {
 			failure(writer, 400, "identity_required")
 			return
 		}
+		console.mu.Lock()
+		now := time.Now()
 		for personID := range console.state.Cleanups {
 			if err := console.retryPersonCleanupLocked(personID); err != nil {
+				console.mu.Unlock()
 				failure(writer, 503, "person_cleanup_pending")
 				return
 			}
 		}
-		if now.Sub(console.lastPair) < 10*time.Second || (console.pair != nil && console.pair.Expires.After(now)) {
+		if now.Sub(console.lastPair) < 10*time.Second || (console.pair != nil && console.pair.Expires.After(now) && console.pair.status != "rejected") {
+			console.mu.Unlock()
 			failure(writer, 429, "pairing_in_progress")
 			return
 		}
 		if len(console.state.Clients) >= 16 {
+			console.mu.Unlock()
 			failure(writer, 409, "too_many_clients")
 			return
 		}
-		for _, client := range console.state.Clients {
-			if client.PersonID != input.PersonID {
+		for personID := range console.state.Clients {
+			if console.state.Clients[personID].PersonID != input.PersonID {
+				console.mu.Unlock()
 				failure(writer, 409, "person_mismatch")
 				return
 			}
 		}
 		console.lastPair = now
 		console.pair = &pairing{ID: randomToken(), Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute), PersonID: input.PersonID, DeviceID: input.DeviceID, proof: randomToken()}
-		reply(writer, 200, map[string]any{"id": console.pair.ID, "code": console.pair.Code, "proof": console.pair.proof, "expires": console.pair.Expires})
+		pending := *console.pair
+		console.mu.Unlock()
+		reply(writer, 200, map[string]any{"id": pending.ID, "code": pending.Code, "proof": pending.proof, "expires": pending.Expires})
 		return
 	}
-	if console.pair == nil || !console.pair.Expires.After(now) || digest(input.Proof) != digest(console.pair.proof) {
+	if request.URL.Path == "/pair/start" {
+		if input.SchemaVersion != 1 || !validPersonID(input.PersonID) || !validDeviceID(input.DeviceID) || !validConnectionID(input.IssuerKeyID) {
+			failure(writer, 400, "identity_required")
+			return
+		}
+		publicKey, err := base64.RawURLEncoding.DecodeString(input.IssuerPublicKey)
+		if err != nil || len(publicKey) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(publicKey) != input.IssuerPublicKey {
+			failure(writer, 400, "validation")
+			return
+		}
+		metadata, err := console.producerMetadata()
+		if err != nil {
+			failure(writer, 503, "producer_unavailable")
+			return
+		}
+		audience, ok := metadata["audience"].(string)
+		if !ok || audience == "" {
+			failure(writer, 503, "producer_unavailable")
+			return
+		}
+		console.mu.Lock()
+		now := time.Now()
+		for personID := range console.state.Cleanups {
+			if err := console.retryPersonCleanupLocked(personID); err != nil {
+				console.mu.Unlock()
+				failure(writer, 503, "person_cleanup_pending")
+				return
+			}
+		}
+		if now.Sub(console.lastPair) < 10*time.Second || (console.pair != nil && console.pair.Expires.After(now) && console.pair.status != "rejected") {
+			console.mu.Unlock()
+			failure(writer, 429, "pairing_in_progress")
+			return
+		}
+		if len(console.state.Clients) >= 16 {
+			console.mu.Unlock()
+			failure(writer, 409, "too_many_clients")
+			return
+		}
+		for _, client := range console.state.Clients {
+			if client.PersonID != input.PersonID {
+				console.mu.Unlock()
+				failure(writer, 409, "person_mismatch")
+				return
+			}
+		}
+		console.lastPair = now
+		pairingID := randomToken()
+		pollingProof := randomToken()
+		console.mu.Unlock()
+		principal := authorization.Principal{ClientID: pairingID, PersonID: input.PersonID, DeviceID: input.DeviceID, Authenticated: true}
+		engine := console.authorityEngine()
+		if engine == nil {
+			failure(writer, 503, "authority_unavailable")
+			return
+		}
+		enrollment, challenge, err := engine.BeginEnrollment(principal, input.IssuerKeyID, ed25519.PublicKey(publicKey), audience)
+		if err != nil {
+			failure(writer, 409, "pairing_denied")
+			return
+		}
+		producerFingerprint, _ := metadata["fingerprint"].(string)
+		pending := &pairing{
+			ID: pairingID, Code: strings.ToUpper(randomToken()[:8]), Expires: now.Add(5 * time.Minute),
+			PersonID: input.PersonID, DeviceID: input.DeviceID, IssuerKeyID: enrollment.KeyID,
+			IssuerPublicKey:   base64.RawURLEncoding.EncodeToString(publicKey),
+			IssuerFingerprint: enrollment.Fingerprint, ProducerFingerprint: producerFingerprint, ProducerAudience: audience,
+			enrollmentID: enrollment.ID, challengeID: challenge.ID, challengeBytes: append([]byte(nil), challenge.Bytes...),
+			challengeB64: challenge.BytesB64, producerSignature: console.producer.signChallenge(challenge.Bytes), proof: pollingProof,
+		}
+		console.mu.Lock()
+		if console.pair != nil && console.pair.Expires.After(time.Now()) {
+			console.mu.Unlock()
+			_ = engine.ApproveEnrollment(enrollment.ID, enrollment.Fingerprint, false)
+			failure(writer, 429, "pairing_in_progress")
+			return
+		}
+		console.pair = pending
+		console.mu.Unlock()
+		reply(writer, 200, map[string]any{
+			"schema_version": 1, "pairing_id": pending.ID, "code": pending.Code, "proof": pending.proof,
+			"expires_at_unix_ms": pending.Expires.UnixMilli(), "person_id": pending.PersonID, "device_id": pending.DeviceID,
+			"producer":     metadata,
+			"issuer":       map[string]any{"key_id": pending.IssuerKeyID, "public_key": pending.IssuerPublicKey, "fingerprint": pending.IssuerFingerprint},
+			"challenge_id": pending.challengeID, "challenge_b64url": pending.challengeB64,
+			"producer_signature": base64.RawURLEncoding.EncodeToString(pending.producerSignature),
+		})
+		return
+	}
+	console.mu.Lock()
+	now := time.Now()
+	if console.pair == nil || digest(input.Proof) != digest(console.pair.proof) {
+		console.mu.Unlock()
 		failure(writer, 401, "pairing_expired")
 		return
 	}
+	if !console.pair.Expires.After(now) {
+		if request.URL.Path == "/pair/poll" {
+			pending := *console.pair
+			console.mu.Unlock()
+			reply(writer, 200, map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": "expired", "person_id": pending.PersonID, "device_id": pending.DeviceID})
+			return
+		}
+		console.mu.Unlock()
+		failure(writer, http.StatusConflict, "pairing_expired")
+		return
+	}
 	if request.URL.Path == "/pair/cancel" {
+		enrollmentID, fingerprint := console.pair.enrollmentID, console.pair.IssuerFingerprint
 		console.pair = nil
+		console.mu.Unlock()
+		if engine := console.authorityEngine(); engine != nil {
+			_ = engine.ApproveEnrollment(enrollmentID, fingerprint, false)
+		}
 		reply(writer, 200, map[string]bool{"ok": true})
 		return
 	}
-	if request.URL.Path == "/pair/poll" {
-		if console.pair.token == "" {
-			reply(writer, 200, map[string]string{"status": "pending"})
+	if request.URL.Path == "/pair/confirm" {
+		pending := *console.pair
+		console.mu.Unlock()
+		if input.SchemaVersion != 1 || input.PairingID != pending.ID || input.ChallengeID != pending.challengeID || input.KeyID != pending.IssuerKeyID || input.Signature == "" {
+			failure(writer, 400, "validation")
 			return
 		}
-		reply(writer, 200, map[string]string{"status": "approved", "token": console.pair.token, "client_id": console.pair.ID, "person_id": console.pair.PersonID, "device_id": console.pair.DeviceID})
+		engine := console.authorityEngine()
+		if engine == nil {
+			failure(writer, 503, "authority_unavailable")
+			return
+		}
+		principal := authorization.Principal{ClientID: pending.ID, PersonID: pending.PersonID, DeviceID: pending.DeviceID, Authenticated: true}
+		if err := engine.CompleteEnrollment(pending.enrollmentID, principal, authorization.Proof{ChallengeID: input.ChallengeID, KeyID: input.KeyID, Signature: input.Signature}); err != nil {
+			failure(writer, 403, "pairing_denied")
+			return
+		}
+		console.mu.Lock()
+		if console.pair == nil || console.pair.ID != pending.ID {
+			console.mu.Unlock()
+			_ = engine.ApproveEnrollment(pending.enrollmentID, pending.IssuerFingerprint, false)
+			failure(writer, 409, "pairing_expired")
+			return
+		}
+		console.pair.LocalConfirmed = true
+		console.pair.status = "local_confirmed"
+		console.mu.Unlock()
+		reply(writer, 200, map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": "local_confirmed"})
 		return
 	}
+	if request.URL.Path == "/pair/poll" {
+		pending := *console.pair
+		console.mu.Unlock()
+		status := pending.status
+		if status == "" {
+			status = "pending"
+		}
+		if pending.token != "" {
+			status = "approved"
+		}
+		response := map[string]any{"schema_version": 1, "pairing_id": pending.ID, "status": status, "person_id": pending.PersonID, "device_id": pending.DeviceID}
+		if pending.token != "" {
+			response["issuer"] = map[string]any{"key_id": pending.IssuerKeyID, "public_key": pending.IssuerPublicKey, "fingerprint": pending.IssuerFingerprint}
+			response["issuer_fingerprint"] = pending.IssuerFingerprint
+			response["client_id"], response["token"] = pending.ID, pending.token
+			if producer, err := console.producerMetadata(); err == nil {
+				response["producer"] = producer
+			}
+		}
+		reply(writer, 200, response)
+		return
+	}
+	console.mu.Unlock()
 	failure(writer, 404, "not_found")
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
 	if strings.HasPrefix(request.URL.Path, "/manage/api/authority/") {
 		console.manageAuthority(writer, request)
+		return
+	}
+	if request.URL.Path == "/manage/api/pair/approve" {
+		if request.Method != http.MethodPost {
+			failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		console.managePairApprove(writer, request)
+		return
+	}
+	if request.URL.Path == "/manage/api/pair/reject" {
+		if request.Method != http.MethodPost {
+			failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		console.managePairReject(writer, request)
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") && request.Method == "POST" {
@@ -914,22 +1110,6 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 	}
 	next := cloneState(console.state)
 	switch request.URL.Path {
-	case "/manage/api/pair/approve":
-		if console.pair == nil || console.pair.ID != input.ID || !console.pair.Expires.After(time.Now()) || console.pair.token != "" {
-			failure(writer, 409, "pairing_expired")
-			return
-		}
-		token := randomToken()
-		next.Clients[input.ID] = pairedClient{ClientID: input.ID, TokenHash: digest(token), PersonID: console.pair.PersonID, DeviceID: console.pair.DeviceID}
-		if console.save(next) != nil {
-			failure(writer, 500, "save_failed")
-			return
-		}
-		console.state, console.pair.token = next, token
-	case "/manage/api/pair/reject":
-		if console.pair != nil && console.pair.ID == input.ID {
-			console.pair = nil
-		}
 	case "/manage/api/client/delete":
 		removed, exists := next.Clients[input.ID]
 		if !exists {

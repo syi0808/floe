@@ -3,6 +3,9 @@ package console
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +25,8 @@ import (
 
 const fixturePersonID = "00000000-0000-4000-8000-000000000001"
 const fixtureDeviceID = "fixture-device"
+
+var pairingTestKeys sync.Map
 
 type memoryVault struct {
 	values      map[string]string
@@ -353,12 +359,39 @@ func (fixture *fixture) pair() (string, string) {
 	if pending["status"] != "pending" || pending["token"] != nil {
 		fixture.test.Fatal("unapproved credential issued")
 	}
-	fixture.value(fixture.call("POST", "/manage/api/pair/approve", map[string]any{"id": started["id"]}, ""))
+	fixture.value(fixture.call("POST", "/manage/api/pair/approve", map[string]string{"id": started["id"].(string)}, ""))
 	approved := fixture.value(fixture.call("POST", "/pair/poll", map[string]string{"proof": proof}, ""))
 	if approved["person_id"] != fixturePersonID || approved["device_id"] != fixtureDeviceID {
 		fixture.test.Fatalf("pairing lost identity scope: %#v", approved)
 	}
 	return approved["client_id"].(string), approved["token"].(string)
+}
+
+func pairStartBody(personID, deviceID string) map[string]any {
+	keyID, err := newConnectionID()
+	if err != nil {
+		panic(err)
+	}
+	privateKey := ed25519.NewKeyFromSeed(pairingTestSeed(keyID))
+	pairingTestKeys.Store(keyID, privateKey)
+	return map[string]any{
+		"schema_version": 1, "person_id": personID, "device_id": deviceID,
+		"issuer_key_id":     keyID,
+		"issuer_public_key": base64.RawURLEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)),
+	}
+}
+
+func pairingTestSeed(keyID string) []byte {
+	seed := sha256.Sum256([]byte("pairing-test:" + keyID))
+	return seed[:]
+}
+
+func pairIssuerPrivateKey(keyID string) ed25519.PrivateKey {
+	value, ok := pairingTestKeys.Load(keyID)
+	if !ok {
+		panic("pairing test key missing")
+	}
+	return value.(ed25519.PrivateKey)
 }
 
 func (fixture *fixture) ownConnector(connectorID string) {
@@ -768,10 +801,7 @@ func TestPairingRejectsMissingAndDifferentPersonIdentity(test *testing.T) {
 		test.Fatal(err)
 	}
 	fixture.console = restarted
-	response := fixture.call("POST", "/pair/start", map[string]string{
-		"person_id": "00000000-0000-4000-8000-000000000002",
-		"device_id": "other-device",
-	}, "")
+	response := fixture.call("POST", "/pair/start", pairStartBody("00000000-0000-4000-8000-000000000002", "other-device"), "")
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "person_mismatch") {
 		test.Fatalf("different person accepted: %d %s", response.Code, response.Body.String())
 	}
@@ -1005,8 +1035,8 @@ func TestCredentialFailureIsAtomicAndRedacted(test *testing.T) {
 
 func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 	fixture := setup(test)
-	started := fixture.value(fixture.call("POST", "/pair/start", map[string]string{"person_id": fixturePersonID, "device_id": fixtureDeviceID}, ""))
-	if fixture.call("POST", "/pair/start", map[string]string{"person_id": fixturePersonID, "device_id": fixtureDeviceID}, "").Code != 429 {
+	started := fixture.value(fixture.call("POST", "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), ""))
+	if fixture.call("POST", "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), "").Code != 429 {
 		test.Fatal("pending pairing overwritten")
 	}
 	if fixture.call("POST", "/pair/poll", map[string]string{"proof": "wrong"}, "").Code != 401 {
@@ -1017,11 +1047,12 @@ func TestExpiredRejectedAndDuplicatePairing(test *testing.T) {
 		test.Fatal("poll proof leaked to management response")
 	}
 	fixture.console.pair.Expires = time.Now().Add(-time.Second)
-	if fixture.call("POST", "/manage/api/pair/approve", map[string]any{"id": started["id"]}, "").Code != 409 {
+	if fixture.call("POST", "/manage/api/pair/approve", map[string]any{"schema_version": 1, "pairing_id": started["pairing_id"], "issuer_fingerprint": "wrong"}, "").Code != 409 {
 		test.Fatal("expired request approved")
 	}
-	if fixture.call("POST", "/pair/poll", map[string]any{"proof": started["proof"]}, "").Code != 401 {
-		test.Fatal("expired proof accepted")
+	expired := fixture.call("POST", "/pair/poll", map[string]any{"proof": started["proof"]}, "")
+	if expired.Code != 200 || !strings.Contains(expired.Body.String(), `"status":"expired"`) {
+		test.Fatalf("expired proof did not report status: %d %s", expired.Code, expired.Body.String())
 	}
 }
 
