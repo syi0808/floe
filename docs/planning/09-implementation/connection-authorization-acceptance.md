@@ -37,3 +37,12 @@ require separate explicit consent and disposable resources; synthetic tests do n
 
 See [delivery plan](connection-authorization-delivery.md) for reviewed commits and validation counts,
 and [runtime design](connection-authorization-runtime.md) for the complete scenario matrix.
+
+## Audited storage boundaries
+
+`ExpertPrivateState` currently contains only schema/revision, invocation count and last invocation
+identity. It does not retain a source-derived text/blob or feed such a blob to the model. Do not add
+a new private-state payload mechanism merely to implement a resolver for it. Current lineage work
+must instead cover the actual session delegation/result/proposal bytes and their receipt transaction.
+The metadata-only private state remains a CAS/deduplication mechanism, never an authorization proof.
+Any future source-bearing private state requires dependency coverage before reuse.
