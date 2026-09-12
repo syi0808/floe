@@ -114,7 +114,9 @@ impl FloeCore {
             calendars.sort();
             if binding.provider != views.grant().provider
                 || binding.device_id != views.grant().device_id
-                || binding.calendar_ids != calendars
+                || calendars
+                    .iter()
+                    .any(|calendar_id| !binding.calendar_ids.contains(calendar_id))
             {
                 return Err(AgentFailure::CapabilityDenied);
             }
@@ -376,7 +378,12 @@ struct GrantBoundCalendarAccess<'host, Keys, Access> {
     vault: &'host EncryptedAgentVault<Keys>,
     access: &'host Access,
     grant: CalendarTimelineGrant,
-    grant_pin: Mutex<Option<floe_domain::GrantAuthority>>,
+    grant_pin: Mutex<
+        Option<(
+            floe_domain::GrantAuthority,
+            floe_domain::ConsumerPolicyAuthority,
+        )>,
+    >,
     remote_processing: bool,
 }
 
@@ -386,12 +393,18 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
     async fn authorize_native(
         &self,
         request: &CalendarReadAccessRequest,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<
+        Option<(
+            floe_domain::GrantAuthority,
+            floe_domain::ConsumerPolicyAuthority,
+        )>,
+        AgentFailure,
+    > {
         if !matches!(
             self.grant.provider,
             CalendarProvider::EventKit | CalendarProvider::Android
         ) {
-            return Ok(());
+            return Ok(None);
         }
         if self.remote_processing {
             return Err(AgentFailure::CapabilityDenied);
@@ -399,7 +412,10 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
         if request.person_id != self.grant.person_id
             || request.provider != self.grant.provider
             || request.device_id != self.grant.device_id
-            || request.calendar_ids != self.grant.calendar_ids
+            || request
+                .calendar_ids
+                .iter()
+                .any(|calendar_id| !self.grant.calendar_ids.contains(calendar_id))
         {
             return Err(AgentFailure::CapabilityDenied);
         }
@@ -460,14 +476,36 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess>
                 ProcessingRestriction::LocalOnly,
             )
             .await?;
+        let grant_pin = self
+            .grant_pin
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if grant_pin.is_some_and(|(authority, policy)| {
+            authority != admission.authority || policy != admission.consumer_policy
+        }) {
+            return Err(AgentFailure::StaleContext);
+        }
+        Ok(Some((admission.authority, admission.consumer_policy)))
+    }
+
+    fn pin_native(
+        &self,
+        candidate: Option<(
+            floe_domain::GrantAuthority,
+            floe_domain::ConsumerPolicyAuthority,
+        )>,
+    ) -> Result<(), AgentFailure> {
+        let Some(candidate) = candidate else {
+            return Ok(());
+        };
         let mut grant_pin = self
             .grant_pin
             .lock()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        if grant_pin.is_some_and(|authority| authority != admission.authority) {
+        if grant_pin.is_some_and(|pin| pin != candidate) {
             return Err(AgentFailure::StaleContext);
         }
-        *grant_pin = Some(admission.authority);
+        *grant_pin = Some(candidate);
         Ok(())
     }
 }
@@ -487,14 +525,42 @@ impl<Keys: VaultKeyProvider, Access: CalendarReadAccess> CalendarReadAccess
         &self,
         request: CalendarObserveRequest,
     ) -> Result<Option<CalendarObservation>, AgentFailure> {
-        self.access.observe(request).await
+        let candidate = self
+            .authorize_native(&CalendarReadAccessRequest {
+                person_id: request.person_id,
+                device_id: request.device_id.clone(),
+                provider: request.provider,
+                calendar_ids: request.calendar_ids.clone(),
+                deadline: request.deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?;
+        let observed = self.access.observe(request).await?;
+        if observed.is_some() {
+            self.pin_native(candidate)?;
+        }
+        Ok(observed)
     }
 
     async fn observe_projected(
         &self,
         request: CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
-        self.access.observe_projected(request).await
+        let candidate = self
+            .authorize_native(&CalendarReadAccessRequest {
+                person_id: request.person_id,
+                device_id: request.device_id.clone(),
+                provider: request.provider,
+                calendar_ids: request.calendar_ids.clone(),
+                deadline: request.deadline,
+                cancellation: request.cancellation.clone(),
+            })
+            .await?;
+        let observed = self.access.observe_projected(request).await?;
+        if observed.is_some() {
+            self.pin_native(candidate)?;
+        }
+        Ok(observed)
     }
 }
 
@@ -531,14 +597,23 @@ impl<
     async fn validate(&self) -> Result<(), AgentFailure> {
         self.check_running()?;
         let validation = async {
-            let registry = self
+            let snapshot = self
                 .vault
                 .expert_registry()
                 .await?
                 .ok_or(AgentFailure::CapabilityDenied)?;
-            if registry.revision != self.revision.load(Ordering::Acquire) {
-                return Err(AgentFailure::Conflict);
-            }
+            let registry = AgentRegistry::restore(snapshot, self.vault.registry_instance_id())?;
+            registry
+                .expert_card(
+                    self.views.grant().person_id,
+                    self.assignment_id,
+                    registry.revision(),
+                    self.views.grant().handle,
+                )
+                .map_err(|failure| match failure {
+                    AgentFailure::CapabilityDenied => AgentFailure::Conflict,
+                    failure => failure,
+                })?;
             self.views
                 .revalidate(self.deadline, self.cancellation.clone())
                 .await?;
@@ -598,11 +673,13 @@ impl<
             .snapshot();
         let committed = self
             .vault
-            .commit_expert_session_with_hook(
+            .commit_expert_session_scoped_with_hook(
                 session,
                 previous_revision,
                 self.revision.load(Ordering::Acquire),
                 &staged,
+                self.assignment_id,
+                self.views.grant().handle,
                 async {
                     if dependent {
                         self.views

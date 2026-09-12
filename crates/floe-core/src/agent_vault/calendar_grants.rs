@@ -1,13 +1,15 @@
 use std::num::NonZeroU64;
 
+use floe_agent::AgentRegistry;
 use floe_agent::{
     CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
     CalendarExpertSetupReceipt, RegistrySnapshot,
 };
 use floe_domain::{
-    CalendarProvider, ConnectorId, DataAccessGrant, ExecutionOwnerId, GrantAuthority,
-    GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope,
-    GrantSourceBinding, GrantState, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    CalendarProvider, ConnectorId, ConsumerPolicyAuthority, DataAccessGrant, ExecutionOwnerId,
+    GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+    GrantScope, GrantSourceBinding, GrantState, ProcessingRestriction, ResourceHandle,
+    SourceAuthority,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Row, transaction::TransactionBehavior};
@@ -15,7 +17,7 @@ use uuid::Uuid;
 
 use super::*;
 
-const CALENDAR_GRANT_SCHEMA_VERSION: i64 = 1;
+const CALENDAR_GRANT_SCHEMA_VERSION: i64 = 2;
 const MAX_CALENDAR_GRANT_MAPPINGS: usize = 128;
 const MAX_MAPPING_PAYLOAD_BYTES: usize = 16 * 1024;
 
@@ -26,6 +28,7 @@ pub struct CalendarGrantAdmission {
     pub source: GrantSourceBinding,
     pub scope: GrantScope,
     pub grant_scope: GrantScope,
+    pub consumer_policy: ConsumerPolicyAuthority,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,6 +38,11 @@ struct CalendarGrantMapping {
     view_handle: Uuid,
     grant_id: GrantId,
     source: GrantSourceBinding,
+    expert_assignment_id: Uuid,
+    tool_assignment_id: Uuid,
+    expert_installation_id: Uuid,
+    tool_installation_id: Uuid,
+    consumer_policy: ConsumerPolicyAuthority,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -60,21 +68,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let result = async {
                 transaction
                     .execute(
-                        "CREATE TABLE calendar_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+                        "CREATE TABLE calendar_grant_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
                         (),
                     )
                     .await
                     .map_err(storage)?;
                 transaction
                     .execute(
-                        "INSERT INTO calendar_grant_schema (id, version) VALUES (1, 1)",
+                        "INSERT INTO calendar_grant_schema (id, version) VALUES (1, 2)",
                         (),
                     )
                     .await
                     .map_err(storage)?;
                 transaction
                     .execute(
-                        "CREATE TABLE calendar_grant_mappings (setup_id TEXT PRIMARY KEY, view_handle TEXT NOT NULL UNIQUE, grant_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, payload TEXT NOT NULL)",
+                        "CREATE TABLE calendar_grant_mappings (setup_id TEXT PRIMARY KEY, view_handle TEXT NOT NULL UNIQUE, grant_id TEXT NOT NULL UNIQUE, person_id TEXT NOT NULL, connection_id TEXT NOT NULL, connector TEXT NOT NULL, execution_owner TEXT NOT NULL, source_incarnation TEXT NOT NULL, source_epoch INTEGER NOT NULL, expert_assignment_id TEXT NOT NULL, tool_assignment_id TEXT NOT NULL, expert_installation_id TEXT NOT NULL, tool_installation_id TEXT NOT NULL, policy_incarnation TEXT NOT NULL, policy_epoch INTEGER NOT NULL, payload TEXT NOT NULL)",
                         (),
                     )
                     .await
@@ -120,10 +128,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::VaultUnavailable);
         }
         let mut mappings = connection
-            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, payload FROM calendar_grant_mappings", ())
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings", ())
             .await
             .map_err(storage)?;
         let mut count = 0;
+        let mut decoded_mappings = Vec::new();
         while let Some(row) = mappings.next().await.map_err(storage)? {
             count += 1;
             if count > MAX_CALENDAR_GRANT_MAPPINGS {
@@ -139,6 +148,37 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(|_| AgentFailure::VaultUnavailable)?;
             if grant.authority_owner() != self.vault_id || grant.source() != &mapping.source {
                 return Err(AgentFailure::VaultUnavailable);
+            }
+            decoded_mappings.push(mapping);
+        }
+        if !decoded_mappings.is_empty() {
+            let registry_snapshot = self
+                .expert_registry()
+                .await?
+                .ok_or(AgentFailure::VaultUnavailable)?;
+            let registry = AgentRegistry::restore(registry_snapshot, self.vault_id)
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            let snapshot = registry.snapshot();
+            for mapping in decoded_mappings {
+                let setup = snapshot
+                    .calendar_setups
+                    .iter()
+                    .find(|setup| setup.setup_id == mapping.setup_id)
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                let view = snapshot
+                    .calendar_views
+                    .iter()
+                    .find(|view| view.handle == mapping.view_handle)
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                if setup.view_handle != mapping.view_handle
+                    || setup.expert_assignment_id != mapping.expert_assignment_id
+                    || setup.tool_assignment_id != mapping.tool_assignment_id
+                    || setup.expert_installation_id != mapping.expert_installation_id
+                    || setup.tool_installation_id != mapping.tool_installation_id
+                    || view.person_id != self.person_id
+                {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
             }
         }
         Ok(())
@@ -169,7 +209,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND view_handle = ? AND person_id = ?",
+                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND view_handle = ? AND person_id = ?",
                 (setup_id.to_string(), view_handle.to_string(), self.person_id.to_string()),
             )
             .await
@@ -203,6 +243,55 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::AccessReviewRequired);
         }
+        let registry_snapshot = self
+            .expert_registry()
+            .await?
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let registry = AgentRegistry::restore(registry_snapshot, self.vault_id)?;
+        let registry_snapshot = registry.snapshot();
+        let setup = registry_snapshot
+            .calendar_setups
+            .iter()
+            .find(|setup| setup.setup_id == mapping.setup_id)
+            .ok_or(AgentFailure::AccessReviewRequired)?;
+        let view = registry
+            .calendar_view(self.person_id, mapping.view_handle)
+            .map_err(|_| AgentFailure::AccessReviewRequired)?;
+        let assignments = &registry_snapshot.assignments;
+        let installations = &registry_snapshot.installations;
+        let expert_assignment = assignments
+            .iter()
+            .find(|assignment| assignment.id == mapping.expert_assignment_id);
+        let tool_assignment = assignments
+            .iter()
+            .find(|assignment| assignment.id == mapping.tool_assignment_id);
+        let expert_installation = installations
+            .iter()
+            .find(|installation| installation.id == mapping.expert_installation_id);
+        let tool_installation = installations
+            .iter()
+            .find(|installation| installation.id == mapping.tool_installation_id);
+        if setup.view_handle != mapping.view_handle
+            || setup.expert_assignment_id != mapping.expert_assignment_id
+            || setup.tool_assignment_id != mapping.tool_assignment_id
+            || setup.expert_installation_id != mapping.expert_installation_id
+            || setup.tool_installation_id != mapping.tool_installation_id
+            || view.provider != provider
+            || view.device_id != device_id
+            || calendar_ids
+                .iter()
+                .any(|calendar_id| !view.calendar_ids.contains(calendar_id))
+            || expert_assignment.is_none_or(|assignment| {
+                assignment.person_id != self.person_id || !assignment.enabled
+            })
+            || tool_assignment.is_none_or(|assignment| {
+                assignment.person_id != self.person_id || !assignment.enabled
+            })
+            || expert_installation.is_none_or(|installation| !installation.enabled)
+            || tool_installation.is_none_or(|installation| !installation.enabled)
+        {
+            return Err(AgentFailure::AccessReviewRequired);
+        }
         let requested_scope =
             calendar_scope(calendar_ids.to_vec(), consumer.clone(), purpose, processing)?;
         if requested_scope
@@ -226,6 +315,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             source: grant.source().clone(),
             scope: requested_scope,
             grant_scope: grant.scope().clone(),
+            consumer_policy: mapping.consumer_policy,
         })
     }
 
@@ -239,7 +329,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let connection = self.connection()?;
         let mut rows = connection
             .query(
-                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?",
+                "SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?",
                 (setup_id.to_string(), self.person_id.to_string()),
             )
             .await
@@ -293,7 +383,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             let previous_in_transaction = self.registry_on(&transaction).await?;
             if previous_in_transaction
@@ -447,8 +537,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 snapshot,
             )
             .await?;
-            self.update_calendar_mapping(&transaction, &mapping, &updated, source, scope)
-                .await?;
+            let consumer_policy = if updated != current {
+                mapping
+                    .consumer_policy
+                    .advance()
+                    .ok_or(AgentFailure::BudgetExceeded)?
+            } else {
+                mapping.consumer_policy
+            };
+            self.update_calendar_mapping(
+                &transaction,
+                &mapping,
+                &updated,
+                source,
+                scope,
+                consumer_policy,
+            )
+            .await?;
             self.check_access()?;
             check()?;
             Ok(())
@@ -469,6 +574,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             view_handle: setup.view_handle,
             grant_id: grant.id(),
             source: grant.source().clone(),
+            expert_assignment_id: setup.expert_assignment_id,
+            tool_assignment_id: setup.tool_assignment_id,
+            expert_installation_id: setup.expert_installation_id,
+            tool_installation_id: setup.tool_installation_id,
+            consumer_policy: ConsumerPolicyAuthority::new(),
         };
         let payload =
             serde_json::to_string(&mapping).map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -477,7 +587,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         transaction
             .execute(
-                "INSERT INTO calendar_grant_mappings (setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO calendar_grant_mappings (setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 mapping_values(&mapping, payload)?,
             )
             .await
@@ -492,19 +602,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         grant: &DataAccessGrant,
         source: GrantSourceBinding,
         _scope: GrantScope,
+        consumer_policy: ConsumerPolicyAuthority,
     ) -> Result<(), AgentFailure> {
         let mapping = CalendarGrantMapping {
             setup_id: previous.setup_id,
             view_handle: previous.view_handle,
             grant_id: grant.id(),
             source,
+            expert_assignment_id: previous.expert_assignment_id,
+            tool_assignment_id: previous.tool_assignment_id,
+            expert_installation_id: previous.expert_installation_id,
+            tool_installation_id: previous.tool_installation_id,
+            consumer_policy,
         };
         let payload =
             serde_json::to_string(&mapping).map_err(|_| AgentFailure::StorageUnavailable)?;
         let changed = transaction
             .execute(
-                "UPDATE calendar_grant_mappings SET grant_id = ?, person_id = ?, connection_id = ?, connector = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, payload = ? WHERE setup_id = ? AND person_id = ? AND grant_id = ?",
-                (
+                "UPDATE calendar_grant_mappings SET grant_id = ?, person_id = ?, connection_id = ?, connector = ?, execution_owner = ?, source_incarnation = ?, source_epoch = ?, expert_assignment_id = ?, tool_assignment_id = ?, expert_installation_id = ?, tool_installation_id = ?, policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE setup_id = ? AND person_id = ? AND grant_id = ?",
+                turso::params![
                     mapping.grant_id.as_uuid().to_string(),
                     self.person_id.to_string(),
                     mapping.source.connection_id().as_str().to_owned(),
@@ -512,11 +628,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     mapping.source.execution_owner().as_str().to_string(),
                     mapping.source.source_authority().incarnation().to_string(),
                     i64::try_from(mapping.source.source_authority().epoch().get()).map_err(|_| AgentFailure::Conflict)?,
+                    mapping.expert_assignment_id.to_string(),
+                    mapping.tool_assignment_id.to_string(),
+                    mapping.expert_installation_id.to_string(),
+                    mapping.tool_installation_id.to_string(),
+                    mapping.consumer_policy.incarnation().to_string(),
+                    i64::try_from(mapping.consumer_policy.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
                     payload,
                     mapping.setup_id.to_string(),
                     self.person_id.to_string(),
                     previous.grant_id.as_uuid().to_string(),
-                ),
+                ],
             )
             .await
             .map_err(storage)?;
@@ -532,7 +654,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         setup_id: Uuid,
     ) -> Result<CalendarGrantMapping, AgentFailure> {
         let mut rows = transaction
-            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?", (setup_id.to_string(), self.person_id.to_string()))
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE setup_id = ? AND person_id = ?", (setup_id.to_string(), self.person_id.to_string()))
             .await
             .map_err(storage)?;
         let row = rows
@@ -542,6 +664,144 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .ok_or(AgentFailure::AccessReviewRequired)?;
         decode_mapping(&row)
     }
+
+    pub(super) async fn bump_calendar_policies_for_registry_change(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        previous: &RegistrySnapshot,
+        next: &RegistrySnapshot,
+    ) -> Result<(), AgentFailure> {
+        let mut rows = transaction
+            .query("SELECT setup_id, view_handle, grant_id, person_id, connection_id, connector, execution_owner, source_incarnation, source_epoch, expert_assignment_id, tool_assignment_id, expert_installation_id, tool_installation_id, policy_incarnation, policy_epoch, payload FROM calendar_grant_mappings WHERE person_id = ?", [self.person_id.to_string()])
+            .await
+            .map_err(storage)?;
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let mapping = decode_mapping(&row)?;
+            if registry_policy_identity_changed(previous, next, &mapping) {
+                let policy = mapping
+                    .consumer_policy
+                    .advance()
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                let mut updated = mapping.clone();
+                updated.consumer_policy = policy;
+                let payload = serde_json::to_string(&updated)
+                    .map_err(|_| AgentFailure::StorageUnavailable)?;
+                if payload.len() > MAX_MAPPING_PAYLOAD_BYTES {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let changed = transaction
+                    .execute(
+                        "UPDATE calendar_grant_mappings SET policy_incarnation = ?, policy_epoch = ?, payload = ? WHERE setup_id = ? AND person_id = ?",
+                        (
+                            policy.incarnation().to_string(),
+                            i64::try_from(policy.epoch().get())
+                                .map_err(|_| AgentFailure::Conflict)?,
+                            payload,
+                            mapping.setup_id.to_string(),
+                            self.person_id.to_string(),
+                        ),
+                    )
+                    .await
+                    .map_err(storage)?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn registry_policy_identity_changed(
+    previous: &RegistrySnapshot,
+    next: &RegistrySnapshot,
+    mapping: &CalendarGrantMapping,
+) -> bool {
+    let previous_setup = previous
+        .calendar_setups
+        .iter()
+        .find(|setup| setup.setup_id == mapping.setup_id);
+    let next_setup = next
+        .calendar_setups
+        .iter()
+        .find(|setup| setup.setup_id == mapping.setup_id);
+    let Some(previous_setup) = previous_setup else {
+        return true;
+    };
+    let Some(next_setup) = next_setup else {
+        return true;
+    };
+    if previous_setup.person_id != next_setup.person_id
+        || previous_setup.view_handle != next_setup.view_handle
+        || previous_setup.tool_installation_id != next_setup.tool_installation_id
+        || previous_setup.expert_installation_id != next_setup.expert_installation_id
+        || previous_setup.tool_assignment_id != next_setup.tool_assignment_id
+        || previous_setup.expert_assignment_id != next_setup.expert_assignment_id
+        || previous_setup.connection_scope != next_setup.connection_scope
+        || previous_setup.source_authority != next_setup.source_authority
+    {
+        return true;
+    }
+    let previous_view = previous
+        .calendar_views
+        .iter()
+        .find(|view| view.handle == mapping.view_handle);
+    let next_view = next
+        .calendar_views
+        .iter()
+        .find(|view| view.handle == mapping.view_handle);
+    if previous_view.map(|view| view.provider) != next_view.map(|view| view.provider)
+        || previous_view.map(|view| &view.device_id) != next_view.map(|view| &view.device_id)
+        || previous_view.map(|view| &view.calendar_ids) != next_view.map(|view| &view.calendar_ids)
+        || previous_view.map(|view| view.connection_scope)
+            != next_view.map(|view| view.connection_scope)
+        || previous_view.map(|view| view.source_authority)
+            != next_view.map(|view| view.source_authority)
+        || previous_view.map(|view| view.enabled) != next_view.map(|view| view.enabled)
+    {
+        return true;
+    }
+    for assignment_id in [mapping.expert_assignment_id, mapping.tool_assignment_id] {
+        let previous_assignment = previous
+            .assignments
+            .iter()
+            .find(|assignment| assignment.id == assignment_id);
+        let next_assignment = next
+            .assignments
+            .iter()
+            .find(|assignment| assignment.id == assignment_id);
+        if previous_assignment.map(|assignment| assignment.person_id)
+            != next_assignment.map(|assignment| assignment.person_id)
+            || previous_assignment.map(|assignment| assignment.installation_id)
+                != next_assignment.map(|assignment| assignment.installation_id)
+            || previous_assignment.map(|assignment| assignment.enabled)
+                != next_assignment.map(|assignment| assignment.enabled)
+            || previous_assignment.map(|assignment| &assignment.granted_tool_assignments)
+                != next_assignment.map(|assignment| &assignment.granted_tool_assignments)
+            || previous_assignment.map(|assignment| &assignment.granted_view_handles)
+                != next_assignment.map(|assignment| &assignment.granted_view_handles)
+        {
+            return true;
+        }
+    }
+    for installation_id in [mapping.expert_installation_id, mapping.tool_installation_id] {
+        let previous_installation = previous
+            .installations
+            .iter()
+            .find(|installation| installation.id == installation_id);
+        let next_installation = next
+            .installations
+            .iter()
+            .find(|installation| installation.id == installation_id);
+        if previous_installation.map(|installation| installation.enabled)
+            != next_installation.map(|installation| installation.enabled)
+            || previous_installation.map(|installation| &installation.package)
+                != next_installation.map(|installation| &installation.package)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_native_provider(provider: CalendarProvider) -> bool {
@@ -650,6 +910,12 @@ fn mapping_values(
         String,
         i64,
         String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        String,
     ),
     AgentFailure,
 > {
@@ -664,12 +930,18 @@ fn mapping_values(
         mapping.source.source_authority().incarnation().to_string(),
         i64::try_from(mapping.source.source_authority().epoch().get())
             .map_err(|_| AgentFailure::Conflict)?,
+        mapping.expert_assignment_id.to_string(),
+        mapping.tool_assignment_id.to_string(),
+        mapping.expert_installation_id.to_string(),
+        mapping.tool_installation_id.to_string(),
+        mapping.consumer_policy.incarnation().to_string(),
+        i64::try_from(mapping.consumer_policy.epoch().get()).map_err(|_| AgentFailure::Conflict)?,
         payload,
     ))
 }
 
 fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
-    let payload = row.get::<String>(9).map_err(storage)?;
+    let payload = row.get::<String>(15).map_err(storage)?;
     if payload.len() > MAX_MAPPING_PAYLOAD_BYTES {
         return Err(AgentFailure::BudgetExceeded);
     }
@@ -701,6 +973,21 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
             .map_err(|_| AgentFailure::VaultUnavailable)?,
     )
     .ok_or(AgentFailure::VaultUnavailable)?;
+    let expert_assignment_id = Uuid::parse_str(&row.get::<String>(9).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let tool_assignment_id = Uuid::parse_str(&row.get::<String>(10).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let expert_installation_id = Uuid::parse_str(&row.get::<String>(11).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let tool_installation_id = Uuid::parse_str(&row.get::<String>(12).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let policy_incarnation = Uuid::parse_str(&row.get::<String>(13).map_err(storage)?)
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let policy_epoch = NonZeroU64::new(
+        u64::try_from(row.get::<i64>(14).map_err(storage)?)
+            .map_err(|_| AgentFailure::VaultUnavailable)?,
+    )
+    .ok_or(AgentFailure::VaultUnavailable)?;
     let indexed_source = GrantSourceBinding::try_new(
         person_id,
         connection_id,
@@ -714,6 +1001,13 @@ fn decode_mapping(row: &Row) -> Result<CalendarGrantMapping, AgentFailure> {
         || mapping.view_handle != view_handle
         || mapping.grant_id != grant_id
         || mapping.source != indexed_source
+        || mapping.expert_assignment_id != expert_assignment_id
+        || mapping.tool_assignment_id != tool_assignment_id
+        || mapping.expert_installation_id != expert_installation_id
+        || mapping.tool_installation_id != tool_installation_id
+        || mapping.consumer_policy
+            != ConsumerPolicyAuthority::from_parts(policy_incarnation, policy_epoch)
+                .ok_or(AgentFailure::VaultUnavailable)?
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -839,11 +1133,88 @@ mod tests {
             .unwrap();
         assert_eq!(admission.scope.resources().len(), 1);
         assert_eq!(admission.grant_scope.resources().len(), 2);
-        let paused = vault
+        let stable_policy = admission.consumer_policy;
+        let retry = vault
             .configure_calendar_access_with_connection(
                 CalendarAccessConfiguration {
                     instance_id: request.instance_id,
                     expected_revision: active.registry.revision,
+                    setup_id: installed.setup.setup_id,
+                    change: CalendarAccessChange::SetEnabled { enabled: true },
+                },
+                "opaque-eventkit-connection".into(),
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert!(retry.registry.revision > active.registry.revision);
+        let retry_admission = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry_admission.consumer_policy, stable_policy);
+        let disabled = vault
+            .configure_registry(
+                floe_agent::RegistryConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: retry.registry.revision,
+                    target: floe_agent::RegistryConfigurationTarget::Assignment {
+                        id: installed.setup.expert_assignment_id,
+                        enabled: false,
+                    },
+                },
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let reenabled = vault
+            .configure_registry(
+                floe_agent::RegistryConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: disabled.revision,
+                    target: floe_agent::RegistryConfigurationTarget::Assignment {
+                        id: installed.setup.expert_assignment_id,
+                        enabled: true,
+                    },
+                },
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let policy_aba = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &["home".into()],
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+            )
+            .await
+            .unwrap();
+        assert_ne!(policy_aba.consumer_policy, stable_policy);
+        let paused = vault
+            .configure_calendar_access_with_connection(
+                CalendarAccessConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: reenabled.revision,
                     setup_id: installed.setup.setup_id,
                     change: CalendarAccessChange::SetEnabled { enabled: false },
                 },
@@ -870,11 +1241,41 @@ mod tests {
                 .await,
             Err(AgentFailure::AccessReviewRequired)
         );
-        vault
+        let reactivated = vault
             .configure_calendar_access_with_connection(
                 CalendarAccessConfiguration {
                     instance_id: request.instance_id,
                     expected_revision: paused.registry.revision,
+                    setup_id: installed.setup.setup_id,
+                    change: CalendarAccessChange::SetEnabled { enabled: true },
+                },
+                "opaque-eventkit-connection".into(),
+                floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        let reactivated_admission = vault
+            .authorize_calendar_grant(
+                installed.setup.setup_id,
+                installed.setup.view_handle,
+                "opaque-eventkit-connection",
+                CalendarProvider::EventKit,
+                "test-device",
+                &request.calendar_ids,
+                source_authority,
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("calendar.expert").unwrap(),
+                ProcessingRestriction::LocalOnly,
+            )
+            .await
+            .unwrap();
+        assert_ne!(reactivated_admission.consumer_policy, stable_policy);
+        vault
+            .configure_calendar_access_with_connection(
+                CalendarAccessConfiguration {
+                    instance_id: request.instance_id,
+                    expected_revision: reactivated.registry.revision,
                     setup_id: installed.setup.setup_id,
                     change: CalendarAccessChange::Remove {},
                 },

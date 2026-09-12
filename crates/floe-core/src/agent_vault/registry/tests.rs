@@ -771,6 +771,58 @@ async fn failed_paired_commit_rolls_back_state_and_receipt_then_retry_is_single(
 }
 
 #[tokio::test]
+async fn scoped_commit_rejects_a_competing_private_state_update() {
+    let fixture = Fixture::new().await;
+    let baseline = fixture.prepare().await;
+    let (first_previous, first_next, first_staged) = fixture.stage(Uuid::new_v4()).await;
+    let (second_previous, second_next, second_staged) = fixture.stage(Uuid::new_v4()).await;
+    fixture
+        .vault
+        .commit_expert_session(
+            &first_next,
+            first_previous.revision,
+            baseline.revision,
+            &first_staged,
+        )
+        .await
+        .unwrap();
+    let AgentMessage::Delegation { task, .. } = second_next.messages.last().unwrap() else {
+        panic!("missing expert result");
+    };
+    let result: ExpertResult = serde_json::from_str(
+        task.data_part(EXPERT_RESULT_MEDIA_TYPE)
+            .expect("missing expert result payload"),
+    )
+    .unwrap();
+    assert_eq!(
+        fixture
+            .vault
+            .commit_expert_session_scoped_with_hook(
+                &second_next,
+                second_previous.revision,
+                baseline.revision,
+                &second_staged,
+                result.assignment_id,
+                result.view_handle,
+                std::future::ready(Ok(())),
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let current = fixture.vault.expert_registry().await.unwrap().unwrap();
+    assert_eq!(
+        current
+            .assignments
+            .iter()
+            .find(|assignment| assignment.id == result.assignment_id)
+            .unwrap()
+            .private_state
+            .revision,
+        1
+    );
+}
+
+#[tokio::test]
 async fn dropping_a_transaction_after_registry_write_cannot_leave_half_a_commit() {
     let fixture = Fixture::new().await;
     let baseline = fixture.prepare().await;

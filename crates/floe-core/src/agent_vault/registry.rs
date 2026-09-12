@@ -5,6 +5,73 @@ use super::*;
 
 const MAX_REGISTRY_BYTES: usize = 262_144;
 
+fn expert_identity_matches(
+    current: &RegistrySnapshot,
+    staged: &RegistrySnapshot,
+    result: &ExpertResult,
+) -> bool {
+    let current_assignment = current
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == result.assignment_id);
+    let staged_assignment = staged
+        .assignments
+        .iter()
+        .find(|assignment| assignment.id == result.assignment_id);
+    let (Some(current_assignment), Some(staged_assignment)) =
+        (current_assignment, staged_assignment)
+    else {
+        return false;
+    };
+    if current_assignment.person_id != staged_assignment.person_id
+        || current_assignment.installation_id != staged_assignment.installation_id
+        || current_assignment.enabled != staged_assignment.enabled
+        || current_assignment.granted_tool_assignments != staged_assignment.granted_tool_assignments
+        || current_assignment.granted_view_handles != staged_assignment.granted_view_handles
+    {
+        return false;
+    }
+    let current_installation = current
+        .installations
+        .iter()
+        .find(|installation| installation.id == current_assignment.installation_id);
+    let staged_installation = staged
+        .installations
+        .iter()
+        .find(|installation| installation.id == staged_assignment.installation_id);
+    let (Some(current_installation), Some(staged_installation)) =
+        (current_installation, staged_installation)
+    else {
+        return false;
+    };
+    if current_installation.package != staged_installation.package
+        || current_installation.enabled != staged_installation.enabled
+    {
+        return false;
+    }
+    let current_view = current
+        .calendar_views
+        .iter()
+        .find(|view| view.handle == result.view_handle);
+    let staged_view = staged
+        .calendar_views
+        .iter()
+        .find(|view| view.handle == result.view_handle);
+    match (current_view, staged_view) {
+        (Some(current_view), Some(staged_view)) => {
+            current_view.person_id == staged_view.person_id
+                && current_view.provider == staged_view.provider
+                && current_view.device_id == staged_view.device_id
+                && current_view.calendar_ids == staged_view.calendar_ids
+                && current_view.connection_scope == staged_view.connection_scope
+                && current_view.source_authority == staged_view.source_authority
+                && current_view.enabled == staged_view.enabled
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn builtin_expert_overview(
         &self,
@@ -451,7 +518,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             if self.registry_on(&transaction).await?.is_some() { return Err(AgentFailure::Conflict); }
             transaction.execute("CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)", ()).await.map_err(storage)?;
@@ -503,7 +570,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             let previous = self
                 .registry_on(&transaction)
@@ -721,6 +788,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
+            self.bump_calendar_policies_for_registry_change(&transaction, &previous, snapshot)
+                .await?;
             self.update_registry(&transaction, expected_revision, snapshot.revision, payload)
                 .await?;
             self.check_access()?;
@@ -728,7 +797,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(())
         }
         .await;
-        self.finish_registry_transaction(transaction, result).await
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 
     pub(crate) async fn commit_expert_session(
@@ -756,6 +826,47 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         staged: &RegistrySnapshot,
         after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
     ) -> Result<RegistrySnapshot, AgentFailure> {
+        self.commit_expert_session_inner(
+            session,
+            previous_revision,
+            expected_registry_revision,
+            staged,
+            None,
+            after_registry_write,
+        )
+        .await
+    }
+
+    pub(crate) async fn commit_expert_session_scoped_with_hook(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        expected_registry_revision: u64,
+        staged: &RegistrySnapshot,
+        assignment_id: uuid::Uuid,
+        view_handle: uuid::Uuid,
+        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
+        self.commit_expert_session_inner(
+            session,
+            previous_revision,
+            expected_registry_revision,
+            staged,
+            Some((assignment_id, view_handle)),
+            after_registry_write,
+        )
+        .await
+    }
+
+    async fn commit_expert_session_inner(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        expected_registry_revision: u64,
+        staged: &RegistrySnapshot,
+        scope: Option<(uuid::Uuid, uuid::Uuid)>,
+        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
         let payload = self.payload(session)?;
         if previous_revision.checked_add(1) != Some(session.revision) {
             return Err(AgentFailure::Conflict);
@@ -765,14 +876,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
+            .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
             let previous = self.session_on(&transaction, session.id).await?;
             let stored = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
+            if scope.is_none() && stored.revision != expected_registry_revision {
+                return Err(AgentFailure::Conflict);
+            }
             if previous.data_classes.iter().any(|class| !session.data_classes.contains(class)) {
                 return Err(AgentFailure::PolicyDenied);
             }
-            if previous.scope != session.scope || previous.revision != previous_revision || stored.revision != expected_registry_revision
+            if previous.scope != session.scope || previous.revision != previous_revision
                 || session.messages.len() < previous.messages.len()
                 || session.messages.len() > previous.messages.len() + 1
                 || session.messages[..previous.messages.len()] != previous.messages {
@@ -788,14 +902,35 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         || !session.data_classes.contains(&receipt.data_class) {
                         return Err(AgentFailure::Conflict);
                     }
+                    if let Some((assignment_id, view_handle)) = scope
+                        && (assignment_id != receipt.assignment_id || view_handle != receipt.view_handle)
+                    {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    if !expert_identity_matches(&stored, staged, &receipt) {
+                        return Err(AgentFailure::Conflict);
+                    }
                     let mut duplicate = transaction.query("SELECT 1 FROM agent_expert_receipts WHERE invocation_id = ?", [call_id.to_string()]).await.map_err(storage)?;
                     if duplicate.next().await.map_err(storage)?.is_some() { return Err(AgentFailure::Conflict); }
                     drop(duplicate);
-                    let mut registry = AgentRegistry::restore(stored, self.vault_id)?;
-                    registry.record_result(expected_registry_revision, &receipt)?;
+                    let mut registry = AgentRegistry::restore(stored.clone(), self.vault_id)?;
+                    if scope.is_some() {
+                        registry.record_result_current(&receipt)?;
+                    } else {
+                        registry.record_result(expected_registry_revision, &receipt)?;
+                    }
                     next = registry.snapshot();
-                    if &next != staged { return Err(AgentFailure::Conflict); }
-                    self.update_registry(&transaction, expected_registry_revision, next.revision, self.registry_payload(&next)?).await?;
+                    if scope.is_none() && next != *staged {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    self.bump_calendar_policies_for_registry_change(&transaction, &stored, &next)
+                        .await?;
+                    let registry_revision = if scope.is_some() {
+                        stored.revision
+                    } else {
+                        expected_registry_revision
+                    };
+                    self.update_registry(&transaction, registry_revision, next.revision, self.registry_payload(&next)?).await?;
                     transaction.execute("INSERT INTO agent_expert_receipts VALUES (?, ?, ?, ?)",
                         (call_id.to_string(), session.id.to_string(), receipt.assignment_id.to_string(), integer(next.revision)?)).await.map_err(storage)?;
                 }
@@ -807,7 +942,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_access()?;
             Ok(next)
         }.await;
-        self.finish_registry_transaction(transaction, result).await
+        let finish = if scope.is_some() {
+            self.finish_registry_transaction_checked(transaction, result)
+                .await
+        } else {
+            self.finish_registry_transaction(transaction, result).await
+        };
+        finish
     }
 
     pub(super) async fn finish_registry_transaction<T>(
@@ -827,6 +968,51 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::VaultUnavailable);
                 }
                 Err(failure)
+            }
+        }
+    }
+
+    async fn finish_registry_transaction_checked<T>(
+        &self,
+        transaction: turso::transaction::Transaction<'_>,
+        result: Result<T, AgentFailure>,
+    ) -> Result<T, AgentFailure> {
+        match result {
+            Ok(value) => {
+                if transaction.commit().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    Err(AgentFailure::StorageUnavailable)
+                } else if let Err(failure) = self.check_access() {
+                    self.unavailable.store(true, Ordering::Release);
+                    Err(failure)
+                } else {
+                    Ok(value)
+                }
+            }
+            Err(failure) => {
+                if transaction.rollback().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                if matches!(
+                    failure,
+                    AgentFailure::StorageUnavailable
+                        | AgentFailure::VaultUnavailable
+                        | AgentFailure::UnsupportedVersion
+                ) {
+                    self.unavailable.store(true, Ordering::Release);
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    pub(super) fn registry_transaction_start_error(&self, error: turso::Error) -> AgentFailure {
+        match error {
+            turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
+            _ => {
+                self.unavailable.store(true, Ordering::Release);
+                AgentFailure::StorageUnavailable
             }
         }
     }

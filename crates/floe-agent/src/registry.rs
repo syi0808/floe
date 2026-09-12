@@ -556,6 +556,25 @@ impl AgentRegistry {
         Ok(())
     }
 
+    pub fn record_result_current(
+        &mut self,
+        result: &crate::ExpertResult,
+    ) -> Result<(), AgentFailure> {
+        let resolved = self.resolve_result(self.revision(), result)?;
+        if result.state_revision
+            != resolved
+                .assignment
+                .private_state
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::BudgetExceeded)?
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        self.complete(&resolved, result.invocation_id)?;
+        Ok(())
+    }
+
     pub fn validate_recorded_result(
         &self,
         result: &crate::ExpertResult,

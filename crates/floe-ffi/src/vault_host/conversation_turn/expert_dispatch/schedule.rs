@@ -11,6 +11,7 @@ use floe_domain::{
     CalendarConnection, CalendarProvider, GrantAuthority, GrantConsumer, GrantPurpose, PersonId,
     ProcessingRestriction,
 };
+use floe_infra::native_calendar::NativeCalendarReadAccess;
 use floe_protocol::PROTOCOL_VERSION;
 use uuid::Uuid;
 
@@ -118,6 +119,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                 remote_route: request.remote_route.as_ref(),
                 ambiguous,
                 access: Access::new(
+                    person_id,
                     binding.provider,
                     binding.device_id.clone(),
                     binding.calendar_ids.clone(),
@@ -129,6 +131,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                     binding.source_authority,
                 ),
                 grant_pin: std::sync::Mutex::new(None),
+                grant_candidate: std::sync::Mutex::new(None),
             },
             &model,
             CalendarAgentTurnRequest {
@@ -186,7 +189,9 @@ struct BoundAccess<'host, Keys: VaultKeyProvider> {
     remote_route: Option<&'host floe_protocol::AgentRemoteRouteDto>,
     ambiguous: bool,
     access: Access<'host>,
-    grant_pin: std::sync::Mutex<Option<GrantAuthority>>,
+    grant_pin: std::sync::Mutex<Option<(GrantAuthority, floe_domain::ConsumerPolicyAuthority)>>,
+    grant_candidate:
+        std::sync::Mutex<Option<(GrantAuthority, floe_domain::ConsumerPolicyAuthority)>>,
 }
 
 impl<Keys: VaultKeyProvider> BoundAccess<'_, Keys> {
@@ -239,18 +244,44 @@ impl<Keys: VaultKeyProvider> BoundAccess<'_, Keys> {
                     ProcessingRestriction::LocalOnly,
                 )
                 .await?;
-            let mut grant_pin = self
+            let grant_pin = self
                 .grant_pin
                 .lock()
                 .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-            if let Some(previous) = *grant_pin {
-                if previous != admission.authority {
+            if let Some((previous_authority, previous_policy)) = *grant_pin {
+                if previous_authority != admission.authority
+                    || previous_policy != admission.consumer_policy
+                {
                     return Err(AgentFailure::StaleContext);
                 }
-            } else {
-                *grant_pin = Some(admission.authority);
             }
+            drop(grant_pin);
+            *self
+                .grant_candidate
+                .lock()
+                .map_err(|_| AgentFailure::CapabilityUnavailable)? =
+                Some((admission.authority, admission.consumer_policy));
         }
+        Ok(())
+    }
+
+    fn pin_candidate(&self) -> Result<(), AgentFailure> {
+        let candidate = self
+            .grant_candidate
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?
+            .take();
+        let Some(candidate) = candidate else {
+            return Ok(());
+        };
+        let mut grant_pin = self
+            .grant_pin
+            .lock()
+            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+        if grant_pin.is_some_and(|pin| pin != candidate) {
+            return Err(AgentFailure::StaleContext);
+        }
+        *grant_pin = Some(candidate);
         Ok(())
     }
 }
@@ -269,7 +300,11 @@ impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<floe_core::CalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
-        self.access.observe(request).await
+        let observed = self.access.observe(request).await?;
+        if observed.is_some() {
+            self.pin_candidate()?;
+        }
+        Ok(observed)
     }
 
     async fn observe_projected(
@@ -277,7 +312,11 @@ impl<Keys: VaultKeyProvider> CalendarReadAccess for BoundAccess<'_, Keys> {
         request: floe_core::CalendarObserveRequest,
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         self.validate(request.person_id).await?;
-        self.access.observe_projected(request).await
+        let observed = self.access.observe_projected(request).await?;
+        if observed.is_some() {
+            self.pin_candidate()?;
+        }
+        Ok(observed)
     }
 }
 
@@ -399,11 +438,13 @@ fn range_bounds(
 enum Access<'model> {
     Fixture(FixtureAccess),
     Device(DeviceCalendarAccess<'model>),
+    Native(NativeCalendarReadAccess),
     Remote(RemoteCalendarAccess<'model>),
 }
 
 impl<'model> Access<'model> {
     fn new(
+        person_id: PersonId,
         provider: CalendarProvider,
         device_id: String,
         calendar_ids: Vec<String>,
@@ -419,16 +460,32 @@ impl<'model> Access<'model> {
                 device_id,
                 calendar_ids,
             }),
-            CalendarProvider::EventKit => Self::Device(DeviceCalendarAccess {
-                core,
-                connection_id,
-                source_authority,
-                pinned: std::sync::Mutex::new(None),
-                local_context,
-                provider,
-                device_id,
-                calendar_ids,
-            }),
+            CalendarProvider::EventKit => {
+                #[cfg(target_os = "macos")]
+                {
+                    Self::Native(NativeCalendarReadAccess::new(
+                        person_id,
+                        device_id,
+                        provider,
+                        calendar_ids,
+                        connection_id,
+                        connection_revision,
+                    ))
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Self::Device(DeviceCalendarAccess {
+                        core,
+                        connection_id,
+                        source_authority,
+                        pinned: std::sync::Mutex::new(None),
+                        local_context,
+                        provider,
+                        device_id,
+                        calendar_ids,
+                    })
+                }
+            }
             CalendarProvider::Google | CalendarProvider::Microsoft => match model {
                 Model::Server(model) => Self::Remote(RemoteCalendarAccess {
                     model: Some(model),
@@ -469,6 +526,7 @@ impl CalendarReadAccess for Access<'_> {
         match self {
             Self::Fixture(access) => access.check(request).await,
             Self::Device(access) => access.check(request).await,
+            Self::Native(access) => access.check(request).await,
             Self::Remote(access) => access.check(request).await,
         }
     }
@@ -480,6 +538,7 @@ impl CalendarReadAccess for Access<'_> {
         match self {
             Self::Fixture(_) => Ok(None),
             Self::Device(access) => access.observe(request).await,
+            Self::Native(access) => access.observe(request).await,
             Self::Remote(_) => Ok(None),
         }
     }
@@ -490,6 +549,7 @@ impl CalendarReadAccess for Access<'_> {
     ) -> Result<Option<ProjectedCalendarObservation>, AgentFailure> {
         match self {
             Self::Remote(access) => access.observe_projected(request).await,
+            Self::Native(access) => access.observe_projected(request).await,
             Self::Fixture(_) | Self::Device(_) => Ok(None),
         }
     }
@@ -1010,7 +1070,7 @@ mod tests {
 
     #[tokio::test]
     async fn device_active_schedule_ignores_connected_server_calendar_routes() {
-        for provider in [CalendarProvider::EventKit, CalendarProvider::Android] {
+        for provider in [CalendarProvider::Android] {
             let (mut setup, mut binding, connection) = active_identity(provider);
             let directory = tempfile::tempdir().unwrap();
             let core = FloeCore::open(directory.path().join("calendar.db"))
@@ -1074,6 +1134,7 @@ mod tests {
                 .unwrap();
             let model = Model::conversation(Some(route)).unwrap();
             let access = Access::new(
+                setup.person_id,
                 provider,
                 binding.device_id.clone(),
                 binding.calendar_ids.clone(),
