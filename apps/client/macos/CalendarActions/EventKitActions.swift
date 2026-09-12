@@ -154,8 +154,58 @@ func localConflict(_ records: [[String: Any]], _ proposal: Proposal) throws -> B
   return false
 }
 
+private func nativeSubjectFingerprint(_ store: EKEventStore, _ identifiers: [String]) throws -> String {
+  let permissionClass: String
+  if #available(macOS 14.0, *) {
+    switch EKEventStore.authorizationStatus(for: .event) {
+    case .fullAccess:
+      permissionClass = "full"
+    case .writeOnly:
+      permissionClass = "write_only"
+    case .authorized:
+      permissionClass = "authorized"
+    case .denied:
+      permissionClass = "denied"
+    case .restricted:
+      permissionClass = "restricted"
+    case .notDetermined:
+      permissionClass = "not_determined"
+    @unknown default:
+      permissionClass = "unknown"
+    }
+  } else {
+    switch EKEventStore.authorizationStatus(for: .event) {
+    case .authorized:
+      permissionClass = "authorized"
+    case .denied:
+      permissionClass = "denied"
+    case .restricted:
+      permissionClass = "restricted"
+    case .notDetermined:
+      permissionClass = "not_determined"
+    case .fullAccess:
+      permissionClass = "authorized"
+    case .writeOnly:
+      permissionClass = "authorized"
+    @unknown default:
+      permissionClass = "unknown"
+    }
+  }
+  let tuples = try identifiers.sorted().map { identifier -> [String] in
+    guard let calendar = store.calendar(withIdentifier: identifier) else {
+      throw NativeFailure("provider_unavailable")
+    }
+    return [calendar.calendarIdentifier, calendar.source.sourceIdentifier,
+            String(calendar.source.sourceType.rawValue)]
+  }
+  let canonical: [String: Any] = ["permission_class": permissionClass, "subjects": tuples]
+  let bytes = try JSONSerialization.data(withJSONObject: canonical, options: [.sortedKeys])
+  return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+}
+
 func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
-                        contains: (String) -> Bool, generation: () -> String) throws -> [String: Any] {
+                        contains: (String) -> Bool, generation: () -> String,
+                        subjectFingerprint: () throws -> String) throws -> [String: Any] {
   guard request["schema_version"] as? Int == 1,
         request["person_id"] as? String == localPerson,
         let deviceID = request["device_id"] as? String,
@@ -177,12 +227,14 @@ func calendarViewAccess(_ request: [String: Any], permission: () throws -> Void,
   let deadline = try timestamp(request["deadline"])
   guard Date() < deadline, deadline.timeIntervalSinceNow <= 30 else { throw NativeFailure("timeout") }
   try permission()
+  let beforeSubject = try subjectFingerprint()
   let before = generation()
   guard identifiers.allSatisfy(contains) else { throw NativeFailure("provider_unavailable") }
   try permission()
-  guard before == generation(), Date() < deadline else { throw NativeFailure("timeout") }
+  guard before == generation(), beforeSubject == (try subjectFingerprint()), Date() < deadline else { throw NativeFailure("timeout") }
   return ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
-          "provider": "event_kit", "calendar_ids": identifiers.sorted(), "generation": before]
+          "provider": "event_kit", "calendar_ids": identifiers.sorted(),
+          "native_subject_fingerprint": beforeSubject, "generation": before]
 }
 
 private func observationRecord(_ event: EKEvent, calendarID: String) -> [String: Any] {
@@ -274,6 +326,11 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
   try requirePermission()
   let before = calendarViewGeneration.value()
   let store = EKEventStore()
+  let beforeSubject = try nativeSubjectFingerprint(store, identifiers)
+  if let expectedSubject = request["expected_native_subject_fingerprint"] as? String,
+     expectedSubject != beforeSubject {
+    throw NativeFailure("permission_denied")
+  }
   let calendars = identifiers.compactMap { store.calendar(withIdentifier: $0) }
   guard calendars.count == identifiers.count else { throw NativeFailure("provider_unavailable") }
   var totalItems = 0
@@ -290,7 +347,7 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
     ]
   }
   try requirePermission()
-  guard before == calendarViewGeneration.value(), Date() < deadline else {
+  guard before == calendarViewGeneration.value(), beforeSubject == (try nativeSubjectFingerprint(store, identifiers)), Date() < deadline else {
     throw NativeFailure("timeout")
   }
   let formatter = ISO8601DateFormatter()
@@ -298,7 +355,8 @@ private func calendarObservation(_ request: [String: Any]) throws -> [String: An
   let response: [String: Any] = [
     "stamp": ["schema_version": 1, "person_id": localPerson, "device_id": deviceID,
       "provider": "event_kit",
-      "calendar_ids": identifiers.sorted(), "generation": before],
+      "calendar_ids": identifiers.sorted(), "native_subject_fingerprint": beforeSubject,
+      "generation": before],
     "observed_at": formatter.string(from: Date()),
     "batches": batches
   ]
@@ -313,7 +371,8 @@ private func runAction(_ request: [String: Any]) throws -> Any {
   if operation == "view_access" {
     let store = EKEventStore()
     return try calendarViewAccess(request, permission: requirePermission,
-      contains: { store.calendar(withIdentifier: $0) != nil }, generation: calendarViewGeneration.value)
+      contains: { store.calendar(withIdentifier: $0) != nil }, generation: calendarViewGeneration.value,
+      subjectFingerprint: { try nativeSubjectFingerprint(store, request["calendar_ids"] as! [String]) })
   }
   if operation == "observe" { return try calendarObservation(request) }
   guard let raw = request["action"] as? [String: Any] else { throw NativeFailure("uncertain_result") }

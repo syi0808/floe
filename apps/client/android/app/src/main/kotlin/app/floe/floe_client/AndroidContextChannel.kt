@@ -59,6 +59,7 @@ internal class AndroidContextChannel(
             "selectedCalendars" -> result.success(selectedCalendarIds())
             "setSelectedCalendars" -> runWorker(result) { setSelectedCalendars(arguments(call)) }
             "readCalendar" -> runWorker(result) { readCalendar(arguments(call)) }
+            "readAcquisition" -> runWorker(result) { readAcquisition(arguments(call)) }
             "readContacts" -> runWorker(result) { readContacts(arguments(call)) }
             "readWellbeing" -> runWorker(result) { readWellbeing() }
             else -> result.notImplemented()
@@ -206,6 +207,159 @@ internal class AndroidContextChannel(
             }
         } ?: throw ContextFailure("unavailable", "Calendar provider returned no cursor.")
         return calendars
+    }
+
+    private fun readAcquisition(arguments: Map<String, Any?>): Map<String, Any?> {
+        val requestId = arguments.string("request_id")
+        val hostEpoch = arguments.string("host_epoch")
+        val personId = arguments.string("person_id")
+        val deviceId = arguments.string("device_id")
+        val connectionId = arguments.string("connection_id")
+        val revision = arguments.int("connection_revision")
+        val provider = arguments.string("provider")
+        val mode = arguments.string("mode")
+        val ids = arguments.stringList("calendar_ids").sorted()
+        val start = arguments.long("range_start_unix_ms")
+        val end = arguments.long("range_end_unix_ms")
+        val deadline = arguments.long("deadline_unix_ms")
+        if (provider != "android" || (mode != "inspect_subject" && mode != "read_events") ||
+            revision <= 0 || ids.isEmpty() || ids.size > MAX_SELECTED_CALENDARS ||
+            ids.toSet().size != ids.size || ids.any { !validOpaque(it, 512) } ||
+            start < 0 || end <= start || end - start > MAX_RANGE_MS ||
+            deadline <= System.currentTimeMillis() || deadline - System.currentTimeMillis() > MAX_ACQUISITION_DEADLINE_MS) {
+            throw ContextFailure("invalid_input", "Calendar acquisition is outside its bounded scope.")
+        }
+        if (ids != arguments.stringList("calendar_ids")) {
+            throw ContextFailure("invalid_input", "Calendar identifiers must be sorted.")
+        }
+        if (mode == "read_events") requirePermission(Manifest.permission.READ_CALENDAR)
+        val before = calendarSubjectEvidence(ids)
+        if (mode == "read_events") {
+            val expected = arguments.string("expected_native_subject_fingerprint")
+            if (expected != before.fingerprint) throw ContextFailure("stale_context", "Calendar subject changed before acquisition.")
+        } else if (arguments["expected_native_subject_fingerprint"] != null) {
+            throw ContextFailure("invalid_input", "Subject inspection cannot carry a read fingerprint.")
+        }
+        val batches = mutableListOf<Map<String, Any?>>()
+        var total = 0
+        if (mode == "read_events") {
+            val uriBase = CalendarContract.Instances.CONTENT_URI
+            for (calendarId in ids) {
+                if (deadline <= System.currentTimeMillis()) throw ContextFailure("deadline_exceeded", "Calendar acquisition deadline elapsed.")
+                val uriBuilder = uriBase.buildUpon()
+                ContentUris.appendId(uriBuilder, start)
+                ContentUris.appendId(uriBuilder, end)
+                val query = Bundle().apply {
+                    putString(ContentResolverKeys.SELECTION, "${CalendarContract.Instances.CALENDAR_ID} = ?")
+                    putStringArray(ContentResolverKeys.SELECTION_ARGS, arrayOf(calendarId))
+                    putStringArray(ContentResolverKeys.SORT_COLUMNS, arrayOf(CalendarContract.Instances.BEGIN))
+                    putInt(ContentResolverKeys.SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_ASCENDING)
+                    putInt(ContentResolverKeys.LIMIT, MAX_CALENDAR_ITEMS - total + 1)
+                }
+                val projection = arrayOf(
+                    CalendarContract.Instances.EVENT_ID,
+                    CalendarContract.Instances.CALENDAR_ID,
+                    CalendarContract.Instances.TITLE,
+                    CalendarContract.Instances.BEGIN,
+                    CalendarContract.Instances.END,
+                    CalendarContract.Instances.ALL_DAY,
+                )
+                val records = mutableListOf<Map<String, Any?>>()
+                activity.contentResolver.query(uriBuilder.build(), projection, query, null)?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        if (total >= MAX_CALENDAR_ITEMS) throw ContextFailure("budget_exceeded", "Calendar acquisition item budget exceeded.")
+                        total += 1
+                        records += acquisitionRecord(cursor)
+                        val partial = mapOf("calendar_id" to calendarId, "records" to records, "failure" to null)
+                        if (JSONObject(mapOf("batches" to batches + partial)).toString().toByteArray(StandardCharsets.UTF_8).size > MAX_ACQUISITION_BYTES) {
+                            throw ContextFailure("budget_exceeded", "Calendar acquisition byte budget exceeded.")
+                        }
+                    }
+                } ?: throw ContextFailure("unavailable", "Calendar provider returned no cursor.")
+                batches += mapOf("calendar_id" to calendarId, "records" to records, "failure" to null)
+            }
+        }
+        val after = calendarSubjectEvidence(ids)
+        if (after.fingerprint != before.fingerprint || deadline <= System.currentTimeMillis()) {
+            throw ContextFailure("stale_context", "Calendar subject changed during acquisition.")
+        }
+        val response = linkedMapOf<String, Any?>(
+            "request_id" to requestId,
+            "host_epoch" to hostEpoch,
+            "person_id" to personId,
+            "device_id" to deviceId,
+            "connection_id" to connectionId,
+            "connection_revision" to revision,
+            "provider" to provider,
+            "mode" to mode,
+            "calendar_ids" to ids,
+            "range_start_unix_ms" to start,
+            "range_end_unix_ms" to end,
+            "native_subject_fingerprint_before" to before.fingerprint,
+            "native_subject_fingerprint_after" to after.fingerprint,
+            "available_calendar_ids" to before.availableCalendarIds,
+            "permission_class" to before.permissionClass,
+            "batches" to batches,
+        )
+        if (JSONObject(response).toString().toByteArray(StandardCharsets.UTF_8).size > MAX_ACQUISITION_BYTES) {
+            throw ContextFailure("budget_exceeded", "Calendar acquisition byte budget exceeded.")
+        }
+        return response
+    }
+
+    private fun calendarSubjectEvidence(selected: List<String>): CalendarSubjectEvidence {
+        val permissionClass = if (granted(Manifest.permission.READ_CALENDAR)) "read_calendar" else "denied"
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
+            CalendarContract.Calendars.OWNER_ACCOUNT,
+        )
+        val rows = mutableListOf<Map<String, String>>()
+        activity.contentResolver.query(CalendarContract.Calendars.CONTENT_URI, projection, null, null)?.use { cursor ->
+            while (cursor.moveToNext() && rows.size < MAX_AVAILABLE_CALENDARS) {
+                val id = cursor.requiredString(0, 512)
+                rows += mapOf(
+                    "calendar_id" to id,
+                    "account_name" to (cursor.getString(1) ?: ""),
+                    "account_type" to (cursor.getString(2) ?: ""),
+                    "owner_account" to (cursor.getString(3) ?: ""),
+                )
+            }
+        } ?: throw ContextFailure("unavailable", "Calendar provider returned no cursor.")
+        val available = rows.map { it.getValue("calendar_id") }.sorted()
+        val selectedRows = rows.filter { selected.contains(it.getValue("calendar_id")) }.sortedBy { it.getValue("calendar_id") }
+        if (selectedRows.size != selected.size) throw ContextFailure("calendar_unavailable", "Calendar selection is unavailable.")
+        val canonical = JSONObject().apply {
+            put("permission", permissionClass)
+            put("calendars", selectedRows.map { JSONObject(it) })
+        }.toString()
+        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return CalendarSubjectEvidence(digest, available, permissionClass)
+    }
+
+    private fun acquisitionRecord(cursor: Cursor): Map<String, Any?> {
+        val eventId = cursor.requiredString(0, 512)
+        val calendarId = cursor.requiredString(1, 512)
+        val title = cursor.getString(2)?.trim()?.take(MAX_TITLE_CHARS) ?: ""
+        val starts = cursor.getLong(3)
+        val ends = cursor.getLong(4)
+        if (starts < 0 || ends <= starts) throw ContextFailure("invalid_response", "Calendar provider returned an invalid event.")
+        val schedule = mapOf(
+            "kind" to "timed",
+            "starts_at" to Instant.ofEpochMilli(starts).toString(),
+            "ends_at" to Instant.ofEpochMilli(ends).toString(),
+            "timezone" to "UTC",
+        )
+        return mapOf(
+            "can_modify" to false,
+            "calendar_id" to calendarId,
+            "external_id" to eventId,
+            "external_revision" to "$starts:$ends:${cursor.getInt(5)}",
+            "title" to title,
+            "schedule" to schedule,
+        )
     }
 
     private fun setSelectedCalendars(arguments: Map<String, Any?>): Map<String, Any?> {
@@ -553,6 +707,12 @@ internal class AndroidContextChannel(
 
     private class ContextFailure(val code: String, override val message: String) : RuntimeException(message)
 
+    private data class CalendarSubjectEvidence(
+        val fingerprint: String,
+        val availableCalendarIds: List<String>,
+        val permissionClass: String,
+    )
+
     private object ContentResolverKeys {
         const val SELECTION = android.content.ContentResolver.QUERY_ARG_SQL_SELECTION
         const val SELECTION_ARGS = android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS
@@ -571,6 +731,8 @@ internal class AndroidContextChannel(
         const val FRESHNESS_MS = 300_000L
         const val MAX_RANGE_MS = 32L * 86_400_000L
         const val MAX_CALENDAR_ITEMS = 128
+        const val MAX_ACQUISITION_BYTES = 65_536
+        const val MAX_ACQUISITION_DEADLINE_MS = 30_000L
         const val MAX_AVAILABLE_CALENDARS = 32
         const val MAX_SELECTED_CALENDARS = 4
         const val MAX_CONTACT_ITEMS = 64
