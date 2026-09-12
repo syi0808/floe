@@ -435,6 +435,7 @@ final class RemoteCalendarGrantOverview {
     required this.grantAuthority,
     required this.state,
     required this.connectorId,
+    this.connectionId,
     required this.resource,
     required this.recipient,
   });
@@ -443,6 +444,7 @@ final class RemoteCalendarGrantOverview {
   final Map<String, Object?> grantAuthority;
   final String state;
   final String connectorId;
+  final String? connectionId;
   final String resource;
   final String recipient;
 
@@ -455,6 +457,7 @@ final class RemoteCalendarGrantOverview {
         value['grant_authority'] is! Map ||
         value['state'] is! String ||
         value['connector_id'] is! String ||
+        (value['connection_id'] != null && value['connection_id'] is! String) ||
         value['resource'] is! String ||
         value['recipient'] is! String) {
       throw const FormatException('Invalid calendar grant overview');
@@ -466,6 +469,7 @@ final class RemoteCalendarGrantOverview {
       ),
       state: value['state'] as String,
       connectorId: value['connector_id'] as String,
+      connectionId: value['connection_id'] as String?,
       resource: value['resource'] as String,
       recipient: value['recipient'] as String,
     );

@@ -272,6 +272,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         serverClient: widget.serverClient,
         deviceId: widget.serverClient?.deviceId,
         agentController: agentController,
+        agentVaultGateway: widget.agentGateway is NativeAgentVaultGateway
+            ? widget.agentGateway as NativeAgentVaultGateway
+            : null,
         calendarSources: _agentCalendarSources,
         calendarSourceChanges: controller,
         initialDeviceCalendarDetail: openDeviceCalendarDetail,

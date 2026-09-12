@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:floe_client/features/server/local_server_client.dart';
 import 'package:floe_client/features/server/local_server_panel.dart';
+import 'package:floe_client/features/agent/agent_vault_gateway.dart';
+import 'package:floe_client/app/local_identity.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -169,4 +171,126 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('pairing cancellation sends the strict pairing identity', (
+    tester,
+  ) async {
+    final client = _PairingClient();
+    final gateway = _PairingGateway();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: LocalServerPanel(client: client, pairingGateway: gateway),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pair this device'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cancel pairing'), findsOneWidget);
+    await tester.tap(find.text('Cancel pairing'));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(client.cancelBody, {
+      'schema_version': 1,
+      'pairing_id': '00000000-0000-4000-8000-000000000002',
+      'proof': 'polling-proof',
+    });
+  });
 }
+
+final class _PairingClient extends LocalServerClient {
+  _PairingClient() : super(store: MemoryServerCredentials());
+
+  Map<String, Object?>? cancelBody;
+
+  @override
+  Future<ServerPairingStart> startPairingStrict(
+    String address, {
+    required String issuerKeyId,
+    required String issuerPublicKey,
+  }) async => ServerPairingStart(
+    pairingId: '00000000-0000-4000-8000-000000000002',
+    proof: 'polling-proof',
+    code: 'ABCD1234',
+    expiresAt: DateTime.now().toUtc().add(const Duration(minutes: 5)),
+    personId: personId,
+    deviceId: deviceId,
+    producer: _pairingProducer,
+    issuer: _pairingIssuer,
+    challengeId: '00000000-0000-4000-8000-000000000003',
+    challengeB64Url: 'challenge',
+    producerSignature: 'signature',
+  );
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String address,
+    String path, {
+    Map<String, Object?>? body,
+    String? token,
+  }) async {
+    if (path == '/pair/cancel') cancelBody = body;
+    return <String, dynamic>{};
+  }
+}
+
+final class _PairingGateway implements RemotePairingGateway {
+  @override
+  Future<RemoteOwnerPublicKey> prepareRemotePairing({
+    required String personId,
+  }) async => RemoteOwnerPublicKey.fromJson(_pairingIssuer);
+
+  @override
+  Future<RemotePairingStatus> confirmRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required RemotePairingChallenge challenge,
+    required String pollingProof,
+  }) async => _pairingStatus('local_confirmed');
+
+  @override
+  Future<RemotePairingStatus> remotePairingStatus({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+  }) async => _pairingStatus('pending');
+
+  @override
+  Future<RemotePairingStatus> finalizeRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+    required RemotePairingChallenge challenge,
+  }) async => _pairingStatus('approved', token: 't' * 32);
+}
+
+RemotePairingStatus _pairingStatus(String status, {String? token}) =>
+    RemotePairingStatus(
+      schemaVersion: 1,
+      pairingId: '00000000-0000-4000-8000-000000000002',
+      status: status,
+      personId: defaultLocalPersonId,
+      deviceId: 'local-client',
+      token: token,
+    );
+
+const _pairingIssuer = {
+  'key_id': '00000000-0000-4000-8000-000000000004',
+  'public_key': 'owner-public-key',
+  'fingerprint': 'owner-fingerprint',
+};
+
+const _pairingProducer = {
+  'schema_version': 1,
+  'instance_id': '00000000-0000-4000-8000-000000000005',
+  'execution_owner': '00000000-0000-4000-8000-000000000006',
+  'audience': 'floe.server:fixture',
+  'key_id': '00000000-0000-4000-8000-000000000007',
+  'public_key': 'producer-public-key',
+  'fingerprint': 'producer-fingerprint',
+};

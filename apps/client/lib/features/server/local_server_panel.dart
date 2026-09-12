@@ -93,7 +93,11 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       await widget.client.request(
         base,
         '/pair/cancel',
-        body: {'proof': response.proof},
+        body: {
+          'schema_version': 1,
+          'pairing_id': response.pairingId,
+          'proof': response.proof,
+        },
       );
       return;
     }
@@ -122,7 +126,11 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       await widget.client.request(
         base,
         '/pair/cancel',
-        body: {'proof': response.proof},
+        body: {
+          'schema_version': 1,
+          'pairing_id': response.pairingId,
+          'proof': response.proof,
+        },
       );
       rethrow;
     }
@@ -232,6 +240,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
   Future<void> _abortPairing(String message) async {
     final base = pairingAddress;
     final pendingProof = proof;
+    final pairingId = pairing?.pairingId;
     generation++;
     _finishPairing(message);
     if (base == null || pendingProof == null) return;
@@ -239,7 +248,11 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
       await widget.client.request(
         base,
         '/pair/cancel',
-        body: {'proof': pendingProof},
+        body: {
+          'schema_version': 1,
+          'pairing_id': pairingId,
+          'proof': pendingProof,
+        },
       );
     } on Object {
       // The server expires abandoned pairings even when cancellation fails.
@@ -250,6 +263,7 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
     generation++;
     final pendingProof = proof;
     final base = pairingAddress;
+    final pairingId = pairing?.pairingId;
     proof = null;
     code = null;
     pairing = null;
@@ -258,7 +272,11 @@ class _LocalServerPanelState extends State<LocalServerPanel> {
         await widget.client.request(
           base,
           '/pair/cancel',
-          body: {'proof': pendingProof},
+          body: {
+            'schema_version': 1,
+            'pairing_id': pairingId,
+            'proof': pendingProof,
+          },
         );
       } on Object {
         if (mounted && notify) {

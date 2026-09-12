@@ -20,6 +20,7 @@ import 'server_connector_panel.dart';
 import '../../agent/agent_calendar_expert_dialog.dart';
 import '../../agent/agent_calendar_sources.dart';
 import '../../agent/agent_controller.dart';
+import '../../agent/agent_vault_gateway.dart';
 
 class ConnectorScreen extends StatefulWidget {
   const ConnectorScreen({
@@ -34,6 +35,7 @@ class ConnectorScreen extends StatefulWidget {
     this.agentController,
     this.calendarSources,
     this.calendarSourceChanges,
+    this.agentVaultGateway,
     this.initialDeviceCalendarDetail = false,
   });
 
@@ -47,6 +49,7 @@ class ConnectorScreen extends StatefulWidget {
   final AgentController? agentController;
   final AgentCalendarSources? Function()? calendarSources;
   final Listenable? calendarSourceChanges;
+  final NativeAgentVaultGateway? agentVaultGateway;
   final bool initialDeviceCalendarDetail;
 
   @override
@@ -296,6 +299,7 @@ class _ConnectorScreenState extends State<ConnectorScreen> {
         connector: serverConnector,
         connection: serverConnection!,
         client: widget.serverClient!,
+        agentVaultGateway: widget.agentVaultGateway,
         onBack: () => setState(() => selectedServerConnectorId = null),
         onChanged: _loadCatalog,
       );
