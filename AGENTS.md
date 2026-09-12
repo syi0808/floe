@@ -4,6 +4,12 @@
 - Keep the package's `packageManager` version and `pnpm-lock.yaml` in sync; do not add npm or Yarn lockfiles.
 - Use Flutter's `flutter pub` commands for Dart dependencies. Prefer current stable releases compatible with the supported Flutter SDK; do not override SDK-pinned dependencies solely to force newer versions.
 
+# Platform priority
+
+- Apple ecosystem devices are the first product target. Prioritize macOS, iPhone, and iPad implementation and validation.
+- Android is out of scope for current implementation work. Do not spend time extending Android support, maintaining platform parity, or running Android builds/tests unless explicitly requested.
+- Existing Android code may remain dormant; Apple delivery must not be blocked by Android compatibility or validation.
+
 # Local development data and compatibility
 
 - Floe is currently used only for local testing. Local Floe application data is disposable and may be reset or deleted when needed for development or validation.
