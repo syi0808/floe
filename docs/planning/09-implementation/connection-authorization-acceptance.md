@@ -8,14 +8,14 @@ require separate explicit consent and disposable resources; synthetic tests do n
 | --- | --- | --- |
 | Native Calendar consent | Durable OS subject mapping and selected-subset preview-before-confirm implemented; root Flutter 26/26 | Final combined-tree review and native platform validation |
 | Native Calendar admission | Encrypted grant/mapping; invocation/query leases and mobile hook implemented under review | Final FFI positive broker integration and combined-tree regression |
-| macOS native read | Bounded direct EventKit adapter; expected subject checked before event query; root synthetic suite 13/13 | Complete consent preview integration and real OS validation |
+| macOS native read | Native source boundary accepted in `5417858`; actual Swift warnings-as-errors typecheck and 25 native assertions pass; synthetic adapter 13/13 | Final integrated host commit and separately consented real OS validation |
 | iOS/Android native read | Native bounded readers, application-lifetime broker and Calendar tool/review hook implemented; root broker 12/12, Android Kotlin build passed | Final tool-through-broker positive integration; iOS SDK build unavailable |
 | General conversation | Governed store CAS/projection; monotonic unknown; restored-turn filtering | Positive production source resolvers; opaque replay optimization disabled |
-| Calendar history/private state | Consumed lease coverage implemented in scoped result transaction; permission regression passes; private state is metadata-only | Positive live-evidence persisted-history resolver |
+| Calendar history/private state | Bounded live evidence and positive two-turn history implemented; root Calendar 36/36; private state is metadata-only | Historical dependency expiry/revocation during model and final-commit fence |
 | Revocation cleanup | Durable bounded scan/outbox and merge-before-sanitize accepted in `afaa9fb`; root cleanup 6/6, integration 18/18 | Worker idle integration and final combined-tree regression suite |
 | Compaction and learning | Transactional coverage union and independent evidence gates; positive/negative tests | Source-learning consent/retention policy; no implicit Read-to-Learning permission |
 | Remote issuer enrollment | Durable console approval; producer identity `2214b16`, encrypted owner signer `9450d72`; FFI/UI implemented and focused tests passed | Integrated host/client commit and final route adoption |
-| Remote Calendar route | Identity foundation `5488c8e`; admission/read/release, encrypted signer and consent UI implemented under review | Authenticated producer source preview, actual model-recipient binding and production positive circuit |
+| Remote Calendar route | Signed producer source preview, explicit grants and local Foundation processing implemented under review | Original-request challenge binding and actual host-to-producer positive circuit |
 | Remote Mail route | Existing Person ownership checks | Exact source selection; remove Gmail-to-Microsoft fallback; owner admission/release |
 | Remote Work route | Existing Person-owned runtime aggregation | One exact authorized source per request, explicit Core aggregation and coverage |
 | Remote Logistics route | Existing owned runtime/Gmail aggregation | Exact selected source, authorization and bounded partial-coverage parity |
@@ -74,3 +74,13 @@ does not establish whole-workspace or P7 acceptance: agents continue changing th
 signer fixture exercises both Google and Microsoft, but cannot substitute for a real host-to-producer
 positive test. Attention's current generic publication and caller-provided subject cannot establish
 native authority; its trusted broker correction remains in progress.
+
+The trusted Attention broker and frozen review are now implemented, but encrypted end-to-end
+positive admission and the final dependent-save fence are still pending. The root full FFI run
+found a failed legacy personal-delegation fixture and a hung unavailable-provider fixture; the hung
+test process was terminated and the fixtures were assigned for correction. That run is not a pass
+and those failures are not classified as baseline. Test compilation must exercise the production
+authorization path rather than excluding it with `cfg(not(test))`.
+
+Existing native projection packages pass root checks: Apple Contacts 9, Apple Health 8 and
+Feasibility 5 tests. These are projection tests, not proof of adoption by the new grant boundary.
