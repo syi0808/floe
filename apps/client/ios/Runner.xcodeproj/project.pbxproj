@@ -268,10 +268,12 @@
 			);
 			inputPaths = (
 				"${SRCROOT}/build_rust.sh",
+				"${SRCROOT}/../macos/LocalModel/LocalModel.swift",
 			);
 			name = "Build Rust Core";
 			outputPaths = (
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libfloe_ffi.dylib",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libfloe_local_model.dylib",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/zsh;
