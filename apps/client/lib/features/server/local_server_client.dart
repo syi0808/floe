@@ -9,6 +9,98 @@ final _uuidPattern = RegExp(
   r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
 );
 
+final class ServerPairingStart {
+  const ServerPairingStart({
+    required this.pairingId,
+    required this.proof,
+    required this.code,
+    required this.expiresAt,
+    required this.personId,
+    required this.deviceId,
+    required this.producer,
+    required this.issuer,
+    required this.challengeId,
+    required this.challengeB64Url,
+    required this.producerSignature,
+  });
+
+  final String pairingId;
+  final String proof;
+  final String code;
+  final DateTime expiresAt;
+  final String personId;
+  final String deviceId;
+  final Map<String, Object?> producer;
+  final Map<String, Object?> issuer;
+  final String challengeId;
+  final String challengeB64Url;
+  final String producerSignature;
+
+  factory ServerPairingStart.fromJson(
+    Object? raw, {
+    required String expectedPersonId,
+    required String expectedDeviceId,
+  }) {
+    if (raw is! Map) throw const FormatException('Invalid pairing response');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'schema_version',
+      'pairing_id',
+      'code',
+      'proof',
+      'expires_at_unix_ms',
+      'person_id',
+      'device_id',
+      'producer',
+      'issuer',
+      'challenge_id',
+      'challenge_b64url',
+      'producer_signature',
+    };
+    if (value.keys.any((key) => !fields.contains(key)) ||
+        value['schema_version'] != 1 ||
+        value['expires_at_unix_ms'] is! int ||
+        value['producer'] is! Map ||
+        value['issuer'] is! Map) {
+      throw const FormatException('Invalid pairing response');
+    }
+    String text(String key, {int maxLength = 256}) {
+      final item = value[key];
+      if (item is! String || item.isEmpty || item.length > maxLength) {
+        throw const FormatException('Invalid pairing response');
+      }
+      return item;
+    }
+
+    final personId = text('person_id');
+    final deviceId = text('device_id');
+    final pairingId = text('pairing_id');
+    final expiresAt = DateTime.fromMillisecondsSinceEpoch(
+      value['expires_at_unix_ms'] as int,
+      isUtc: true,
+    );
+    if (personId != expectedPersonId ||
+        deviceId != expectedDeviceId ||
+        !_uuidPattern.hasMatch(pairingId) ||
+        expiresAt.isBefore(DateTime.now().toUtc())) {
+      throw const FormatException('Invalid pairing response');
+    }
+    return ServerPairingStart(
+      pairingId: pairingId,
+      proof: text('proof'),
+      code: text('code', maxLength: 32),
+      expiresAt: expiresAt,
+      personId: personId,
+      deviceId: deviceId,
+      producer: Map<String, Object?>.from(value['producer'] as Map),
+      issuer: Map<String, Object?>.from(value['issuer'] as Map),
+      challengeId: text('challenge_id'),
+      challengeB64Url: text('challenge_b64url', maxLength: 8192),
+      producerSignature: text('producer_signature', maxLength: 256),
+    );
+  }
+}
+
 abstract interface class ServerCredentialStore {
   Future<String?> read();
   Future<void> write(String value);
@@ -395,6 +487,50 @@ class LocalServerClient {
     '/pair/start',
     body: {'person_id': personId, 'device_id': deviceId},
   );
+
+  Future<ServerPairingStart> startPairingStrict(
+    String address, {
+    required String issuerKeyId,
+    required String issuerPublicKey,
+  }) async {
+    final response = await request(
+      address,
+      '/pair/start',
+      body: {
+        'schema_version': 1,
+        'person_id': personId,
+        'device_id': deviceId,
+        'issuer_key_id': issuerKeyId,
+        'issuer_public_key': issuerPublicKey,
+      },
+    );
+    try {
+      return ServerPairingStart.fromJson(
+        response,
+        expectedPersonId: personId,
+        expectedDeviceId: deviceId,
+      );
+    } on FormatException {
+      throw const ServerConnectionException('invalid_response');
+    }
+  }
+
+  Map<String, Object?> pairingRoute({
+    required String address,
+    required String clientId,
+  }) => {
+    'base_url': normalizeAddress(address),
+    'bearer_token': '',
+    'purpose': InferencePurpose.everydayAssistance.wireName,
+    'external': false,
+    'allow_external': false,
+    'pairing': {
+      'client_id': clientId,
+      'person_id': personId,
+      'device_id': deviceId,
+    },
+    'calendar_connections': const <Object?>[],
+  };
 
   Future<ServerConnectorCatalog> connectorCatalog(
     ServerConnection connection,

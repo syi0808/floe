@@ -83,6 +83,236 @@ final class RemoteProducerIdentity {
   };
 }
 
+final class RemoteOwnerPublicKey {
+  const RemoteOwnerPublicKey({
+    required this.keyId,
+    required this.publicKey,
+    required this.fingerprint,
+  });
+
+  final String keyId;
+  final String publicKey;
+  final String fingerprint;
+
+  factory RemoteOwnerPublicKey.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid owner key');
+    final value = Map<String, Object?>.from(raw);
+    if (value.keys.any(
+      (key) => !{'key_id', 'public_key', 'fingerprint'}.contains(key),
+    )) {
+      throw const FormatException('Invalid owner key');
+    }
+    String text(String key) {
+      final item = value[key];
+      if (item is! String || item.isEmpty || item.length > 256) {
+        throw const FormatException('Invalid owner key');
+      }
+      return item;
+    }
+
+    return RemoteOwnerPublicKey(
+      keyId: text('key_id'),
+      publicKey: text('public_key'),
+      fingerprint: text('fingerprint'),
+    );
+  }
+
+  Map<String, Object> toJson() => {
+    'key_id': keyId,
+    'public_key': publicKey,
+    'fingerprint': fingerprint,
+  };
+}
+
+final class RemotePairingChallenge {
+  const RemotePairingChallenge({
+    required this.schemaVersion,
+    required this.pairingId,
+    required this.challengeId,
+    required this.challengeB64Url,
+    required this.producerSignature,
+    required this.producer,
+    required this.issuer,
+    required this.expiresAtUnixMs,
+  });
+
+  final int schemaVersion;
+  final String pairingId;
+  final String challengeId;
+  final String challengeB64Url;
+  final String producerSignature;
+  final RemoteProducerIdentity producer;
+  final RemoteOwnerPublicKey issuer;
+  final int expiresAtUnixMs;
+
+  factory RemotePairingChallenge.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid pairing challenge');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'schema_version',
+      'pairing_id',
+      'challenge_id',
+      'challenge_b64url',
+      'producer_signature',
+      'producer',
+      'issuer',
+      'expires_at_unix_ms',
+    };
+    if (value.keys.any((key) => !fields.contains(key)) ||
+        value['schema_version'] != 1 ||
+        value['expires_at_unix_ms'] is! int) {
+      throw const FormatException('Invalid pairing challenge');
+    }
+    String text(String key, {int maxLength = 256}) {
+      final item = value[key];
+      if (item is! String || item.isEmpty || item.length > maxLength) {
+        throw const FormatException('Invalid pairing challenge');
+      }
+      return item;
+    }
+
+    final pairingId = text('pairing_id');
+    return RemotePairingChallenge(
+      schemaVersion: 1,
+      pairingId: pairingId,
+      challengeId: text('challenge_id'),
+      challengeB64Url: text('challenge_b64url', maxLength: 8192),
+      producerSignature: text('producer_signature'),
+      producer: RemoteProducerIdentity.fromJson(value['producer']),
+      issuer: RemoteOwnerPublicKey.fromJson(value['issuer']),
+      expiresAtUnixMs: value['expires_at_unix_ms'] as int,
+    );
+  }
+
+  Map<String, Object> toJson() => {
+    'schema_version': schemaVersion,
+    'pairing_id': pairingId,
+    'challenge_id': challengeId,
+    'challenge_b64url': challengeB64Url,
+    'producer_signature': producerSignature,
+    'producer': producer.toJson(),
+    'issuer': issuer.toJson(),
+    'expires_at_unix_ms': expiresAtUnixMs,
+  };
+}
+
+final class RemotePairingStatus {
+  const RemotePairingStatus({
+    required this.schemaVersion,
+    required this.pairingId,
+    required this.status,
+    required this.personId,
+    required this.deviceId,
+    this.producer,
+    this.issuer,
+    this.issuerFingerprint,
+    this.clientId,
+    this.token,
+  });
+
+  final int schemaVersion;
+  final String pairingId;
+  final String status;
+  final String personId;
+  final String deviceId;
+  final RemoteProducerIdentity? producer;
+  final RemoteOwnerPublicKey? issuer;
+  final String? issuerFingerprint;
+  final String? clientId;
+  final String? token;
+
+  factory RemotePairingStatus.fromJson(Object? raw) {
+    if (raw is! Map) throw const FormatException('Invalid pairing status');
+    final value = Map<String, Object?>.from(raw);
+    const fields = {
+      'schema_version',
+      'pairing_id',
+      'status',
+      'person_id',
+      'device_id',
+      'producer',
+      'issuer',
+      'issuer_fingerprint',
+      'client_id',
+      'token',
+    };
+    if (value.keys.any((key) => !fields.contains(key)) ||
+        value['schema_version'] != 1 ||
+        value['pairing_id'] is! String ||
+        value['status'] is! String ||
+        value['person_id'] is! String ||
+        value['device_id'] is! String ||
+        !{
+          'pending',
+          'local_confirmed',
+          'approved',
+          'rejected',
+          'expired',
+          'repair_required',
+        }.contains(value['status'])) {
+      throw const FormatException('Invalid pairing status');
+    }
+    final producer = value['producer'] == null
+        ? null
+        : RemoteProducerIdentity.fromJson(value['producer']);
+    final issuer = value['issuer'] == null
+        ? null
+        : RemoteOwnerPublicKey.fromJson(value['issuer']);
+    final issuerFingerprint = value['issuer_fingerprint'];
+    final clientId = value['client_id'];
+    final token = value['token'];
+    if (issuerFingerprint != null && issuerFingerprint is! String ||
+        clientId != null && clientId is! String ||
+        token != null && token is! String) {
+      throw const FormatException('Invalid pairing status');
+    }
+    final status = value['status'] as String;
+    if (clientId != null && clientId != value['pairing_id'] ||
+        status == 'approved' && token == null ||
+        status != 'approved' && token != null) {
+      throw const FormatException('Invalid pairing status');
+    }
+    return RemotePairingStatus(
+      schemaVersion: 1,
+      pairingId: value['pairing_id'] as String,
+      status: status,
+      personId: value['person_id'] as String,
+      deviceId: value['device_id'] as String,
+      producer: producer,
+      issuer: issuer,
+      issuerFingerprint: issuerFingerprint as String?,
+      clientId: clientId as String?,
+      token: token as String?,
+    );
+  }
+}
+
+abstract interface class RemotePairingGateway {
+  Future<RemoteOwnerPublicKey> prepareRemotePairing({required String personId});
+
+  Future<RemotePairingStatus> confirmRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required RemotePairingChallenge challenge,
+    required String pollingProof,
+  });
+
+  Future<RemotePairingStatus> remotePairingStatus({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+  });
+
+  Future<RemotePairingStatus> finalizeRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+    required RemotePairingChallenge challenge,
+  });
+}
+
 final class RemoteEnrollmentStatus {
   const RemoteEnrollmentStatus({
     required this.enrollmentId,
@@ -445,7 +675,8 @@ final class NativeAgentVaultGateway
         AgentConnectionsGateway,
         AgentPersonalAccessGateway,
         AgentMemoryGateway,
-        AgentMemoryReviewGateway {
+        AgentMemoryReviewGateway,
+        RemotePairingGateway {
   NativeAgentVaultGateway(
     this.request, {
     required this.deviceId,
@@ -458,6 +689,75 @@ final class NativeAgentVaultGateway
   _VaultJob? _pending;
   AgentSession? _run;
   AgentConversationTurnRequest? _conversationRun;
+
+  @override
+  Future<RemoteOwnerPublicKey> prepareRemotePairing({
+    required String personId,
+  }) async {
+    final result = await _perform(personId, {'kind': 'remote_pairing_prepare'});
+    return RemoteOwnerPublicKey.fromJson(result['remote_owner']);
+  }
+
+  @override
+  Future<RemotePairingStatus> confirmRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required RemotePairingChallenge challenge,
+    required String pollingProof,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_pairing_confirm',
+      'route': route,
+      'challenge': challenge.toJson(),
+      'polling_proof': pollingProof,
+    });
+    return _pairingResult(result, personId);
+  }
+
+  @override
+  Future<RemotePairingStatus> remotePairingStatus({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_pairing_status',
+      'route': route,
+      'pairing_id': pairingId,
+      'polling_proof': pollingProof,
+    });
+    return _pairingResult(result, personId);
+  }
+
+  @override
+  Future<RemotePairingStatus> finalizeRemotePairing({
+    required String personId,
+    required Map<String, Object?> route,
+    required String pairingId,
+    required String pollingProof,
+    required RemotePairingChallenge challenge,
+  }) async {
+    final result = await _perform(personId, {
+      'kind': 'remote_pairing_finalize',
+      'route': route,
+      'pairing_id': pairingId,
+      'polling_proof': pollingProof,
+      'challenge': challenge.toJson(),
+    });
+    return _pairingResult(result, personId);
+  }
+
+  RemotePairingStatus _pairingResult(
+    Map<String, dynamic> result,
+    String personId,
+  ) {
+    final status = RemotePairingStatus.fromJson(result['remote_pairing']);
+    if (result['state'] != 'ready' || status.personId != personId) {
+      throw const FormatException('Pairing identity mismatch');
+    }
+    return status;
+  }
 
   @override
   Future<List<AgentConnection>> readConnections(String personId) async {
@@ -963,11 +1263,9 @@ final class NativeAgentVaultGateway
   Future<PersonalAccessOverview> inspectPersonalFeasibility(
     String personId,
   ) async {
-    return _personalAccess(
-      personId,
-      {'kind': 'inspect'},
-      connector: 'feasibility.apple',
-    );
+    return _personalAccess(personId, {
+      'kind': 'inspect',
+    }, connector: 'feasibility.apple');
   }
 
   @override
@@ -985,18 +1283,14 @@ final class NativeAgentVaultGateway
         consumers.toSet().length != consumers.length) {
       throw const FormatException('Feasibility review scope changed');
     }
-    return _personalAccess(
-      personId,
-      {
-        'kind': 'review',
-        'expected_native_subject_fingerprint': fingerprint,
-        'consumers': List<String>.unmodifiable(consumers),
-        'expected_grant_id': reviewedPreview.grantId,
-        'expected_grant_authority': reviewedPreview.grantAuthority,
-        'feasibility_query': query.toJson(),
-      },
-      connector: 'feasibility.apple',
-    );
+    return _personalAccess(personId, {
+      'kind': 'review',
+      'expected_native_subject_fingerprint': fingerprint,
+      'consumers': List<String>.unmodifiable(consumers),
+      'expected_grant_id': reviewedPreview.grantId,
+      'expected_grant_authority': reviewedPreview.grantAuthority,
+      'feasibility_query': query.toJson(),
+    }, connector: 'feasibility.apple');
   }
 
   @override
@@ -1004,18 +1298,19 @@ final class NativeAgentVaultGateway
     String personId,
     bool enabled,
   ) async {
-    return _personalAccess(
-      personId,
-      {'kind': 'set_enabled', 'enabled': enabled},
-      connector: 'feasibility.apple',
-    );
+    return _personalAccess(personId, {
+      'kind': 'set_enabled',
+      'enabled': enabled,
+    }, connector: 'feasibility.apple');
   }
 
   @override
   Future<PersonalAccessOverview> inspectPersonalWellbeing(
     String personId,
   ) async {
-    return _personalAccess(personId, {'kind': 'inspect'}, connector: 'health.apple');
+    return _personalAccess(personId, {
+      'kind': 'inspect',
+    }, connector: 'health.apple');
   }
 
   @override
@@ -1029,17 +1324,13 @@ final class NativeAgentVaultGateway
         !RegExp(r'^[0-9a-f]{64}$').hasMatch(nativeSubjectFingerprint)) {
       throw const FormatException('Wellbeing review scope changed');
     }
-    return _personalAccess(
-      personId,
-      {
-        'kind': 'review',
-        'expected_native_subject_fingerprint': nativeSubjectFingerprint,
-        'consumers': const ['assistant'],
-        'expected_grant_id': reviewedPreview.grantId,
-        'expected_grant_authority': reviewedPreview.grantAuthority,
-      },
-      connector: 'health.apple',
-    );
+    return _personalAccess(personId, {
+      'kind': 'review',
+      'expected_native_subject_fingerprint': nativeSubjectFingerprint,
+      'consumers': const ['assistant'],
+      'expected_grant_id': reviewedPreview.grantId,
+      'expected_grant_authority': reviewedPreview.grantAuthority,
+    }, connector: 'health.apple');
   }
 
   @override
@@ -1047,11 +1338,10 @@ final class NativeAgentVaultGateway
     String personId,
     bool enabled,
   ) async {
-    return _personalAccess(
-      personId,
-      {'kind': 'set_enabled', 'enabled': enabled},
-      connector: 'health.apple',
-    );
+    return _personalAccess(personId, {
+      'kind': 'set_enabled',
+      'enabled': enabled,
+    }, connector: 'health.apple');
   }
 
   @override
@@ -1093,8 +1383,9 @@ final class NativeAgentVaultGateway
 
   Future<PersonalAccessOverview> _personalAccess(
     String personId,
-    Map<String, Object?> change,
-  {String connector = 'attention.macos'}) async {
+    Map<String, Object?> change, {
+    String connector = 'attention.macos',
+  }) async {
     final result = await _perform(personId, {
       'kind': 'personal_access',
       'change': {

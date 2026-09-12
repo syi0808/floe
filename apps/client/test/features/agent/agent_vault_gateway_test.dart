@@ -237,7 +237,180 @@ void main() {
       await expectLater(gateway.vaultStatus('test'), throwsFormatException);
     },
   );
+
+  test(
+    'pairing lifecycle uses strict proof actions without connector grants',
+    () async {
+      const personId = '00000000-0000-4000-8000-000000000001';
+      const pairingId = '00000000-0000-4000-8000-000000000002';
+      const owner = {
+        'key_id': '00000000-0000-4000-8000-000000000003',
+        'public_key': 'owner-public-key',
+        'fingerprint': 'owner-fingerprint',
+      };
+      final producer = RemoteProducerIdentity(
+        schemaVersion: 1,
+        instanceId: '00000000-0000-4000-8000-000000000004',
+        executionOwner: '00000000-0000-4000-8000-000000000005',
+        audience: 'floe.server:00000000-0000-4000-8000-000000000004',
+        keyId: '00000000-0000-4000-8000-000000000006',
+        publicKey: 'producer-public-key',
+        fingerprint: 'producer-fingerprint',
+      );
+      final challenge = RemotePairingChallenge(
+        schemaVersion: 1,
+        pairingId: pairingId,
+        challengeId: '00000000-0000-4000-8000-000000000007',
+        challengeB64Url: 'challenge',
+        producerSignature: 'producer-signature',
+        producer: producer,
+        issuer: RemoteOwnerPublicKey.fromJson(owner),
+        expiresAtUnixMs: 4102444800000,
+      );
+      final route = <String, Object?>{
+        'base_url': 'http://127.0.0.1:8431',
+        'bearer_token': '',
+        'purpose': 'everyday_assistance',
+        'external': false,
+        'allow_external': false,
+        'pairing': {
+          'client_id': pairingId,
+          'person_id': personId,
+          'device_id': 'test-device',
+        },
+        'calendar_connections': <Object?>[],
+      };
+      final calls = <String>[];
+      final gateway = NativeAgentVaultGateway((request) async {
+        final operation = Map<String, Object?>.from(
+          request['operation']! as Map,
+        );
+        if (operation['kind'] == 'release') return _pairingSuccess(request);
+        final action = Map<String, Object?>.from(operation['action']! as Map);
+        final kind = action['kind']! as String;
+        calls.add(kind);
+        final payload = switch (kind) {
+          'remote_pairing_prepare' => {'remote_owner': owner},
+          'remote_pairing_confirm' => {
+            'remote_pairing': _pairingStatus(
+              personId,
+              pairingId,
+              'local_confirmed',
+            ),
+          },
+          'remote_pairing_status' => {
+            'remote_pairing': _pairingStatus(
+              personId,
+              pairingId,
+              'approved',
+              token: 't' * 32,
+            ),
+          },
+          'remote_pairing_finalize' => {
+            'remote_pairing': _pairingStatus(
+              personId,
+              pairingId,
+              'approved',
+              token: 't' * 32,
+            ),
+          },
+          _ => throw StateError('unexpected action $kind'),
+        };
+        return _pairingSuccess(request, payload);
+      }, deviceId: 'test-device');
+
+      expect(
+        (await gateway.prepareRemotePairing(personId: personId)).fingerprint,
+        'owner-fingerprint',
+      );
+      expect(
+        (await gateway.confirmRemotePairing(
+          personId: personId,
+          route: route,
+          challenge: challenge,
+          pollingProof: 'polling-proof',
+        )).status,
+        'local_confirmed',
+      );
+      expect(
+        (await gateway.remotePairingStatus(
+          personId: personId,
+          route: route,
+          pairingId: pairingId,
+          pollingProof: 'polling-proof',
+        )).token,
+        't' * 32,
+      );
+      expect(
+        (await gateway.finalizeRemotePairing(
+          personId: personId,
+          route: route,
+          pairingId: pairingId,
+          pollingProof: 'polling-proof',
+          challenge: challenge,
+        )).status,
+        'approved',
+      );
+      expect(calls, [
+        'remote_pairing_prepare',
+        'remote_pairing_confirm',
+        'remote_pairing_status',
+        'remote_pairing_finalize',
+      ]);
+      expect(calls.any((kind) => kind.contains('grant')), isFalse);
+    },
+  );
+
+  test('pairing status accepts explicit rejection and expiry only', () {
+    Map<String, Object?> status(String value) => {
+      'schema_version': 1,
+      'pairing_id': '00000000-0000-4000-8000-000000000002',
+      'status': value,
+      'person_id': '00000000-0000-4000-8000-000000000001',
+      'device_id': 'test-device',
+    };
+    expect(RemotePairingStatus.fromJson(status('rejected')).status, 'rejected');
+    expect(RemotePairingStatus.fromJson(status('expired')).status, 'expired');
+    expect(
+      () => RemotePairingStatus.fromJson(status('unknown')),
+      throwsFormatException,
+    );
+    expect(
+      () => RemotePairingStatus.fromJson({
+        ...status('approved'),
+        'token': 'token',
+        'client_id': 'wrong-client',
+      }),
+      throwsFormatException,
+    );
+  });
 }
+
+Map<String, dynamic> _pairingSuccess(
+  Map<String, dynamic> request, [
+  Map<String, Object?> payload = const {},
+]) => {
+  'request_id': request['request_id'],
+  'done': true,
+  'events': <Object?>[],
+  'next_sequence': 0,
+  'state': 'ready',
+  ...payload,
+};
+
+Map<String, Object?> _pairingStatus(
+  String personId,
+  String pairingId,
+  String status, {
+  String? token,
+}) => {
+  'schema_version': 1,
+  'pairing_id': pairingId,
+  'status': status,
+  'person_id': personId,
+  'device_id': 'test-device',
+  if (token != null) 'token': token,
+};
 
 class _Transport {
   Map<String, dynamic>? pending;

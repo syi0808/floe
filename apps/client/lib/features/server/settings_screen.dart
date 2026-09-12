@@ -29,7 +29,6 @@ import '../../infrastructure/native/apple_context_gateway.dart';
 
 part 'settings/data_privacy.dart';
 part 'settings/ai_processing.dart';
-part 'settings/remote_authority.dart';
 part 'settings/action_permissions.dart';
 part 'settings/navigation.dart';
 
@@ -226,7 +225,10 @@ class _RemoteServerSettings extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       if (client case final serverClient?)
-        LocalServerPanel(client: serverClient)
+        LocalServerPanel(
+          client: serverClient,
+          pairingGateway: agentVaultGateway,
+        )
       else
         const FloeSquircle(
           padding: EdgeInsets.all(FloeSpace.lg),
@@ -234,13 +236,6 @@ class _RemoteServerSettings extends StatelessWidget {
             'Remote server connection is available in the native Floe app.',
           ),
         ),
-      if (client != null && agentVaultGateway != null) ...[
-        const SizedBox(height: FloeSpace.lg),
-        _RemoteAuthorityEnrollment(
-          client: client!,
-          agentVaultGateway: agentVaultGateway!,
-        ),
-      ],
       const SizedBox(height: FloeSpace.lg),
       Padding(
         padding: EdgeInsets.symmetric(horizontal: 4),

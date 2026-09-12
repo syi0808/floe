@@ -280,4 +280,58 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'strict pairing start binds issuer and preserves challenge identity',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+        expect(request.uri.path, '/pair/start');
+        expect(body['schema_version'], 1);
+        expect(body['issuer_key_id'], '00000000-0000-4000-8000-000000000003');
+        expect(body['issuer_public_key'], 'owner-public-key');
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'schema_version': 1,
+            'pairing_id': '00000000-0000-4000-8000-000000000002',
+            'code': 'ABCD1234',
+            'proof': 'polling-proof',
+            'expires_at_unix_ms':
+                DateTime.now().toUtc().millisecondsSinceEpoch + 60000,
+            'person_id': '00000000-0000-4000-8000-000000000001',
+            'device_id': 'local-client',
+            'producer': {
+              'schema_version': 1,
+              'instance_id': '00000000-0000-4000-8000-000000000004',
+              'execution_owner': '00000000-0000-4000-8000-000000000005',
+              'audience': 'floe.server:00000000-0000-4000-8000-000000000004',
+              'key_id': '00000000-0000-4000-8000-000000000006',
+              'public_key': 'producer-public-key',
+              'fingerprint': 'producer-fingerprint',
+            },
+            'issuer': {
+              'key_id': '00000000-0000-4000-8000-000000000003',
+              'public_key': 'owner-public-key',
+              'fingerprint': 'owner-fingerprint',
+            },
+            'challenge_id': '00000000-0000-4000-8000-000000000007',
+            'challenge_b64url': 'challenge',
+            'producer_signature': 'producer-signature',
+          }),
+        );
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final client = LocalServerClient(store: MemoryServerCredentials());
+      final result = await client.startPairingStrict(
+        'http://127.0.0.1:${server.port}',
+        issuerKeyId: '00000000-0000-4000-8000-000000000003',
+        issuerPublicKey: 'owner-public-key',
+      );
+      expect(result.pairingId, isNot(result.challengeId));
+      expect(result.issuer['fingerprint'], 'owner-fingerprint');
+    },
+  );
 }
