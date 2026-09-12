@@ -59,15 +59,19 @@ Deliverables:
    and the reviewed source authority. Grant owner is the local vault identity, not a caller-selected
    remote issuer. Use existing ID types where their meaning matches; do not equate a grant ID with
    a registry revision or pretend device IDs are UUIDs.
-2. Scope explicitly carries nonempty bounded resource handles, operations, purposes, consumers
-   and processing restriction. Document limits in exported constants/tests; canonicalize or reject
+2. Scope explicitly carries domain/data categories, nonempty bounded resource handles, operations,
+   purposes, consumers and processing restriction. Document limits in exported constants/tests; canonicalize or reject
    duplicates deterministically. Initially support finite explicit resource sets only. Reject blank,
    overlong, unsupported/unknown, missing or zero-valued authority fields. No wildcard fallback.
    Keep provider raw identifiers in encrypted host data; no source payload or credential in grants.
+   Revalidate nested identifiers after deserialization, not just in constructors. A reordered finite
+   set is the same consent. Unsupported processing recipients must not become a bare allow-external flag.
 3. States: paused/active/revoked. Creation is paused. Activation or reviewed replacement is an
    explicit host command against the expected grant stamp and the exact reviewed source binding.
    Pause/revoke cannot activate or expand scope. Revoked identity is terminal: renewed consent
-   requires a new grant ID. Scope replacement/review and state changes advance access epoch with
+   requires a new grant ID. Same-ID review cannot change Person/connection/connector/execution owner.
+   Source mismatch produces review-required admission distinct from user pause; P2 must represent
+   this explicitly rather than silently overwrite the paused state. Scope replacement/review and state changes advance access epoch with
    checked overflow. No-op commands do not gratuitously advance epochs.
 4. Add an encrypted grant table and cleanup outbox using the same vault database and existing
    transaction/key-access patterns. Include a strict per-store schema marker. Never repurpose
