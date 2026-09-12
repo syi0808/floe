@@ -65,6 +65,28 @@ versus unrelated item change; payload/target tampering; restart after provider s
 settlement; duplicate completion; reconciliation without duplicate effects; and expired proposal
 dependencies that remain inspectable but cannot authorize publication.
 
+### Audited action integration gaps
+
+`calendar_action.rs::execute_calendar_action` currently transitions to `Executing` before preflight,
+then separately reads action policy, mirror revision and the entire local event list. The final
+provider call is not serialized with policy/source revocation. Equality of the entire event list and
+`connection_revision` also rejects unrelated item updates. These checks are not dispatch admission.
+`AgentActionOrigin` does not yet carry an exact connection/source authority, normalized approved
+payload digest or target precondition. Existing `execution_id` and unknown-result reconciliation
+must be retained, not replaced with another retry state machine.
+
+The action projection and `ActionAuthority` currently live in the Core store; grant authority lives
+in the encrypted agent vault. A transaction in either database cannot atomically check the other.
+Before implementation, explicitly choose the authoritative dispatch owner and make every relevant
+pause/revoke/cancel/policy mutation participate in its fence. Do not describe two independent
+transactions as atomic. Keep provider preflight/mutation outside that fence. A crash between durable
+admission and delivery must remain reconcilable using the original execution identifier.
+
+`agent_vault/expert_actions.rs` currently denies publication of all `calendar.lease:*` evidence.
+This is an intentional temporary safety gate, not P6b adoption. Historical inspection can retain
+that evidence without granting a new live lease. Replace the gate only when the actual current
+dependency resolver and dispatch admission are wired end to end.
+
 ## P7 final gate
 
 Only mark complete after all rows in the acceptance ledger have production positive and negative
