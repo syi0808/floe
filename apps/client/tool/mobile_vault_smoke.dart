@@ -42,8 +42,9 @@ Future<void> main() async {
             } on AgentVaultException catch (error) {
               rejected = error.failure == 'conflict';
             }
-            if (!rejected)
+            if (!rejected) {
               throw StateError('A second vault owner was admitted');
+            }
           } finally {
             await contender.close();
           }

@@ -23,12 +23,22 @@ not a requirement to recreate every test before implementing the next feature.
 - Attention uses a trusted host broker and final-save liveness validation. Contacts now has native
   selected-identity inspection, explicit review and encrypted selected-handle persistence; the
   generic display publication remains insufficient to authorize a model read.
-- Wellbeing and Feasibility remain explicitly unavailable in governed native acquisition. Mobile
-  encrypted-vault key storage is also not implemented by the current macOS-only keyring adapter.
-  These are implementation gaps, not tests that can be waived by using a synthetic provider.
+- Governed Wellbeing acquisition remains unimplemented. Feasibility now binds an explicit event,
+  destination, time window and travel mode to an encrypted grant and native permission subject;
+  background acquisition never requests new OS permission.
 - Contacts capability and Relationships expert now resolve the unique active reviewed grant,
   reload the saved selection, acquire through the broker and record the dependency for model/CAS
-  validation. Mobile secure-key support still gates a real device run.
+  validation. Contacts OS/provider behavior still needs a separately consented mobile run.
+- Mobile Vault keys are connected: iOS uses device-only unlocked Keychain items; Android uses
+  Keystore-wrapped keys in no-backup storage. Android's unsupported Rust standard file lock was
+  replaced with a nonblocking platform lock without weakening single-owner enforcement.
+- Actual Android emulator smoke passed Vault creation, lock, reopen, and rejection of a second
+  owner through the packaged JNI/FFI path. `tool/mobile_vault_smoke.dart` preserves this regression.
+  iOS Core and FFI target checks pass, but full iOS app execution is blocked by the installed
+  SDK/runtime mismatch (SDK 26.2 versus simulator runtime 26.0).
+- iOS native Contacts, Feasibility, Health, ScreenTime modules and the Flutter Apple channel
+  typecheck against the simulator SDK. The settings regression group passes 11 tests, including
+  publishing-wrapper visibility, explicit permission and exact Feasibility query forwarding.
 - Mail/Work/Logistics now have settings Inspect → Review → Pause controls and Vault worker
   handlers. Review binds the frozen signed source, provider identity, revision and producer;
   model authorization checks fresh source and consumer policy. The approved processing recipient
@@ -41,14 +51,16 @@ not a requirement to recreate every test before implementing the next feature.
   exit loading with a credential-store error on this machine; actual pairing remains unverified.
 - Focused UI regressions pass: 13 action-review and 17 settings/server checks. The action-review
   scrollbar-only golden was removed; narrow-layout readability and overflow checks remain.
-- The stable Core integration checkpoint passes 169 tests and FFI passes 66. Positive remote
+- The preceding desktop integration checkpoint passed 169 Core and 66 FFI tests. Positive remote
   expert artifact checks use an injected reader, not a claim of end-to-end signed authorization.
   The signed Calendar fixture uses a bounded 10-second socket timeout to tolerate suite contention.
   The Go server suite passes;
   native source fixture checks and signed Calendar exchange are synthetic checks, separate
   from the direct macOS startup/settings exercise and unperformed external provider writes.
-- Next implementation order: mobile secure-key provider, governed Feasibility acquisition,
-  then governed Wellbeing acquisition. These are usable-path work, not additional test matrices.
+- Remaining implementation includes governed Wellbeing and the mobile local-model bridge
+  (`local_model.rs` still only loads its native model on macOS). Feasibility's local-only grants
+  are not permission to bypass this limitation by forwarding context to a remote model.
+  Real location/MapKit/WeatherKit acquisition and external provider writes remain unverified.
 
 ## Historical checkpoints
 
