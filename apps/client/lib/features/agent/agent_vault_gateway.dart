@@ -401,8 +401,9 @@ final class RemoteCalendarGrantPreview {
   final String recipient;
 
   factory RemoteCalendarGrantPreview.fromJson(Object? raw) {
-    if (raw is! Map)
+    if (raw is! Map) {
       throw const FormatException('Invalid calendar grant preview');
+    }
     final value = Map<String, Object?>.from(raw);
     if (value['schema_version'] != 1 ||
         value['connector_id'] is! String ||
@@ -449,8 +450,9 @@ final class RemoteCalendarGrantOverview {
   final String recipient;
 
   factory RemoteCalendarGrantOverview.fromJson(Object? raw) {
-    if (raw is! Map)
+    if (raw is! Map) {
       throw const FormatException('Invalid calendar grant overview');
+    }
     final value = Map<String, Object?>.from(raw);
     if (value['schema_version'] != 1 ||
         value['grant_id'] is! String ||

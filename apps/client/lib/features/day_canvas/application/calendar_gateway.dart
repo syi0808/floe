@@ -98,8 +98,9 @@ final class EventKitCalendarAdapter implements CalendarAdapter {
       'readAcquisition',
       _arguments(Map<String, Object>.from(request)),
     );
-    if (response == null)
+    if (response == null) {
       throw const FormatException('Missing EventKit acquisition result.');
+    }
     return Map<String, dynamic>.from(response);
   }
 

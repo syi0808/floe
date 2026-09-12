@@ -528,10 +528,11 @@ final class _ServerConnectionGrantsState
     } on AgentVaultException catch (failure) {
       if (mounted) setState(() => error = _grantError(failure.failure));
     } on Object {
-      if (mounted)
+      if (mounted) {
         setState(
           () => error = 'The connection permission could not be updated.',
         );
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -551,8 +552,9 @@ final class _ServerConnectionGrantsState
       connectionId: connectionId,
       resource: resource,
     );
-    if (!_stable(preview.connectionId))
+    if (!_stable(preview.connectionId)) {
       throw const FormatException('connection_changed');
+    }
     if (mounted) setState(() => calendarPreview = preview);
   });
 
@@ -604,8 +606,9 @@ final class _ServerConnectionGrantsState
       resource: '$viewId:$connectionId',
       consumer: consumer,
     );
-    if (!_stable(preview.connectionId))
+    if (!_stable(preview.connectionId)) {
       throw const FormatException('connection_changed');
+    }
     if (mounted) setState(() => viewPreview = preview);
   });
 
@@ -691,7 +694,7 @@ final class _ServerConnectionGrantsState
           const Text('Remote views', style: FloeType.controlLabel),
           DropdownButtonFormField<String>(
             key: const ValueKey('connection-view-selection'),
-            value: selectedView,
+            initialValue: selectedView,
             items: [
               for (final view in views)
                 DropdownMenuItem(value: view, child: Text(view)),
@@ -707,7 +710,7 @@ final class _ServerConnectionGrantsState
           ),
           DropdownButtonFormField<String>(
             key: const ValueKey('connection-view-consumer'),
-            value: consumer,
+            initialValue: consumer,
             items: const [
               DropdownMenuItem(value: 'assistant', child: Text('assistant')),
               DropdownMenuItem(

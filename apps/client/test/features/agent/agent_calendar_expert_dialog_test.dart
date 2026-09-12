@@ -120,7 +120,7 @@ void main() {
         deviceId: 'test-device',
         provider: 'event_kit',
         revision: 2,
-        sourceAuthority: const CalendarSourceAuthority(
+        sourceAuthority: CalendarSourceAuthority(
           incarnation: '00000000-0000-4000-8000-000000000009',
           epoch: 1,
         ),

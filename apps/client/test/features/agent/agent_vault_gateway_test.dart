@@ -409,7 +409,7 @@ Map<String, Object?> _pairingStatus(
   'status': status,
   'person_id': personId,
   'device_id': 'test-device',
-  if (token != null) 'token': token,
+  'token': ?token,
 };
 
 class _Transport {
