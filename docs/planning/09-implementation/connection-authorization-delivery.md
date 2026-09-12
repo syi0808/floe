@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1/P2 and P3a/P4a/P4b/P5a/P5b accepted as bounded milestones; P3b/P5c/P7a integration continues. P7 is not complete.
+> Status: P1/P2 and P3a/P4a/P4b/P5a/P5b/P7a accepted as bounded milestones; P3b/P4d/P5c integration continues. P7 final acceptance is not complete.
 
 ## 1. Scope and completion rule
 
@@ -399,6 +399,14 @@ persisted timestamps. Recovery may reacquire authority but cannot silently exten
   later model work, reject competing private-state writes, and block second egress after grant pause
   or expansion. Failed source acquisition does not pin an authority. macOS tool dispatch uses the
   native adapter; mobile tool-time acquisition and non-Calendar policy mappings remain separate gates.
+- P7a `cf8afb9` + `a4d1127`: strict stage-aware failure envelopes and source-local conversation UI
+  accepted; the second commit corrects index-only selective-staging placement without altering the
+  shared working tree. Root rebuilt the FFI library and reran 48 FFI tests, 8 complete gateway tests,
+  and 22 controller/panel tests. Unknown stale context no longer claims Calendar access changed;
+  source review opens explicit Settings and preserves the conversation. Retry requires an explicitly
+  safe read envelope; current host mappings do not infer safe retry from timeout/cancellation or
+  a generic capability failure. Opaque affected-source references remain empty where the operation
+  lacks authoritative attribution. This is the bounded failure/recovery path, not the P7 route matrix.
 - P5b `71b5c89`: durable console issuer enrollment, explicit administrator approval, terminal
   revocation, strict trust quarantine, and source-lock release validation accepted. Root reran fresh
   authorization/console tests and their race suites; all passed. Post-rename durability uncertainty

@@ -20,7 +20,7 @@ require separate explicit consent and disposable resources; synthetic tests do n
 | Remote Logistics route | Existing owned runtime/Gmail aggregation | Exact selected source, authorization and bounded partial-coverage parity |
 | Contacts/Wellbeing/Attention/Feasibility | Existing domain-specific projection and retention paths | Shared grant/lease/dependency boundary with positive and negative source fixtures |
 | Action proposals and execution | Existing approval, durable attempts and uncertain-outcome reconciliation | Current dependency/action-policy admission and revoke/dispatch race tests |
-| Recovery UI | Source-authority consent review implemented | Typed source-local failure envelope, eligible read retry and unknown-action reconciliation |
+| Recovery UI | Strict stage-aware failure envelope, session-preserving source review and generic stale context guidance | Exact affected-source attribution, eligible read-retry producers, final route/action matrix |
 
 ## Required final evidence
 
