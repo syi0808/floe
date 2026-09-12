@@ -30,6 +30,15 @@ func TestAuthorityEnrollmentHTTPFlowAndMethodGuards(t *testing.T) {
 	if unauthorized := fixture.call(http.MethodPost, "/v1/authority/enrollment/begin", beginBody, "invalid-bearer"); unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong bearer reached enrollment: %d", unauthorized.Code)
 	}
+	wrongCase := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8431/v1/authority/enrollment/begin", bytes.NewBufferString(`{"KEY_ID":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","audience":"floe.server:00000000-0000-4000-8000-000000000001"}`))
+	wrongCase.Host = "127.0.0.1:8431"
+	wrongCase.Header.Set("Content-Type", "application/json")
+	wrongCase.Header.Set("Authorization", "Bearer "+token)
+	wrongCaseResponse := httptest.NewRecorder()
+	fixture.console.ServeHTTP(wrongCaseResponse, wrongCase)
+	if wrongCaseResponse.Code != http.StatusBadRequest {
+		t.Fatalf("case-alias authority field accepted: %d %s", wrongCaseResponse.Code, wrongCaseResponse.Body.String())
+	}
 	begin := fixture.call(http.MethodPost, "/v1/authority/enrollment/begin", beginBody, token)
 	if begin.Code != http.StatusOK {
 		t.Fatalf("begin: %d %s", begin.Code, begin.Body.String())

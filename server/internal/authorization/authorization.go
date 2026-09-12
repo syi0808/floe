@@ -1574,7 +1574,7 @@ func walkJSON(decoder *json.Decoder, depth int) error {
 					return err
 				}
 				ks, ok := key.(string)
-				if !ok || seen[ks] {
+				if !ok || ks != strings.ToLower(ks) || seen[ks] {
 					return ErrInvalid
 				}
 				seen[ks] = true

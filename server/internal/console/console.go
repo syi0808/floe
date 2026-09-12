@@ -9,6 +9,8 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -174,6 +176,8 @@ type Console struct {
 	gateway                                      *inference.Gateway
 	authorization                                *authorization.Engine
 	trustUnavailable                             atomic.Bool
+	producerUnavailable                          atomic.Bool
+	producer                                     *producerIdentity
 	unavailable                                  map[string]bool
 	sessions                                     map[string]session
 	pair                                         *pairing
@@ -367,11 +371,24 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 	if err != nil || host != "127.0.0.1" || port == "" {
 		return nil, errors.New("console requires 127.0.0.1:port")
 	}
+	_, stateError := os.Stat(filepath.Join(directory, "state.json"))
+	stateExists := stateError == nil
 	state, admin, err := readState(directory)
 	if err != nil {
 		return nil, err
 	}
 	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
+	producer, producerError := loadProducerIdentity(filepath.Join(directory, "producer-identity.json"), !stateExists)
+	if producerError != nil {
+		console.producerUnavailable.Store(true)
+	} else {
+		console.producer = producer
+	}
+	if !stateExists {
+		if saveError := console.save(state); saveError != nil {
+			return nil, errors.New("initial server state unavailable")
+		}
+	}
 	var engine *authorization.Engine
 	if !state.TrustCorrupt {
 		engine, err = authorization.New(authorization.Options{Store: consoleTrustStore{console: console}})
@@ -608,7 +625,7 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 		failure(writer, 503, "person_cleanup_pending")
 		return
 	}
-	if strings.HasPrefix(request.URL.Path, "/v1/authority/enrollment") {
+	if strings.HasPrefix(request.URL.Path, "/v1/authority/enrollment") || request.URL.Path == "/v1/authority/producer" {
 		console.serveAuthority(writer, request, scope)
 		return
 	}

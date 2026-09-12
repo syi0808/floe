@@ -90,7 +90,10 @@ async function refresh() {
     })); clients.append(row);
   }
   const authority = element('authority-enrollments'); authority.replaceChildren();
+  const producer = element('authority-producer'); producer.replaceChildren();
   try {
+    const producerValue = await api('authority/producer');
+    producer.append(text('small', `Producer instance: ${producerValue.instance_id} · execution owner: ${producerValue.execution_owner}`), text('small', `Audience: ${producerValue.audience}`), text('small', `Public-key fingerprint: ${producerValue.fingerprint}`));
     const value = await api('authority/enrollments');
     if (!value.enrollments?.length) { authority.append(text('p', 'No issuer enrollments awaiting approval.')); return; }
     for (const enrollment of value.enrollments) {

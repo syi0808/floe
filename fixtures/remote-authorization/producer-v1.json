@@ -1,0 +1,21 @@
+{
+  "fixture_only": true,
+  "schema_version": 1,
+  "signature_domain_hex": "666c6f652e72656d6f74652e70726f64756365722e763100",
+  "test_seed_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+  "public_key_b64url": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+  "fingerprint_hex": "6a3803d5f059902a1c6dafbc9ba4729212f7caac08634cc3ae76b27529f03827",
+  "challenge_bytes": "{\"v\":1,\"operation\":\"enrollment\",\"challenge_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"key_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"person_id\":\"11111111-1111-4111-8111-111111111111\",\"client_id\":\"client-1\",\"device_id\":\"device-1\",\"audience\":\"floe.server:22222222-2222-4222-8222-222222222222\",\"purpose\":\"owner_enrollment\",\"consumer\":\"owner\",\"issued_at_unix_ms\":1700000000000,\"expires_at_unix_ms\":1700000030000}",
+  "signature_b64url": "Xs8FOS_QPododK04Qu0dKrmdOypjVIS_ME4fPKs-qKYAmDtudgSv0WnMTAdX_HYy8ymGDoAwOHbR7SebytbDBA",
+  "negative": [
+    {"name": "signature_modified", "signature_b64url": "Ap6sbXYtB7Yx5TE9ge63U4mUzNGZuP6UtH_FtNeHYTJBEbLo1GF2qZ7UGOFQMhzsmMYp2KXPm9gGQ9KOCSVdAg"},
+    {"name": "challenge_modified", "challenge_suffix": ",\"unknown\":1}"},
+    {"name": "duplicate_nested_or_top_level", "challenge_suffix": ",\"operation\":\"release\"}"},
+    {"name": "padded_signature", "signature_b64url": "Np6sbXYtB7Yx5TE9ge63U4mUzNGZuP6UtH_FtNeHYTJBEbLo1GF2qZ7UGOFQMhzsmMYp2KXPm9gGQ9KOCSVdAg="},
+    {"name": "changed_audience", "mutation": "floe.server:22222222-2222-4222-8222-222222222222", "replacement": "floe.server:33333333-3333-4333-8333-333333333333"},
+    {"name": "changed_person", "mutation": "11111111-1111-4111-8111-111111111111", "replacement": "11111111-1111-4111-8111-111111111112"},
+    {"name": "changed_device", "mutation": "device-1", "replacement": "device-2"},
+    {"name": "changed_key", "mutation": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "replacement": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"},
+    {"name": "wrong_case_field", "mutation": "\"operation\":\"enrollment\"", "replacement": "\"OPERATION\":\"enrollment\""}
+  ]
+}

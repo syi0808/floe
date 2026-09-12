@@ -14,6 +14,15 @@ import (
 )
 
 func (console *Console) serveAuthority(writer http.ResponseWriter, request *http.Request, scope clientScope) {
+	if request.Method == http.MethodGet && request.URL.Path == "/v1/authority/producer" {
+		metadata, err := console.producerMetadata()
+		if err != nil {
+			failure(writer, http.StatusServiceUnavailable, "producer_unavailable")
+			return
+		}
+		reply(writer, http.StatusOK, metadata)
+		return
+	}
 	engine := console.authorityEngine()
 	if engine == nil {
 		failure(writer, http.StatusServiceUnavailable, "authority_unavailable")
@@ -36,12 +45,36 @@ func (console *Console) serveAuthority(writer http.ResponseWriter, request *http
 			failure(writer, http.StatusBadRequest, "validation")
 			return
 		}
-		enrollment, challenge, err := engine.BeginEnrollment(principal, input.KeyID, ed25519.PublicKey(publicKey), input.Audience)
+		metadata, metadataError := console.producerMetadata()
+		if metadataError != nil {
+			failure(writer, http.StatusServiceUnavailable, "producer_unavailable")
+			return
+		}
+		audience, audienceOK := metadata["audience"].(string)
+		if !audienceOK {
+			failure(writer, http.StatusBadRequest, "validation")
+			return
+		}
+		enrollment, challenge, err := engine.BeginEnrollment(principal, input.KeyID, ed25519.PublicKey(publicKey), audience)
 		if err != nil {
 			failure(writer, http.StatusForbidden, "enrollment_denied")
 			return
 		}
-		reply(writer, http.StatusOK, map[string]any{"enrollment_id": enrollment.ID, "challenge_id": challenge.ID, "key_id": enrollment.KeyID, "fingerprint": enrollment.Fingerprint, "challenge_b64url": challenge.BytesB64, "expires": challenge.ExpiresAt})
+		producerKeyID := metadata["key_id"]
+		producerPublicKey := metadata["public_key"]
+		producerFingerprint := metadata["fingerprint"]
+		metadata["enrollment_id"] = enrollment.ID
+		metadata["challenge_id"] = challenge.ID
+		metadata["key_id"] = enrollment.KeyID
+		metadata["fingerprint"] = enrollment.Fingerprint
+		metadata["producer_key_id"] = producerKeyID
+		metadata["producer_public_key"] = producerPublicKey
+		metadata["producer_fingerprint"] = producerFingerprint
+		delete(metadata, "public_key")
+		metadata["challenge_b64url"] = challenge.BytesB64
+		metadata["producer_signature"] = base64.RawURLEncoding.EncodeToString(console.producer.signChallenge(challenge.Bytes))
+		metadata["expires"] = challenge.ExpiresAt
+		reply(writer, http.StatusOK, metadata)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/authority/enrollment/complete":
 		var input struct {
 			EnrollmentID string `json:"enrollment_id"`
@@ -86,6 +119,17 @@ func (console *Console) manageAuthority(writer http.ResponseWriter, request *htt
 		return
 	}
 	switch request.URL.Path {
+	case "/manage/api/authority/producer":
+		if request.Method != http.MethodGet {
+			failure(writer, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		metadata, err := console.producerMetadata()
+		if err != nil {
+			failure(writer, http.StatusServiceUnavailable, "producer_unavailable")
+			return
+		}
+		reply(writer, http.StatusOK, metadata)
 	case "/manage/api/authority/enrollments":
 		if request.Method != http.MethodGet {
 			failure(writer, http.StatusNotFound, "not_found")
@@ -177,7 +221,7 @@ func walkAuthorityJSON(decoder *json.Decoder, depth int) error {
 				return err
 			}
 			name, ok := key.(string)
-			if !ok || seen[name] {
+			if !ok || name != strings.ToLower(name) || seen[name] {
 				return errors.New("duplicate")
 			}
 			seen[name] = true
