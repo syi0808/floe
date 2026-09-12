@@ -8,6 +8,41 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0")
 }
 
+val rustBuildScript = layout.projectDirectory.file("../build_rust.sh")
+val rustAbis = providers.gradleProperty("target-platform").map { platforms ->
+    platforms.split(',').map { platform ->
+        when (platform.trim()) {
+            "android-arm64" -> "arm64-v8a"
+            "android-x64" -> "x86_64"
+            else -> throw GradleException("Unsupported Flutter target platform: ${platform.trim()}")
+        }
+    }.distinct().joinToString(" ")
+}.orElse("arm64-v8a")
+val requestedRustMode = when {
+    gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) } -> "release"
+    gradle.startParameter.taskNames.any { it.contains("profile", ignoreCase = true) } -> "profile"
+    else -> "debug"
+}
+val rustConfiguration = providers.gradleProperty("flutter.buildMode").orElse(requestedRustMode).map { mode ->
+    when (mode.lowercase()) {
+        "debug" -> "Debug"
+        "profile" -> "Profile"
+        "release" -> "Release"
+        else -> throw GradleException("Unsupported Flutter build mode: $mode")
+    }
+}
+val generatedRustJniLibs = layout.buildDirectory.dir("generated/rust/jniLibs").get().asFile
+val buildRust = tasks.register<Exec>("buildRust") {
+    environment("FLOE_ANDROID_JNI_LIBS_DIR", generatedRustJniLibs.absolutePath)
+    environment("FLOE_ANDROID_ABIS", rustAbis.get())
+    environment("CONFIGURATION", rustConfiguration.get())
+    commandLine(rustBuildScript.asFile.absolutePath)
+}
+
+tasks.named("preBuild") {
+    dependsOn(buildRust)
+}
+
 android {
     namespace = "app.floe.floe_client"
     compileSdk = flutter.compileSdkVersion
@@ -17,6 +52,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    sourceSets.getByName("main").jniLibs.srcDir(generatedRustJniLibs)
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
@@ -31,6 +68,10 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {

@@ -204,7 +204,10 @@ final class NativeTransport implements LocalContextTransport {
   static String resolveLibraryPath() {
     final override = Platform.environment['FLOE_CORE_LIBRARY_PATH'];
     if (override != null && override.isNotEmpty) return override;
-    if (Platform.isIOS) return '';
+    if (Platform.isIOS) {
+      final executableDirectory = File(Platform.resolvedExecutable).parent.path;
+      return '$executableDirectory/Frameworks/libfloe_ffi.dylib';
+    }
     if (Platform.isAndroid) return 'libfloe_ffi.so';
     if (Platform.isMacOS) {
       final executableDirectory = File(Platform.resolvedExecutable).parent.path;

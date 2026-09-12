@@ -963,6 +963,17 @@ fn lock_directory(directory: &Path) -> Result<File, AgentFailure> {
         .truncate(false)
         .open(directory.join("host.lock"))
         .map_err(unavailable)?;
+    #[cfg(target_os = "android")]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(match std::io::Error::last_os_error().kind() {
+                std::io::ErrorKind::WouldBlock => AgentFailure::Conflict,
+                _ => AgentFailure::VaultUnavailable,
+            });
+        }
+    }
+    #[cfg(not(target_os = "android"))]
     lock.try_lock().map_err(|error| match error {
         std::fs::TryLockError::WouldBlock => AgentFailure::Conflict,
         std::fs::TryLockError::Error(_) => AgentFailure::VaultUnavailable,

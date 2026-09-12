@@ -1,5 +1,21 @@
 # Floe Client
 
+## Mobile native builds
+
+Android Gradle packages the Rust library for the requested Flutter target platform
+(`android-arm64` or `android-x64`). Install the matching Rust target and the Android NDK first.
+iOS Xcode builds package the Rust dylib for the selected device/simulator architecture;
+the corresponding Rust target and an eligible Xcode runtime are required.
+
+Run `flutter run -d <mobile-device> -t tool/mobile_vault_smoke.dart` to directly check
+the platform secure-key store, exclusive Vault ownership, and reopening an encrypted Vault.
+This uses a separate `mobile-vault-smoke` application-support directory and does not request
+Contacts, location, or external provider access. Success prints `MOBILE_VAULT_SMOKE_PASSED`.
+
+Android stores only AES-GCM-wrapped Vault keys in no-backup app storage; the wrapping key stays
+in Android Keystore. iOS uses device-only Keychain items available while unlocked. Neither
+platform regenerates a missing key while opening an existing Vault.
+
 Flutter client for Floe's Personal Day experience.
 
 The production UI uses Floe's shared design system: a compact desktop rail becomes a floating bottom navigation at `780px` and below. The time grid, in-flow capture field, context cards, collections, and task detail share the same shell. Empty days retain the same calendar rather than switching to a separate hero layout.

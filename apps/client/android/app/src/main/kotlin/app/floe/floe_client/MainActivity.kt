@@ -7,8 +7,17 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity : FlutterActivity() {
     private var contextChannel: AndroidContextChannel? = null
 
+    private external fun nativeConfigureVault(): Boolean
+
+    companion object {
+        init {
+            System.loadLibrary("floe_ffi")
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        check(nativeConfigureVault()) { "Floe vault key storage is unavailable" }
         contextChannel = AndroidContextChannel(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 

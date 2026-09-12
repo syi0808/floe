@@ -12,16 +12,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "android")]
+use crate::android_vault_keys::AndroidVaultKeys as PlatformVaultKeys;
 use base64::Engine as _;
 use floe_agent::{
     AgentEvent, AgentFailure, AgentOutcome, AgentSession, BuiltinContextSource, BuiltinExpertKind,
     BuiltinExpertSetup, BuiltinSourceBinding, BuiltinSourceState, Cancellation, ConnectionState,
     KnowledgeActor, KnowledgeDecisionKind, KnowledgeKind, SessionStore,
 };
+#[cfg(not(target_os = "android"))]
+use floe_core::KeyringVaultKeys as PlatformVaultKeys;
 use floe_core::{
     AgentFixtureTurn, CalendarActionState, CalendarReadAccess, CalendarReadAccessRequest,
     EncryptedAgentVault, ExpertCalendarInspection, ExpertProposalReference, FloeCore,
-    KeyringVaultKeys, RemoteProducerIdentity, VaultKeyProvider, recover_agent_sample,
+    RemoteProducerIdentity, VaultKeyProvider, recover_agent_sample,
 };
 use floe_domain::{
     CalendarProvider, ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer,
@@ -129,7 +133,7 @@ impl VaultBridge {
             *worker = Some(
                 Worker::with_core(
                     self.root.clone(),
-                    KeyringVaultKeys,
+                    PlatformVaultKeys,
                     self.core.clone(),
                     self.local_context.clone(),
                 )

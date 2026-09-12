@@ -1,5 +1,7 @@
 mod abi;
 mod agent_run;
+#[cfg(target_os = "android")]
+mod android_vault_keys;
 mod diagnostics;
 
 pub use abi::*;

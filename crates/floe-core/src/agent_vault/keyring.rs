@@ -34,7 +34,20 @@ fn entry(person_id: PersonId, vault_id: Uuid) -> Result<Entry, AgentFailure> {
     .map_err(|_| AgentFailure::VaultUnavailable)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "ios")]
+fn entry(person_id: PersonId, vault_id: Uuid) -> Result<Entry, AgentFailure> {
+    use apple_native_keyring_store::protected::{AccessPolicy, Cred};
+    Cred::build(
+        SERVICE,
+        &format!("{person_id}/{vault_id}"),
+        AccessPolicy::WhenUnlockedThisDeviceOnly,
+        None,
+        false,
+    )
+    .map_err(|_| AgentFailure::VaultUnavailable)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn entry(_: PersonId, _: Uuid) -> Result<Entry, AgentFailure> {
     let _ = SERVICE;
     Err(AgentFailure::VaultUnavailable)
