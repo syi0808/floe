@@ -322,7 +322,11 @@ mod tests {
 
     use super::*;
     use chrono::{Duration, Utc};
-    use floe_agent::{AgentBudget, SessionStore};
+    use floe_agent::{
+        AGENT_VERSION, AgentBudget, AgentContext, AgentMessage, Cancellation, DataClass,
+        InferencePolicyDecision, ModelPlacement, ModelReplay, ModelRequest, ProviderReplay,
+        SessionStore, TransferConsent, manager_prompt,
+    };
     use floe_domain::{
         ConnectionId, ConnectorId, ConsumerPolicyAuthority, ContextDependency, DependencyCoverage,
         ExecutionOwnerId, GrantAuthority, GrantConsumer, GrantDataCategory, GrantId,
@@ -363,6 +367,72 @@ mod tests {
     }
 
     type Vault = super::super::EncryptedAgentVault<TestKeys>;
+
+    struct AllowDependency;
+
+    impl super::super::GovernedDependencyResolver for AllowDependency {
+        fn authorize<'a>(
+            &'a self,
+            _: &'a ContextDependency,
+            _: &'a ModelRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), AgentFailure>> + Send + 'a>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn projection_request(
+        person_id: PersonId,
+        session_id: Uuid,
+        turn_id: Uuid,
+        messages: Vec<AgentMessage>,
+    ) -> ModelRequest {
+        ModelRequest {
+            usage: floe_agent::UsageLedger::default(),
+            replay: vec![ModelReplay {
+                call_id: Uuid::new_v4(),
+                replay: ProviderReplay {
+                    call_ids: vec!["call".into()],
+                    preamble: "".into(),
+                    gateway: "test".into(),
+                    purpose: "test".into(),
+                    external: false,
+                    source: "test".into(),
+                    provider_call_id: "call".into(),
+                    items: serde_json::json!([]),
+                },
+            }],
+            schema_version: AGENT_VERSION,
+            prompt: manager_prompt(None).unwrap(),
+            person_id,
+            session_id,
+            turn_id,
+            policy: InferencePolicyDecision {
+                purpose: "test".into(),
+                data_classes: vec![DataClass::Personal],
+                allowed_placements: vec![ModelPlacement::DeviceLocal],
+                performance_class: "test".into(),
+                projection_version: 1,
+                external_transfer_consent: TransferConsent::NotGranted,
+                bounded_sensitive_projection: false,
+            },
+            context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            },
+            messages,
+            capabilities: vec![],
+            active_agents: vec![],
+            remaining_tokens: 100,
+            remaining_cost_micros: 100,
+            max_output_bytes: 4096,
+            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            cancellation: Cancellation::default(),
+        }
+    }
 
     fn root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
@@ -720,5 +790,354 @@ mod tests {
             read(&reopened, person, session.id, turn).await.unwrap(),
             DependencyCoverage::Unknown
         );
+    }
+
+    #[tokio::test]
+    async fn direct_session_cas_cannot_mint_independent_coverage() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn = Uuid::new_v4();
+        session.messages.push(floe_agent::AgentMessage::User {
+            turn_id: turn,
+            text: "direct CAS".into(),
+        });
+        session.revision = 1;
+        vault.compare_and_swap(&session, 0).await.unwrap();
+        assert_eq!(
+            read(&vault, person, session.id, turn).await.unwrap(),
+            DependencyCoverage::Unknown
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_session_cas_records_new_user_turn_as_independent() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn = Uuid::new_v4();
+        session.messages.push(floe_agent::AgentMessage::User {
+            turn_id: turn,
+            text: "ordinary chat".into(),
+        });
+        session.revision = 1;
+        let governed = vault.governed_general_store(session.id);
+        governed.compare_and_swap(&session, 0).await.unwrap();
+        assert_eq!(
+            read(&vault, person, session.id, turn).await.unwrap(),
+            DependencyCoverage::Independent
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_session_never_upgrades_persisted_unknown() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn = Uuid::new_v4();
+        session.messages.push(floe_agent::AgentMessage::User {
+            turn_id: turn,
+            text: "unmanaged chat".into(),
+        });
+        session.revision = 1;
+        vault.compare_and_swap(&session, 0).await.unwrap();
+        let governed = vault.governed_general_store(session.id);
+        governed
+            .record_dependency(turn, dependency(person, b"late dependency"))
+            .await
+            .unwrap();
+        session.messages.push(floe_agent::AgentMessage::Assistant {
+            turn_id: turn,
+            text: "reply".into(),
+        });
+        session.revision = 2;
+        governed.compare_and_swap(&session, 1).await.unwrap();
+        assert_eq!(
+            read(&vault, person, session.id, turn).await.unwrap(),
+            DependencyCoverage::Unknown
+        );
+    }
+
+    #[tokio::test]
+    async fn every_capability_result_requires_explicit_result_dependency() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn = Uuid::new_v4();
+        let call_id = Uuid::new_v4();
+        session.messages.extend([
+            floe_agent::AgentMessage::Capability {
+                turn_id: turn,
+                call_id,
+                capability_id: "calendar.read".into(),
+                input: "{}".into(),
+                result: Ok("{}".into()),
+            },
+            floe_agent::AgentMessage::User {
+                turn_id: turn,
+                text: "tool request".into(),
+            },
+        ]);
+        session.revision = 1;
+        let governed = vault.governed_general_store(session.id);
+        governed
+            .record_dependency(turn, dependency(person, b"turn-only"))
+            .await
+            .unwrap();
+        governed.compare_and_swap(&session, 0).await.unwrap();
+        assert_eq!(
+            read(&vault, person, session.id, turn).await.unwrap(),
+            DependencyCoverage::Unknown
+        );
+
+        let mut second = vault.create_session().await.unwrap();
+        let second_turn = Uuid::new_v4();
+        let second_call = Uuid::new_v4();
+        second.messages.extend([
+            floe_agent::AgentMessage::User {
+                turn_id: second_turn,
+                text: "tool request".into(),
+            },
+            floe_agent::AgentMessage::Capability {
+                turn_id: second_turn,
+                call_id: second_call,
+                capability_id: "calendar.read".into(),
+                input: "{}".into(),
+                result: Ok("{}".into()),
+            },
+        ]);
+        second.revision = 1;
+        let governed = vault.governed_general_store(second.id);
+        governed
+            .record_result_dependency(
+                second_turn,
+                second_call,
+                dependency(person, b"result-bound"),
+            )
+            .unwrap();
+        governed.compare_and_swap(&second, 0).await.unwrap();
+        assert!(matches!(
+            read(&vault, person, second.id, second_turn).await.unwrap(),
+            DependencyCoverage::Dependent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn projection_requires_resolver_and_persists_authorized_dependency() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let historical_turn = Uuid::new_v4();
+        let current_turn = Uuid::new_v4();
+        let coverage = DependencyCoverage::dependent(dependency(person, b"history")).unwrap();
+        merge(&vault, person, session.id, historical_turn, coverage)
+            .await
+            .unwrap();
+        let historical_messages = vec![
+            AgentMessage::User {
+                turn_id: historical_turn,
+                text: "old request".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: historical_turn,
+                text: "old answer".into(),
+            },
+        ];
+        let mut historical_session = session.clone();
+        historical_session.messages = historical_messages.clone();
+        historical_session.revision = 1;
+        let governed = vault.governed_general_store(session.id);
+        governed
+            .compare_and_swap(&historical_session, 0)
+            .await
+            .unwrap();
+        let session = vault.load(person, session.id).await.unwrap();
+        let messages = vec![
+            AgentMessage::User {
+                turn_id: historical_turn,
+                text: "old request".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: historical_turn,
+                text: "old answer".into(),
+            },
+            AgentMessage::User {
+                turn_id: current_turn,
+                text: "new request".into(),
+            },
+        ];
+        let mut denied = projection_request(person, session.id, current_turn, messages.clone());
+        governed
+            .project_model_request(&mut denied, None)
+            .await
+            .unwrap();
+        assert_eq!(denied.messages.len(), 2);
+        assert!(denied.replay.is_empty());
+        let mut allowed = projection_request(person, session.id, current_turn, messages);
+        governed
+            .project_model_request(&mut allowed, Some(&AllowDependency))
+            .await
+            .unwrap();
+        assert_eq!(allowed.messages.len(), 3);
+        assert!(allowed.replay.is_empty());
+
+        let mut committed = session;
+        committed.messages = allowed.messages;
+        committed.revision = 2;
+        governed.compare_and_swap(&committed, 1).await.unwrap();
+        assert!(matches!(
+            read(&vault, person, committed.id, current_turn)
+                .await
+                .unwrap(),
+            DependencyCoverage::Dependent { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn compaction_preserves_unknown_and_dependent_lineage_after_reopen() {
+        let root = root();
+        let person = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = Vault::create(root.path(), person, keys.clone())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let independent_turn = Uuid::new_v4();
+        let unknown_turn = Uuid::new_v4();
+        session.messages.extend([
+            AgentMessage::User {
+                turn_id: independent_turn,
+                text: "independent".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: independent_turn,
+                text: "answer".into(),
+            },
+        ]);
+        session.revision = 1;
+        let governed = vault.governed_general_store(session.id);
+        governed.compare_and_swap(&session, 0).await.unwrap();
+        session.messages.extend([
+            AgentMessage::User {
+                turn_id: unknown_turn,
+                text: "tool".into(),
+            },
+            AgentMessage::Capability {
+                turn_id: unknown_turn,
+                call_id: Uuid::new_v4(),
+                capability_id: "unregistered".into(),
+                input: "{}".into(),
+                result: Ok("private".into()),
+            },
+        ]);
+        session.revision = 2;
+        vault.compare_and_swap(&session, 1).await.unwrap();
+        let compacted = vault
+            .compact_session(session.id, 2, unknown_turn, "mixed summary".into())
+            .await
+            .unwrap();
+        let compaction = compacted.session.messages[0].clone();
+        drop(vault);
+        let reopened = Vault::open(root.path(), person, keys).await.unwrap();
+        let current_turn = Uuid::new_v4();
+        let mut request = projection_request(
+            person,
+            session.id,
+            current_turn,
+            vec![
+                compaction,
+                AgentMessage::User {
+                    turn_id: current_turn,
+                    text: "next".into(),
+                },
+            ],
+        );
+        reopened
+            .governed_general_store(session.id)
+            .project_model_request(&mut request, None)
+            .await
+            .unwrap();
+        assert_eq!(request.messages.len(), 1);
+
+        let mut dependent_session = reopened.create_session().await.unwrap();
+        let archived_independent_turn = Uuid::new_v4();
+        let dependent_turn = Uuid::new_v4();
+        merge(
+            &reopened,
+            person,
+            dependent_session.id,
+            dependent_turn,
+            DependencyCoverage::dependent(dependency(person, b"compaction-dependent")).unwrap(),
+        )
+        .await
+        .unwrap();
+        dependent_session.messages = vec![
+            AgentMessage::User {
+                turn_id: archived_independent_turn,
+                text: "independent".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: archived_independent_turn,
+                text: "answer".into(),
+            },
+            AgentMessage::User {
+                turn_id: dependent_turn,
+                text: "dependent".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: dependent_turn,
+                text: "answer".into(),
+            },
+        ];
+        dependent_session.revision = 1;
+        reopened
+            .governed_general_store(dependent_session.id)
+            .compare_and_swap(&dependent_session, 0)
+            .await
+            .unwrap();
+        let compacted = reopened
+            .compact_session(
+                dependent_session.id,
+                1,
+                dependent_turn,
+                "dependent summary".into(),
+            )
+            .await
+            .unwrap();
+        let dependent_compaction = compacted.session.messages[0].clone();
+        let current_turn = Uuid::new_v4();
+        let mut request = projection_request(
+            person,
+            dependent_session.id,
+            current_turn,
+            vec![
+                dependent_compaction,
+                AgentMessage::User {
+                    turn_id: current_turn,
+                    text: "next".into(),
+                },
+            ],
+        );
+        reopened
+            .governed_general_store(dependent_session.id)
+            .project_model_request(&mut request, None)
+            .await
+            .unwrap();
+        assert_eq!(request.messages.len(), 1);
     }
 }

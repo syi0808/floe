@@ -29,8 +29,9 @@ pub use agent_fixture::{
 };
 #[cfg(unix)]
 pub use agent_vault::{
-    AccessGrantCleanup, CalendarGrantAdmission, EncryptedAgentVault, KeyringVaultKeys,
-    SessionCompactionResult, SessionSearchHit, VaultKey, VaultKeyProvider,
+    AccessGrantCleanup, CalendarGrantAdmission, EncryptedAgentVault, GovernedAgentSessionStore,
+    GovernedDependencyResolver, KeyringVaultKeys, SessionCompactionResult, SessionSearchHit, VaultKey,
+    VaultKeyProvider,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,

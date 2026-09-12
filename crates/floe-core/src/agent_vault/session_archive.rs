@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 
+use super::context_dependencies::{
+    merge_context_dependency_coverage, read_context_dependency_coverage,
+};
 use super::*;
 
 const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
@@ -129,6 +132,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .iter()
                 .map(AgentMessage::turn_id)
                 .collect();
+            let mut archived_coverage: Option<floe_domain::DependencyCoverage> = None;
+            for turn_id in &archived_turns {
+                let coverage = read_context_dependency_coverage(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    *turn_id,
+                )
+                .await?;
+                archived_coverage = Some(match archived_coverage {
+                    Some(existing) => existing
+                        .merge(&coverage)
+                        .map_err(|_| AgentFailure::VaultUnavailable)?,
+                    None => coverage,
+                });
+            }
             let archive_id = Uuid::new_v4();
             let recovery = SessionRecoveryPointer {
                 archive_id,
@@ -161,6 +180,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             session.model_attempts.retain(|record| !archived_turns.contains(&record.turn_id));
             session.capability_executions.retain(|record| !archived_turns.contains(&record.turn_id));
             session.delegation_executions.retain(|record| !archived_turns.contains(&record.turn_id));
+            if let Some(coverage) = archived_coverage {
+                merge_context_dependency_coverage(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    through_turn_id,
+                    coverage,
+                )
+                .await?;
+            }
             let payload = self.payload(&session)?;
             let changed = transaction.execute(
                 "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",

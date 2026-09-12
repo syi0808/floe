@@ -1,16 +1,22 @@
 use std::{
+    collections::{BTreeMap, HashMap},
     fs::{self, File, OpenOptions},
+    future::Future,
     io::{Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
-    sync::atomic::{AtomicBool, Ordering},
+    pin::Pin,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use floe_agent::{
     AGENT_VERSION, AgentBudget, AgentFailure, AgentSession, DataClass, SessionProtection,
     SessionStore,
 };
-use floe_domain::PersonId;
+use floe_domain::{ContextDependency, DependencyCoverage, PersonId};
 use subtle::ConstantTimeEq;
 use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
@@ -76,6 +82,280 @@ pub struct EncryptedAgentVault<Keys> {
     vault_id: Uuid,
     unavailable: AtomicBool,
     _host_lock: File,
+}
+
+pub struct GovernedAgentSessionStore<'vault, Keys> {
+    vault: &'vault EncryptedAgentVault<Keys>,
+    session_id: Uuid,
+    coverage: Mutex<HashMap<Uuid, floe_domain::CoverageAccumulator>>,
+    result_coverage: Mutex<HashMap<(Uuid, Uuid), floe_domain::CoverageAccumulator>>,
+}
+
+impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    pub async fn record_dependency(
+        &self,
+        turn_id: Uuid,
+        dependency: ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        if turn_id.is_nil() || dependency.observation_id().is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let has_coverage = self
+            .coverage
+            .lock()
+            .map_err(|_| AgentFailure::VaultUnavailable)?
+            .contains_key(&turn_id);
+        let stored = if has_coverage {
+            None
+        } else {
+            let session = self
+                .vault
+                .load(self.vault.person_id, self.session_id)
+                .await?;
+            if session
+                .messages
+                .iter()
+                .any(|message| message.turn_id() == turn_id)
+            {
+                Some(
+                    self.vault
+                        .read_turn_coverage(self.session_id, turn_id)
+                        .await?,
+                )
+            } else {
+                None
+            }
+        };
+        let mut coverage = self
+            .coverage
+            .lock()
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
+        if !coverage.contains_key(&turn_id) {
+            let accumulator = match stored {
+                Some(stored) => floe_domain::CoverageAccumulator::from_stored(stored)
+                    .map_err(|_| AgentFailure::VaultUnavailable)?,
+                None => floe_domain::CoverageAccumulator::new(),
+            };
+            coverage.insert(turn_id, accumulator);
+        }
+        let accumulator = coverage.get_mut(&turn_id).unwrap();
+        accumulator
+            .record_host_dependency(dependency)
+            .map_err(|_| AgentFailure::InvalidInput)
+    }
+
+    pub fn record_result_dependency(
+        &self,
+        turn_id: Uuid,
+        result_id: Uuid,
+        dependency: ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        if turn_id.is_nil() || result_id.is_nil() || dependency.observation_id().is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut coverage = self
+            .result_coverage
+            .lock()
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
+        coverage
+            .entry((turn_id, result_id))
+            .or_default()
+            .record_host_dependency(dependency)
+            .map_err(|_| AgentFailure::InvalidInput)
+    }
+
+    pub async fn project_model_request(
+        &self,
+        request: &mut floe_agent::ModelRequest,
+        resolver: Option<&dyn GovernedDependencyResolver>,
+    ) -> Result<(), AgentFailure> {
+        if request.session_id != self.session_id {
+            return Err(AgentFailure::Conflict);
+        }
+        let messages = std::mem::take(&mut request.messages);
+        let mut coverage_by_turn = HashMap::new();
+        for turn_id in messages.iter().map(floe_agent::AgentMessage::turn_id) {
+            if !coverage_by_turn.contains_key(&turn_id) {
+                let coverage = self
+                    .vault
+                    .read_turn_coverage(self.session_id, turn_id)
+                    .await?;
+                coverage_by_turn.insert(turn_id, coverage);
+            }
+        }
+        let mut retained = Vec::with_capacity(messages.len());
+        let mut filtered = false;
+        for message in messages {
+            let turn_id = message.turn_id();
+            let coverage = coverage_by_turn
+                .get(&turn_id)
+                .cloned()
+                .unwrap_or(DependencyCoverage::Unknown);
+            let allowed = match &coverage {
+                DependencyCoverage::Independent => true,
+                DependencyCoverage::Unknown => false,
+                DependencyCoverage::Dependent { dependencies } => match resolver {
+                    Some(resolver) => {
+                        let mut allowed = true;
+                        for dependency in dependencies {
+                            match resolver.authorize(dependency, request).await {
+                                Ok(()) => {}
+                                Err(AgentFailure::PolicyDenied) => allowed = false,
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        allowed
+                    }
+                    None => false,
+                },
+            };
+            if allowed {
+                if let DependencyCoverage::Dependent { dependencies } = coverage {
+                    let mut coverage = self
+                        .coverage
+                        .lock()
+                        .map_err(|_| AgentFailure::VaultUnavailable)?;
+                    let accumulator = coverage.entry(request.turn_id).or_default();
+                    for dependency in dependencies {
+                        accumulator
+                            .record_host_dependency(dependency)
+                            .map_err(|_| AgentFailure::PolicyDenied)?;
+                    }
+                }
+                retained.push(message);
+            } else {
+                if !matches!(message, floe_agent::AgentMessage::User { .. }) {
+                    filtered = true;
+                } else {
+                    retained.push(message);
+                }
+            }
+        }
+        request.messages = retained;
+        if filtered || !request.replay.is_empty() {
+            request.replay.clear();
+        }
+        Ok(())
+    }
+}
+
+impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys> {
+    fn protection(&self) -> SessionProtection {
+        self.vault.protection()
+    }
+
+    async fn load(
+        &self,
+        person_id: PersonId,
+        session_id: Uuid,
+    ) -> Result<AgentSession, AgentFailure> {
+        self.vault.load(person_id, session_id).await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+    ) -> Result<(), AgentFailure> {
+        if session.id != self.session_id {
+            return Err(AgentFailure::Conflict);
+        }
+        let stored = self.vault.load(session.person_id, session.id).await?;
+        if stored.revision != previous_revision || session.messages.len() < stored.messages.len() {
+            return Err(AgentFailure::Conflict);
+        }
+        let appended = &session.messages[stored.messages.len()..];
+        let mut initial = BTreeMap::new();
+        let mut stored_turns = HashMap::new();
+        for message in &stored.messages {
+            stored_turns.insert(message.turn_id(), ());
+        }
+        for turn_id in appended.iter().map(floe_agent::AgentMessage::turn_id) {
+            if stored_turns.contains_key(&turn_id) && !initial.contains_key(&turn_id) {
+                initial.insert(
+                    turn_id,
+                    self.vault.read_turn_coverage(session.id, turn_id).await?,
+                );
+            }
+        }
+        let snapshot = {
+            let mut coverage = self
+                .coverage
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+            let mut fresh_turns = HashMap::new();
+            let mut initialized = HashMap::new();
+            for message in appended {
+                let turn_id = message.turn_id();
+                if !coverage.contains_key(&turn_id) {
+                    if stored_turns.contains_key(&turn_id) {
+                        let initial = initial
+                            .remove(&turn_id)
+                            .ok_or(AgentFailure::VaultUnavailable)?;
+                        coverage.insert(
+                            turn_id,
+                            floe_domain::CoverageAccumulator::from_stored(initial)
+                                .map_err(|_| AgentFailure::VaultUnavailable)?,
+                        );
+                    } else {
+                        fresh_turns.insert(turn_id, ());
+                        coverage.insert(turn_id, floe_domain::CoverageAccumulator::new());
+                    }
+                }
+                let accumulator = coverage.get_mut(&turn_id).unwrap();
+                let first_message = initialized.insert(turn_id, ()).is_none();
+                if first_message
+                    && fresh_turns.contains_key(&turn_id)
+                    && matches!(message, floe_agent::AgentMessage::User { .. })
+                {
+                    accumulator
+                        .record_host_independent()
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                }
+                let result_id = match message {
+                    floe_agent::AgentMessage::Capability { call_id, .. } => Some(*call_id),
+                    floe_agent::AgentMessage::Delegation { task, .. } => Some(task.id),
+                    _ => None,
+                };
+                if let Some(result_id) = result_id {
+                    let result_coverage = self
+                        .result_coverage
+                        .lock()
+                        .map_err(|_| AgentFailure::VaultUnavailable)?
+                        .get(&(turn_id, result_id))
+                        .map(|result| result.coverage());
+                    if let Some(DependencyCoverage::Dependent { dependencies }) = result_coverage {
+                        for dependency in dependencies {
+                            accumulator
+                                .record_host_dependency(dependency)
+                                .map_err(|_| AgentFailure::InvalidInput)?;
+                        }
+                    } else {
+                        accumulator.mark_unknown();
+                    }
+                }
+            }
+            coverage
+                .iter()
+                .map(|(turn_id, accumulator)| (*turn_id, accumulator.coverage()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        self.vault
+            .compare_and_swap_checked(session, previous_revision, &snapshot)
+            .await
+    }
+}
+
+pub trait GovernedDependencyResolver: Send + Sync {
+    fn authorize<'a>(
+        &'a self,
+        dependency: &'a ContextDependency,
+        request: &'a floe_agent::ModelRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>>;
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -228,6 +508,36 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub async fn create_session(&self) -> Result<AgentSession, AgentFailure> {
         self.insert_session(AgentSession::new(self.person_id)).await
+    }
+
+    pub fn governed_general_store(&self, session_id: Uuid) -> GovernedAgentSessionStore<'_, Keys> {
+        GovernedAgentSessionStore {
+            vault: self,
+            session_id,
+            coverage: Mutex::new(HashMap::new()),
+            result_coverage: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn read_turn_coverage(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+    ) -> Result<DependencyCoverage, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = context_dependencies::read_context_dependency_coverage(
+            &transaction,
+            self.person_id,
+            session_id,
+            turn_id,
+        )
+        .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await
     }
 
     pub async fn resume_session(&self) -> Result<AgentSession, AgentFailure> {
@@ -405,39 +715,80 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
         session: &AgentSession,
         previous_revision: u64,
     ) -> Result<(), AgentFailure> {
+        self.compare_and_swap_checked(session, previous_revision, &BTreeMap::new())
+            .await
+    }
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(crate) async fn compare_and_swap_checked(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        coverage: &BTreeMap<Uuid, DependencyCoverage>,
+    ) -> Result<(), AgentFailure> {
         if previous_revision.checked_add(1) != Some(session.revision) {
             return Err(AgentFailure::Conflict);
         }
         let revision = i64::try_from(session.revision).map_err(|_| AgentFailure::Conflict)?;
         let previous = i64::try_from(previous_revision).map_err(|_| AgentFailure::Conflict)?;
         let payload = self.payload(session)?;
-        let stored = self.load(session.person_id, session.id).await?;
-        if stored.revision != previous_revision
-            || stored.scope != session.scope
-            || session.messages.len() < stored.messages.len()
-            || session.messages[..stored.messages.len()] != stored.messages
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        if stored
-            .data_classes
-            .iter()
-            .any(|class| !session.data_classes.contains(class))
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let changed = self
-            .connection()?
-            .execute(
-                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
-                (revision, payload, session.id.to_string(), previous),
-            )
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
             .await
-            .map_err(storage)?;
-        if changed != 1 {
-            return Err(AgentFailure::Conflict);
+            .map_err(|error| match error {
+                turso::Error::Busy(_) | turso::Error::BusySnapshot(_) => AgentFailure::Conflict,
+                _ => AgentFailure::StorageUnavailable,
+            })?;
+        let result = async {
+            let stored = self.session_on(&transaction, session.id).await?;
+            if stored.revision != previous_revision
+                || stored.scope != session.scope
+                || session.messages.len() < stored.messages.len()
+                || session.messages[..stored.messages.len()] != stored.messages
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            if stored
+                .data_classes
+                .iter()
+                .any(|class| !session.data_classes.contains(class))
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let mut turns = std::collections::BTreeSet::new();
+            for message in &session.messages[stored.messages.len()..] {
+                if turns.insert(message.turn_id()) {
+                    let turn_coverage = coverage
+                        .get(&message.turn_id())
+                        .cloned()
+                        .unwrap_or(DependencyCoverage::Unknown);
+                    context_dependencies::merge_context_dependency_coverage(
+                        &transaction,
+                        session.person_id,
+                        session.id,
+                        message.turn_id(),
+                        turn_coverage,
+                    )
+                    .await?;
+                }
+            }
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                    (revision, payload, session.id.to_string(), previous),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            Ok(())
         }
-        Ok(())
+        .await;
+        self.finish_access_grant_transaction(transaction, result)
+            .await
     }
 }
 

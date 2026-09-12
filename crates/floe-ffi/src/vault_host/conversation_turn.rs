@@ -15,7 +15,7 @@ use floe_agent::{
     run_life_logistics_expert, run_relationships_expert_with_views,
     run_wellbeing_expert_with_views, run_work_context_expert,
 };
-use floe_core::{EncryptedAgentVault, FloeCore, VaultKeyProvider};
+use floe_core::{EncryptedAgentVault, FloeCore, GovernedAgentSessionStore, VaultKeyProvider};
 use floe_domain::PersonId;
 #[cfg(test)]
 use floe_protocol::AgentRemoteCalendarConnectionDto;
@@ -95,6 +95,11 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     let request = inputs.request;
     let session_id = session_uuid(&request.session_id)?;
     let model = Model::new(request.remote_route.clone())?;
+    let governed_store = vault.governed_general_store(session_id);
+    let governed_model = GovernedModel {
+        model: &model,
+        store: &governed_store,
+    };
     let policy = policy(&model, request.remote_route.as_ref());
     let task_views = optional_task_views(core, person_id).await?;
     let expert_cards = vault.enabled_expert_cards().await?;
@@ -119,8 +124,8 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
-        store: vault,
-        model: &model,
+        store: &governed_store,
+        model: &governed_model,
         capabilities: &capabilities,
         policy: &policy,
         budget: AgentBudget::default(),
@@ -260,6 +265,22 @@ impl ModelRunner for Model {
             ),
         }
         result
+    }
+}
+
+struct GovernedModel<'a, Keys> {
+    model: &'a Model,
+    store: &'a GovernedAgentSessionStore<'a, Keys>,
+}
+
+impl<Keys: VaultKeyProvider> ModelRunner for GovernedModel<'_, Keys> {
+    fn placement(&self) -> ModelPlacement {
+        self.model.placement()
+    }
+
+    async fn generate(&self, mut request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        self.store.project_model_request(&mut request, None).await?;
+        self.model.generate(request).await
     }
 }
 

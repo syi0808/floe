@@ -104,6 +104,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::NotFound);
             }
+            let evidence = request
+                .turn_ids
+                .iter()
+                .map(|turn_id| floe_agent::LearningEvidenceRef {
+                    session_id: request.session_id,
+                    turn_id: *turn_id,
+                })
+                .collect::<Vec<_>>();
+            if !evidence_is_independent(&transaction, self.person_id, &evidence).await? {
+                return Err(AgentFailure::PolicyDenied);
+            }
 
             let source_refs = request
                 .turn_ids
@@ -297,6 +308,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     (None, None)
                 }
                 KnowledgeDecisionKind::Approve => {
+                    if candidate.source_refs.is_empty()
+                        || !evidence_is_independent(
+                        &transaction,
+                        self.person_id,
+                        &candidate.source_refs,
+                    )
+                    .await?
+                    {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
                     let target_id = candidate.target_id.unwrap_or_else(Uuid::new_v4);
                     let (from_revision, revision_number) = match candidate.operation {
                         KnowledgeOperation::Create => {
@@ -484,6 +505,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut context = Vec::new();
         let mut total_bytes = 0usize;
         for revision in self.active_personal_memories().await? {
+            if !self.evidence_is_independent(&revision.source_refs).await? {
+                continue;
+            }
             let KnowledgePayload::Memory { value } = revision.payload else {
                 return Err(AgentFailure::VaultUnavailable);
             };
@@ -515,6 +539,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.check_access()?;
         Ok(context)
+    }
+
+    async fn evidence_is_independent(
+        &self,
+        evidence: &[LearningEvidenceRef],
+    ) -> Result<bool, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = evidence_is_independent(&transaction, self.person_id, evidence).await;
+        finish_transaction(transaction, result).await
     }
 
     pub async fn knowledge_mutations(
@@ -796,6 +833,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         {
                             return Err(AgentFailure::PolicyDenied);
                         }
+                        if !evidence_is_independent(
+                            &transaction,
+                            self.person_id,
+                            &candidate.source_refs,
+                        )
+                        .await?
+                        {
+                            return Err(AgentFailure::PolicyDenied);
+                        }
                     }
                     job.state = LearnerJobState::Completed;
                     job.finished_at = Some(settled_at);
@@ -990,6 +1036,34 @@ fn validate_learner_input(
     Ok(())
 }
 
+async fn evidence_is_independent(
+    transaction: &turso::transaction::Transaction<'_>,
+    person_id: floe_domain::PersonId,
+    evidence: &[LearningEvidenceRef],
+) -> Result<bool, AgentFailure> {
+    if evidence.is_empty() {
+        return Ok(false);
+    }
+    for reference in evidence {
+        if reference.session_id.is_nil() || reference.turn_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if !matches!(
+            super::context_dependencies::read_context_dependency_coverage(
+                transaction,
+                person_id,
+                reference.session_id,
+                reference.turn_id,
+            )
+            .await?,
+            floe_domain::DependencyCoverage::Independent
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 async fn validate_learner_source(
     transaction: &turso::transaction::Transaction<'_>,
     input: &LearnerReviewInput,
@@ -1034,6 +1108,17 @@ async fn validate_learner_source(
         .any(|turn_id| !evidence.contains(turn_id))
     {
         return Err(AgentFailure::NotFound);
+    }
+    let evidence = input
+        .turn_ids
+        .iter()
+        .map(|turn_id| floe_agent::LearningEvidenceRef {
+            session_id: input.session_id,
+            turn_id: *turn_id,
+        })
+        .collect::<Vec<_>>();
+    if !evidence_is_independent(transaction, input.person_id, &evidence).await? {
+        return Err(AgentFailure::PolicyDenied);
     }
     Ok(())
 }

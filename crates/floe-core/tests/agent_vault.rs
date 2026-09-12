@@ -92,6 +92,18 @@ fn memory_value(statement: &str) -> PersonalMemoryValue {
     }
 }
 
+async fn governed_commit<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    session: &AgentSession,
+    previous_revision: u64,
+) {
+    vault
+        .governed_general_store(session.id)
+        .compare_and_swap(session, previous_revision)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     let root = private_root();
@@ -123,7 +135,7 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
     ];
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&session, 0).await.unwrap();
+    governed_commit(&vault, &session, 0).await;
     let created_at = Utc.with_ymd_and_hms(2026, 9, 10, 12, 1, 0).unwrap();
     let request = StageMemoryCandidate {
         session_id: session.id,
@@ -329,7 +341,7 @@ async fn memory_review_rejects_untrusted_sources_and_non_user_decisions() {
     }];
     personal.revision = 1;
     personal.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&personal, 0).await.unwrap();
+    governed_commit(&vault, &personal, 0).await;
     let candidate = vault
         .stage_memory_candidate(StageMemoryCandidate {
             session_id: personal.id,
@@ -597,7 +609,7 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
     ];
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&session, 0).await.unwrap();
+    governed_commit(&vault, &session, 0).await;
     let now = Utc.with_ymd_and_hms(2026, 9, 10, 13, 0, 0).unwrap();
     let input = LearnerReviewInput {
         schema_version: KNOWLEDGE_VERSION,
@@ -793,7 +805,7 @@ async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
     }];
     session.revision = 1;
     session.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&session, 0).await.unwrap();
+    governed_commit(&vault, &session, 0).await;
     let now = Utc.with_ymd_and_hms(2026, 9, 10, 14, 0, 0).unwrap();
     let input = LearnerReviewInput {
         schema_version: KNOWLEDGE_VERSION,
@@ -812,7 +824,7 @@ async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
         .await
         .unwrap();
     session.revision = 2;
-    vault.compare_and_swap(&session, 1).await.unwrap();
+    governed_commit(&vault, &session, 1).await;
 
     assert!(vault.claim_learner_review(now).await.unwrap().is_none());
     let failed = vault.enqueue_learner_review(input, now).await.unwrap();
@@ -858,7 +870,7 @@ async fn explicit_completed_conversations_discover_bounded_review_jobs() {
     ];
     explicit.revision = 1;
     explicit.last_outcome = Some(AgentOutcome::Completed);
-    vault.compare_and_swap(&explicit, 0).await.unwrap();
+    governed_commit(&vault, &explicit, 0).await;
     let now = Utc.with_ymd_and_hms(2026, 9, 10, 15, 0, 0).unwrap();
 
     assert_eq!(
@@ -882,6 +894,185 @@ async fn explicit_completed_conversations_discover_bounded_review_jobs() {
             .unwrap(),
         jobs
     );
+}
+
+#[tokio::test]
+async fn lineage_revocation_blocks_approval_settlement_and_memory_projection() {
+    let root = private_root();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 9, 10, 16, 0, 0).unwrap();
+
+    let mut memory_session = vault.create_session().await.unwrap();
+    let memory_turn = Uuid::new_v4();
+    memory_session.messages = vec![
+        AgentMessage::User {
+            turn_id: memory_turn,
+            text: "remember afternoons".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: memory_turn,
+            text: "prepared for review".into(),
+        },
+    ];
+    memory_session.revision = 1;
+    memory_session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &memory_session, 0).await;
+    let candidate = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: memory_session.id,
+            expected_session_revision: 1,
+            turn_ids: vec![memory_turn],
+            observation_kind: LearningObservationKind::ExplicitRemember,
+            digest: "remember afternoons".into(),
+            value: memory_value("Afternoon meetings are preferred."),
+            target_id: None,
+            base_revision: None,
+            extractor_version: "lineage-test".into(),
+            prompt_version: "lineage-test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    let approved = vault
+        .decide_knowledge_candidate(
+            candidate.id,
+            KnowledgeDecisionKind::Approve,
+            KnowledgeActor::User,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(vault.personal_memory_context(now).await.unwrap().len(), 1);
+    memory_session.messages.push(AgentMessage::Capability {
+        turn_id: memory_turn,
+        call_id: Uuid::new_v4(),
+        capability_id: "unregistered".into(),
+        input: "{}".into(),
+        result: Ok("private".into()),
+    });
+    memory_session.revision = 2;
+    vault.compare_and_swap(&memory_session, 1).await.unwrap();
+    assert!(vault.personal_memory_context(now).await.unwrap().is_empty());
+
+    let mut approval_session = vault.create_session().await.unwrap();
+    let approval_turn = Uuid::new_v4();
+    approval_session.messages = vec![AgentMessage::User {
+        turn_id: approval_turn,
+        text: "review this".into(),
+    }];
+    approval_session.revision = 1;
+    approval_session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &approval_session, 0).await;
+    let pending = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: approval_session.id,
+            expected_session_revision: 1,
+            turn_ids: vec![approval_turn],
+            observation_kind: LearningObservationKind::ExplicitRemember,
+            digest: "approval".into(),
+            value: memory_value("approval must be lineage checked"),
+            target_id: None,
+            base_revision: None,
+            extractor_version: "lineage-test".into(),
+            prompt_version: "lineage-test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    approval_session.messages.push(AgentMessage::Capability {
+        turn_id: approval_turn,
+        call_id: Uuid::new_v4(),
+        capability_id: "unregistered".into(),
+        input: "{}".into(),
+        result: Ok("private".into()),
+    });
+    approval_session.revision = 2;
+    vault.compare_and_swap(&approval_session, 1).await.unwrap();
+    assert_eq!(
+        vault
+            .decide_knowledge_candidate(
+                pending.id,
+                KnowledgeDecisionKind::Approve,
+                KnowledgeActor::User,
+                now,
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+
+    let mut settlement_session = vault.create_session().await.unwrap();
+    let settlement_turn = Uuid::new_v4();
+    settlement_session.messages = vec![AgentMessage::User {
+        turn_id: settlement_turn,
+        text: "learner review".into(),
+    }];
+    settlement_session.revision = 1;
+    settlement_session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &settlement_session, 0).await;
+    let input = LearnerReviewInput {
+        schema_version: KNOWLEDGE_VERSION,
+        run_id: Uuid::new_v4(),
+        person_id: person,
+        session_id: settlement_session.id,
+        session_revision: 1,
+        turn_ids: vec![settlement_turn],
+        outcome: AgentOutcome::Completed,
+        digest: "learner review".into(),
+        current_memories: vec![],
+        observed_at: now,
+    };
+    let queued = vault.enqueue_learner_review(input, now).await.unwrap();
+    let claimed = vault.claim_learner_review(now).await.unwrap().unwrap();
+    let learner_candidate = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: settlement_session.id,
+            expected_session_revision: 1,
+            turn_ids: vec![settlement_turn],
+            observation_kind: LearningObservationKind::ExplicitRemember,
+            digest: "learner review".into(),
+            value: memory_value("settlement must recheck lineage"),
+            target_id: None,
+            base_revision: None,
+            extractor_version: "lineage-test".into(),
+            prompt_version: "lineage-test".into(),
+            actor: KnowledgeActor::Learner {
+                run_id: claimed.input.run_id,
+            },
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    settlement_session.messages.push(AgentMessage::Capability {
+        turn_id: settlement_turn,
+        call_id: Uuid::new_v4(),
+        capability_id: "unregistered".into(),
+        input: "{}".into(),
+        result: Ok("private".into()),
+    });
+    settlement_session.revision = 2;
+    vault
+        .compare_and_swap(&settlement_session, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .settle_learner_review(
+                queued.id,
+                claimed.attempts,
+                LearnerJobSettlement::Completed {
+                    candidate_id: Some(learner_candidate.id),
+                },
+                now,
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    assert_eq!(approved.candidate.state, KnowledgeCandidateState::Approved);
 }
 
 #[tokio::test]
