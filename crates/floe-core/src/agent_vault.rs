@@ -24,6 +24,7 @@ use zeroize::Zeroizing;
 
 mod access_grants;
 mod calendar_grants;
+mod context_cleanup;
 mod context_dependencies;
 mod expert_actions;
 mod keyring;
@@ -426,6 +427,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_calendar_grant_store().await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_context_cleanup(true).await?;
         vault.checkpoint().await?;
         File::open(&directory)
             .and_then(|directory| directory.sync_all())
@@ -502,6 +504,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_access_grant_store().await?;
         vault.initialize_calendar_grant_store().await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_context_cleanup(false).await?;
         vault.expert_registry().await?;
         Ok(vault)
     }
@@ -732,7 +735,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let revision = i64::try_from(session.revision).map_err(|_| AgentFailure::Conflict)?;
         let previous = i64::try_from(previous_revision).map_err(|_| AgentFailure::Conflict)?;
-        let payload = self.payload(session)?;
+        self.payload(session)?;
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
@@ -742,23 +745,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 _ => AgentFailure::StorageUnavailable,
             })?;
         let result = async {
+            let mut candidate = session.clone();
             let stored = self.session_on(&transaction, session.id).await?;
             if stored.revision != previous_revision
-                || stored.scope != session.scope
-                || session.messages.len() < stored.messages.len()
-                || session.messages[..stored.messages.len()] != stored.messages
+                || stored.scope != candidate.scope
+                || candidate.messages.len() < stored.messages.len()
+                || candidate.messages[..stored.messages.len()] != stored.messages
             {
                 return Err(AgentFailure::Conflict);
             }
             if stored
                 .data_classes
                 .iter()
-                .any(|class| !session.data_classes.contains(class))
+                .any(|class| !candidate.data_classes.contains(class))
             {
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut turns = std::collections::BTreeSet::new();
-            for message in &session.messages[stored.messages.len()..] {
+            for message in &candidate.messages[stored.messages.len()..] {
                 if turns.insert(message.turn_id()) {
                     let turn_coverage = coverage
                         .get(&message.turn_id())
@@ -766,14 +770,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .unwrap_or(DependencyCoverage::Unknown);
                     context_dependencies::merge_context_dependency_coverage(
                         &transaction,
-                        session.person_id,
-                        session.id,
+                        candidate.person_id,
+                        candidate.id,
                         message.turn_id(),
                         turn_coverage,
                     )
                     .await?;
                 }
             }
+            self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
+                .await?;
+            let payload = self.payload(&candidate)?;
             let changed = transaction
                 .execute(
                     "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",

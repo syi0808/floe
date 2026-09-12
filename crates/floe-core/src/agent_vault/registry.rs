@@ -1,4 +1,5 @@
 use floe_agent::{AgentMessage, AgentRegistry, ExpertResult, RegistrySnapshot};
+use floe_domain::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
 
 use super::*;
@@ -832,6 +833,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             expected_registry_revision,
             staged,
             None,
+            None,
             after_registry_write,
         )
         .await
@@ -853,6 +855,34 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             expected_registry_revision,
             staged,
             Some((assignment_id, view_handle)),
+            None,
+            after_registry_write,
+        )
+        .await
+    }
+
+    pub(crate) async fn commit_expert_session_scoped_with_coverage_hook(
+        &self,
+        session: &AgentSession,
+        previous_revision: u64,
+        expected_registry_revision: u64,
+        staged: &RegistrySnapshot,
+        assignment_id: uuid::Uuid,
+        view_handle: uuid::Uuid,
+        turn_id: Uuid,
+        coverage: DependencyCoverage,
+        after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
+    ) -> Result<RegistrySnapshot, AgentFailure> {
+        if turn_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.commit_expert_session_inner(
+            session,
+            previous_revision,
+            expected_registry_revision,
+            staged,
+            Some((assignment_id, view_handle)),
+            Some((turn_id, coverage)),
             after_registry_write,
         )
         .await
@@ -865,9 +895,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         expected_registry_revision: u64,
         staged: &RegistrySnapshot,
         scope: Option<(uuid::Uuid, uuid::Uuid)>,
+        coverage: Option<(Uuid, DependencyCoverage)>,
         after_registry_write: impl std::future::Future<Output = Result<(), AgentFailure>> + Send,
     ) -> Result<RegistrySnapshot, AgentFailure> {
-        let payload = self.payload(session)?;
+        self.payload(session)?;
         if previous_revision.checked_add(1) != Some(session.revision) {
             return Err(AgentFailure::Conflict);
         }
@@ -878,6 +909,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
         let result = async {
+            let mut candidate = session.clone();
             let previous = self.session_on(&transaction, session.id).await?;
             let stored = self.registry_on(&transaction).await?.ok_or(AgentFailure::NotFound)?;
             if scope.is_none() && stored.revision != expected_registry_revision {
@@ -936,6 +968,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
             }
             after_registry_write.await?;
+            if let Some((turn_id, coverage)) = coverage {
+                super::context_dependencies::merge_context_dependency_coverage(
+                    &transaction,
+                    self.person_id,
+                    session.id,
+                    turn_id,
+                    coverage,
+                )
+                .await?;
+            }
+            self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
+                .await?;
+            let payload = self.payload(&candidate)?;
             let changed = transaction.execute("UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
                 (integer(session.revision)?, payload, session.id.to_string(), integer(previous_revision)?)).await.map_err(storage)?;
             if changed != 1 { return Err(AgentFailure::Conflict); }

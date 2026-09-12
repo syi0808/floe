@@ -364,6 +364,85 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    pub(super) async fn pending_data_access_grant_cleanup_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        limit: usize,
+    ) -> Result<Vec<AccessGrantCleanup>, AgentFailure> {
+        if limit == 0 || limit > MAX_CLEANUP_ITEMS {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
+        let mut rows = transaction
+            .query(
+                "SELECT cleanup_id, grant_id, person_id, invalidated_incarnation, invalidated_epoch, payload FROM data_access_grant_cleanup WHERE person_id = ? ORDER BY invalidated_epoch, cleanup_id LIMIT ?",
+                (
+                    self.person_id.to_string(),
+                    i64::try_from(limit).map_err(|_| AgentFailure::BudgetExceeded)?,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage)? {
+            let item = self
+                .decode_cleanup_row(&row)
+                .map_err(|failure| self.reject_access_corruption(failure))?;
+            let mut grants = transaction
+                .query(
+                    "SELECT grant_id, person_id, authority_owner, connection_id, connector, execution_owner, source_incarnation, source_epoch, grant_incarnation, access_epoch, state, payload FROM data_access_grants WHERE grant_id = ? AND person_id = ?",
+                    (
+                        item.grant_id.as_uuid().to_string(),
+                        self.person_id.to_string(),
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            let current = grants
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?;
+            let current =
+                decode_grant(&current).map_err(|failure| self.reject_access_corruption(failure))?;
+            if current.authority_owner() != self.vault_id
+                || current.authority().incarnation() != item.invalidated_authority.incarnation()
+                || item.invalidated_authority.access_epoch() >= current.authority().access_epoch()
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            items.push(item);
+        }
+        Ok(items)
+    }
+
+    pub(super) async fn acknowledge_data_access_grant_cleanup_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        item: &AccessGrantCleanup,
+    ) -> Result<bool, AgentFailure> {
+        self.ensure_access_grant_schema_transaction(transaction)
+            .await?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM data_access_grant_cleanup WHERE cleanup_id = ? AND grant_id = ? AND person_id = ? AND invalidated_incarnation = ? AND invalidated_epoch = ?",
+                (
+                    cleanup_id(item),
+                    item.grant_id.as_uuid().to_string(),
+                    self.person_id.to_string(),
+                    item.invalidated_authority.incarnation().to_string(),
+                    integer(item.invalidated_authority.access_epoch().get())?,
+                ),
+            )
+            .await
+            .map_err(storage)?;
+        if changed > 1 {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(changed == 1)
+    }
+
     async fn mutate_data_access_grant(
         &self,
         id: GrantId,

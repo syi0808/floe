@@ -529,7 +529,7 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     });
     let mut child = session.capability_executions[0].clone();
     child.scope_id = Uuid::new_v4();
-    child.turn_id = child.scope_id;
+    child.turn_id = turn;
     child.call_id = Uuid::new_v4();
     child.capability_id = "schedule.find_free_windows".into();
     child.result = Some(Ok(markers[5].into()));
@@ -584,6 +584,9 @@ async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen()
     let vault = EncryptedAgentVault::open(root.path(), person, keys)
         .await
         .unwrap();
+    for execution in &mut session.capability_executions {
+        execution.replay = None;
+    }
     assert_eq!(vault.load(person, session.id).await.unwrap(), session);
 }
 

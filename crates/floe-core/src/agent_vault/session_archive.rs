@@ -155,7 +155,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 through_turn_id,
                 archived_message_count: split,
             };
-            let archive_payload = serde_json::to_string(&source).map_err(storage)?;
+            let mut archived_source = source.clone();
+            self.sanitize_session_for_context_cleanup(&transaction, &mut archived_source)
+                .await?;
+            let archive_payload = serde_json::to_string(&archived_source).map_err(storage)?;
             transaction.execute(
                 "INSERT INTO agent_session_archives (id, session_id, source_revision, through_turn_id, message_count, payload) VALUES (?, ?, ?, ?, ?, ?)",
                 (
@@ -190,6 +193,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 )
                 .await?;
             }
+            self.sanitize_session_for_context_cleanup(&transaction, &mut session)
+                .await?;
             let payload = self.payload(&session)?;
             let changed = transaction.execute(
                 "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
