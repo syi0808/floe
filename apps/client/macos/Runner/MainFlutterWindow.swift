@@ -3,6 +3,7 @@ import FlutterMacOS
 import EventKit
 import CryptoKit
 import Security
+import LocalAuthentication
 
 class MainFlutterWindow: NSWindow {
   private let calendarBridge = CalendarBridge()
@@ -54,6 +55,7 @@ class MainFlutterWindow: NSWindow {
 }
 
 final class LocalServerBridge {
+  private let credentialQueue = DispatchQueue(label: "floe.local-server.credentials")
   private var query: [String: Any] {
     [kSecClass as String: kSecClassGenericPassword,
      kSecAttrService as String: "app.floe.local-server",
@@ -70,10 +72,24 @@ final class LocalServerBridge {
         result(failure()); return
       }
       if NSWorkspace.shared.open(url) { result(nil) } else { result(failure()) }
+    default:
+      credentialQueue.async {
+        self.handleCredential(call) { value in
+          DispatchQueue.main.async { result(value) }
+        }
+      }
+    }
+  }
+
+  private func handleCredential(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
     case "read":
       var request = query
       request[kSecReturnData as String] = true
       request[kSecMatchLimit as String] = kSecMatchLimitOne
+      let authentication = LAContext()
+      authentication.interactionNotAllowed = true
+      request[kSecUseAuthenticationContext as String] = authentication
       var found: CFTypeRef?
       let status = SecItemCopyMatching(request as CFDictionary, &found)
       if status == errSecItemNotFound { result(nil); return }

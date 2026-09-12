@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:floe_client/features/server/local_server_client.dart';
@@ -8,6 +9,35 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../support/server_credentials.dart';
 
 void main() {
+  testWidgets(
+    'stalled Keychain reads stop waiting without forgetting credentials',
+    (tester) async {
+      final pending = Completer<String?>();
+      final calls = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        KeychainServerCredentialStore.channel,
+        (call) {
+          calls.add(call.method);
+          return pending.future;
+        },
+      );
+      addTearDown(() {
+        pending.complete(null);
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          KeychainServerCredentialStore.channel,
+          null,
+        );
+      });
+      final result = expectLater(
+        KeychainServerCredentialStore().read(),
+        throwsA(isA<TimeoutException>()),
+      );
+      await tester.pump(const Duration(seconds: 5));
+      await result;
+      expect(calls, ['read']);
+    },
+  );
+
   test('addresses stay literal loopback with no path or credentials', () {
     expect(
       LocalServerClient.normalizeAddress('http://localhost:9431/'),

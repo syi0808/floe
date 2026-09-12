@@ -21,7 +21,9 @@ class KeychainServerCredentialStore implements ServerCredentialStore {
   @override
   Future<String?> read() async {
     try {
-      return await channel.invokeMethod<String>('read');
+      return await channel
+          .invokeMethod<String>('read')
+          .timeout(const Duration(seconds: 5));
     } on MissingPluginException {
       return null;
     }
@@ -298,6 +300,23 @@ class LocalServerClient {
   Future<void> save(ServerConnection value) {
     _requireConnectionIdentity(value);
     return store.write(jsonEncode(value.toJson()));
+  }
+
+  Map<String, Object?> authorityRoute(ServerConnection connection) {
+    _requireConnectionIdentity(connection);
+    return {
+      'base_url': connection.address,
+      'bearer_token': connection.token,
+      'purpose': InferencePurpose.everydayAssistance.wireName,
+      'external': false,
+      'allow_external': false,
+      'pairing': {
+        'client_id': connection.clientId,
+        'person_id': connection.personId,
+        'device_id': connection.deviceId,
+      },
+      'calendar_connections': const <Object?>[],
+    };
   }
 
   void _requireConnectionIdentity(ServerConnection connection) {
