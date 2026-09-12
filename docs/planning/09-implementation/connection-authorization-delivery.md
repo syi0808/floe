@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1 accepted; P2 implementation/review in progress; P3a/P5a foundations accepted; integration continues.
+> Status: P1/P2a and P3a/P4a/P5a/P5b accepted as bounded milestones; P2b/P4b/P5c integration continues. P7 is not complete.
 
 ## 1. Scope and completion rule
 
@@ -377,3 +377,27 @@ persisted timestamps. Recovery may reacquire authority but cannot silently exten
   action UI/execution and golden cases also failed in an isolated archived pre-client-change tree
   (`HEAD` before `5290dcd`). They are pre-existing failures, not silently accepted as new regressions.
   No goldens were regenerated. Backend reviewed-stamp enforcement remains a separate required gate.
+- P2a `2a91cd8`: native Calendar uses durable encrypted grants and atomic registry mappings;
+  root Core and FFI tests passed. Grant owner is vault identity, execution owner is device identity.
+- Native harness `8fd6f5b`: serialized expensive synthetic Swift fixture workloads across test
+  processes to prevent default-parallel deadline contention. Two default-parallel suites passed.
+- P4a `f52460d`: bounded dependency types and transactional encrypted sidecar accepted. This is
+  persistence, not permission to replay source context. P4b production projection remains in review.
+- P5b `71b5c89`: durable console issuer enrollment, explicit administrator approval, terminal
+  revocation, strict trust quarantine, and source-lock release validation accepted. Root reran fresh
+  authorization/console tests and their race suites; all passed. Post-rename durability uncertainty
+  latches protected authority, including already-held engine references. Independent model routes
+  remain available when trust is quarantined. Provider identity and protected routes are not adopted.
+
+### P5c mutual identity review contract
+
+Loopback address, bearer pairing, and a caller-supplied audience do not authenticate a producer.
+The producer must own a separate Ed25519 identity and sign its exact challenge bytes under a distinct
+producer domain. The local owner explicitly reviews and pins that producer fingerprint, instance,
+and audience before signing an enrollment challenge. The vault owner signing key is separately
+generated, encrypted in the existing vault, and never exported to the producer or reused as a database
+encryption key. Typed parsing and producer-signature verification precede owner signing; no general
+opaque-message signing API is permitted. Restart, unknown schema, changed pin, ambiguous identity,
+and missing current grant/source/policy validation fail closed. New protected provider paths remain
+disabled until the complete admission/read/release circuit and provider-authoritative identity have
+positive and negative synthetic coverage. Enrollment cryptography alone does not complete P5.
