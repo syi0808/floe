@@ -1205,7 +1205,7 @@ func (console *Console) writeState(writer http.ResponseWriter, current session) 
 		clientScopes[identifier] = map[string]any{"person_id": client.PersonID, "device_id": client.DeviceID}
 	}
 	var pending *pairing
-	if console.pair != nil && console.pair.token == "" && console.pair.Expires.After(time.Now()) {
+	if console.pair != nil && console.pair.token == "" && console.pair.status != "rejected" && console.pair.Expires.After(time.Now()) {
 		copy := *console.pair
 		pending = &copy
 	}

@@ -96,6 +96,10 @@ func (console *Console) manageLegacyPairApprove(writer http.ResponseWriter, pair
 		failure(writer, http.StatusConflict, "pairing_expired")
 		return
 	}
+	if console.pair.IssuerKeyID != "" {
+		failure(writer, http.StatusConflict, "pairing_confirmation_required")
+		return
+	}
 	next := cloneState(console.state)
 	token := randomToken()
 	next.Clients[pairingID] = pairedClient{ClientID: pairingID, TokenHash: digest(token), PersonID: console.pair.PersonID, DeviceID: console.pair.DeviceID}
@@ -109,8 +113,9 @@ func (console *Console) manageLegacyPairApprove(writer http.ResponseWriter, pair
 
 func (console *Console) managePairReject(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
-		PairingID string `json:"pairing_id"`
-		ID        string `json:"id"`
+		SchemaVersion int    `json:"schema_version"`
+		PairingID     string `json:"pairing_id"`
+		ID            string `json:"id"`
 	}
 	if !decode(writer, request, &input) || input.PairingID != "" && input.ID != "" && input.PairingID != input.ID {
 		failure(writer, http.StatusBadRequest, "validation")
@@ -119,7 +124,7 @@ func (console *Console) managePairReject(writer http.ResponseWriter, request *ht
 	if input.PairingID == "" {
 		input.PairingID = input.ID
 	}
-	if input.PairingID == "" {
+	if input.PairingID == "" || input.SchemaVersion != 1 && input.ID == "" {
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}

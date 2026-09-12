@@ -79,31 +79,21 @@ async function refresh() {
   element('login-panel').hidden = true; element('dashboard').hidden = false;
   element('address').textContent = state.address; pairing = state.pairing;
   element('pair-panel').hidden = !pairing; element('pair-code').textContent = pairing?.code || '';
+  element('approve').disabled = pairing?.local_confirmed !== true;
+  element('pair-identity').textContent = pairing
+    ? `${pairing.person_id} · ${pairing.device_id}` : '';
+  element('pair-fingerprint').textContent = pairing
+    ? `Issuer fingerprint: ${pairing.issuer_fingerprint || 'unavailable'} · Producer fingerprint: ${pairing.producer_fingerprint || 'unavailable'}` : '';
   renderProvider();
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
   for (const identifier of state.clients) {
     const row = document.createElement('div'); row.className = 'client';
-    row.append(text('span', `Floe app · ${identifier.slice(0, 12)}`), button('Revoke', async () => {
-      if (!confirm('Revoke this app’s access? It will need to pair again.')) return;
+    row.append(text('span', `Floe app · ${identifier.slice(0, 12)}`), button('Revoke app and issuer', async () => {
+      if (!confirm('Revoke this app and its trusted issuer? It will need to pair again.')) return;
       await api('client/delete', {id:identifier}); await refresh();
     })); clients.append(row);
   }
-  const authority = element('authority-enrollments'); authority.replaceChildren();
-  const producer = element('authority-producer'); producer.replaceChildren();
-  try {
-    const producerValue = await api('authority/producer');
-    producer.append(text('small', `Producer instance: ${producerValue.instance_id} · execution owner: ${producerValue.execution_owner}`), text('small', `Audience: ${producerValue.audience}`), text('small', `Public-key fingerprint: ${producerValue.fingerprint}`));
-    const value = await api('authority/enrollments');
-    if (!value.enrollments?.length) { authority.append(text('p', 'No issuer enrollments awaiting approval.')); return; }
-    for (const enrollment of value.enrollments) {
-      const row = document.createElement('div'); row.className = 'client';
-      const details = document.createElement('span'); details.append(text('strong', `${enrollment.client_id} · ${enrollment.person_id} · ${enrollment.device_id}`), text('small', `Fingerprint: ${enrollment.fingerprint}`)); row.append(details);
-      if (enrollment.active) row.append(button('Revoke', async () => { if (confirm('Revoke this issuer?')) { await api('authority/revoke', {key_id: enrollment.key_id}); await refresh(); } }));
-      else if (enrollment.local_confirmed && !enrollment.admin_approved) row.append(button('Approve', async () => { await api('authority/approve', {enrollment_id: enrollment.enrollment_id, fingerprint: enrollment.fingerprint}); await refresh(); }), button('Reject', async () => { await api('authority/reject', {enrollment_id: enrollment.enrollment_id, fingerprint: enrollment.fingerprint}); await refresh(); }));
-      authority.append(row);
-    }
-  } catch (error) { authority.append(text('p', `Authority unavailable: ${error.message}`)); }
 }
 
 element('login-form').addEventListener('submit', (event) => {
@@ -146,7 +136,10 @@ element('refresh').onclick = () => action(element('refresh'), refresh);
 element('logout').onclick = () => action(element('logout'), async () => { await api('logout', {}); lock(); });
 for (const operation of ['approve', 'reject']) element(operation).onclick = () => action(element(operation), async () => {
   if (!pairing) return;
-  await api(`pair/${operation}`, {id:pairing.id}); await refresh();
+  const body = operation === 'approve'
+    ? {schema_version: 1, pairing_id: pairing.id, issuer_fingerprint: pairing.issuer_fingerprint}
+    : {schema_version: 1, pairing_id: pairing.id};
+  await api(`pair/${operation}`, body); await refresh();
   notice(operation === 'approve' ? 'App approved. Return to Floe to finish connecting.' : 'Request rejected.');
 });
 async function codex(operation) {

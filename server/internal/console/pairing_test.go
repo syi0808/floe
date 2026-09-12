@@ -146,3 +146,36 @@ func TestPairingPollRequiresExactPairingIdentity(t *testing.T) {
 		t.Fatalf("poll accepted a different pairing identity: %d %s", response.Code, response.Body.String())
 	}
 }
+
+func TestLegacyApprovalCannotBypassIssuerConfirmation(t *testing.T) {
+	fixture := setup(t)
+	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), ""))
+	response := fixture.call(http.MethodPost, "/manage/api/pair/approve", map[string]any{
+		"id": started["pairing_id"],
+	}, "")
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "pairing_confirmation_required") {
+		t.Fatalf("legacy approval bypassed issuer confirmation: %d %s", response.Code, response.Body.String())
+	}
+	fixture.console.mu.Lock()
+	if len(fixture.console.state.Clients) != 0 || len(fixture.console.state.TrustedIssuers) != 0 {
+		fixture.console.mu.Unlock()
+		t.Fatal("legacy approval changed durable trust state")
+	}
+	fixture.console.mu.Unlock()
+}
+
+func TestRejectedPairingIsRemovedFromDashboardPendingState(t *testing.T) {
+	fixture := setup(t)
+	started := fixture.value(fixture.call(http.MethodPost, "/pair/start", pairStartBody(fixturePersonID, fixtureDeviceID), ""))
+	response := fixture.call(http.MethodPost, "/manage/api/pair/reject", map[string]any{
+		"schema_version": 1,
+		"pairing_id":     started["pairing_id"],
+	}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("reject pairing: %d %s", response.Code, response.Body.String())
+	}
+	state := fixture.value(fixture.call(http.MethodGet, "/manage/api/state", nil, ""))
+	if state["pairing"] != nil {
+		t.Fatalf("rejected pairing remained in dashboard state: %#v", state["pairing"])
+	}
+}
