@@ -2,7 +2,7 @@
 
 > 2026-09-12. Baseline: `205107b`. Planning and review: primary agent.
 > Implementation: explicitly requested `gpt-5.6-luna`, reasoning `high` subagent.
-> Status: P1 foundation implemented and reviewed; P2–P7 pending.
+> Status: P1 accepted; P2a implementation in progress; P3/P5 integration audits in progress.
 
 ## 1. Scope and completion rule
 
@@ -236,10 +236,10 @@ dependent milestone edits against unreviewed authority APIs. Update this ledger 
 | Milestone | State | Evidence |
 | --- | --- | --- |
 | P1 | Accepted foundation | Domain 9 tests, grant-store 8 tests, full Rust workspace and formatting passed; no runtime adoption |
-| P2 | Pending | — |
-| P3 | Pending | — |
+| P2 | In progress: P2a | Luna/high: atomic native grant/projection and actual read admission; P2b review/policy work follows |
+| P3 | Architecture audit | Separate Luna/high read-only native host/worker lifecycle audit; implementation not yet accepted |
 | P4 | Pending | — |
-| P5 | Pending | Enrollment/verification decision required before implementation |
+| P5 | Architecture audit | Separate Luna/high read-only enrollment/verification audit; no paired-bearer authorization shortcut |
 | P6 | Pending | — |
 | P7 | Pending | Live environment gates remain explicit |
 
@@ -264,3 +264,40 @@ source mismatch/needs-review admission, consumer/policy epochs, native refresh, 
 cleanup execution and server issuer verification are not implemented by P1. The initial retained-grant
 capacity is 128 records including terminal identities; P2 must account for that explicit quota in UI
 and lifecycle integration, not delete tombstones to make room silently.
+
+## 5. Continued execution toward P7
+
+The user requested continuation through P7. P2 is split into reviewable substeps rather than treating
+the foundation as completion. P2a replaces native Calendar's registry-only authorization with an
+actual encrypted grant and atomic execution projection, preserving lazy acquisition. P2b finishes
+authority-based consent review DTO/UI and per-consumer policy epochs (including disable/re-enable ABA)
+so unrelated global registry changes do not invalidate source work. Registry CAS still protects writes.
+
+Native and remote architecture audits run independently of P2a implementation. They cannot edit the
+shared Core/FFI files or enable a protected path before its dependent contracts are reviewed. All
+implementation agents retain the requested Luna/high setting; the primary owns decisions and review.
+
+### P4 integration direction for review
+
+Existing `LearningEvidenceRef` already references session/turn identities. Prefer a vault-owned,
+transactional per-turn dependency sidecar over adding fields to every AgentMessage variant:
+- Record explicit independent/source-dependent coverage for new turns. Missing coverage is unknown,
+  not permission to reuse generated source history. Do not migrate old authority implicitly.
+- Every source acquisition supplies immutable grant/source/policy stamps plus observation ID, effective
+  scope handle and expiry. Record consumption before derived output can be committed.
+- Inherit the union from all retained historical context and consumed Views into generated output for
+  the current turn. Whole-turn conservative attribution is acceptable; model self-report is not.
+- Session CAS/result/private-state commits and dependency records must be atomic in the encrypted
+  vault. A detached post-save metadata write cannot establish lineage.
+- General as well as Calendar model paths project/revalidate history and provider replay. A general
+  follow-up that sees valid Calendar history inherits its dependencies even without a new tool call.
+- Compaction unions covered dependencies into its summary turn. Archive restoration, proposal
+  evidence, Learner discovery/review and accepted memory projection resolve the same sidecar.
+- Scope/resource/recipient policy still limits allowed uses: Read/Suggestion must not silently become
+  permission to persist a source-derived memory. Keep source learning closed without explicit learning
+  consent and retention policy; ordinary source-independent learning remains separately governed.
+- Observation expiry is not extended by restart or summary. Historical retention needs a distinct
+  supported policy; do not claim durable lineage alone authorizes indefinite reuse.
+
+This is an integration direction, not implemented behavior. Final P4 contracts must match the reviewed
+P2 admission record and P3 lease/observation identities before implementation is assigned.
