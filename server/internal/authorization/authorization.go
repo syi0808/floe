@@ -27,6 +27,9 @@ const (
 	MaxPendingPerClient    = 128
 	MaxStageBytesPerResult = 1 << 20
 	MaxStageBytesGlobal    = 16 << 20
+	MaxProofBytes          = 4 << 10
+	MaxChallengeBytes      = 64 << 10
+	MaxJSONDepth           = 16
 	MaxResources           = 64
 	MaxResourceBytes       = 256
 	MaxQueryDigestBytes    = 32
@@ -116,9 +119,10 @@ type Request struct {
 }
 
 type IssuerRecord struct {
-	KeyID     string
-	Principal Principal
-	PublicKey ed25519.PublicKey
+	KeyID        string
+	EnrollmentID string
+	Principal    Principal
+	PublicKey    ed25519.PublicKey
 }
 
 // TrustStore is a durable transaction boundary. Implementations must commit
@@ -159,6 +163,9 @@ type Proof struct {
 // ParseProofJSON rejects duplicate/unknown fields, trailing bytes, and
 // non-canonical base64 before a proof reaches the engine.
 func ParseProofJSON(data []byte) (Proof, error) {
+	if len(data) > MaxProofBytes {
+		return Proof{}, fmt.Errorf("%w: proof too large", ErrInvalid)
+	}
 	if err := rejectDuplicateJSON(data); err != nil {
 		return Proof{}, err
 	}
@@ -191,6 +198,17 @@ type Enrollment struct {
 	KeyID       string
 }
 
+type EnrollmentStatus struct {
+	ID             string
+	Fingerprint    string
+	Principal      Principal
+	KeyID          string
+	LocalConfirmed bool
+	AdminApproved  bool
+	ExpiresAt      time.Duration
+	Active         bool
+}
+
 type Release struct {
 	ID        string
 	Bytes     []byte
@@ -210,6 +228,7 @@ type Engine struct {
 	enrollmentsByClient map[string]int
 	admissionsByClient  map[string]int
 	enrollments         map[string]*pendingEnrollment
+	enrollmentHistory   map[string]EnrollmentStatus
 	admissions          map[string]*admission
 	stages              map[string]*stage
 	stagedBytes         int
@@ -284,7 +303,7 @@ func New(opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	engine := &Engine{clock: clock, random: random, store: opts.Store, issuers: make(map[string]IssuerRecord), pending: make(map[string]*pendingChallenge), pendingByClient: make(map[string]int), enrollmentsByClient: make(map[string]int), admissionsByClient: make(map[string]int), enrollments: make(map[string]*pendingEnrollment), admissions: make(map[string]*admission), stages: make(map[string]*stage)}
+	engine := &Engine{clock: clock, random: random, store: opts.Store, issuers: make(map[string]IssuerRecord), pending: make(map[string]*pendingChallenge), pendingByClient: make(map[string]int), enrollmentsByClient: make(map[string]int), admissionsByClient: make(map[string]int), enrollments: make(map[string]*pendingEnrollment), enrollmentHistory: make(map[string]EnrollmentStatus), admissions: make(map[string]*admission), stages: make(map[string]*stage)}
 	for _, record := range loaded {
 		if err := validateIssuer(record); err != nil {
 			return nil, fmt.Errorf("%w: invalid stored issuer: %v", ErrUnavailable, err)
@@ -298,6 +317,9 @@ func New(opts Options) (*Engine, error) {
 			}
 		}
 		engine.issuers[record.KeyID] = cloneIssuer(record)
+		if record.EnrollmentID != "" {
+			engine.enrollmentHistory[record.EnrollmentID] = EnrollmentStatus{ID: record.EnrollmentID, Fingerprint: fingerprintPublicKey(record.PublicKey), Principal: record.Principal, KeyID: record.KeyID, LocalConfirmed: true, AdminApproved: true, Active: true}
+		}
 	}
 	return engine, nil
 }
@@ -413,12 +435,114 @@ func (engine *Engine) CompleteEnrollment(enrollmentID string, principal Principa
 	if activate {
 		enrollment.committing = true
 	}
-	record := IssuerRecord{KeyID: enrollment.keyID, Principal: enrollment.principal, PublicKey: append(ed25519.PublicKey(nil), enrollment.publicKey...)}
+	record := IssuerRecord{KeyID: enrollment.keyID, EnrollmentID: enrollment.id, Principal: enrollment.principal, PublicKey: append(ed25519.PublicKey(nil), enrollment.publicKey...)}
 	engine.mu.Unlock()
 	if !activate {
 		return nil
 	}
 	return engine.commitActivation(enrollmentID, record)
+}
+
+func (engine *Engine) EnrollmentStatus(enrollmentID string, principal Principal) (EnrollmentStatus, error) {
+	if err := validatePrincipal(principal); err != nil {
+		return EnrollmentStatus{}, err
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	enrollment, exists := engine.enrollments[enrollmentID]
+	if !exists {
+		status, historical := engine.enrollmentHistory[enrollmentID]
+		if !historical || !samePrincipal(principal, status.Principal) {
+			return EnrollmentStatus{}, ErrDenied
+		}
+		return status, nil
+	}
+	if !samePrincipal(principal, enrollment.principal) {
+		return EnrollmentStatus{}, ErrDenied
+	}
+	if engine.expired(enrollment.deadline) {
+		return EnrollmentStatus{}, ErrExpired
+	}
+	return EnrollmentStatus{ID: enrollment.id, Fingerprint: enrollment.fingerprint, Principal: enrollment.principal, KeyID: enrollment.keyID, LocalConfirmed: enrollment.localConfirmed, AdminApproved: enrollment.adminApproved, ExpiresAt: enrollment.deadline}, nil
+}
+
+func (engine *Engine) IssuerStatus(keyID string, principal Principal) (EnrollmentStatus, error) {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	issuer, exists := engine.issuers[keyID]
+	if !exists || !samePrincipal(principal, issuer.Principal) {
+		return EnrollmentStatus{}, ErrDenied
+	}
+	enrollmentID := issuer.EnrollmentID
+	if enrollmentID == "" {
+		enrollmentID = keyID
+	}
+	return EnrollmentStatus{ID: enrollmentID, KeyID: keyID, Fingerprint: fingerprintPublicKey(issuer.PublicKey), Principal: principal, Active: true}, nil
+}
+
+func (engine *Engine) ActiveIssuers() []EnrollmentStatus {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	statuses := make([]EnrollmentStatus, 0, len(engine.issuers))
+	for keyID, issuer := range engine.issuers {
+		enrollmentID := issuer.EnrollmentID
+		if enrollmentID == "" {
+			enrollmentID = keyID
+		}
+		statuses = append(statuses, EnrollmentStatus{ID: enrollmentID, KeyID: keyID, Fingerprint: fingerprintPublicKey(issuer.PublicKey), Principal: issuer.Principal, Active: true})
+	}
+	return statuses
+}
+
+func (engine *Engine) PendingEnrollments() []EnrollmentStatus {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	statuses := make([]EnrollmentStatus, 0, len(engine.enrollments))
+	for _, enrollment := range engine.enrollments {
+		if !engine.expired(enrollment.deadline) {
+			statuses = append(statuses, EnrollmentStatus{ID: enrollment.id, Fingerprint: enrollment.fingerprint, Principal: enrollment.principal, KeyID: enrollment.keyID, LocalConfirmed: enrollment.localConfirmed, AdminApproved: enrollment.adminApproved, ExpiresAt: enrollment.deadline})
+		}
+	}
+	return statuses
+}
+
+func (engine *Engine) ForgetPrincipal(principal Principal) []string {
+	engine.transitionMu.Lock()
+	defer engine.transitionMu.Unlock()
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	var revoked []string
+	for keyID, issuer := range engine.issuers {
+		if samePrincipal(issuer.Principal, principal) {
+			delete(engine.issuers, keyID)
+			revoked = append(revoked, keyID)
+		}
+	}
+	for enrollmentID, status := range engine.enrollmentHistory {
+		if samePrincipal(status.Principal, principal) {
+			delete(engine.enrollmentHistory, enrollmentID)
+		}
+	}
+	for enrollmentID, enrollment := range engine.enrollments {
+		if samePrincipal(enrollment.principal, principal) {
+			engine.dropEnrollmentLocked(enrollmentID)
+		}
+	}
+	for admissionID, admission := range engine.admissions {
+		if samePrincipal(admission.principal, principal) {
+			delete(engine.admissions, admissionID)
+			if engine.admissionsByClient[principal.ClientID] > 0 {
+				engine.admissionsByClient[principal.ClientID]--
+			}
+		}
+	}
+	for stageID, staged := range engine.stages {
+		if samePrincipal(staged.principal, principal) {
+			engine.dropStageLocked(staged)
+			delete(engine.stages, stageID)
+		}
+	}
+	return revoked
 }
 
 // ApproveEnrollment records the explicit admin decision. The caller must
@@ -458,7 +582,7 @@ func (engine *Engine) ApproveEnrollment(enrollmentID, fingerprint string, approv
 	if activate {
 		enrollment.committing = true
 	}
-	record := IssuerRecord{KeyID: enrollment.keyID, Principal: enrollment.principal, PublicKey: append(ed25519.PublicKey(nil), enrollment.publicKey...)}
+	record := IssuerRecord{KeyID: enrollment.keyID, EnrollmentID: enrollment.id, Principal: enrollment.principal, PublicKey: append(ed25519.PublicKey(nil), enrollment.publicKey...)}
 	engine.mu.Unlock()
 	if !activate {
 		return nil
@@ -518,6 +642,7 @@ func (engine *Engine) commitActivation(enrollmentID string, record IssuerRecord)
 		}
 	}
 	engine.issuers[record.KeyID] = cloneIssuer(record)
+	engine.enrollmentHistory[enrollmentID] = EnrollmentStatus{ID: enrollmentID, Fingerprint: fingerprintPublicKey(record.PublicKey), Principal: record.Principal, KeyID: record.KeyID, LocalConfirmed: true, AdminApproved: true, Active: true}
 	delete(engine.enrollments, enrollmentID)
 	if engine.enrollmentsByClient[record.Principal.ClientID] > 0 {
 		engine.enrollmentsByClient[record.Principal.ClientID]--
@@ -547,6 +672,11 @@ func (engine *Engine) RevokeIssuer(keyID string) error {
 		engine.mu.Unlock()
 		return fmt.Errorf("%w: revocation: %v", ErrUnavailable, err)
 	}
+	engine.mu.Lock()
+	if record.EnrollmentID != "" {
+		delete(engine.enrollmentHistory, record.EnrollmentID)
+	}
+	engine.mu.Unlock()
 	return nil
 }
 
@@ -871,13 +1001,11 @@ func (engine *Engine) ClaimRelease(principal Principal, proof Proof, authority S
 		return nil
 	})
 	if err != nil || !didConsume {
-		if err != nil || !didConsume {
-			engine.mu.Lock()
-			if live, ok := engine.stages[staged.id]; ok && live == staged && live.state == challengeChecking {
-				engine.dropStageLocked(live)
-			}
-			engine.mu.Unlock()
+		engine.mu.Lock()
+		if live, ok := engine.stages[staged.id]; ok && live == staged && live.state == challengeChecking {
+			engine.dropStageLocked(live)
 		}
+		engine.mu.Unlock()
 		if err == nil {
 			return nil, ErrDenied
 		}
@@ -1055,6 +1183,9 @@ type grantWire struct {
 }
 
 func parseChallengeBytes(data []byte) (challengeWire, error) {
+	if len(data) > MaxChallengeBytes {
+		return challengeWire{}, fmt.Errorf("%w: challenge too large", ErrInvalid)
+	}
 	if err := rejectDuplicateJSON(data); err != nil {
 		return challengeWire{}, err
 	}
@@ -1412,8 +1543,11 @@ func formatUUID(b []byte) string {
 }
 
 func rejectDuplicateJSON(data []byte) error {
+	if len(data) > MaxChallengeBytes {
+		return fmt.Errorf("%w: json too large", ErrInvalid)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := walkJSON(decoder); err != nil {
+	if err := walkJSON(decoder, 0); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	var extra any
@@ -1422,7 +1556,10 @@ func rejectDuplicateJSON(data []byte) error {
 	}
 	return nil
 }
-func walkJSON(decoder *json.Decoder) error {
+func walkJSON(decoder *json.Decoder, depth int) error {
+	if depth > MaxJSONDepth {
+		return ErrInvalid
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -1441,7 +1578,7 @@ func walkJSON(decoder *json.Decoder) error {
 					return ErrInvalid
 				}
 				seen[ks] = true
-				if err := walkJSON(decoder); err != nil {
+				if err := walkJSON(decoder, depth+1); err != nil {
 					return err
 				}
 			}
@@ -1450,7 +1587,7 @@ func walkJSON(decoder *json.Decoder) error {
 		}
 		if delimiter == '[' {
 			for decoder.More() {
-				if err := walkJSON(decoder); err != nil {
+				if err := walkJSON(decoder, depth+1); err != nil {
 					return err
 				}
 			}

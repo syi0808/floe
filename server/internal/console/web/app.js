@@ -89,6 +89,18 @@ async function refresh() {
       await api('client/delete', {id:identifier}); await refresh();
     })); clients.append(row);
   }
+  const authority = element('authority-enrollments'); authority.replaceChildren();
+  try {
+    const value = await api('authority/enrollments');
+    if (!value.enrollments?.length) { authority.append(text('p', 'No issuer enrollments awaiting approval.')); return; }
+    for (const enrollment of value.enrollments) {
+      const row = document.createElement('div'); row.className = 'client';
+      const details = document.createElement('span'); details.append(text('strong', `${enrollment.client_id} · ${enrollment.person_id} · ${enrollment.device_id}`), text('small', `Fingerprint: ${enrollment.fingerprint}`)); row.append(details);
+      if (enrollment.active) row.append(button('Revoke', async () => { if (confirm('Revoke this issuer?')) { await api('authority/revoke', {key_id: enrollment.key_id}); await refresh(); } }));
+      else if (enrollment.local_confirmed && !enrollment.admin_approved) row.append(button('Approve', async () => { await api('authority/approve', {enrollment_id: enrollment.enrollment_id, fingerprint: enrollment.fingerprint}); await refresh(); }), button('Reject', async () => { await api('authority/reject', {enrollment_id: enrollment.enrollment_id, fingerprint: enrollment.fingerprint}); await refresh(); }));
+      authority.append(row);
+    }
+  } catch (error) { authority.append(text('p', `Authority unavailable: ${error.message}`)); }
 }
 
 element('login-form').addEventListener('submit', (event) => {

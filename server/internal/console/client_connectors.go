@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -166,6 +167,10 @@ func (console *Console) writeClientConnectorCatalog(writer http.ResponseWriter, 
 		if connected {
 			item["connection_id"] = connection.ConnectionID
 			item["connection_revision"] = connection.Revision
+			item["incarnation"] = connection.Incarnation
+			item["epoch"] = connection.Epoch
+			item["execution_owner"] = console.state.ExecutionOwnerID
+			item["identity_unverified"] = connection.IdentityUnverified
 			item["scope"] = cloneConnectorScope(connection.Scope)
 		}
 		items = append(items, item)
@@ -253,7 +258,13 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 		failure(writer, http.StatusInternalServerError, "connection_identity_unavailable")
 		return
 	}
-	record := connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope}
+	incarnation, err := newConnectionID()
+	if err != nil {
+		console.mu.Unlock()
+		failure(writer, http.StatusInternalServerError, "connection_identity_unavailable")
+		return
+	}
+	record := connectionRecord{ConnectionID: connectionID, Revision: 1, ConnectorID: definition.ID, PersonID: scope.PersonID, Scope: selectedScope, Incarnation: incarnation, Epoch: 1, IdentityUnverified: true}
 	credentialNamespace := definition.CredentialName
 	if credentialNamespace == "" {
 		credentialNamespace = definition.OAuthCredential
@@ -303,6 +314,7 @@ func (console *Console) startClientConnector(writer http.ResponseWriter, request
 	next.Attempts[attemptID] = connectionAttemptRecord{
 		AttemptID: attemptID, ClientID: scope.ClientID, PersonID: scope.PersonID, DeviceID: scope.DeviceID,
 		ConnectorID: definition.ID, ConnectionID: connectionID, Credential: record.Credential,
+		Incarnation: record.Incarnation, Epoch: record.Epoch,
 		Scope: cloneConnectorScope(record.Scope), CreatedAtUnixMs: attempt.CreatedAt.UnixMilli(), CleanupKind: "oauth_logout",
 	}
 	if err := console.save(next); err != nil {
@@ -530,8 +542,17 @@ func (console *Console) updateClientConnectorScope(writer http.ResponseWriter, r
 		return
 	}
 	previous := cloneState(console.state)
+	if reflect.DeepEqual(record.Scope, selectedScope) {
+		reply(writer, http.StatusOK, map[string]any{"schema_version": 1, "person_id": scope.PersonID, "device_id": scope.DeviceID, "connection_id": record.ConnectionID, "connection_revision": record.Revision, "connector_id": definition.ID, "scope": cloneConnectorScope(selectedScope)})
+		return
+	}
 	record.Scope = selectedScope
 	record.Revision++
+	if record.Epoch == 0 || record.Epoch == ^uint64(0) {
+		failure(writer, http.StatusConflict, "connection_epoch_invalid")
+		return
+	}
+	record.Epoch++
 	console.state.Connections[record.ConnectionID] = record
 	if console.rebuildConnectorRuntimes() != nil || console.save(console.state) != nil {
 		console.state = previous
@@ -746,7 +767,7 @@ func (console *Console) finishClientOAuthAttempt(attemptID string) bool {
 	if attempt == nil || !durableExists || attempt.Status != "pending" && attempt.Status != "connected" || durable.ConnectionID != attempt.ConnectionID {
 		return false
 	}
-	record := connectionRecord{ConnectionID: attempt.ConnectionID, Revision: 1, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential}
+	record := connectionRecord{ConnectionID: attempt.ConnectionID, Revision: 1, ConnectorID: attempt.ConnectorID, PersonID: attempt.PersonID, Scope: cloneConnectorScope(attempt.Scope), Credential: attempt.Credential, Incarnation: durable.Incarnation, Epoch: durable.Epoch, IdentityUnverified: true}
 	if !console.connectionCredentialReady(record) {
 		return false
 	}

@@ -12,8 +12,10 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"floe/server/internal/authorization"
 	"floe/server/internal/connectors/common"
 	"floe/server/internal/inference"
 )
@@ -75,6 +77,7 @@ func (console *Console) ownedConnectionSnapshots(snapshots []any, scope clientSc
 		if record.Device != nil {
 			connection["device_binding"] = map[string]any{"device_id": record.Device.DeviceID}
 		}
+		connection["authority"] = map[string]any{"execution_owner": console.state.ExecutionOwnerID, "incarnation": record.Incarnation, "epoch": record.Epoch, "identity_unverified": record.IdentityUnverified}
 		owned = append(owned, value)
 	}
 	return owned, nil
@@ -169,6 +172,8 @@ type Console struct {
 	calendars                                    map[string]CalendarRuntime
 	state                                        diskState
 	gateway                                      *inference.Gateway
+	authorization                                *authorization.Engine
+	trustUnavailable                             atomic.Bool
 	unavailable                                  map[string]bool
 	sessions                                     map[string]session
 	pair                                         *pairing
@@ -180,6 +185,17 @@ type Console struct {
 	connectorLifecycleMu                         sync.Mutex
 	connectorLifecycles                          map[string]*sync.Mutex
 	connectorReservations                        map[string]connectionRecord
+}
+
+func (console *Console) authorityEngine() *authorization.Engine {
+	if console.trustUnavailable.Load() {
+		return nil
+	}
+	return console.authorization
+}
+
+func (console *Console) latchTrustUnavailable() {
+	console.trustUnavailable.Store(true)
 }
 
 func (console *Console) SetWorkContext(runtime WorkContextRuntime) {
@@ -356,6 +372,18 @@ func New(directory, address string, vault Vault, runtime AuthRuntime) (*Console,
 		return nil, err
 	}
 	console := &Console{directory: directory, address: address, adminHash: digest(admin), internalToken: randomToken(), vault: vault, runtime: runtime, state: state, sessions: map[string]session{}, connectorAttempts: map[string]*connectorAttempt{}, connectorLifecycles: map[string]*sync.Mutex{}, connectorReservations: map[string]connectionRecord{}}
+	var engine *authorization.Engine
+	if !state.TrustCorrupt {
+		engine, err = authorization.New(authorization.Options{Store: consoleTrustStore{console: console}})
+	}
+	if err != nil {
+		engine = nil
+		console.trustUnavailable.Store(true)
+	}
+	if state.TrustCorrupt {
+		console.trustUnavailable.Store(true)
+	}
+	console.authorization = engine
 	console.rebuild()
 	if err := console.recoverConnectionAttemptsLocked(); err != nil {
 		return nil, errors.New("connection attempt recovery unavailable")
@@ -578,6 +606,10 @@ func (console *Console) serveInference(writer http.ResponseWriter, request *http
 	console.mu.Unlock()
 	if cleanupPending {
 		failure(writer, 503, "person_cleanup_pending")
+		return
+	}
+	if strings.HasPrefix(request.URL.Path, "/v1/authority/enrollment") {
+		console.serveAuthority(writer, request, scope)
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/connectors") {
@@ -918,6 +950,10 @@ func (console *Console) servePair(writer http.ResponseWriter, request *http.Requ
 }
 
 func (console *Console) manage(writer http.ResponseWriter, request *http.Request, current session) {
+	if strings.HasPrefix(request.URL.Path, "/manage/api/authority/") {
+		console.manageAuthority(writer, request)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") && request.Method == "POST" {
 		if console.runtime == nil {
 			failure(writer, 503, "codex_unavailable")
@@ -954,7 +990,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	console.mu.Lock()
-	defer console.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			console.mu.Unlock()
+		}
+	}()
 	if request.Method != "POST" {
 		failure(writer, 404, "not_found")
 		return
@@ -985,7 +1026,7 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		token := randomToken()
-		next.Clients[input.ID] = pairedClient{TokenHash: digest(token), PersonID: console.pair.PersonID, DeviceID: console.pair.DeviceID}
+		next.Clients[input.ID] = pairedClient{ClientID: input.ID, TokenHash: digest(token), PersonID: console.pair.PersonID, DeviceID: console.pair.DeviceID}
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
 			return
@@ -1003,6 +1044,12 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		}
 		transientAttempts := console.removeClientAttemptsLocked(&next, input.ID)
 		delete(next.Clients, input.ID)
+		for keyID, trusted := range next.TrustedIssuers {
+			if trusted.ClientID == input.ID {
+				delete(next.TrustedIssuers, keyID)
+				next.RevokedIssuerKeys[keyID] = true
+			}
+		}
 		transientAttempts = append(transientAttempts, console.removePersonConnectionsLocked(&next, removed.PersonID)...)
 		if console.save(next) != nil {
 			failure(writer, 500, "save_failed")
@@ -1012,15 +1059,26 @@ func (console *Console) manage(writer http.ResponseWriter, request *http.Request
 		for _, attemptID := range transientAttempts {
 			delete(console.connectorAttempts, attemptID)
 		}
+		postDeleteError := ""
 		if err := console.rebuildConnectorRuntimes(); err != nil {
-			failure(writer, 500, "invalid_connector_configuration")
-			return
+			postDeleteError = "invalid_connector_configuration"
 		}
 		if console.pair != nil && console.pair.ID == input.ID {
 			console.pair = nil
 		}
-		if err := console.retryPersonCleanupLocked(removed.PersonID); err != nil && !errors.Is(err, errConnectorLifecycleInProgress) {
-			failure(writer, 500, "connection_cleanup_pending")
+		if postDeleteError == "" {
+			if err := console.retryPersonCleanupLocked(removed.PersonID); err != nil && !errors.Is(err, errConnectorLifecycleInProgress) {
+				postDeleteError = "connection_cleanup_pending"
+			}
+		}
+		if engine := console.authorityEngine(); engine != nil {
+			principal := authorization.Principal{ClientID: input.ID, PersonID: removed.PersonID, DeviceID: removed.DeviceID, Authenticated: true}
+			console.mu.Unlock()
+			locked = false
+			engine.ForgetPrincipal(principal)
+		}
+		if postDeleteError != "" {
+			failure(writer, 500, postDeleteError)
 			return
 		}
 	case "/manage/api/target/delete":

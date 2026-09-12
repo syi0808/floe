@@ -21,14 +21,46 @@ type Vault interface {
 	Delete(string) error
 }
 
+const maxRetainedIssuerIdentities = 128
+const trustSchemaVersion = 1
+
+type indeterminatePrivateWriteError struct{ err error }
+
+func (writeError indeterminatePrivateWriteError) Error() string { return writeError.err.Error() }
+func (writeError indeterminatePrivateWriteError) Unwrap() error { return writeError.err }
+
+func isIndeterminatePrivateWrite(err error) bool {
+	var writeError indeterminatePrivateWriteError
+	return errors.As(err, &writeError)
+}
+
+var syncPrivateDirectory = func(directory string) error {
+	directoryFile, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	if err := directoryFile.Sync(); err != nil {
+		_ = directoryFile.Close()
+		return err
+	}
+	return directoryFile.Close()
+}
+
 type diskState struct {
-	Targets     map[string]inference.Target        `json:"targets"`
-	Routes      map[string]inference.Route         `json:"routes"`
-	Providers   map[string]providerProfile         `json:"providers,omitempty"`
-	Connections map[string]connectionRecord        `json:"connections,omitempty"`
-	Clients     map[string]pairedClient            `json:"clients"`
-	Cleanups    map[string]personCleanup           `json:"person_cleanups"`
-	Attempts    map[string]connectionAttemptRecord `json:"connection_attempts"`
+	Targets            map[string]inference.Target        `json:"targets"`
+	Routes             map[string]inference.Route         `json:"routes"`
+	Providers          map[string]providerProfile         `json:"providers,omitempty"`
+	Connections        map[string]connectionRecord        `json:"connections,omitempty"`
+	Clients            map[string]pairedClient            `json:"clients"`
+	Cleanups           map[string]personCleanup           `json:"person_cleanups"`
+	Attempts           map[string]connectionAttemptRecord `json:"connection_attempts"`
+	InstanceID         string                             `json:"instance_id"`
+	ExecutionOwnerID   string                             `json:"execution_owner_id"`
+	TrustSchemaVersion int                                `json:"trust_schema_version"`
+	TrustedIssuers     map[string]trustedIssuerRecord     `json:"trusted_issuers"`
+	RevokedIssuerKeys  map[string]bool                    `json:"revoked_issuer_keys"`
+	TrustCorrupt       bool                               `json:"trust_corrupt,omitempty"`
+	TrustQuarantine    map[string]json.RawMessage         `json:"trust_quarantine,omitempty"`
 }
 
 type connectionAttemptRecord struct {
@@ -38,6 +70,8 @@ type connectionAttemptRecord struct {
 	DeviceID        string         `json:"device_id"`
 	ConnectorID     string         `json:"connector_id"`
 	ConnectionID    string         `json:"connection_id"`
+	Incarnation     string         `json:"incarnation"`
+	Epoch           uint64         `json:"epoch"`
 	Credential      string         `json:"credential"`
 	Scope           map[string]any `json:"scope"`
 	CreatedAtUnixMs int64          `json:"created_at_unix_ms"`
@@ -60,13 +94,17 @@ type connectionCleanupStep struct {
 }
 
 type connectionRecord struct {
-	ConnectionID string         `json:"connection_id"`
-	Revision     uint64         `json:"revision"`
-	ConnectorID  string         `json:"connector_id"`
-	PersonID     string         `json:"person_id"`
-	Device       *deviceBinding `json:"device_binding,omitempty"`
-	Scope        map[string]any `json:"scope"`
-	Credential   string         `json:"credential,omitempty"`
+	ConnectionID       string         `json:"connection_id"`
+	Revision           uint64         `json:"revision"`
+	ConnectorID        string         `json:"connector_id"`
+	PersonID           string         `json:"person_id"`
+	Device             *deviceBinding `json:"device_binding,omitempty"`
+	Scope              map[string]any `json:"scope"`
+	Credential         string         `json:"credential,omitempty"`
+	Incarnation        string         `json:"incarnation"`
+	Epoch              uint64         `json:"epoch"`
+	ProviderIdentity   string         `json:"provider_identity,omitempty"`
+	IdentityUnverified bool           `json:"identity_unverified,omitempty"`
 }
 
 type deviceBinding struct {
@@ -74,9 +112,19 @@ type deviceBinding struct {
 }
 
 type pairedClient struct {
+	ClientID  string `json:"client_id,omitempty"`
 	TokenHash string `json:"token_hash"`
 	PersonID  string `json:"person_id"`
 	DeviceID  string `json:"device_id"`
+}
+
+type trustedIssuerRecord struct {
+	KeyID        string `json:"key_id"`
+	EnrollmentID string `json:"enrollment_id,omitempty"`
+	ClientID     string `json:"client_id"`
+	PersonID     string `json:"person_id"`
+	DeviceID     string `json:"device_id"`
+	PublicKey    []byte `json:"public_key"`
 }
 
 type providerProfile struct {
@@ -127,11 +175,24 @@ func writePrivate(path string, value []byte) error {
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	if err = os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	if err = syncPrivateDirectory(filepath.Dir(path)); err != nil {
+		return indeterminatePrivateWriteError{err: err}
+	}
+	return nil
 }
 
 func readState(directory string) (diskState, string, error) {
-	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}}
+	state := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: trustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}}
+	var err error
+	if state.InstanceID, err = newConnectionID(); err != nil {
+		return state, "", err
+	}
+	if state.ExecutionOwnerID, err = newConnectionID(); err != nil {
+		return state, "", err
+	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return state, "", err
 	}
@@ -142,14 +203,94 @@ func readState(directory string) (diskState, string, error) {
 	data, err := os.ReadFile(filepath.Join(directory, "state.json"))
 	if err == nil {
 		var fields map[string]json.RawMessage
-		if json.Unmarshal(data, &fields) != nil || fields["connection_attempts"] == nil {
+		if json.Unmarshal(data, &fields) != nil || fields["connection_attempts"] == nil || fields["instance_id"] == nil || fields["execution_owner_id"] == nil {
 			return state, "", errors.New("invalid server state")
 		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
+		decodeData := data
+		trustCorrupt := state.TrustCorrupt
+		var marker int
+		if raw, exists := fields["trust_schema_version"]; !exists || json.Unmarshal(raw, &marker) != nil || marker != trustSchemaVersion {
+			trustCorrupt = true
+		}
+		decodeTrust := func(raw json.RawMessage, target any) error {
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(target); err != nil {
+				return err
+			}
+			if err := decoder.Decode(new(any)); err != io.EOF {
+				if err == nil {
+					return errors.New("trailing trust data")
+				}
+				return err
+			}
+			return nil
+		}
+		validateTrustJSON := func(raw json.RawMessage) bool {
+			return len(raw) <= 1<<20 && strictAuthorityJSON(raw)
+		}
+		issuerCount := 0
+		revokedCount := 0
+		if raw, exists := fields["trusted_issuers"]; !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			trustCorrupt = true
+		} else {
+			var issuers map[string]trustedIssuerRecord
+			if !validateTrustJSON(raw) || decodeTrust(raw, &issuers) != nil || len(issuers) > maxRetainedIssuerIdentities {
+				trustCorrupt = true
+			}
+			issuerCount = len(issuers)
+		}
+		if raw, exists := fields["revoked_issuer_keys"]; !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			trustCorrupt = true
+		} else {
+			var revoked map[string]bool
+			if !validateTrustJSON(raw) || decodeTrust(raw, &revoked) != nil || len(revoked) > maxRetainedIssuerIdentities {
+				trustCorrupt = true
+			} else {
+				for keyID, tombstone := range revoked {
+					if keyID == "" || !tombstone {
+						trustCorrupt = true
+						break
+					}
+				}
+			}
+			revokedCount = len(revoked)
+		}
+		if issuerCount+revokedCount > maxRetainedIssuerIdentities {
+			trustCorrupt = true
+		}
+		if trustCorrupt {
+			var raw map[string]json.RawMessage
+			if json.Unmarshal(data, &raw) == nil {
+				quarantine := map[string]json.RawMessage{}
+				for _, field := range []string{"trusted_issuers", "revoked_issuer_keys"} {
+					if value, exists := raw[field]; exists {
+						quarantine[field] = append(json.RawMessage(nil), value...)
+					}
+				}
+				delete(raw, "trusted_issuers")
+				delete(raw, "revoked_issuer_keys")
+				raw["trust_schema_version"] = json.RawMessage("1")
+				raw["trust_corrupt"] = json.RawMessage("true")
+				if encoded, marshalErr := json.Marshal(quarantine); marshalErr == nil {
+					raw["trust_quarantine"] = encoded
+				}
+				if sanitized, marshalErr := json.Marshal(raw); marshalErr == nil {
+					decodeData = sanitized
+				}
+			}
+		}
+		decoder := json.NewDecoder(bytes.NewReader(decodeData))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.Targets == nil || state.Clients == nil || state.Cleanups == nil || state.Attempts == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 || len(state.Cleanups) > 16 || len(state.Attempts) > 64 {
+		if decoder.Decode(&state) != nil || decoder.Decode(new(any)) != io.EOF || state.TrustSchemaVersion != trustSchemaVersion || !validConnectionID(state.InstanceID) || !validConnectionID(state.ExecutionOwnerID) || state.Targets == nil || state.Clients == nil || state.Cleanups == nil || state.Attempts == nil || len(state.Targets) > 32 || len(state.Routes) > 8 || len(state.Providers) > 3 || len(state.Clients) > 16 || len(state.Cleanups) > 16 || len(state.Attempts) > 64 || len(state.TrustQuarantine) > 2 {
 			return state, "", errors.New("invalid server state")
 		}
+		for field, value := range state.TrustQuarantine {
+			if field != "trusted_issuers" && field != "revoked_issuer_keys" || len(value) == 0 {
+				return state, "", errors.New("invalid trust quarantine")
+			}
+		}
+		state.TrustCorrupt = state.TrustCorrupt || trustCorrupt || len(state.TrustQuarantine) > 0
 		if len(state.Cleanups) > 1 {
 			return state, "", errors.New("invalid server state")
 		}
@@ -161,6 +302,15 @@ func readState(directory string) (diskState, string, error) {
 		}
 		if state.Connections == nil {
 			state.Connections = map[string]connectionRecord{}
+		}
+		if state.TrustedIssuers == nil {
+			state.TrustedIssuers = map[string]trustedIssuerRecord{}
+		}
+		if state.RevokedIssuerKeys == nil {
+			state.RevokedIssuerKeys = map[string]bool{}
+		}
+		if state.TrustQuarantine == nil {
+			state.TrustQuarantine = map[string]json.RawMessage{}
 		}
 		configuredTargets := len(state.Targets)
 		for _, profile := range state.Providers {
@@ -282,11 +432,15 @@ func (console *Console) save(state diskState) error {
 	if err != nil {
 		return err
 	}
-	return writePrivate(filepath.Join(console.directory, "state.json"), data)
+	err = writePrivate(filepath.Join(console.directory, "state.json"), data)
+	if isIndeterminatePrivateWrite(err) {
+		console.latchTrustUnavailable()
+	}
+	return err
 }
 
 func cloneState(state diskState) diskState {
-	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}}
+	copy := diskState{Targets: map[string]inference.Target{}, Routes: map[string]inference.Route{}, Providers: map[string]providerProfile{}, Connections: map[string]connectionRecord{}, Clients: map[string]pairedClient{}, Cleanups: map[string]personCleanup{}, Attempts: map[string]connectionAttemptRecord{}, TrustSchemaVersion: state.TrustSchemaVersion, TrustedIssuers: map[string]trustedIssuerRecord{}, RevokedIssuerKeys: map[string]bool{}, TrustQuarantine: map[string]json.RawMessage{}, InstanceID: state.InstanceID, ExecutionOwnerID: state.ExecutionOwnerID, TrustCorrupt: state.TrustCorrupt}
 	for key, value := range state.Targets {
 		copy.Targets[key] = value
 	}
@@ -303,6 +457,16 @@ func cloneState(state diskState) diskState {
 	}
 	for key, value := range state.Clients {
 		copy.Clients[key] = value
+	}
+	for key, value := range state.TrustedIssuers {
+		value.PublicKey = append([]byte(nil), value.PublicKey...)
+		copy.TrustedIssuers[key] = value
+	}
+	for key, value := range state.RevokedIssuerKeys {
+		copy.RevokedIssuerKeys[key] = value
+	}
+	for key, value := range state.TrustQuarantine {
+		copy.TrustQuarantine[key] = append(json.RawMessage(nil), value...)
 	}
 	for key, value := range state.Connections {
 		if value.Device != nil {
