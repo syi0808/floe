@@ -74,7 +74,17 @@ void main() {
         'events': [],
         'next_sequence': 0,
         'state': 'ready',
-        'failure': failure,
+        'failure': failure == null
+            ? null
+            : {
+                'schema_version': 1,
+                'kind': failure,
+                'stage': 'inspect_proposal',
+                'affected_refs': const <String>[],
+                'retryable': false,
+                'recovery_action': 'none',
+                'correlation_request_id': request['request_id'],
+              },
         if (includeProposal) 'proposal': response,
       };
     }, deviceId: 'test-device');

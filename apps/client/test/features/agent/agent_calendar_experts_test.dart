@@ -274,7 +274,15 @@ void main() {
               case 4:
                 result['state'] = 'locked';
               case 5:
-                result['failure'] = 'vault_unavailable';
+                result['failure'] = {
+                  'schema_version': 1,
+                  'kind': 'vault_unavailable',
+                  'stage': 'calendar_experts',
+                  'affected_refs': const <String>[],
+                  'retryable': false,
+                  'recovery_action': 'reopen_vault',
+                  'correlation_request_id': result['request_id'],
+                };
               case 6:
                 ((overview['views'] as List).single as Map)['device_id'] =
                     'other-device';

@@ -155,13 +155,14 @@ void main() {
       await running;
       expect(controller.failure, 'cancelled');
       expect(controller.needsReload, isFalse);
+      expect(controller.canRetry, isFalse);
+      expect(controller.messages, hasLength(1));
       await controller.retry();
-      expect(controller.session!.lastOutcome!.completed, isTrue);
-      expect(controller.messages, hasLength(4));
+      expect(controller.messages, hasLength(1));
       final resumed = await gateway.resumeAgentFixture(localPersonId);
       expect(resumed.session.id, controller.session!.id);
       expect(resumed.session.revision, controller.session!.revision);
-      expect(resumed.session.messages, hasLength(4));
+      expect(resumed.session.messages, hasLength(1));
     },
   );
 
