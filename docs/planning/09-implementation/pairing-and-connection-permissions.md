@@ -1,6 +1,6 @@
 # Pairing and connection-scoped permissions implementation plan
 
-- **Status:** active
+- **Status:** implemented; live pairing acceptance pending
 - **Date:** 2026-09-13
 - **Decision:** [ADR 0028](../../decisions/0028-pairing-integrated-authority-and-connection-permissions.md)
 
@@ -136,3 +136,26 @@ scope. Unrelated failures are reported rather than fixed.
 - Data & privacy and any global Permissions view summarize or navigate without expanding access.
 - Pair, grant, use, pause, revoke, disconnect, identity change and re-pair are directly exercised on
   macOS, with unverified iPhone/iPad behavior reported explicitly.
+
+## Implementation record
+
+- P1 shipped in `a9b6de5`, `9fee0ca` and `6fe4434`. Go tests and authorization/console race suites
+  pass; the dashboard binds approval to the exact locally confirmed issuer.
+- P2 shipped in `7b8a103`, `04abd49` and `283d792`. Focused Core/infra pairing tests and cross-crate
+  checks pass; final producer pinning is bound to the saved signed challenge and local issuer.
+- P3 shipped in `690592a`. The built macOS app was opened and its connection detail visibly showed
+  System access, Calendars available to Floe and Data Floe can use in one screen.
+- P4 shipped in `424e9c5` and `1586438`. Remote server settings visibly contain one pairing surface
+  and no Server authority enrollment section. Focused lifecycle tests pass.
+- P5 shipped in `e0f5600`. Focused connection-panel tests bind Calendar and remote-view grant actions
+  to the displayed connection and reject cross-connection mutation.
+
+Root validation on 2026-09-13 passed all Go packages, focused Core/infra pairing tests, 54 combined
+Flutter tests and the macOS Debug build. Flutter analysis reports only 24 existing informational
+diagnostics in unrelated infrastructure files. The live pairing ceremony was not completed because
+the existing local app state was retained rather than forgotten or reset during validation. Real
+EventKit permission mutation, live remote grant use and iPhone/iPad behavior remain unverified.
+
+The current Go connector catalog still supports one connection per connector and Person. Client tests
+prove grant isolation for multiple fixture connections, but real same-provider multi-account creation
+requires a separate server catalog/runtime expansion before that final ADR scenario can be accepted.
