@@ -1,0 +1,25 @@
+{
+  "fixture_only": true,
+  "schema_version": 1,
+  "signature_domain_hex": "666c6f652e72656d6f74652e617574686f72697a6174696f6e2e763100",
+  "test_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "public_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "positive": {
+    "operation": "admission",
+    "challenge_bytes": "{\"v\":1,\"operation\":\"admission\",\"challenge_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"nonce\":\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\",\"key_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"person_id\":\"11111111-1111-4111-8111-111111111111\",\"client_id\":\"client-1\",\"device_id\":\"device-1\",\"audience\":\"local-producer\",\"purpose\":\"everyday_assistance\",\"consumer\":\"day-canvas\",\"policy\":{\"incarnation\":\"33333333-3333-4333-8333-333333333333\",\"epoch\":2},\"source\":{\"connector_id\":\"gmail\",\"connection_id\":\"44444444-4444-4444-8444-444444444444\",\"execution_owner\":\"person-runtime\",\"incarnation\":\"55555555-5555-4555-8555-555555555555\",\"epoch\":7},\"grant\":{\"id\":\"66666666-6666-4666-8666-666666666666\",\"incarnation\":\"77777777-7777-4777-8777-777777777777\",\"epoch\":3},\"resources\":[\"mail.read\"],\"query_sha256\":\"28b1d959db3e421ca8c4d70c7ea1843622e7b3e4c98773e62bb765378ff92164\",\"max_items\":10,\"max_bytes\":4096,\"issued_at_unix_ms\":1700000000000,\"expires_at_unix_ms\":1700000030000}",
+    "signature_b64url": "SZpT6GNdPaCr_7aspar8IEV1rWYLP2ejz0k2bRxWRKnBzHeSv9D60_bSqmoC_fbaRLvGZGztD6hr7mwpVgLADA"
+  },
+  "negative": [
+    {"name": "signature_modified", "signature_b64url": "TZpT6GNdPaCr_7aspar8IEV1rWYLP2ejz0k2bRxWRKnBzHeSv9D60_bSqmoC_fbaRLvGZGztD6hr7mwpVgLADA"},
+    {"name": "challenge_modified", "challenge_suffix": ",\"unknown\":1}"},
+    {"name": "duplicate_key", "challenge_suffix": ",\"operation\":\"release\"}"},
+    {"name": "padded_base64", "signature_b64url": "SZpT6GNdPaCr_7aspar8IEV1rWYLP2ejz0k2bRxWRKnBzHeSv9D60_bSqmoC_fbaRLvGZGztD6hr7mwpVgLADA="},
+    {"name": "changed_source", "mutation": "person-runtime", "replacement": "other-runtime"},
+    {"name": "changed_grant", "mutation": "66666666-6666-4666-8666-666666666666", "replacement": "99999999-9999-4999-8999-999999999999"},
+    {"name": "changed_policy", "mutation": "33333333-3333-4333-8333-333333333333", "replacement": "99999999-9999-4999-8999-999999999999"},
+    {"name": "changed_query", "mutation": "28b1d959db3e421ca8c4d70c7ea1843622e7b3e4c98773e62bb765378ff92164", "replacement": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"name": "changed_audience", "mutation": "local-producer", "replacement": "other-producer"},
+    {"name": "changed_operation", "mutation": "admission", "replacement": "enrollment"},
+    {"name": "duplicate_nested_policy", "challenge_suffix": ",\"policy\":{\"epoch\":1,\"epoch\":2}}"}
+  ]
+}
