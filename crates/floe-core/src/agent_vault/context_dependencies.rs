@@ -636,6 +636,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicitly_independent_failed_result_does_not_poison_turn() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn = Uuid::new_v4();
+        let call = Uuid::new_v4();
+        session.messages.extend([
+            AgentMessage::User {
+                turn_id: turn,
+                text: "tool request".into(),
+            },
+            AgentMessage::Capability {
+                turn_id: turn,
+                call_id: call,
+                capability_id: "people.identity.read".into(),
+                input: "{}".into(),
+                result: Err(AgentFailure::CapabilityUnavailable),
+            },
+        ]);
+        session.revision = 1;
+        let store = vault.governed_general_store(session.id);
+        store.record_result_independent(turn, call).unwrap();
+        store.compare_and_swap(&session, 0).await.unwrap();
+        assert_eq!(
+            read(&vault, person, session.id, turn).await.unwrap(),
+            DependencyCoverage::Independent
+        );
+    }
+
+    #[tokio::test]
     async fn sidecar_and_session_roll_back_together_on_sql_failure() {
         let root = root();
         let person = PersonId::new();
@@ -970,6 +1003,9 @@ mod tests {
         ]);
         second.revision = 1;
         let governed = vault.governed_general_store(second.id);
+        governed
+            .record_result_independent(second_turn, second_call)
+            .unwrap();
         governed
             .record_result_dependency(
                 second_turn,

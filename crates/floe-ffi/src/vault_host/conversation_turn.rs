@@ -436,11 +436,19 @@ struct PersonalViewSource<'a> {
 }
 
 impl PersonalViewSource<'_> {
+    fn record_result_independent(&self) -> Result<(), AgentFailure> {
+        if let (Some(recorder), false) = (self.recorder, self.dependency_turn_id.is_nil()) {
+            recorder.record_independent(self.dependency_turn_id, self.dependency_result_id)?;
+        }
+        Ok(())
+    }
+
     async fn people_view(
         &self,
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<PeopleView, AgentFailure> {
+        self.record_result_independent()?;
         let reader = self
             .people_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -462,6 +470,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<FeasibilityView, AgentFailure> {
+        self.record_result_independent()?;
         let reader = self
             .feasibility_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -489,6 +498,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<AttentionView, AgentFailure> {
+        self.record_result_independent()?;
         let _ = (deadline, cancellation);
         Err(AgentFailure::CapabilityUnavailable)
     }
@@ -498,6 +508,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<WellbeingView, AgentFailure> {
+        self.record_result_independent()?;
         let reader = self
             .wellbeing_reader
             .ok_or(AgentFailure::CapabilityUnavailable)?;
@@ -656,6 +667,8 @@ struct ConversationCapabilities<'model> {
 }
 
 trait ResultRecorder: Send + Sync {
+    fn record_independent(&self, turn_id: Uuid, result_id: Uuid) -> Result<(), AgentFailure>;
+
     fn record(
         &self,
         turn_id: uuid::Uuid,
@@ -669,6 +682,10 @@ struct StoreResultRecorder<'a, Keys: VaultKeyProvider> {
 }
 
 impl<Keys: VaultKeyProvider> ResultRecorder for StoreResultRecorder<'_, Keys> {
+    fn record_independent(&self, turn_id: Uuid, result_id: Uuid) -> Result<(), AgentFailure> {
+        self.store.record_result_independent(turn_id, result_id)
+    }
+
     fn record(
         &self,
         turn_id: uuid::Uuid,
@@ -1011,6 +1028,20 @@ impl CapabilityHost for ConversationCapabilities<'_> {
             #[serde(default = "default_communication_limit")]
             limit: usize,
         }
+        if matches!(
+            invocation.capability_id.as_str(),
+            "mail.communication.read"
+                | "work.context.read"
+                | "life.logistics.read"
+                | "people.identity.read"
+                | "schedule.feasibility.read"
+                | "attention.coarse.read"
+                | "wellbeing.derived.read"
+        ) {
+            if let Some(recorder) = self.recorder {
+                recorder.record_independent(invocation.turn_id, invocation.call_id)?;
+            }
+        }
         let output = match invocation.capability_id.as_str() {
             "mail.communication.read" => {
                 let input: Input = serde_json::from_str(&invocation.input)
@@ -1328,6 +1359,10 @@ mod tests {
     struct FixtureResultRecorder;
 
     impl ResultRecorder for FixtureResultRecorder {
+        fn record_independent(&self, _: Uuid, _: Uuid) -> Result<(), AgentFailure> {
+            Ok(())
+        }
+
         fn record(
             &self,
             _: Uuid,
@@ -1615,6 +1650,8 @@ mod tests {
             policy: &policy,
             person_id: PersonId::new(),
             people_reader: None,
+            feasibility_reader: None,
+            wellbeing_reader: None,
             remote_reader: None,
             recorder: None,
             dependency_turn_id: Uuid::nil(),

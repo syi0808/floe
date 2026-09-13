@@ -184,6 +184,25 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
             .map_err(|_| AgentFailure::InvalidInput)
     }
 
+    pub fn record_result_independent(
+        &self,
+        turn_id: Uuid,
+        result_id: Uuid,
+    ) -> Result<(), AgentFailure> {
+        if turn_id.is_nil() || result_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut coverage = self
+            .result_coverage
+            .lock()
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
+        coverage
+            .entry((turn_id, result_id))
+            .or_default()
+            .record_host_independent()
+            .map_err(|_| AgentFailure::InvalidInput)
+    }
+
     pub async fn project_model_request(
         &self,
         request: &mut floe_agent::ModelRequest,
@@ -388,14 +407,22 @@ impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys
                         .map_err(|_| AgentFailure::VaultUnavailable)?
                         .get(&(turn_id, result_id))
                         .map(|result| result.coverage());
-                    if let Some(DependencyCoverage::Dependent { dependencies }) = result_coverage {
-                        for dependency in dependencies {
+                    match result_coverage {
+                        Some(DependencyCoverage::Dependent { dependencies }) => {
+                            for dependency in dependencies {
+                                accumulator
+                                    .record_host_dependency(dependency)
+                                    .map_err(|_| AgentFailure::InvalidInput)?;
+                            }
+                        }
+                        Some(DependencyCoverage::Independent) => {
                             accumulator
-                                .record_host_dependency(dependency)
+                                .record_host_independent()
                                 .map_err(|_| AgentFailure::InvalidInput)?;
                         }
-                    } else {
-                        accumulator.mark_unknown();
+                        Some(DependencyCoverage::Unknown) | None => {
+                            accumulator.mark_unknown();
+                        }
                     }
                 }
             }
