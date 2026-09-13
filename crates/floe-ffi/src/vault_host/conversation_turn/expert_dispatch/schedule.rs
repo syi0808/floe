@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent::{
     AgentBudget, AgentEvent, AgentFailure, DataClass, InferencePolicyDecision, ModelPlacement,
-    ModelRequest, ModelResponse, ModelRunner, SessionStore, TransferConsent,
+    ModelRequest, ModelResponse, ModelRunner, SessionStore,
 };
 use floe_core::{
     CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessAdmission,
@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::super::super::session_uuid;
-use super::ConversationTurnInputs;
+use super::{ConversationTurnInputs, external_transfer_consent};
 
 pub(in crate::vault_host::conversation_turn) async fn try_run<
     Keys: VaultKeyProvider,
@@ -84,7 +84,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         .collect();
     if active_setups.is_empty() {
         if propose_focus {
-            return Err(AgentFailure::ConsentRequired);
+            return Err(AgentFailure::AccessReviewRequired);
         }
         return Ok(None);
     }
@@ -128,8 +128,7 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         Model::conversation(request.remote_route.clone())?
     };
     let placement = model.placement();
-    let external_consent =
-        schedule_external_transfer_consent(placement, request.remote_route.as_ref());
+    let external_consent = external_transfer_consent(placement, request.remote_route.as_ref());
     let remote_backend = match request.remote_route.as_ref() {
         Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
             vault,
@@ -223,19 +222,6 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     )
     .await?;
     Ok(Some(result.session))
-}
-
-fn schedule_external_transfer_consent(
-    placement: ModelPlacement,
-    route: Option<&floe_protocol::AgentRemoteRouteDto>,
-) -> TransferConsent {
-    if placement == ModelPlacement::Remote
-        && route.is_some_and(|route| route.external && route.allow_external)
-    {
-        TransferConsent::Granted
-    } else {
-        TransferConsent::NotGranted
-    }
 }
 
 struct BoundAccess<'host> {
@@ -1291,6 +1277,7 @@ impl ModelRunner for Model {
 mod tests {
     use super::*;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use floe_agent::TransferConsent;
     use floe_core::{EncryptedAgentVault, FloeCore, VaultKey, VaultKeyProvider};
     use floe_domain::{
         CalendarScope, CalendarSelection, CalendarSyncStatus, ConnectorId, ExecutionOwnerId,
@@ -1948,17 +1935,17 @@ mod tests {
         route.allow_external = true;
 
         assert_eq!(
-            schedule_external_transfer_consent(ModelPlacement::Remote, Some(&route)),
+            external_transfer_consent(ModelPlacement::Remote, Some(&route)),
             TransferConsent::Granted
         );
         assert_eq!(
-            schedule_external_transfer_consent(ModelPlacement::DeviceLocal, Some(&route)),
+            external_transfer_consent(ModelPlacement::DeviceLocal, Some(&route)),
             TransferConsent::NotGranted
         );
 
         route.allow_external = false;
         assert_eq!(
-            schedule_external_transfer_consent(ModelPlacement::Remote, Some(&route)),
+            external_transfer_consent(ModelPlacement::Remote, Some(&route)),
             TransferConsent::NotGranted
         );
     }

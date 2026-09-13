@@ -296,14 +296,21 @@ fn policy(model: &Model, route: Option<&AgentRemoteRouteDto>) -> InferencePolicy
         allowed_placements: vec![model.placement()],
         performance_class: "interactive".into(),
         projection_version: 1,
-        external_transfer_consent: if route
-            .is_some_and(|route| route.external && route.allow_external)
-        {
-            TransferConsent::Granted
-        } else {
-            TransferConsent::NotGranted
-        },
+        external_transfer_consent: external_transfer_consent(model.placement(), route),
         bounded_sensitive_projection: false,
+    }
+}
+
+fn external_transfer_consent(
+    placement: ModelPlacement,
+    route: Option<&AgentRemoteRouteDto>,
+) -> TransferConsent {
+    if placement == ModelPlacement::Remote
+        && route.is_some_and(|route| route.external && route.allow_external)
+    {
+        TransferConsent::Granted
+    } else {
+        TransferConsent::NotGranted
     }
 }
 

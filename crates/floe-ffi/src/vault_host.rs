@@ -2727,8 +2727,13 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
             AgentFailureCategory::Security,
             "capability_access_denied".into(),
         ),
-        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired => (
+        AgentFailure::AccessReviewRequired => (
             AgentFailureDomain::Source,
+            AgentFailureCategory::UserConfiguration,
+            reason_code.clone(),
+        ),
+        AgentFailure::ConsentRequired => (
+            AgentFailureDomain::Capability,
             AgentFailureCategory::UserConfiguration,
             reason_code.clone(),
         ),
@@ -2815,10 +2820,11 @@ fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassificatio
             AgentFailureSafeAction::ContinueWithoutSource,
             AgentFailureSafeAction::ReviewSource,
         ],
-        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired => vec![
+        AgentFailure::AccessReviewRequired => vec![
             AgentFailureSafeAction::ContinueWithoutSource,
             AgentFailureSafeAction::ReviewSource,
         ],
+        AgentFailure::ConsentRequired => vec![],
         AgentFailure::Conflict if stage == "conversation_session" => vec![
             AgentFailureSafeAction::StartNewSession,
             AgentFailureSafeAction::RefreshSession,
@@ -2904,7 +2910,7 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         | AgentFailure::InvalidModelOutput
         | AgentFailure::LocalModelInvalidOutput
         | AgentFailure::ServerModelInvalidOutput => AgentVaultRecoveryActionDto::RetryRead,
-        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired
+        AgentFailure::AccessReviewRequired
             if matches!(
                 stage,
                 "calendar_access"
@@ -3143,6 +3149,21 @@ mod tests {
         assert_eq!(
             turn_review.recovery_action,
             AgentVaultRecoveryActionDto::ReviewSource
+        );
+        let model_consent = failure_envelope(
+            &AgentFailure::ConsentRequired,
+            "conversation_turn",
+            "request",
+        );
+        assert_eq!(model_consent.domain, AgentFailureDomain::Capability);
+        assert_eq!(
+            model_consent.category,
+            AgentFailureCategory::UserConfiguration
+        );
+        assert!(model_consent.safe_actions.is_empty());
+        assert_eq!(
+            model_consent.recovery_action,
+            AgentVaultRecoveryActionDto::None
         );
 
         for failure in [
