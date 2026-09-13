@@ -133,6 +133,30 @@ class AppLocalizationsEn extends AppLocalizations {
       'The configured model could not handle this request.';
 
   @override
+  String get agentSessionIntegrityFailure =>
+      'Floe couldn\'t safely open the previous conversation. You can retry it or start a new conversation.';
+
+  @override
+  String get agentDataReleaseBlocked =>
+      'Floe blocked one operation because its data access could not be verified. No unverified data was sent.';
+
+  @override
+  String get agentCapabilityAccessDenied =>
+      'Floe blocked an unavailable or unauthorized capability. You can continue in a new conversation.';
+
+  @override
+  String get agentInternalPolicyFailure =>
+      'Floe stopped an internal operation to protect your data. You can start a new conversation; diagnostics were recorded.';
+
+  @override
+  String agentIncidentId(String incidentId) {
+    return 'Incident: $incidentId';
+  }
+
+  @override
+  String get agentExportDiagnostics => 'Export diagnostics';
+
+  @override
   String get agentTransportUnavailable =>
       'Floe could not reach the selected model adapter. Check the server connection or restart Floe.';
 

@@ -109,6 +109,12 @@ final class AgentController extends ChangeNotifier {
   AgentProgress progress = AgentProgress.idle;
   String? failure;
   String? recoveryAction;
+  String? failureDomain;
+  String? failureCategory;
+  List<String> failureSafeActions = const [];
+  List<String> failureAffectedRefs = const [];
+  String? failureIncidentId;
+  String? failureRetryPolicy;
   bool needsReload = false;
   bool _busy = false;
   bool _disposed = false;
@@ -401,12 +407,7 @@ final class AgentController extends ChangeNotifier {
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('load', error, stackTrace);
-      _fail(
-        error is AgentVaultException ? error.failure : 'storage_unavailable',
-        recoveryAction: error is AgentVaultException
-            ? error.recoveryAction
-            : null,
-      );
+      _failFromError(error, 'storage_unavailable');
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -432,12 +433,7 @@ final class AgentController extends ChangeNotifier {
       needsReload = false;
     } on Object catch (error, stackTrace) {
       _recordError('recover', error, stackTrace, sessionId: session?.id);
-      _fail(
-        error is AgentVaultException ? error.failure : 'storage_unavailable',
-        recoveryAction: error is AgentVaultException
-            ? error.recoveryAction
-            : null,
-      );
+      _failFromError(error, 'storage_unavailable');
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -485,7 +481,7 @@ final class AgentController extends ChangeNotifier {
     _lastConversationText = normalized;
     _begin();
     _stopRequested = false;
-    failure = null;
+    _clearFailure();
     progress = AgentProgress.model;
     _notify();
     var done = false;
@@ -509,7 +505,7 @@ final class AgentController extends ChangeNotifier {
             if (update.failure == null) {
               needsReload = false;
             } else {
-              _fail(update.failure!, recoveryAction: update.recoveryAction);
+              _failFromUpdate(update);
             }
           } else {
             final resultError = AgentVaultException(
@@ -517,6 +513,13 @@ final class AgentController extends ChangeNotifier {
               requestId: update.requestId,
               stage: 'conversation_turn',
               recoveryAction: update.recoveryAction,
+              domain: update.failureDomain,
+              category: update.failureCategory,
+              reasonCode: update.failureReasonCode,
+              safeActions: update.failureSafeActions,
+              affectedRefs: update.failureAffectedRefs,
+              incidentId: update.failureIncidentId,
+              retryPolicy: update.failureRetryPolicy,
             );
             _recordError(
               'conversation_turn',
@@ -524,10 +527,7 @@ final class AgentController extends ChangeNotifier {
               StackTrace.current,
               sessionId: original.id,
             );
-            _fail(
-              update.failure ?? 'storage_unavailable',
-              recoveryAction: update.recoveryAction,
-            );
+            _failFromUpdate(update, fallback: 'storage_unavailable');
           }
           break;
         }
@@ -542,12 +542,7 @@ final class AgentController extends ChangeNotifier {
         stackTrace,
         sessionId: original.id,
       );
-      _fail(
-        error is AgentVaultException ? error.failure : 'transport_unavailable',
-        recoveryAction: error is AgentVaultException
-            ? error.recoveryAction
-            : null,
-      );
+      _failFromError(error, 'transport_unavailable');
     } finally {
       try {
         if (!done && started) {
@@ -584,7 +579,7 @@ final class AgentController extends ChangeNotifier {
     _lastPrompt = prompt;
     _begin();
     _stopRequested = false;
-    failure = null;
+    _clearFailure();
     progress = AgentProgress.model;
     _notify();
     var done = false;
@@ -607,13 +602,10 @@ final class AgentController extends ChangeNotifier {
             if (update.failure == null) {
               needsReload = false;
             } else {
-              _fail(update.failure!, recoveryAction: update.recoveryAction);
+              _failFromUpdate(update);
             }
           } else {
-            _fail(
-              update.failure ?? 'storage_unavailable',
-              recoveryAction: update.recoveryAction,
-            );
+            _failFromUpdate(update, fallback: 'storage_unavailable');
           }
           break;
         }
@@ -622,12 +614,7 @@ final class AgentController extends ChangeNotifier {
       }
     } on Object catch (error, stackTrace) {
       _recordError('fixture_turn', error, stackTrace, sessionId: original.id);
-      _fail(
-        error is AgentVaultException ? error.failure : 'transport_unavailable',
-        recoveryAction: error is AgentVaultException
-            ? error.recoveryAction
-            : null,
-      );
+      _failFromError(error, 'transport_unavailable');
     } finally {
       try {
         if (!done && started) {
@@ -679,8 +666,8 @@ final class AgentController extends ChangeNotifier {
     _clearProposals();
     session = saved;
     messages = List.of(saved.messages);
+    _clearFailure();
     failure = saved.lastOutcome?.failure;
-    recoveryAction = null;
     final lastUser = messages
         .whereType<AgentTextMessage>()
         .where((message) => message.kind == AgentMessageKind.user)
@@ -750,7 +737,7 @@ final class AgentController extends ChangeNotifier {
     _sealed = false;
     _begin();
     progress = AgentProgress.loading;
-    failure = null;
+    _clearFailure();
     _notify();
     try {
       final state = create
@@ -764,12 +751,7 @@ final class AgentController extends ChangeNotifier {
       _acceptSession((await vault.resumeAgentFixture(personId)).session);
       needsReload = false;
     } on Object catch (error) {
-      _fail(
-        error is AgentVaultException ? error.failure : 'vault_unavailable',
-        recoveryAction: error is AgentVaultException
-            ? error.recoveryAction
-            : null,
-      );
+      _failFromError(error, 'vault_unavailable');
     } finally {
       _end();
       progress = AgentProgress.idle;
@@ -800,7 +782,7 @@ final class AgentController extends ChangeNotifier {
     try {
       await (gateway as AgentVaultGateway).lockVault(personId);
       vaultState = AgentVaultState.locked;
-      failure = null;
+      _clearFailure();
       needsReload = false;
     } on Object {
       _fail('vault_unavailable');
@@ -822,10 +804,63 @@ final class AgentController extends ChangeNotifier {
     _operationDone = null;
   }
 
-  void _fail(String reason, {String? recoveryAction}) {
+  void _clearFailure() {
+    failure = null;
+    recoveryAction = null;
+    failureDomain = null;
+    failureCategory = null;
+    failureSafeActions = const [];
+    failureAffectedRefs = const [];
+    failureIncidentId = null;
+    failureRetryPolicy = null;
+  }
+
+  void _failFromError(Object error, String fallback) {
+    final source = error is AgentVaultException ? error : null;
+    _fail(
+      source?.reasonCode ?? source?.failure ?? fallback,
+      recoveryAction: source?.recoveryAction,
+      domain: source?.domain,
+      category: source?.category,
+      safeActions: source?.safeActions,
+      affectedRefs: source?.affectedRefs,
+      incidentId: source?.incidentId,
+      retryPolicy: source?.retryPolicy,
+    );
+  }
+
+  void _failFromUpdate(AgentRunUpdate update, {String? fallback}) {
+    _fail(
+      update.failureReasonCode ?? update.failure ?? fallback ?? 'unknown',
+      recoveryAction: update.recoveryAction,
+      domain: update.failureDomain,
+      category: update.failureCategory,
+      safeActions: update.failureSafeActions,
+      affectedRefs: update.failureAffectedRefs,
+      incidentId: update.failureIncidentId,
+      retryPolicy: update.failureRetryPolicy,
+    );
+  }
+
+  void _fail(
+    String reason, {
+    String? recoveryAction,
+    String? domain,
+    String? category,
+    List<String>? safeActions,
+    List<String>? affectedRefs,
+    String? incidentId,
+    String? retryPolicy,
+  }) {
     _clearProposals();
     failure = reason;
     this.recoveryAction = recoveryAction;
+    failureDomain = domain;
+    failureCategory = category;
+    failureSafeActions = List.unmodifiable(safeActions ?? const []);
+    failureAffectedRefs = List.unmodifiable(affectedRefs ?? const []);
+    failureIncidentId = incidentId;
+    failureRetryPolicy = retryPolicy;
     needsReload = !const {
       'retry_read',
       'review_source',
@@ -871,6 +906,11 @@ final class AgentController extends ChangeNotifier {
       error: error,
       stackTrace: stackTrace,
       failure: vaultError?.failure,
+      failureDomain: vaultError?.domain,
+      failureCategory: vaultError?.category,
+      reasonCode: vaultError?.reasonCode,
+      incidentId: vaultError?.incidentId,
+      safeActions: vaultError?.safeActions ?? const [],
       requestId: vaultError?.requestId,
       sessionId: sessionId,
       retryable: vaultError?.retryable,

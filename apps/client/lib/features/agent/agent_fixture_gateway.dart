@@ -57,6 +57,17 @@ final class AgentRunUpdate {
           : AgentSession.fromJson(_object(json['session'])),
       failure = json['failure'] as String?,
       recoveryAction = json['recovery_action'] as String?,
+      failureDomain = json['failure_domain'] as String?,
+      failureCategory = json['failure_category'] as String?,
+      failureReasonCode = json['failure_reason_code'] as String?,
+      failureSafeActions = List.unmodifiable(
+        (json['failure_safe_actions'] as List? ?? const []).cast<String>(),
+      ),
+      failureAffectedRefs = List.unmodifiable(
+        (json['failure_affected_refs'] as List? ?? const []).cast<String>(),
+      ),
+      failureIncidentId = json['failure_incident_id'] as String?,
+      failureRetryPolicy = json['failure_retry_policy'] as String?,
       events = List.unmodifiable(
         (json['events']! as List).map(
           (value) => AgentEvent.fromJson(_object(value)),
@@ -77,6 +88,13 @@ final class AgentRunUpdate {
   final AgentSession? session;
   final String? failure;
   final String? recoveryAction;
+  final String? failureDomain;
+  final String? failureCategory;
+  final String? failureReasonCode;
+  final List<String> failureSafeActions;
+  final List<String> failureAffectedRefs;
+  final String? failureIncidentId;
+  final String? failureRetryPolicy;
   final List<AgentEvent> events;
 }
 

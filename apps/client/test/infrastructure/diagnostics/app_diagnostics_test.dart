@@ -13,6 +13,11 @@ void main() {
       error: StateError('private prompt contents'),
       stackTrace: StackTrace.fromString('agent stack'),
       failure: 'invalid_model_output',
+      failureDomain: 'turn',
+      failureCategory: 'integrity',
+      reasonCode: 'server_model_invalid_output',
+      incidentId: 'incident-1',
+      safeActions: const ['retry', 'export_diagnostics'],
       requestId: 'request-1',
       sessionId: 'session-1',
       retryable: false,
@@ -22,6 +27,11 @@ void main() {
     expect(json['request_id'], 'request-1');
     expect(json['session_id'], 'session-1');
     expect(json['failure'], 'invalid_model_output');
+    expect(json['failure_domain'], 'turn');
+    expect(json['failure_category'], 'integrity');
+    expect(json['reason_code'], 'server_model_invalid_output');
+    expect(json['incident_id'], 'incident-1');
+    expect(json['safe_actions'], ['retry', 'export_diagnostics']);
     expect(json['error_type'], 'StateError');
     expect(json.toString(), isNot(contains('private prompt contents')));
   });

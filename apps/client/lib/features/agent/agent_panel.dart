@@ -11,6 +11,7 @@ import '../../app/floe_input.dart';
 import '../../app/floe_mascot.dart';
 import '../../app/floe_squircle.dart';
 import '../../l10n/app_localizations.dart';
+import '../../infrastructure/diagnostics/app_diagnostics.dart';
 import 'agent_capability_label.dart';
 import 'agent_controller.dart';
 import 'agent_fixture_gateway.dart';
@@ -76,6 +77,20 @@ class _AgentPanelState extends State<AgentPanel> {
         }
       }
     });
+  }
+
+  Future<void> _exportDiagnostics() async {
+    try {
+      final file = await AppDiagnostics.exportBundle();
+      await Clipboard.setData(ClipboardData(text: file.path));
+    } on Object catch (error, stackTrace) {
+      AppDiagnostics.error(
+        component: 'diagnostics',
+        operation: 'export_bundle',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   @override
@@ -330,12 +345,38 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          if (controller.recoveryAction == 'review_source' &&
+          if (controller.failureIncidentId case final incidentId?) ...[
+            SelectableText(
+              strings.agentIncidentId(incidentId),
+              style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+            ),
+            const SizedBox(height: FloeSpace.md),
+          ],
+          if ((controller.recoveryAction == 'review_source' ||
+                  controller.failureSafeActions.contains('review_source')) &&
               widget.onOpenSourceReview != null) ...[
             FloeButton.outlined(
               onPressed: widget.onOpenSourceReview,
               size: FloeButtonSize.compact,
               child: Text(strings.agentConnectedSourceDetails),
+            ),
+            const SizedBox(height: FloeSpace.md),
+          ],
+          if (controller.failureSafeActions.contains('start_new_session')) ...[
+            FloeButton.outlined(
+              onPressed: controller.canStartConversation
+                  ? () => controller.load(newSession: true)
+                  : null,
+              size: FloeButtonSize.compact,
+              child: Text(strings.agentNewConversation),
+            ),
+            const SizedBox(height: FloeSpace.md),
+          ],
+          if (controller.failureSafeActions.contains('export_diagnostics')) ...[
+            FloeButton.outlined(
+              onPressed: _exportDiagnostics,
+              size: FloeButtonSize.compact,
+              child: Text(strings.agentExportDiagnostics),
             ),
             const SizedBox(height: FloeSpace.md),
           ],
@@ -444,6 +485,10 @@ class _AgentPanelState extends State<AgentPanel> {
       'credential_expired' => strings.agentRemoteCredentialExpired,
       'quota_exceeded' => strings.agentRemoteQuotaExceeded,
       'policy_denied' => strings.agentModelPolicyDenied,
+      'session_integrity' => strings.agentSessionIntegrityFailure,
+      'data_release_or_policy_block' => strings.agentDataReleaseBlocked,
+      'capability_access_denied' => strings.agentCapabilityAccessDenied,
+      'internal_policy_invariant' => strings.agentInternalPolicyFailure,
       'conflict' =>
         controller.recoveryAction == 'refresh_session'
             ? strings.agentReloadNeeded

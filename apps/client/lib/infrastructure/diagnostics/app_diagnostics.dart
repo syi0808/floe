@@ -15,6 +15,11 @@ final class DiagnosticRecord {
     required this.operation,
     this.errorId,
     this.failure,
+    this.failureDomain,
+    this.failureCategory,
+    this.reasonCode,
+    this.incidentId,
+    this.safeActions = const [],
     this.requestId,
     this.sessionId,
     this.invocationId,
@@ -30,6 +35,11 @@ final class DiagnosticRecord {
   final String operation;
   final String? errorId;
   final String? failure;
+  final String? failureDomain;
+  final String? failureCategory;
+  final String? reasonCode;
+  final String? incidentId;
+  final List<String> safeActions;
   final String? requestId;
   final String? sessionId;
   final String? invocationId;
@@ -57,6 +67,13 @@ final class DiagnosticRecord {
       operation: operation,
       errorId: json['error_id'] as String?,
       failure: json['failure'] as String?,
+      failureDomain: json['failure_domain'] as String?,
+      failureCategory: json['failure_category'] as String?,
+      reasonCode: json['reason_code'] as String?,
+      incidentId: json['incident_id'] as String?,
+      safeActions: List.unmodifiable(
+        (json['safe_actions'] as List? ?? const []).cast<String>(),
+      ),
       requestId: json['request_id'] as String?,
       sessionId: json['session_id'] as String?,
       invocationId: json['invocation_id'] as String?,
@@ -74,6 +91,11 @@ final class DiagnosticRecord {
     'operation': operation,
     'error_id': ?errorId,
     'failure': ?failure,
+    'failure_domain': ?failureDomain,
+    'failure_category': ?failureCategory,
+    'reason_code': ?reasonCode,
+    'incident_id': ?incidentId,
+    if (safeActions.isNotEmpty) 'safe_actions': safeActions,
     'request_id': ?requestId,
     'session_id': ?sessionId,
     'invocation_id': ?invocationId,
@@ -167,6 +189,11 @@ final class AppDiagnostics {
     required Object error,
     StackTrace? stackTrace,
     String? failure,
+    String? failureDomain,
+    String? failureCategory,
+    String? reasonCode,
+    String? incidentId,
+    List<String> safeActions = const [],
     String? requestId,
     String? sessionId,
     String? invocationId,
@@ -182,6 +209,11 @@ final class AppDiagnostics {
         operation: operation,
         errorId: errorId,
         failure: failure,
+        failureDomain: failureDomain,
+        failureCategory: failureCategory,
+        reasonCode: reasonCode,
+        incidentId: incidentId,
+        safeActions: List.unmodifiable(safeActions),
         requestId: requestId,
         sessionId: sessionId,
         invocationId: invocationId,
@@ -388,13 +420,29 @@ final class AppDiagnostics {
 
   static Map<String, Object?> _sanitizedJson(DiagnosticRecord record) {
     final json = record.toJson();
-    final failure = json['failure'];
-    if (failure is String &&
-        !RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(failure)) {
-      json.remove('failure');
+    for (final key in [
+      'failure',
+      'failure_domain',
+      'failure_category',
+      'reason_code',
+      'incident_id',
+    ]) {
+      final value = json[key];
+      if (value is String && !_safeToken(value)) json.remove(key);
+    }
+    if (json['safe_actions'] case final List<Object?> actions) {
+      final sanitized = actions.whereType<String>().where(_safeToken).toList();
+      if (sanitized.isEmpty) {
+        json.remove('safe_actions');
+      } else {
+        json['safe_actions'] = sanitized;
+      }
     }
     return json;
   }
+
+  static bool _safeToken(String value) =>
+      RegExp(r'^[a-zA-Z0-9_.:-]{1,128}$').hasMatch(value);
 
   static void _ignore(Object _) {}
 

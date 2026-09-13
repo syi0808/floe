@@ -304,6 +304,42 @@ abstract class AppLocalizations {
   /// **'The configured model could not handle this request.'**
   String get agentModelPolicyDenied;
 
+  /// No description provided for @agentSessionIntegrityFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe couldn\'t safely open the previous conversation. You can retry it or start a new conversation.'**
+  String get agentSessionIntegrityFailure;
+
+  /// No description provided for @agentDataReleaseBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe blocked one operation because its data access could not be verified. No unverified data was sent.'**
+  String get agentDataReleaseBlocked;
+
+  /// No description provided for @agentCapabilityAccessDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe blocked an unavailable or unauthorized capability. You can continue in a new conversation.'**
+  String get agentCapabilityAccessDenied;
+
+  /// No description provided for @agentInternalPolicyFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe stopped an internal operation to protect your data. You can start a new conversation; diagnostics were recorded.'**
+  String get agentInternalPolicyFailure;
+
+  /// No description provided for @agentIncidentId.
+  ///
+  /// In en, this message translates to:
+  /// **'Incident: {incidentId}'**
+  String agentIncidentId(String incidentId);
+
+  /// No description provided for @agentExportDiagnostics.
+  ///
+  /// In en, this message translates to:
+  /// **'Export diagnostics'**
+  String get agentExportDiagnostics;
+
   /// No description provided for @agentTransportUnavailable.
   ///
   /// In en, this message translates to:

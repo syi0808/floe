@@ -103,7 +103,14 @@ void main() {
   ) async {
     final gateway = TestVaultGateway()
       ..state = AgentVaultState.ready
-      ..loadError = const AgentVaultException('policy_denied');
+      ..loadError = const AgentVaultException(
+        'policy_denied',
+        domain: 'session',
+        category: 'integrity',
+        reasonCode: 'session_integrity',
+        safeActions: ['start_new_session', 'export_diagnostics'],
+        incidentId: 'incident-1',
+      );
     final controller = AgentController(gateway: gateway, personId: 'test');
     addTearDown(controller.dispose);
     await controller.load();
@@ -114,9 +121,20 @@ void main() {
     expect(controller.session, isNull);
     expect(controller.needsReload, isTrue);
     expect(controller.canStartConversation, isTrue);
+    expect(controller.failureDomain, 'session');
+    expect(controller.failureIncidentId, 'incident-1');
+    expect(
+      find.text(
+        "Floe couldn't safely open the previous conversation. You can retry it or start a new conversation.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('New conversation'), findsOneWidget);
+    expect(find.text('Incident: incident-1'), findsOneWidget);
+    expect(find.text('Export diagnostics'), findsOneWidget);
 
     gateway.loadError = null;
-    await tester.tap(find.byTooltip('New conversation'));
+    await tester.tap(find.text('New conversation'));
     await tester.pumpAndSettle();
 
     expect(controller.session, isNotNull);

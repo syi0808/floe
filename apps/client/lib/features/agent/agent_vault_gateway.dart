@@ -1108,13 +1108,15 @@ final class NativeAgentVaultGateway
   AgentRunUpdate _conversationUpdate(
     AgentConversationTurnRequest turn,
     Map<String, dynamic> result,
-  ) => AgentRunUpdate.fromJson({
-    ...result,
-    'failure': _failureKind(result['failure']),
-    'recovery_action': _failureRecoveryAction(result['failure']),
-    'session_id': turn.session.id,
-    'expected_revision': turn.session.revision,
-  });
+  ) {
+    final failure = _failureUpdateFields(result['failure'], _pending!);
+    return AgentRunUpdate.fromJson({
+      ...result,
+      ...failure,
+      'session_id': turn.session.id,
+      'expected_revision': turn.session.revision,
+    });
+  }
 
   bool _sameConversationTurn(
     AgentConversationTurnRequest left,
@@ -1675,14 +1677,33 @@ final class NativeAgentVaultGateway
     return _update(session, await _call(_pending!, operation));
   }
 
-  AgentRunUpdate _update(AgentSession session, Map<String, dynamic> result) =>
-      AgentRunUpdate.fromJson({
-        ...result,
-        'failure': _failureKind(result['failure']),
-        'recovery_action': _failureRecoveryAction(result['failure']),
-        'session_id': session.id,
-        'expected_revision': session.revision,
-      });
+  AgentRunUpdate _update(AgentSession session, Map<String, dynamic> result) {
+    final failure = _failureUpdateFields(result['failure'], _pending!);
+    return AgentRunUpdate.fromJson({
+      ...result,
+      ...failure,
+      'session_id': session.id,
+      'expected_revision': session.revision,
+    });
+  }
+
+  Map<String, Object?> _failureUpdateFields(Object? raw, _VaultJob job) {
+    if (raw == null) {
+      return const {'failure': null, 'recovery_action': null};
+    }
+    final envelope = _failureEnvelope(raw, job);
+    return {
+      'failure': envelope.reasonCode,
+      'recovery_action': envelope.recoveryAction,
+      'failure_domain': envelope.domain,
+      'failure_category': envelope.category,
+      'failure_reason_code': envelope.reasonCode,
+      'failure_safe_actions': envelope.safeActions,
+      'failure_affected_refs': envelope.affectedRefs,
+      'failure_incident_id': envelope.incidentId,
+      'failure_retry_policy': envelope.retryPolicy,
+    };
+  }
 
   Future<Map<String, dynamic>> _call(
     _VaultJob job,
@@ -1720,6 +1741,11 @@ final class NativeAgentVaultGateway
         error: error,
         stackTrace: stackTrace,
         failure: enriched.failure,
+        failureDomain: enriched.domain,
+        failureCategory: enriched.category,
+        reasonCode: enriched.reasonCode,
+        incidentId: enriched.incidentId,
+        safeActions: enriched.safeActions,
         requestId: enriched.requestId,
         retryable: enriched.retryable,
       );
@@ -1741,6 +1767,11 @@ final class NativeAgentVaultGateway
           error: completedError,
           stackTrace: StackTrace.current,
           failure: completedError.failure,
+          failureDomain: completedError.domain,
+          failureCategory: completedError.category,
+          reasonCode: completedError.reasonCode,
+          incidentId: completedError.incidentId,
+          safeActions: completedError.safeActions,
           requestId: job.id,
           retryable: completedError.retryable,
         );
@@ -1903,21 +1934,6 @@ final class NativeAgentVaultGateway
       recoveryAction: action,
       correlationRequestId: value['correlation_request_id']! as String,
     );
-  }
-
-  String? _failureKind(Object? raw) {
-    if (raw == null) return null;
-    if (raw is String) return raw;
-    if (raw is Map && raw['reason_code'] is String) {
-      return raw['reason_code'] as String;
-    }
-    if (raw is Map && raw['kind'] is String) return raw['kind'] as String;
-    throw const FormatException('Invalid vault failure envelope');
-  }
-
-  String? _failureRecoveryAction(Object? raw) {
-    if (raw is! Map) return null;
-    return raw['recovery_action'] as String?;
   }
 
   Future<void> _release(_VaultJob job) async {
