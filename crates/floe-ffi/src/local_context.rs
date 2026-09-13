@@ -20,6 +20,7 @@ use floe_protocol::{
     LocalContextOperationDto, LocalContextPersonalAcquisitionRequestDto,
     LocalContextPersonalAcquisitionResultDto, LocalContextPersonalDomainDto, LocalContextResultDto,
 };
+#[cfg(test)]
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
@@ -227,9 +228,10 @@ const MAX_ACQUISITION_DEADLINE_MS: i64 = 30_000;
 
 #[derive(Clone)]
 pub(crate) struct PublishedCalendarObservation {
+    #[cfg(test)]
     pub(crate) connection_id: String,
+    #[cfg(test)]
     pub(crate) source_authority: floe_domain::SourceAuthority,
-    pub(crate) device_id: String,
     pub(crate) connection_revision: u64,
     pub(crate) provider: CalendarProvider,
     pub(crate) calendar_ids: Vec<String>,
@@ -241,10 +243,6 @@ pub(crate) struct PublishedCalendarObservation {
 }
 
 impl LocalContextStore {
-    pub(crate) fn is_available(&self, person_id: PersonId, view_id: &str) -> bool {
-        self.read_entry(person_id, view_id, None).is_ok()
-    }
-
     #[cfg(test)]
     pub(crate) fn request(
         &self,
@@ -449,9 +447,10 @@ impl LocalContextStore {
                     .collect::<Result<Vec<_>, AgentFailure>>()
                     .map_err(agent_failure)?;
                 let observation = PublishedCalendarObservation {
+                    #[cfg(test)]
                     connection_id: connection_id.clone(),
+                    #[cfg(test)]
                     source_authority: connection.source_authority,
-                    device_id: device_id.clone(),
                     connection_revision,
                     provider,
                     calendar_ids,
@@ -624,6 +623,7 @@ impl LocalContextStore {
         received
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub(crate) async fn inspect_calendar_subject(
         &self,
         mut request: LocalContextAcquisitionRequestDto,
@@ -827,6 +827,7 @@ impl LocalContextStore {
             .ok_or(AgentFailure::StaleContext)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_trusted_attention_projection(
         &self,
         person_id: PersonId,
@@ -960,6 +961,7 @@ impl LocalContextStore {
             .ok_or(AgentFailure::PolicyDenied)
     }
 
+    #[cfg(test)]
     pub(crate) fn trusted_attention_subject(
         &self,
         person_id: PersonId,
@@ -1696,14 +1698,7 @@ impl LocalContextStore {
         Ok(())
     }
 
-    pub(crate) fn people(&self, person_id: PersonId) -> Result<PeopleView, AgentFailure> {
-        self.read_typed(person_id, "people.identity")
-    }
-
-    pub(crate) fn feasibility(&self, person_id: PersonId) -> Result<FeasibilityView, AgentFailure> {
-        self.read_typed(person_id, "schedule.feasibility")
-    }
-
+    #[cfg(test)]
     pub(crate) fn attention(&self, person_id: PersonId) -> Result<AttentionView, AgentFailure> {
         self.read_typed(person_id, "attention.coarse")
     }
@@ -1718,10 +1713,7 @@ impl LocalContextStore {
         Ok((view, entry.observation_id, entry.process_incarnation))
     }
 
-    pub(crate) fn wellbeing(&self, person_id: PersonId) -> Result<WellbeingView, AgentFailure> {
-        self.read_typed(person_id, "wellbeing.derived")
-    }
-
+    #[cfg(test)]
     pub(crate) fn authorized_calendar_observation(
         &self,
         person_id: PersonId,
@@ -1759,6 +1751,7 @@ impl LocalContextStore {
         Ok(projected)
     }
 
+    #[cfg(test)]
     fn read_typed<T: DeserializeOwned>(
         &self,
         person_id: PersonId,

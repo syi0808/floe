@@ -40,6 +40,7 @@ pub(super) struct ConversationExperts<'model> {
 
 impl ConversationExperts<'_> {
     fn source_granted(&self, agent_id: &str, source: BuiltinContextSource) -> bool {
+        let _ = self.local_context;
         let Some(setup) = &self.builtin_setup else {
             return true;
         };

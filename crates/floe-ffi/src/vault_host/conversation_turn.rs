@@ -493,6 +493,7 @@ impl PersonalViewSource<'_> {
         Ok(view)
     }
 
+    #[cfg(test)]
     async fn attention_view(
         &self,
         deadline: tokio::time::Instant,
@@ -986,6 +987,7 @@ fn contacts_execution_owner(connector: &str, device_id: &str) -> String {
 
 impl CapabilityHost for ConversationCapabilities<'_> {
     fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
+        let _ = self.local_context;
         let mut descriptors = vec![
             read_capability("people.identity.read"),
             read_capability("schedule.feasibility.read"),
@@ -1812,7 +1814,6 @@ mod tests {
     async fn device_model_has_no_implicit_cross_device_personal_view_route() {
         let model = Model::new(None).unwrap();
         let policy = policy(&model, None);
-        let local_context = LocalContextStore::default();
         let result = PersonalViewSource {
             model: &model,
             policy: &policy,

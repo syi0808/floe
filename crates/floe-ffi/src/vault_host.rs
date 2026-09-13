@@ -2172,7 +2172,7 @@ async fn execute_agent_calendar_action<Keys: VaultKeyProvider>(
 
 async fn calendar_grant_authority(
     core: &FloeCore,
-    local_context: &LocalContextStore,
+    _local_context: &LocalContextStore,
     person_id: PersonId,
     request: &floe_agent::CalendarExpertSetup,
     cancellation: Cancellation,
@@ -2242,9 +2242,9 @@ async fn calendar_grant_authority(
         }
         #[cfg(not(target_os = "macos"))]
         floe_domain::CalendarProvider::EventKit | floe_domain::CalendarProvider::Android => {
-            let host_epoch = local_context.acquisition_host_epoch(person_id)?;
+            let host_epoch = _local_context.acquisition_host_epoch(person_id)?;
             let start = chrono::Utc::now().timestamp_millis();
-            let result = local_context
+            let result = _local_context
                 .inspect_calendar_subject(
                     LocalContextAcquisitionRequestDto {
                         request_id: Uuid::new_v4().to_string(),
@@ -2296,7 +2296,7 @@ async fn calendar_grant_authority(
 
 async fn calendar_subject_preview(
     core: &FloeCore,
-    local_context: &LocalContextStore,
+    _local_context: &LocalContextStore,
     person_id: PersonId,
     request: &CalendarSubjectPreviewRequestDto,
     cancellation: Cancellation,
@@ -2362,9 +2362,9 @@ async fn calendar_subject_preview(
         }
         #[cfg(not(target_os = "macos"))]
         floe_domain::CalendarProvider::EventKit | floe_domain::CalendarProvider::Android => {
-            let host_epoch = local_context.acquisition_host_epoch(person_id)?;
+            let host_epoch = _local_context.acquisition_host_epoch(person_id)?;
             let range_start = chrono::Utc::now().timestamp_millis();
-            let result = local_context
+            let result = _local_context
                 .inspect_calendar_subject(
                     LocalContextAcquisitionRequestDto {
                         request_id: Uuid::new_v4().to_string(),

@@ -415,6 +415,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn admit_agent_action_dispatch(
         &self,
         execution_id: Uuid,
@@ -430,6 +431,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn admit_agent_action_dispatch_with_cancellation(
         &self,
         execution_id: Uuid,

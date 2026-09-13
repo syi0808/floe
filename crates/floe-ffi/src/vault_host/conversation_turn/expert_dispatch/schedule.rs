@@ -445,23 +445,17 @@ impl<'model> Access<'model> {
                 }
             }
             CalendarProvider::Google | CalendarProvider::Microsoft => match model {
-                Model::Server(model) => Self::Remote(RemoteCalendarAccess {
-                    model: Some(model),
+                Model::Server(_) => Self::Remote(RemoteCalendarAccess {
                     backend: remote_backend,
                     provider,
                     device_id,
                     calendar_ids,
-                    connection_id,
-                    connection_revision,
                 }),
                 Model::Foundation(_) => Self::Remote(RemoteCalendarAccess {
-                    model: None,
                     backend: remote_backend,
                     provider,
                     device_id,
                     calendar_ids,
-                    connection_id,
-                    connection_revision,
                 }),
             },
             CalendarProvider::Android => Self::Device(DeviceCalendarAccess {
@@ -541,6 +535,7 @@ impl DeviceCalendarAccess<'_> {
         }
         if connection.disconnected
             || connection.connection_id != self.connection_id
+            || connection.revision != self.connection_revision
             || connection.device_id != self.device_id
             || connection.provider != self.provider
             || !self.calendar_ids.iter().all(|identifier| {
@@ -1083,13 +1078,10 @@ impl<Keys: VaultKeyProvider> RemoteCalendarBackend for VaultRemoteCalendarBacken
 }
 
 struct RemoteCalendarAccess<'model> {
-    model: Option<&'model ServerModelRunner>,
     backend: Option<&'model dyn RemoteCalendarBackend>,
     provider: CalendarProvider,
     device_id: String,
     calendar_ids: Vec<String>,
-    connection_id: String,
-    connection_revision: u64,
 }
 
 impl CalendarReadAccess for RemoteCalendarAccess<'_> {
@@ -1306,7 +1298,6 @@ mod tests {
         },
     };
     use tempfile::tempdir;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[derive(Clone, Default)]
     struct RemoteCircuitKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -1891,13 +1882,10 @@ mod tests {
             )
             .unwrap();
             let access = RemoteCalendarAccess {
-                model: None,
                 backend: Some(&backend),
                 provider,
                 device_id: "device-a".into(),
                 calendar_ids: vec!["primary".into()],
-                connection_id: connection_id.clone(),
-                connection_revision: 7,
             };
             let projection = access
                 .observe_projected(floe_core::CalendarObserveRequest {
@@ -2315,6 +2303,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_calendar_access_rejects_a_stale_connection_revision() {
+        let store = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let directory = tempfile::tempdir().unwrap();
+        let core = FloeCore::open(directory.path().join("calendar.db"))
+            .await
+            .unwrap();
+        core.set_calendar_scope(
+            person_id,
+            Uuid::new_v4().to_string(),
+            7,
+            "android".into(),
+            CalendarProvider::Android,
+            vec![CalendarSelection {
+                calendar_id: "primary".into(),
+                calendar_name: "Primary".into(),
+            }],
+            CalendarScope::Selected,
+        )
+        .await
+        .unwrap();
+        let connection = core.calendar_connection(person_id).await.unwrap().unwrap();
+        let access = DeviceCalendarAccess {
+            core: &core,
+            connection_id: connection.connection_id.clone(),
+            source_authority: Some(connection.source_authority),
+            local_context: &store,
+            provider: CalendarProvider::Android,
+            device_id: "android".into(),
+            calendar_ids: vec!["primary".into()],
+            connection_revision: connection.revision + 1,
+        };
+
+        assert_eq!(
+            access
+                .check(CalendarReadAccessRequest {
+                    person_id,
+                    device_id: "android".into(),
+                    provider: CalendarProvider::Android,
+                    calendar_ids: vec!["primary".into()],
+                    expected_native_subject_fingerprint: None,
+                    deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                    cancellation: floe_agent::Cancellation::default(),
+                })
+                .await,
+            Err(AgentFailure::StaleContext)
+        );
+    }
+
+    #[tokio::test]
     async fn device_calendar_access_reads_through_the_bound_acquisition_host() {
         let store = LocalContextStore::default();
         let person_id = PersonId::new();
@@ -2414,85 +2452,13 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    async fn receive_request(mut socket: tokio::net::TcpStream) -> serde_json::Value {
-        let mut bytes = Vec::new();
-        loop {
-            let mut chunk = [0_u8; 4096];
-            let read = socket.read(&mut chunk).await.unwrap();
-            bytes.extend_from_slice(&chunk[..read]);
-            let text = String::from_utf8_lossy(&bytes);
-            let Some((headers, body)) = text.split_once("\r\n\r\n") else {
-                continue;
-            };
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    line.to_ascii_lowercase()
-                        .strip_prefix("content-length: ")
-                        .and_then(|value| value.parse::<usize>().ok())
-                })
-                .unwrap();
-            if body.len() < content_length {
-                continue;
-            }
-            assert!(headers.starts_with("POST /v1/views/calendar.timeline "));
-            let value: serde_json::Value =
-                serde_json::from_slice(&body.as_bytes()[..content_length]).unwrap();
-            let response = serde_json::json!({
-                "schema_version": 1,
-                "view": {
-                    "schema_version": 1,
-                    "view_id": "calendar.timeline",
-                    "source_handle": "calendar.timeline:google",
-                    "observed_at_unix_ms": value["range_start_unix_ms"].as_i64().unwrap(),
-                    "expires_at_unix_ms": value["range_start_unix_ms"].as_i64().unwrap() + 300_000,
-                    "range_start_unix_ms": value["range_start_unix_ms"],
-                    "range_end_unix_ms": value["range_end_unix_ms"],
-                    "coverage_complete": true,
-                    "items": []
-                }
-            })
-            .to_string();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
-                        response.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            return value;
-        }
-    }
-
     #[tokio::test]
     async fn server_calendar_access_without_owner_backend_fails_closed() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            receive_request(socket).await
-        });
-        let model = ServerModelRunner::new(floe_protocol::AgentRemoteRouteDto {
-            base_url: format!("http://{address}/"),
-            bearer_token: "a".repeat(32),
-            purpose: "everyday_assistance".into(),
-            external: false,
-            allow_external: false,
-            calendar_connections: vec![],
-            pairing: None,
-        })
-        .unwrap();
         let access = RemoteCalendarAccess {
-            model: Some(&model),
             backend: None,
             provider: CalendarProvider::Google,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
-            connection_id: "00000000-0000-4000-8000-000000000009".into(),
-            connection_revision: 9,
         };
         let now = chrono::Utc::now();
         let request = floe_core::CalendarObserveRequest {
@@ -2510,19 +2476,15 @@ mod tests {
             access.observe_projected(request).await,
             Err(AgentFailure::CapabilityUnavailable)
         );
-        server.abort();
     }
 
     #[tokio::test]
     async fn device_only_and_wrong_provider_access_keep_distinct_failures() {
         let access = RemoteCalendarAccess {
-            model: None,
             backend: None,
             provider: CalendarProvider::Android,
             device_id: "test-device".into(),
             calendar_ids: vec!["primary".into()],
-            connection_id: "00000000-0000-4000-8000-000000000001".into(),
-            connection_revision: 1,
         };
         let person_id = PersonId::new();
         let unavailable = access
