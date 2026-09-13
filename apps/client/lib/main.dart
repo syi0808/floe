@@ -29,6 +29,7 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      await AppDiagnostics.initialize();
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
         AppDiagnostics.error(
