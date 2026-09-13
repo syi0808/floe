@@ -1,10 +1,48 @@
 import 'package:floe_client/features/agent/agent_controller.dart';
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
+import 'package:floe_client/features/agent/agent_vault_gateway.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/agent_gateway.dart';
+import '../../support/agent_vault_gateway.dart';
 
 void main() {
+  test('vault status failure does not disable a fresh start', () async {
+    final gateway = TestVaultGateway()..unavailable = true;
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+
+    await controller.load();
+
+    expect(controller.vaultState, AgentVaultState.unavailable);
+    expect(controller.canStartConversation, isTrue);
+
+    gateway.unavailable = false;
+    await controller.load(newSession: true);
+    expect(controller.session, isNotNull);
+  });
+
+  test('session load timeout releases the new conversation escape', () async {
+    final gateway = TestAgentGateway()..hangLoad = true;
+    final controller = AgentController(
+      gateway: gateway,
+      personId: 'test',
+      loadTimeout: const Duration(milliseconds: 10),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+
+    expect(controller.progress, AgentProgress.idle);
+    expect(controller.failure, 'storage_unavailable');
+    expect(controller.needsReload, isTrue);
+    expect(controller.canStartConversation, isTrue);
+
+    gateway.hangLoad = false;
+    await controller.load(newSession: true);
+    expect(controller.session, isNotNull);
+  });
+
   test(
     'preambles remain ordered progress messages rather than final answers',
     () async {

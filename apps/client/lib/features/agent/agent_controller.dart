@@ -33,9 +33,10 @@ final class AgentController extends ChangeNotifier {
   factory AgentController({
     required AgentFixtureStreamingGateway gateway,
     required String personId,
-  }) => AgentController._(gateway, personId);
+    Duration loadTimeout = const Duration(seconds: 10),
+  }) => AgentController._(gateway, personId, loadTimeout);
 
-  AgentController._(this.gateway, this.personId) {
+  AgentController._(this.gateway, this.personId, this.loadTimeout) {
     registryController = AgentRegistryController(
       gateway: gateway is AgentRegistryGateway
           ? gateway as AgentRegistryGateway
@@ -104,6 +105,7 @@ final class AgentController extends ChangeNotifier {
 
   final AgentFixtureStreamingGateway gateway;
   final String personId;
+  final Duration loadTimeout;
   AgentSession? session;
   List<AgentMessage> messages = [];
   AgentProgress progress = AgentProgress.idle;
@@ -351,8 +353,7 @@ final class AgentController extends ChangeNotifier {
       connectionController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
-  bool get canStartConversation =>
-      !busy && !running && (!usesVault || vaultState == AgentVaultState.ready);
+  bool get canStartConversation => !busy && !running;
   bool get canSend =>
       !busy && !needsReload && !needsRecovery && session != null;
   bool get canContinue =>
@@ -381,11 +382,13 @@ final class AgentController extends ChangeNotifier {
     _notify();
     try {
       if (gateway case final AgentVaultGateway vault) {
-        final state = await vault.vaultStatus(personId);
+        final state = await vault.vaultStatus(personId).timeout(loadTimeout);
         if (_sealed) return;
         vaultState = switch (state) {
-          AgentVaultState.missing => await vault.createVault(personId),
-          AgentVaultState.locked => await vault.unlockVault(personId),
+          AgentVaultState.missing =>
+            await vault.createVault(personId).timeout(loadTimeout),
+          AgentVaultState.locked =>
+            await vault.unlockVault(personId).timeout(loadTimeout),
           _ => state,
         };
         if (_sealed) return;
@@ -395,13 +398,17 @@ final class AgentController extends ChangeNotifier {
       }
       if (gateway case final AgentConversationGateway conversation) {
         final saved = newSession
-            ? await conversation.startConversation(personId)
-            : await conversation.resumeConversation(personId);
+            ? await conversation
+                  .startConversation(personId)
+                  .timeout(loadTimeout)
+            : await conversation
+                  .resumeConversation(personId)
+                  .timeout(loadTimeout);
         _acceptSession(saved);
       } else {
         final result = newSession
-            ? await gateway.startAgentFixture(personId)
-            : await gateway.resumeAgentFixture(personId);
+            ? await gateway.startAgentFixture(personId).timeout(loadTimeout)
+            : await gateway.resumeAgentFixture(personId).timeout(loadTimeout);
         _acceptSession(result.session);
       }
       needsReload = false;

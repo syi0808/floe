@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:floe_client/features/agent/agent_fixture_gateway.dart';
 
 class TestAgentGateway implements AgentFixtureStreamingGateway {
@@ -7,6 +9,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   Map<String, Object?>? saved;
   bool hold = false;
   bool failLoad = false;
+  bool hangLoad = false;
   Object? loadError;
   bool failPoll = false;
   String? responseFailure;
@@ -43,6 +46,7 @@ class TestAgentGateway implements AgentFixtureStreamingGateway {
   @override
   Future<AgentFixtureResult> resumeAgentFixture(String personId) async {
     if (failLoad) throw StateError('synthetic load failure');
+    if (hangLoad) await Completer<void>().future;
     if (loadError != null) throw loadError!;
     return saved == null ? startAgentFixture(personId) : _result();
   }
