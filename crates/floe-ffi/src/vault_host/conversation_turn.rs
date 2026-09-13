@@ -1209,8 +1209,7 @@ mod tests {
         },
     };
 
-    use floe_agent::Cancellation;
-    use floe_agent::ModelStep;
+    use floe_agent::{AgentMessage, Cancellation, ModelStep};
     use floe_core::{VaultKey, VaultKeyProvider};
     use floe_protocol::{
         LocalContextAttentionAcquisitionModeDto, LocalContextAttentionAcquisitionResultDto,
@@ -1491,6 +1490,62 @@ mod tests {
         }
     }
 
+    struct DegradedFakeModel {
+        requests: Arc<Mutex<Vec<ModelRequest>>>,
+    }
+
+    impl ModelRunner for DegradedFakeModel {
+        fn placement(&self) -> ModelPlacement {
+            ModelPlacement::DeviceLocal
+        }
+
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+            let first = self.requests.lock().unwrap().is_empty();
+            self.requests.lock().unwrap().push(request);
+            Ok(ModelResponse {
+                replay: None,
+                schema_version: AGENT_VERSION,
+                output: if first {
+                    vec![ModelStep::Call {
+                        capability_id: "schedule.feasibility.read".into(),
+                        input: "{}".into(),
+                    }]
+                } else {
+                    vec![ModelStep::Answer {
+                        text: "The schedule source is unavailable, so I cannot assess feasibility.".into(),
+                    }]
+                },
+                used_tokens: 1,
+                cost_micros: 0,
+            })
+        }
+    }
+
+    struct FailingFeasibilityReader;
+
+    impl PersonalFeasibilityReaderApi for FailingFeasibilityReader {
+        fn read<'a>(
+            &'a self,
+            _: PersonId,
+            _: &'a str,
+            _: Uuid,
+            _: tokio::time::Instant,
+            _: &'a Cancellation,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            (FeasibilityView, floe_domain::ContextDependency),
+                            AgentFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Err(AgentFailure::AccessReviewRequired) })
+        }
+    }
+
     const COMMITMENTS_AGENT_ID: &str = BuiltinExpertKind::Commitments.package_id();
     const COMMUNICATION_AGENT_ID: &str = BuiltinExpertKind::Communication.package_id();
     const WORK_CONTEXT_AGENT_ID: &str = BuiltinExpertKind::WorkContext.package_id();
@@ -1498,6 +1553,111 @@ mod tests {
     const RELATIONSHIPS_AGENT_ID: &str = BuiltinExpertKind::Relationships.package_id();
     const FOCUS_AGENT_ID: &str = BuiltinExpertKind::FocusAttention.package_id();
     const WELLBEING_AGENT_ID: &str = BuiltinExpertKind::Wellbeing.package_id();
+
+    #[tokio::test]
+    async fn governed_conversation_degrades_after_feasibility_read_failure() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault = EncryptedAgentVault::create(
+            root.path(),
+            person_id,
+            AttentionTestKeys::default(),
+        )
+        .await
+        .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let local_context = LocalContextStore::default();
+        let model = Model::Foundation(FoundationModelRunner::encrypted());
+        let policy = policy(&model, None);
+        let liveness = personal_grants::PersonalDependencyLiveness {
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let store = vault.governed_general_store_with_liveness(session.id, &liveness);
+        let resolver = personal_grants::PersonalDependencyResolver {
+            vault: &vault,
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let governed_model = DegradedFakeModel {
+            requests: Arc::new(Mutex::new(vec![])),
+        };
+        let governed_runner = GovernedModel {
+            model: &governed_model,
+            store: &store,
+            resolver: &resolver,
+        };
+        let feasibility_reader = FailingFeasibilityReader;
+        let recorder = StoreResultRecorder { store: &store };
+        let capabilities = ConversationCapabilities {
+            model: &model,
+            policy: &policy,
+            local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            feasibility_reader: Some(&feasibility_reader),
+            wellbeing_reader: None,
+            recorder: Some(&recorder),
+            remote_reader: None,
+        };
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &governed_runner,
+            capabilities: &capabilities,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        let command = AgentCommand {
+            schema_version: AGENT_VERSION,
+            person_id,
+            session_id: session.id,
+            expected_revision: 0,
+            text: "Can I fit this into my schedule?".into(),
+        };
+
+        let completed = runtime
+            .run_turn(command, AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                evidence: vec![],
+            }, Cancellation::default(), |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(completed.last_outcome, Some(floe_agent::AgentOutcome::Completed));
+        assert!(completed.messages.iter().any(|message| matches!(
+            message,
+            AgentMessage::Capability {
+                capability_id,
+                result: Err(AgentFailure::AccessReviewRequired),
+                ..
+            } if capability_id == "schedule.feasibility.read"
+        )));
+        assert!(!completed.messages.iter().any(|message| matches!(
+            message,
+            AgentMessage::Capability {
+                result: Err(AgentFailure::PolicyDenied),
+                ..
+            }
+        )));
+        assert!(completed.messages.iter().any(|message| matches!(
+            message,
+            AgentMessage::Assistant { .. }
+        )));
+        let requests = governed_model.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let (_, current_turn) = requests[1].model_conversation();
+        assert!(current_turn.iter().any(|message| {
+            message["role"] == "tool"
+                && message["status"] == "error"
+                && message["failure"] == "access_review_required"
+                && message.get("content").is_none()
+        }));
+    }
 
     fn test_expert_cards() -> Vec<AgentCard> {
         [

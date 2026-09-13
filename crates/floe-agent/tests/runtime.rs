@@ -1892,6 +1892,104 @@ async fn capability_failure_is_paired_and_isolated() {
 }
 
 #[tokio::test]
+async fn source_read_failure_enters_manager_degraded_mode_without_source_payload() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    let host = Host {
+        output: Err(AgentFailure::AccessReviewRequired),
+        ..Host::default()
+    };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+
+    let session = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(session.last_outcome, Some(AgentOutcome::Completed));
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Capability {
+            result: Err(AgentFailure::AccessReviewRequired),
+            ..
+        }
+    )));
+    assert!(!session.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Capability {
+            result: Err(AgentFailure::PolicyDenied),
+            ..
+        }
+    )));
+    assert!(session
+        .messages
+        .iter()
+        .any(|message| matches!(message, AgentMessage::Assistant { .. })));
+
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let (_, current_turn) = requests[1].model_conversation();
+    let failure = current_turn
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .expect("paired machine-generated capability failure");
+    assert_eq!(failure["status"], "error");
+    assert_eq!(failure["failure"], "access_review_required");
+    assert!(failure.get("content").is_none());
+    assert!(requests[1]
+        .prompt
+        .render()
+        .contains("answer honestly using only the remaining evidence"));
+}
+
+#[tokio::test]
+async fn repeated_unavailable_capability_calls_are_bounded_and_do_not_reenter_source() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), call(), call(), answer()]);
+    let host = Host {
+        output: Err(AgentFailure::CapabilityUnavailable),
+        ..Host::default()
+    };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+
+    let session = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::Stalled,
+        })
+    );
+    assert_eq!(model.calls(), 3);
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        session
+            .capability_executions
+            .iter()
+            .filter(|execution| execution.capability_id == "schedule.read")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn repeated_read_calls_continue_until_the_model_answers() {
     let store = Store::new();
     let model = Model::new(vec![call(), call(), call(), answer()]);

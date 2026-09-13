@@ -767,6 +767,15 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                         {
                             return Err(AgentFailure::CapabilityUnavailable.into());
                         }
+                        let unavailable_attempts = unavailable_capability_attempts(
+                            session,
+                            turn_id,
+                            capability_id.as_str(),
+                        );
+                        if unavailable_attempts >= 2 {
+                            return Err(AgentFailure::Stalled.into());
+                        }
+                        let suppress_source_read = unavailable_attempts == 1;
                         usage.capability_calls += 1;
                         let call_id = Uuid::new_v4();
                         session.usage = *usage;
@@ -804,6 +813,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                     budget.max_output_bytes,
                                     Box::pin(async {
                                         self.authorize(context)?;
+                                        if suppress_source_read {
+                                            return Err(AgentFailure::CapabilityUnavailable);
+                                        }
                                         if !self
                                             .capabilities
                                             .descriptors(invocation.person_id)
@@ -1118,6 +1130,30 @@ fn check_running(deadline: Instant, cancellation: &Cancellation) -> Result<(), A
     } else {
         Ok(())
     }
+}
+
+fn unavailable_capability_attempts(
+    session: &AgentSession,
+    turn_id: Uuid,
+    capability_id: &str,
+) -> usize {
+    session
+        .capability_executions
+        .iter()
+        .filter(|execution| {
+            execution.scope_id == session.id
+                && execution.turn_id == turn_id
+                && execution.capability_id == capability_id
+                && execution.state == CapabilityExecutionState::Settled
+                && execution.result.as_ref().is_some_and(|result| {
+                    matches!(
+                        result,
+                        Err(AgentFailure::AccessReviewRequired
+                            | AgentFailure::CapabilityUnavailable)
+                    )
+                })
+        })
+        .count()
 }
 
 async fn bounded<ResultValue>(
