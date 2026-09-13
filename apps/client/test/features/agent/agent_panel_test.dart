@@ -98,6 +98,32 @@ void main() {
     },
   );
 
+  testWidgets('session load failure still allows a new conversation', (
+    tester,
+  ) async {
+    final gateway = TestVaultGateway()
+      ..state = AgentVaultState.ready
+      ..loadError = const AgentVaultException('policy_denied');
+    final controller = AgentController(gateway: gateway, personId: 'test');
+    addTearDown(controller.dispose);
+    await controller.load();
+    await tester.pumpWidget(
+      app(AgentPanel(controller: controller, onClose: () {})),
+    );
+
+    expect(controller.session, isNull);
+    expect(controller.needsReload, isTrue);
+    expect(controller.canStartConversation, isTrue);
+
+    gateway.loadError = null;
+    await tester.tap(find.byTooltip('New conversation'));
+    await tester.pumpAndSettle();
+
+    expect(controller.session, isNotNull);
+    expect(controller.failure, isNull);
+    expect(controller.needsReload, isFalse);
+  });
+
   for (final failure in {
     'access_review_required': 'Calendar access needs your review. Open Connections, choose your Calendar connection, and save the calendars Floe may read, then reload the conversation.',
     'server_model_timeout': 'The configured server model timed out. Try again, or choose a faster model route in the server dashboard.',

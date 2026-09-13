@@ -345,6 +345,8 @@ final class AgentController extends ChangeNotifier {
       connectionController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
+  bool get canStartConversation =>
+      !busy && !running && (!usesVault || vaultState == AgentVaultState.ready);
   bool get canSend =>
       !busy && !needsReload && !needsRecovery && session != null;
   bool get canContinue =>

@@ -115,12 +115,9 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                       FloeButton.icon(
                         tooltip: strings.agentNewConversation,
-                        onPressed:
-                            !controller.canSend ||
-                                controller.needsReload ||
-                                controller.needsRecovery
-                            ? null
-                            : () => controller.load(newSession: true),
+                        onPressed: controller.canStartConversation
+                            ? () => controller.load(newSession: true)
+                            : null,
                         icon: const Icon(LucideIcons.squarePen, size: 18),
                       ),
                       FloeButton.icon(
