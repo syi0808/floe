@@ -49,6 +49,7 @@ mod remote_views;
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
 const LEARNER_ERROR_DELAY: Duration = Duration::from_secs(5);
+const AGENT_VAULT_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn operation_name(operation: &AgentVaultOperationDto) -> &'static str {
     match operation {
@@ -292,6 +293,7 @@ impl Worker {
         let worker_background = background.clone();
         std::thread::Builder::new()
             .name("floe-agent-vault".into())
+            .stack_size(AGENT_VAULT_STACK_SIZE)
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
