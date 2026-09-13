@@ -128,7 +128,8 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
         Model::conversation(request.remote_route.clone())?
     };
     let placement = model.placement();
-    let external_consent = TransferConsent::NotGranted;
+    let external_consent =
+        schedule_external_transfer_consent(placement, request.remote_route.as_ref());
     let remote_backend = match request.remote_route.as_ref() {
         Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
             vault,
@@ -222,6 +223,19 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
     )
     .await?;
     Ok(Some(result.session))
+}
+
+fn schedule_external_transfer_consent(
+    placement: ModelPlacement,
+    route: Option<&floe_protocol::AgentRemoteRouteDto>,
+) -> TransferConsent {
+    if placement == ModelPlacement::Remote
+        && route.is_some_and(|route| route.external && route.allow_external)
+    {
+        TransferConsent::Granted
+    } else {
+        TransferConsent::NotGranted
+    }
 }
 
 struct BoundAccess<'host> {
@@ -1923,6 +1937,29 @@ mod tests {
         assert_eq!(
             validate_active_connection(&setup, &binding, &connection, "device-a", None),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn schedule_model_uses_current_external_transfer_consent() {
+        let (_, _, connection) = active_identity(CalendarProvider::EventKit);
+        let mut route = remote_route("calendar.google", &connection);
+        route.external = true;
+        route.allow_external = true;
+
+        assert_eq!(
+            schedule_external_transfer_consent(ModelPlacement::Remote, Some(&route)),
+            TransferConsent::Granted
+        );
+        assert_eq!(
+            schedule_external_transfer_consent(ModelPlacement::DeviceLocal, Some(&route)),
+            TransferConsent::NotGranted
+        );
+
+        route.allow_external = false;
+        assert_eq!(
+            schedule_external_transfer_consent(ModelPlacement::Remote, Some(&route)),
+            TransferConsent::NotGranted
         );
     }
 
