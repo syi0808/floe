@@ -301,7 +301,7 @@ abstract class AppLocalizations {
   /// No description provided for @agentModelPolicyDenied.
   ///
   /// In en, this message translates to:
-  /// **'The configured model could not handle this request.'**
+  /// **'Floe stopped this operation because a policy or data-access check could not be verified.'**
   String get agentModelPolicyDenied;
 
   /// No description provided for @agentSessionIntegrityFailure.

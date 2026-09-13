@@ -1512,7 +1512,8 @@ mod tests {
                     }]
                 } else {
                     vec![ModelStep::Answer {
-                        text: "The schedule source is unavailable, so I cannot assess feasibility.".into(),
+                        text: "The schedule source is unavailable, so I cannot assess feasibility."
+                            .into(),
                     }]
                 },
                 used_tokens: 1,
@@ -1559,13 +1560,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let person_id = PersonId::new();
-        let vault = EncryptedAgentVault::create(
-            root.path(),
-            person_id,
-            AttentionTestKeys::default(),
-        )
-        .await
-        .unwrap();
+        let vault =
+            EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+                .await
+                .unwrap();
         let session = vault.create_session().await.unwrap();
         let local_context = LocalContextStore::default();
         let model = Model::Foundation(FoundationModelRunner::encrypted());
@@ -1619,16 +1617,24 @@ mod tests {
         };
 
         let completed = runtime
-            .run_turn(command, AgentContext {
-                projection_version: 1,
-                persona: None,
-                memories: vec![],
-                evidence: vec![],
-            }, Cancellation::default(), |_| {})
+            .run_turn(
+                command,
+                AgentContext {
+                    projection_version: 1,
+                    persona: None,
+                    memories: vec![],
+                    evidence: vec![],
+                },
+                Cancellation::default(),
+                |_| {},
+            )
             .await
             .unwrap();
 
-        assert_eq!(completed.last_outcome, Some(floe_agent::AgentOutcome::Completed));
+        assert_eq!(
+            completed.last_outcome,
+            Some(floe_agent::AgentOutcome::Completed)
+        );
         assert!(completed.messages.iter().any(|message| matches!(
             message,
             AgentMessage::Capability {
@@ -1644,10 +1650,12 @@ mod tests {
                 ..
             }
         )));
-        assert!(completed.messages.iter().any(|message| matches!(
-            message,
-            AgentMessage::Assistant { .. }
-        )));
+        assert!(
+            completed
+                .messages
+                .iter()
+                .any(|message| matches!(message, AgentMessage::Assistant { .. }))
+        );
         let requests = governed_model.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         let (_, current_turn) = requests[1].model_conversation();

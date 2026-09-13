@@ -36,7 +36,7 @@
   "agentServerModelTimeout": "The configured server model timed out. Try again, or choose a faster model route in the server dashboard.",
   "agentServerModelRequestRejected": "The configured server model rejected this request. Check the latest server trace and model compatibility.",
   "agentServerModelInvalidOutput": "The server model returned a response that Floe could not validate. Check the server trace and model configuration.",
-  "agentModelPolicyDenied": "The configured model could not handle this request.",
+  "agentModelPolicyDenied": "Floe stopped this operation because a policy or data-access check could not be verified.",
   "agentSessionIntegrityFailure": "Floe couldn't safely open the previous conversation. You can retry it or start a new conversation.",
   "agentDataReleaseBlocked": "Floe blocked one operation because its data access could not be verified. No unverified data was sent.",
   "agentCapabilityAccessDenied": "Floe blocked an unavailable or unauthorized capability. You can continue in a new conversation.",

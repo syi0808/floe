@@ -130,7 +130,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentModelPolicyDenied =>
-      'The configured model could not handle this request.';
+      'Floe stopped this operation because a policy or data-access check could not be verified.';
 
   @override
   String get agentSessionIntegrityFailure =>

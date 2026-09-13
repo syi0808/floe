@@ -1928,10 +1928,12 @@ async fn source_read_failure_enters_manager_degraded_mode_without_source_payload
             ..
         }
     )));
-    assert!(session
-        .messages
-        .iter()
-        .any(|message| matches!(message, AgentMessage::Assistant { .. })));
+    assert!(
+        session
+            .messages
+            .iter()
+            .any(|message| matches!(message, AgentMessage::Assistant { .. }))
+    );
 
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
@@ -1943,10 +1945,12 @@ async fn source_read_failure_enters_manager_degraded_mode_without_source_payload
     assert_eq!(failure["status"], "error");
     assert_eq!(failure["failure"], "access_review_required");
     assert!(failure.get("content").is_none());
-    assert!(requests[1]
-        .prompt
-        .render()
-        .contains("answer honestly using only the remaining evidence"));
+    assert!(
+        requests[1]
+            .prompt
+            .render()
+            .contains("answer honestly using only the remaining evidence")
+    );
 }
 
 #[tokio::test]
