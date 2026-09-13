@@ -78,9 +78,15 @@ void main() {
             ? null
             : {
                 'schema_version': 1,
+                'domain': 'app',
+                'category': 'internal',
+                'reason_code': failure,
                 'kind': failure,
                 'stage': 'inspect_proposal',
+                'safe_actions': const <String>['export_diagnostics'],
                 'affected_refs': const <String>[],
+                'incident_id': request['request_id'],
+                'retry_policy': 'never',
                 'retryable': false,
                 'recovery_action': 'none',
                 'correlation_request_id': request['request_id'],

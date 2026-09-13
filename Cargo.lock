@@ -880,6 +880,7 @@ name = "floe-protocol"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-agent-contract",
  "floe-domain",
  "serde",
  "serde_json",

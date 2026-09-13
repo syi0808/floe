@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub use floe_agent_contract::{
+    AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentRetryPolicy,
+};
+
 macro_rules! response_payload {
     ($name:ident) => {
         #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -24,9 +28,15 @@ response_payload!(PersonalMemoryKindDto);
 #[serde(deny_unknown_fields)]
 pub struct AgentVaultFailureDto {
     pub schema_version: u32,
+    pub domain: AgentFailureDomain,
+    pub category: AgentFailureCategory,
+    pub reason_code: String,
     pub kind: String,
     pub stage: String,
+    pub safe_actions: Vec<AgentFailureSafeAction>,
     pub affected_refs: Vec<String>,
+    pub incident_id: String,
+    pub retry_policy: AgentRetryPolicy,
     pub retryable: bool,
     pub recovery_action: AgentVaultRecoveryActionDto,
     pub correlation_request_id: String,

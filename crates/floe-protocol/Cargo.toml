@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-agent-contract = { path = "../floe-agent-contract" }
 chrono.workspace = true
 floe-domain = { path = "../floe-domain" }
 serde.workspace = true

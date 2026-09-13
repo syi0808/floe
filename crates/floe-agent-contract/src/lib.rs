@@ -32,6 +32,48 @@ pub enum AgentFailure {
     Interrupted,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFailureDomain {
+    Source,
+    Capability,
+    Turn,
+    Session,
+    Vault,
+    App,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFailureCategory {
+    UserConfiguration,
+    Transient,
+    Integrity,
+    Security,
+    Internal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFailureSafeAction {
+    ContinueWithoutSource,
+    ReviewSource,
+    Retry,
+    RefreshSession,
+    StartNewSession,
+    ReopenVault,
+    ResetLocalAgentState,
+    ExportDiagnostics,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRetryPolicy {
+    Never,
+    Immediate,
+    Backoff,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataClass {

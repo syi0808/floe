@@ -2638,14 +2638,247 @@ fn failure_envelope(failure: &AgentFailure, stage: &str, request_id: &str) -> Ag
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".into());
+    let classification = classify_failure(failure, stage);
     AgentVaultFailureDto {
         schema_version: PROTOCOL_VERSION,
+        domain: classification.domain,
+        category: classification.category,
+        reason_code: classification.reason_code,
         kind: kind.clone(),
         stage: stage.into(),
+        safe_actions: classification.safe_actions,
         affected_refs: vec![],
-        retryable: false,
+        incident_id: request_id.into(),
+        retry_policy: classification.retry_policy,
+        retryable: classification.retryable,
         recovery_action: recovery_action(failure, stage),
         correlation_request_id: request_id.into(),
+    }
+}
+
+struct FailureClassification {
+    domain: AgentFailureDomain,
+    category: AgentFailureCategory,
+    reason_code: String,
+    safe_actions: Vec<AgentFailureSafeAction>,
+    retry_policy: AgentRetryPolicy,
+    retryable: bool,
+}
+
+fn classify_failure(failure: &AgentFailure, stage: &str) -> FailureClassification {
+    let reason_code = serde_json::to_value(failure)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    let source_stage = matches!(
+        stage,
+        "calendar_access"
+            | "calendar_experts"
+            | "calendar_subject_preview"
+            | "calendar_action"
+            | "personal_access"
+            | "contacts_access"
+            | "remote_authority_inspect_producer"
+            | "remote_authority_review_and_enroll"
+            | "remote_authority_enrollment_status"
+            | "remote_pairing_prepare"
+            | "remote_pairing_confirm"
+            | "remote_pairing_status"
+            | "remote_pairing_finalize"
+            | "remote_calendar_grant_preview"
+            | "remote_calendar_grant_review"
+            | "remote_calendar_grant_status"
+            | "remote_calendar_grant_pause"
+            | "remote_view_grant_preview"
+            | "remote_view_grant_review"
+            | "remote_view_grant_status"
+            | "remote_view_grant_pause"
+    );
+    let (domain, category, reason_code) = match failure {
+        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => (
+            AgentFailureDomain::Vault,
+            AgentFailureCategory::Transient,
+            reason_code.clone(),
+        ),
+        AgentFailure::PolicyDenied if stage == "conversation_session" => (
+            AgentFailureDomain::Session,
+            AgentFailureCategory::Integrity,
+            "session_integrity".into(),
+        ),
+        AgentFailure::PolicyDenied if stage == "conversation_turn" => (
+            AgentFailureDomain::Turn,
+            AgentFailureCategory::Security,
+            "data_release_or_policy_block".into(),
+        ),
+        AgentFailure::PolicyDenied if source_stage => (
+            AgentFailureDomain::Source,
+            AgentFailureCategory::Security,
+            "source_access_denied".into(),
+        ),
+        AgentFailure::PolicyDenied => (
+            AgentFailureDomain::App,
+            AgentFailureCategory::Internal,
+            "internal_policy_invariant".into(),
+        ),
+        AgentFailure::CapabilityDenied => (
+            AgentFailureDomain::Capability,
+            AgentFailureCategory::Security,
+            "capability_access_denied".into(),
+        ),
+        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired => (
+            AgentFailureDomain::Source,
+            AgentFailureCategory::UserConfiguration,
+            reason_code.clone(),
+        ),
+        AgentFailure::CapabilityUnavailable => (
+            AgentFailureDomain::Capability,
+            AgentFailureCategory::Transient,
+            reason_code.clone(),
+        ),
+        AgentFailure::Conflict | AgentFailure::StaleContext if stage == "conversation_session" => (
+            AgentFailureDomain::Session,
+            AgentFailureCategory::Integrity,
+            reason_code.clone(),
+        ),
+        AgentFailure::Conflict | AgentFailure::StaleContext if stage == "conversation_turn" => (
+            AgentFailureDomain::Turn,
+            AgentFailureCategory::Integrity,
+            reason_code.clone(),
+        ),
+        AgentFailure::Conflict | AgentFailure::StaleContext if source_stage => (
+            AgentFailureDomain::Source,
+            AgentFailureCategory::Integrity,
+            reason_code.clone(),
+        ),
+        AgentFailure::ModelUnavailable
+        | AgentFailure::LocalModelUnavailable
+        | AgentFailure::ServerModelUnavailable
+        | AgentFailure::ServerModelTimeout
+        | AgentFailure::ServerModelRequestRejected
+        | AgentFailure::InvalidModelOutput
+        | AgentFailure::LocalModelInvalidOutput
+        | AgentFailure::ServerModelInvalidOutput => (
+            AgentFailureDomain::Capability,
+            if matches!(
+                failure,
+                AgentFailure::InvalidModelOutput
+                    | AgentFailure::LocalModelInvalidOutput
+                    | AgentFailure::ServerModelInvalidOutput
+            ) {
+                AgentFailureCategory::Integrity
+            } else {
+                AgentFailureCategory::Transient
+            },
+            reason_code.clone(),
+        ),
+        AgentFailure::CredentialExpired | AgentFailure::QuotaExceeded => (
+            AgentFailureDomain::Capability,
+            AgentFailureCategory::UserConfiguration,
+            reason_code.clone(),
+        ),
+        AgentFailure::Interrupted | AgentFailure::DeadlineExceeded | AgentFailure::Stalled => (
+            AgentFailureDomain::Turn,
+            AgentFailureCategory::Transient,
+            reason_code.clone(),
+        ),
+        _ if stage == "conversation_turn" => (
+            AgentFailureDomain::Turn,
+            AgentFailureCategory::Integrity,
+            reason_code.clone(),
+        ),
+        _ if stage == "conversation_session" => (
+            AgentFailureDomain::Session,
+            AgentFailureCategory::Integrity,
+            reason_code.clone(),
+        ),
+        _ => (
+            AgentFailureDomain::App,
+            AgentFailureCategory::Internal,
+            reason_code,
+        ),
+    };
+
+    let mut safe_actions = match failure {
+        AgentFailure::VaultUnavailable | AgentFailure::StorageUnavailable => {
+            vec![AgentFailureSafeAction::ReopenVault]
+        }
+        _ if stage == "conversation_session" => {
+            vec![AgentFailureSafeAction::StartNewSession]
+        }
+        AgentFailure::PolicyDenied if stage == "conversation_turn" => vec![
+            AgentFailureSafeAction::ContinueWithoutSource,
+            AgentFailureSafeAction::ExportDiagnostics,
+        ],
+        AgentFailure::PolicyDenied if source_stage => vec![
+            AgentFailureSafeAction::ContinueWithoutSource,
+            AgentFailureSafeAction::ReviewSource,
+        ],
+        AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired => vec![
+            AgentFailureSafeAction::ContinueWithoutSource,
+            AgentFailureSafeAction::ReviewSource,
+        ],
+        AgentFailure::Conflict if stage == "conversation_session" => vec![
+            AgentFailureSafeAction::StartNewSession,
+            AgentFailureSafeAction::RefreshSession,
+        ],
+        AgentFailure::Conflict if stage == "conversation_turn" => vec![
+            AgentFailureSafeAction::RefreshSession,
+            AgentFailureSafeAction::StartNewSession,
+        ],
+        AgentFailure::StaleContext if stage == "conversation_turn" => vec![
+            AgentFailureSafeAction::RefreshSession,
+            AgentFailureSafeAction::StartNewSession,
+        ],
+        AgentFailure::StaleContext => vec![AgentFailureSafeAction::ReviewSource],
+        AgentFailure::CredentialExpired => vec![AgentFailureSafeAction::RefreshSession],
+        AgentFailure::CapabilityUnavailable if source_stage => {
+            vec![AgentFailureSafeAction::ContinueWithoutSource]
+        }
+        AgentFailure::Cancelled => vec![],
+        AgentFailure::ModelUnavailable
+        | AgentFailure::LocalModelUnavailable
+        | AgentFailure::ServerModelUnavailable
+        | AgentFailure::ServerModelTimeout
+        | AgentFailure::InvalidModelOutput
+        | AgentFailure::LocalModelInvalidOutput
+        | AgentFailure::ServerModelInvalidOutput => vec![AgentFailureSafeAction::Retry],
+        _ if stage == "conversation_turn" && !matches!(failure, AgentFailure::Cancelled) => {
+            vec![AgentFailureSafeAction::StartNewSession]
+        }
+        _ => vec![],
+    };
+    if !matches!(failure, AgentFailure::Cancelled)
+        && matches!(
+            category,
+            AgentFailureCategory::Internal | AgentFailureCategory::Security
+        )
+        && !safe_actions.contains(&AgentFailureSafeAction::ExportDiagnostics)
+    {
+        safe_actions.push(AgentFailureSafeAction::ExportDiagnostics);
+    }
+    let retry_policy = if safe_actions.contains(&AgentFailureSafeAction::Retry) {
+        if matches!(
+            failure,
+            AgentFailure::ServerModelTimeout
+                | AgentFailure::Interrupted
+                | AgentFailure::DeadlineExceeded
+                | AgentFailure::Stalled
+        ) {
+            AgentRetryPolicy::Backoff
+        } else {
+            AgentRetryPolicy::Immediate
+        }
+    } else {
+        AgentRetryPolicy::Never
+    };
+    let retryable = !matches!(retry_policy, AgentRetryPolicy::Never);
+    FailureClassification {
+        domain,
+        category,
+        reason_code,
+        safe_actions,
+        retry_policy,
+        retryable,
     }
 }
 
@@ -2662,6 +2895,13 @@ fn recovery_action(failure: &AgentFailure, stage: &str) -> AgentVaultRecoveryAct
         AgentFailure::Conflict | AgentFailure::StaleContext => {
             AgentVaultRecoveryActionDto::RefreshContext
         }
+        AgentFailure::ModelUnavailable
+        | AgentFailure::LocalModelUnavailable
+        | AgentFailure::ServerModelUnavailable
+        | AgentFailure::ServerModelTimeout
+        | AgentFailure::InvalidModelOutput
+        | AgentFailure::LocalModelInvalidOutput
+        | AgentFailure::ServerModelInvalidOutput => AgentVaultRecoveryActionDto::RetryRead,
         AgentFailure::AccessReviewRequired | AgentFailure::ConsentRequired
             if matches!(
                 stage,
@@ -2814,6 +3054,69 @@ mod tests {
             AgentVaultRecoveryActionDto::RefreshSession
         );
         assert!(!conversation.retryable);
+        assert_eq!(conversation.domain, AgentFailureDomain::Turn);
+        assert_eq!(conversation.category, AgentFailureCategory::Integrity);
+        assert_eq!(conversation.reason_code, "conflict");
+        assert!(
+            conversation
+                .safe_actions
+                .contains(&AgentFailureSafeAction::StartNewSession)
+        );
+
+        let session_policy = failure_envelope(
+            &AgentFailure::PolicyDenied,
+            "conversation_session",
+            "request",
+        );
+        assert_eq!(session_policy.domain, AgentFailureDomain::Session);
+        assert_eq!(session_policy.category, AgentFailureCategory::Integrity);
+        assert_eq!(session_policy.reason_code, "session_integrity");
+        assert_eq!(
+            session_policy.safe_actions,
+            vec![AgentFailureSafeAction::StartNewSession]
+        );
+
+        let release_block =
+            failure_envelope(&AgentFailure::PolicyDenied, "conversation_turn", "request");
+        assert_eq!(release_block.domain, AgentFailureDomain::Turn);
+        assert_eq!(release_block.category, AgentFailureCategory::Security);
+        assert_eq!(release_block.reason_code, "data_release_or_policy_block");
+        assert!(
+            release_block
+                .safe_actions
+                .contains(&AgentFailureSafeAction::ContinueWithoutSource)
+        );
+        assert!(
+            release_block
+                .safe_actions
+                .contains(&AgentFailureSafeAction::ExportDiagnostics)
+        );
+
+        let model_refusal = failure_envelope(
+            &AgentFailure::CapabilityDenied,
+            "conversation_turn",
+            "request",
+        );
+        assert_eq!(model_refusal.reason_code, "capability_access_denied");
+        assert_eq!(model_refusal.category, AgentFailureCategory::Security);
+        assert!(
+            model_refusal
+                .safe_actions
+                .contains(&AgentFailureSafeAction::ExportDiagnostics)
+        );
+
+        let model_retry = failure_envelope(
+            &AgentFailure::ServerModelTimeout,
+            "conversation_turn",
+            "request",
+        );
+        assert_eq!(model_retry.retry_policy, AgentRetryPolicy::Backoff);
+        assert!(model_retry.retryable);
+        assert!(
+            model_retry
+                .safe_actions
+                .contains(&AgentFailureSafeAction::Retry)
+        );
 
         let setup = failure_envelope(&AgentFailure::Conflict, "calendar_access", "request");
         assert_eq!(

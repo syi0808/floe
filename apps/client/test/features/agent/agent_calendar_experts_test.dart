@@ -277,9 +277,15 @@ void main() {
               case 5:
                 result['failure'] = {
                   'schema_version': 1,
+                  'domain': 'vault',
+                  'category': 'transient',
+                  'reason_code': 'vault_unavailable',
                   'kind': 'vault_unavailable',
                   'stage': 'calendar_experts',
+                  'safe_actions': const <String>['reopen_vault'],
                   'affected_refs': const <String>[],
+                  'incident_id': result['request_id'],
+                  'retry_policy': 'never',
                   'retryable': false,
                   'recovery_action': 'reopen_vault',
                   'correlation_request_id': result['request_id'],

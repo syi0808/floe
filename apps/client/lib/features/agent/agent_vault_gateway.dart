@@ -632,6 +632,12 @@ class AgentVaultException implements Exception {
     this.affectedRefs = const [],
     this.correlationRequestId,
     this.retryableOverride,
+    this.domain,
+    this.category,
+    this.reasonCode,
+    this.safeActions = const [],
+    this.incidentId,
+    this.retryPolicy,
   });
 
   final String failure;
@@ -642,6 +648,12 @@ class AgentVaultException implements Exception {
   final List<String> affectedRefs;
   final String? correlationRequestId;
   final bool? retryableOverride;
+  final String? domain;
+  final String? category;
+  final String? reasonCode;
+  final List<String> safeActions;
+  final String? incidentId;
+  final String? retryPolicy;
 
   bool get retryable =>
       retryableOverride ??
@@ -1695,6 +1707,12 @@ final class NativeAgentVaultGateway
         affectedRefs: source?.affectedRefs ?? const [],
         correlationRequestId: source?.correlationRequestId,
         retryableOverride: source?.retryableOverride,
+        domain: source?.domain,
+        category: source?.category,
+        reasonCode: source?.reasonCode,
+        safeActions: source?.safeActions ?? const [],
+        incidentId: source?.incidentId,
+        retryPolicy: source?.retryPolicy,
       );
       AppDiagnostics.error(
         component: 'agent_gateway',
@@ -1734,13 +1752,19 @@ final class NativeAgentVaultGateway
   AgentVaultException _failureException(Object? raw, _VaultJob job) {
     final envelope = _failureEnvelope(raw, job);
     return AgentVaultException(
-      envelope.kind,
+      envelope.reasonCode,
       requestId: envelope.correlationRequestId,
       stage: envelope.stage,
       recoveryAction: envelope.recoveryAction,
       affectedRefs: envelope.affectedRefs,
       correlationRequestId: envelope.correlationRequestId,
       retryableOverride: envelope.retryable,
+      domain: envelope.domain,
+      category: envelope.category,
+      reasonCode: envelope.reasonCode,
+      safeActions: envelope.safeActions,
+      incidentId: envelope.incidentId,
+      retryPolicy: envelope.retryPolicy,
     );
   }
 
@@ -1760,9 +1784,15 @@ final class NativeAgentVaultGateway
     }
     const fields = {
       'schema_version',
+      'domain',
+      'category',
+      'reason_code',
       'kind',
       'stage',
+      'safe_actions',
       'affected_refs',
+      'incident_id',
+      'retry_policy',
       'retryable',
       'recovery_action',
       'correlation_request_id',
@@ -1772,16 +1802,44 @@ final class NativeAgentVaultGateway
       throw const FormatException('Invalid vault failure envelope fields');
     }
     if (value['schema_version'] != agentSchemaVersion ||
+        value['domain'] is! String ||
+        value['category'] is! String ||
+        value['reason_code'] is! String ||
         value['kind'] is! String ||
         value['stage'] != job.stage ||
         (value['stage'] as String).isEmpty ||
         (value['stage'] as String).length > 64 ||
-        (value['kind'] as String).isEmpty ||
+        (value['kind'] as String).trim().isEmpty ||
         (value['kind'] as String).length > 128 ||
+        (value['reason_code'] as String).trim().isEmpty ||
+        (value['reason_code'] as String).length > 128 ||
+        value['incident_id'] is! String ||
+        (value['incident_id'] as String).isEmpty ||
+        (value['incident_id'] as String).length > 128 ||
         value['retryable'] is! bool ||
+        value['retry_policy'] is! String ||
         value['recovery_action'] is! String ||
         value['correlation_request_id'] != job.id) {
       throw const FormatException('Invalid vault failure envelope');
+    }
+    if (!const {
+      'source',
+      'capability',
+      'turn',
+      'session',
+      'vault',
+      'app',
+    }.contains(value['domain'])) {
+      throw const FormatException('Invalid vault failure domain');
+    }
+    if (!const {
+      'user_configuration',
+      'transient',
+      'integrity',
+      'security',
+      'internal',
+    }.contains(value['category'])) {
+      throw const FormatException('Invalid vault failure category');
     }
     final refs = value['affected_refs'];
     if (refs is! List ||
@@ -1801,15 +1859,47 @@ final class NativeAgentVaultGateway
     }.contains(action)) {
       throw const FormatException('Invalid vault recovery action');
     }
+    final safeActions = value['safe_actions'];
+    if (safeActions is! List ||
+        safeActions.length > 16 ||
+        safeActions.any(
+          (item) =>
+              item is! String ||
+              !const {
+                'continue_without_source',
+                'review_source',
+                'retry',
+                'refresh_session',
+                'start_new_session',
+                'reopen_vault',
+                'reset_local_agent_state',
+                'export_diagnostics',
+              }.contains(item),
+        ) ||
+        safeActions.toSet().length != safeActions.length) {
+      throw const FormatException('Invalid vault failure safe actions');
+    }
+    final retryPolicy = value['retry_policy']! as String;
+    if (!const {'never', 'immediate', 'backoff'}.contains(retryPolicy)) {
+      throw const FormatException('Invalid vault failure retry policy');
+    }
     final retryable = value['retryable']! as bool;
-    if (retryable != (action == 'retry_read')) {
+    if (retryable != (action == 'retry_read') ||
+        retryable != (retryPolicy != 'never') ||
+        retryable != safeActions.contains('retry')) {
       throw const FormatException('Invalid vault recovery retry contract');
     }
     return _VaultFailureEnvelope(
+      domain: value['domain']! as String,
+      category: value['category']! as String,
+      reasonCode: value['reason_code']! as String,
       kind: value['kind']! as String,
       stage: value['stage']! as String,
+      safeActions: List.unmodifiable(safeActions.cast<String>()),
       affectedRefs: List.unmodifiable(refs.cast<String>()),
       retryable: retryable,
+      incidentId: value['incident_id']! as String,
+      retryPolicy: retryPolicy,
       recoveryAction: action,
       correlationRequestId: value['correlation_request_id']! as String,
     );
@@ -1818,6 +1908,9 @@ final class NativeAgentVaultGateway
   String? _failureKind(Object? raw) {
     if (raw == null) return null;
     if (raw is String) return raw;
+    if (raw is Map && raw['reason_code'] is String) {
+      return raw['reason_code'] as String;
+    }
     if (raw is Map && raw['kind'] is String) return raw['kind'] as String;
     throw const FormatException('Invalid vault failure envelope');
   }
@@ -1845,18 +1938,30 @@ final class NativeAgentVaultGateway
 
 final class _VaultFailureEnvelope {
   const _VaultFailureEnvelope({
+    required this.domain,
+    required this.category,
+    required this.reasonCode,
     required this.kind,
     required this.stage,
+    required this.safeActions,
     required this.affectedRefs,
     required this.retryable,
+    required this.incidentId,
+    required this.retryPolicy,
     required this.recoveryAction,
     required this.correlationRequestId,
   });
 
+  final String domain;
+  final String category;
+  final String reasonCode;
   final String kind;
   final String stage;
+  final List<String> safeActions;
   final List<String> affectedRefs;
   final bool retryable;
+  final String incidentId;
+  final String retryPolicy;
   final String recoveryAction;
   final String correlationRequestId;
 }
