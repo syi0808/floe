@@ -254,6 +254,23 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         })
         .await
         .unwrap();
+    let competing_candidate = vault
+        .stage_memory_candidate(StageMemoryCandidate {
+            session_id: session.id,
+            expected_session_revision: session.revision,
+            turn_ids: vec![correction_turn_id],
+            observation_kind: LearningObservationKind::UserCorrection,
+            digest: "Another proposed correction against revision one".into(),
+            value: memory_value("Prefers meetings after 15:00"),
+            target_id: Some(revision.target_id),
+            base_revision: Some(1),
+            extractor_version: "memory.fixture.v1".into(),
+            prompt_version: "explicit-memory.v1".into(),
+            actor: KnowledgeActor::User,
+            created_at,
+        })
+        .await
+        .unwrap();
     let revised = vault
         .decide_knowledge_candidate(
             revised_candidate.id,
@@ -274,6 +291,39 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         vault.active_personal_memories().await.unwrap().as_slice(),
         std::slice::from_ref(&active_revision)
     );
+    assert_eq!(
+        vault
+            .decide_knowledge_candidate(
+                competing_candidate.id,
+                KnowledgeDecisionKind::Approve,
+                KnowledgeActor::User,
+                decided_at,
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 1);
+    assert_eq!(
+        vault.active_personal_memories().await.unwrap().as_slice(),
+        std::slice::from_ref(&active_revision)
+    );
+    assert_eq!(
+        vault.knowledge_mutations(revision.target_id).await.unwrap().len(),
+        2
+    );
+    let rejected = vault
+        .decide_knowledge_candidate(
+            competing_candidate.id,
+            KnowledgeDecisionKind::Reject,
+            KnowledgeActor::User,
+            decided_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.candidate.state, KnowledgeCandidateState::Rejected);
+    assert!(rejected.revision.is_none());
+    assert!(rejected.mutation.is_none());
+    assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 0);
     assert_eq!(
         vault.personal_memory_overview(1).await.unwrap(),
         (1, vec![active_revision.clone()])

@@ -1005,6 +1005,7 @@ dependencies = [
  "chrono",
  "floe-kernel",
  "serde",
+ "serde_json",
  "uuid",
 ]
 

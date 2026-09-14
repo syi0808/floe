@@ -9,4 +9,5 @@ rust-version.workspace = true
 chrono.workspace = true
 floe-kernel = { path = "../../contracts/kernel" }
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true

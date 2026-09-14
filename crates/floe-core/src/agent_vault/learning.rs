@@ -2,15 +2,15 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
-    AgentFailure, AgentOutcome, ContextMemory, DataClass, KNOWLEDGE_VERSION, KnowledgeCandidate,
-    KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
-    KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
-    KnowledgeRevisionState, LearnerJobSettlement, LearnerJobState, LearnerReviewInput,
-    LearnerReviewJob, LearningEvidenceRef, LearningObservation, MAX_CONTEXT_MEMORIES,
+    AgentFailure, AgentOutcome, ContextMemory, DataClass, LearnerJobSettlement, LearnerJobState,
+    LearnerReviewInput, LearnerReviewJob, LearningObservation, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, retryable_learner_failure,
 };
 use floe_knowledge::{
-    KnowledgeActor, LearningEvidenceSnapshot, LearningObservationKind, StageMemoryCandidate,
+    KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
+    KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
+    KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+    LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservationKind, StageMemoryCandidate,
     validate_learning_evidence, validate_stage_request,
 };
 use serde::Serialize;
@@ -282,133 +282,97 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         actor: KnowledgeActor,
         decided_at: DateTime<Utc>,
     ) -> Result<KnowledgeDecisionResult, AgentFailure> {
-        if actor != KnowledgeActor::User {
-            return Err(AgentFailure::PolicyDenied);
-        }
+        floe_knowledge::validate_review_actor(&actor)?;
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
             .map_err(storage)?;
         let result = async {
-            let mut candidate = candidate_by_id(&transaction, self.person_id, candidate_id).await?;
-            if candidate.state != KnowledgeCandidateState::Pending {
-                return Err(AgentFailure::Conflict);
-            }
-            let decision = KnowledgeDecision {
-                schema_version: KNOWLEDGE_VERSION,
-                id: Uuid::new_v4(),
-                candidate_id,
-                decision: decision_kind,
-                actor: actor.clone(),
-                decided_at,
-            };
-            let (revision, mutation) = match decision_kind {
-                KnowledgeDecisionKind::Reject => {
-                    candidate.state = KnowledgeCandidateState::Rejected;
-                    (None, None)
-                }
-                KnowledgeDecisionKind::Approve => {
-                    if candidate.source_refs.is_empty()
-                        || !evidence_is_independent(
+            let candidate = candidate_by_id(&transaction, self.person_id, candidate_id).await?;
+            floe_knowledge::validate_review_candidate(&candidate)?;
+            let admission = if decision_kind == KnowledgeDecisionKind::Approve {
+                let independent = !candidate.source_refs.is_empty()
+                    && evidence_is_independent(
                         &transaction,
                         self.person_id,
                         &candidate.source_refs,
                     )
-                    .await?
-                    {
-                        return Err(AgentFailure::PolicyDenied);
-                    }
-                    let target_id = candidate.target_id.unwrap_or_else(Uuid::new_v4);
-                    let (from_revision, revision_number) = match candidate.operation {
-                        KnowledgeOperation::Create => {
-                            if candidate.target_id.is_some() || candidate.base_revision.is_some() {
-                                return Err(AgentFailure::VaultUnavailable);
-                            }
-                            if revision_exists_on(&transaction, target_id).await? {
-                                return Err(AgentFailure::Conflict);
-                            }
-                            (None, 1)
-                        }
-                        KnowledgeOperation::Revise => {
-                            let current = active_revision_on(&transaction, self.person_id, target_id).await?;
-                            if Some(current.revision) != candidate.base_revision
-                                || candidate.before_hash.as_deref()
-                                    != Some(hash(&current.payload)?.as_str())
-                            {
-                                return Err(AgentFailure::Conflict);
-                            }
-                            let mut superseded = current.clone();
-                            superseded.state = KnowledgeRevisionState::Superseded;
-                            let changed = transaction.execute(
-                                "UPDATE knowledge_revisions SET state = 'superseded', payload = ? WHERE target_id = ? AND revision = ? AND state = 'active'",
-                                (
-                                    payload(&superseded)?,
-                                    target_id.to_string(),
-                                    integer(current.revision)?,
-                                ),
-                            ).await.map_err(storage)?;
-                            if changed != 1 {
-                                return Err(AgentFailure::Conflict);
-                            }
-                            (
-                                Some(current.revision),
-                                current.revision.checked_add(1).ok_or(AgentFailure::Conflict)?,
-                            )
-                        }
-                        KnowledgeOperation::Retire => return Err(AgentFailure::InvalidInput),
-                    };
-                    let revision = KnowledgeRevision {
-                        schema_version: KNOWLEDGE_VERSION,
-                        target_id,
-                        revision: revision_number,
-                        person_id: self.person_id,
-                        kind: candidate.kind,
-                        payload: candidate.payload.clone(),
-                        state: KnowledgeRevisionState::Active,
-                        source_refs: candidate.source_refs.clone(),
-                        created_by: actor.clone(),
-                        created_at: decided_at,
-                    };
-                    transaction.execute(
-                        "INSERT INTO knowledge_revisions (target_id, revision, person_id, kind, state, payload) VALUES (?, ?, ?, ?, 'active', ?)",
-                        (
-                            target_id.to_string(),
-                            integer(revision_number)?,
-                            self.person_id.to_string(),
-                            kind_name(candidate.kind),
-                            payload(&revision)?,
-                        ),
-                    ).await.map_err(storage)?;
-                    let mutation = KnowledgeMutation {
-                        schema_version: KNOWLEDGE_VERSION,
-                        id: Uuid::new_v4(),
-                        candidate_id,
-                        target_id,
-                        from_revision,
-                        to_revision: revision_number,
-                        actor: actor.clone(),
-                        operation: candidate.operation,
-                        before_hash: candidate.before_hash.clone(),
-                        after_hash: candidate.after_hash.clone(),
-                        rollback_revision: from_revision,
-                        created_at: decided_at,
-                    };
-                    transaction.execute(
-                        "INSERT INTO knowledge_mutations (id, candidate_id, target_id, created_at, payload) VALUES (?, ?, ?, ?, ?)",
-                        (
-                            mutation.id.to_string(),
-                            candidate_id.to_string(),
-                            target_id.to_string(),
-                            decided_at.to_rfc3339(),
-                            payload(&mutation)?,
-                        ),
-                    ).await.map_err(storage)?;
-                    candidate.target_id = Some(target_id);
-                    candidate.state = KnowledgeCandidateState::Approved;
-                    (Some(revision), Some(mutation))
+                    .await?;
+                if !independent {
+                    return Err(AgentFailure::PolicyDenied);
                 }
+                floe_knowledge::validate_approval_candidate(&candidate)?;
+                let target_id = candidate.target_id.unwrap_or_else(Uuid::new_v4);
+                let current_revision = if candidate.operation == KnowledgeOperation::Revise {
+                    Some(active_revision_on(&transaction, self.person_id, target_id).await?)
+                } else {
+                    None
+                };
+                let current_payload_hash = current_revision
+                    .as_ref()
+                    .map(|revision| hash(&revision.payload))
+                    .transpose()?;
+                let target_exists = if candidate.operation == KnowledgeOperation::Create {
+                    revision_exists_on(&transaction, target_id).await?
+                } else {
+                    current_revision.is_some()
+                };
+                Some(floe_knowledge::ReviewAdmission {
+                    target_id,
+                    target_exists,
+                    current_revision,
+                    current_payload_hash,
+                    evidence_independent: independent,
+                })
+            } else {
+                None
             };
+            let plan = floe_knowledge::plan_review(
+                candidate,
+                decision_kind,
+                actor,
+                decided_at,
+                admission,
+            )?;
+            if let Some(superseded) = &plan.superseded {
+                let changed = transaction.execute(
+                    "UPDATE knowledge_revisions SET state = 'superseded', payload = ? WHERE target_id = ? AND revision = ? AND state = 'active'",
+                    (
+                        payload(superseded)?,
+                        superseded.target_id.to_string(),
+                        integer(superseded.revision)?,
+                    ),
+                ).await.map_err(storage)?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+            let KnowledgeDecisionResult { candidate, decision, revision, mutation } = plan.result;
+            if let Some(revision) = &revision {
+                transaction.execute(
+                    "INSERT INTO knowledge_revisions (target_id, revision, person_id, kind, state, payload) VALUES (?, ?, ?, ?, 'active', ?)",
+                    (
+                        revision.target_id.to_string(),
+                        integer(revision.revision)?,
+                        self.person_id.to_string(),
+                        kind_name(revision.kind),
+                        payload(revision)?,
+                    ),
+                ).await.map_err(storage)?;
+            }
+            if let Some(mutation) = &mutation {
+                transaction.execute(
+                    "INSERT INTO knowledge_mutations (id, candidate_id, target_id, created_at, payload) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        mutation.id.to_string(),
+                        candidate_id.to_string(),
+                        mutation.target_id.to_string(),
+                        decided_at.to_rfc3339(),
+                        payload(mutation)?,
+                    ),
+                ).await.map_err(storage)?;
+            }
             let changed = transaction.execute(
                 "UPDATE knowledge_candidates SET state = ?, target_id = ?, payload = ? WHERE id = ? AND person_id = ? AND state = 'pending'",
                 (

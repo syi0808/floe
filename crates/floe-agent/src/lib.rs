@@ -117,8 +117,8 @@ pub use personal_context::{
 };
 pub use playbook::{
     LoadedPlaybook, MAX_LOADED_PLAYBOOK_BYTES, MAX_LOADED_PLAYBOOKS, MAX_PLAYBOOK_DEPTH,
-    MAX_VISIBLE_PLAYBOOKS, Playbook, PlaybookBody, PlaybookChild, PlaybookIndexEntry, PlaybookRef,
-    PlaybookRegistry, PlaybookSession,
+    MAX_VISIBLE_PLAYBOOKS, Playbook, PlaybookAudience, PlaybookBody, PlaybookChild,
+    PlaybookIndexEntry, PlaybookRef, PlaybookRegistry, PlaybookSession,
 };
 pub use policy::{
     AgentContext, ContextEvidence, ContextMemory, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
