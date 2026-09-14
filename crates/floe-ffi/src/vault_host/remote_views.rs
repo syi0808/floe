@@ -17,7 +17,7 @@ use floe_domain::{
     GrantPurpose, GrantScope, GrantState, ProcessingRestriction, ResourceHandle,
 };
 use floe_infra::RemoteViewAuthorizationRequest;
-use floe_infra::remote_model::ServerModelRunner;
+use floe_infra::ServerSourceClient;
 use floe_protocol::AgentRemoteRouteDto;
 use serde::Deserialize;
 use serde_json::Value;
@@ -31,7 +31,7 @@ const ASSISTANT_PURPOSE: GrantPurpose = GrantPurpose::Assistant;
 
 pub(crate) struct RemoteViewReader<'a, Keys: VaultKeyProvider> {
     pub(crate) vault: &'a EncryptedAgentVault<Keys>,
-    pub(crate) model: &'a ServerModelRunner,
+    pub(crate) source_client: &'a ServerSourceClient,
     pub(crate) person_id: floe_domain::PersonId,
     pub(crate) client_id: &'a str,
     pub(crate) device_id: &'a str,
@@ -250,7 +250,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
         let connection_id = source.connection_id();
         let connection_id_text = connection_id.as_str();
         let resource = expected_resource(view_id, connection_id_text);
-        let client = self.model.authorization_client()?;
+        let client = self.source_client.authorization_client()?;
         let preview = client
             .view_source_preview(
                 view_id,
@@ -347,7 +347,7 @@ impl<Keys: VaultKeyProvider> RemoteViewReader<'_, Keys> {
             query,
         };
         let value = self
-            .model
+            .source_client
             .read_authorized_view(self.vault, request, expected, deadline, cancellation)
             .await?;
         let now = Utc::now().timestamp_millis();

@@ -1251,7 +1251,7 @@ impl Model {
         remote_route: Option<floe_protocol::AgentRemoteRouteDto>,
     ) -> Result<Self, AgentFailure> {
         match remote_route {
-            Some(route) => ServerModelRunner::new(route).map(Self::Server),
+            Some(route) => ServerModelRunner::new_model_only(route).map(Self::Server),
             None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
         }
     }
@@ -1499,6 +1499,9 @@ mod tests {
             .collect::<String>();
         for request_number in 0..5 {
             let (mut stream, _) = accept_with_timeout(&listener)?;
+            stream
+                .set_nonblocking(false)
+                .map_err(|error| error.to_string())?;
             stream
                 .set_read_timeout(Some(std::time::Duration::from_secs(10)))
                 .map_err(|error| error.to_string())?;

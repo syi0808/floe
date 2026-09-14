@@ -25,10 +25,8 @@ use floe_protocol::{AgentConversationTurnRequestDto, AgentRemoteRouteDto};
 use uuid::Uuid;
 
 use crate::local_context::LocalContextStore;
-use crate::{
-    local_model::FoundationModelRunner,
-    remote_model::{CalendarContextRequest, ServerModelRunner},
-};
+use crate::{local_model::FoundationModelRunner, remote_model::ServerModelRunner};
+use floe_infra::{ServerSourceClient, remote_source::CalendarContextRequest};
 
 use super::personal_grants;
 use super::remote_views::{self, RemoteViewReaderApi};
@@ -98,9 +96,14 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     let person_id = inputs.person_id;
     let request = inputs.request;
     let session_id = session_uuid(&request.session_id)?;
+    let source_client = request
+        .remote_route
+        .as_ref()
+        .map(|route| ServerSourceClient::new(route.clone()))
+        .transpose()?;
     let model = Model::new(request.remote_route.clone())?;
     let remote_reader = match (&model, request.remote_route.as_ref()) {
-        (Model::Server(model), Some(route)) => {
+        (Model::Server(_), Some(route)) => {
             let pairing = route.pairing.as_ref().ok_or(AgentFailure::PolicyDenied)?;
             if pairing.person_id != person_id.to_string() || pairing.device_id != request.device_id
             {
@@ -108,7 +111,9 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
             }
             Some(remote_views::RemoteViewReader {
                 vault,
-                model,
+                source_client: source_client
+                    .as_ref()
+                    .ok_or(AgentFailure::CapabilityUnavailable)?,
                 person_id,
                 client_id: &pairing.client_id,
                 device_id: &pairing.device_id,
@@ -195,6 +200,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
     };
     let experts = ConversationExperts {
         model: &model,
+        source_client: source_client.as_ref(),
         policy: &policy,
         context: &context,
         local_context,
@@ -321,7 +327,7 @@ enum Model {
 impl Model {
     fn new(route: Option<AgentRemoteRouteDto>) -> Result<Self, AgentFailure> {
         match route {
-            Some(route) => ServerModelRunner::new(route).map(Self::Server),
+            Some(route) => ServerModelRunner::new_model_only(route).map(Self::Server),
             None => Ok(Self::Foundation(FoundationModelRunner::encrypted())),
         }
     }
@@ -427,6 +433,7 @@ impl floe_core::GovernedDependencyResolver for CompositeDependencyResolver<'_> {
 
 struct PersonalViewSource<'a> {
     model: &'a Model,
+    source_client: Option<&'a ServerSourceClient>,
     policy: &'a InferencePolicyDecision,
     person_id: PersonId,
     people_reader: Option<&'a dyn PersonalPeopleReaderApi>,
@@ -541,7 +548,7 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<Vec<CalendarContextView>, AgentFailure> {
-        let Model::Server(model) = self.model else {
+        let Model::Server(_) = self.model else {
             return Ok(vec![]);
         };
         if !self.server_fallback_allowed() {
@@ -551,9 +558,12 @@ impl PersonalViewSource<'_> {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
         let now = i64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?;
+        let source_client = self
+            .source_client
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
         let mut views = Vec::new();
-        for connection in model.calendar_connections() {
-            match model
+        for connection in source_client.calendar_connections() {
+            match source_client
                 .read_calendar_context_view(
                     CalendarContextRequest {
                         connector_id: &connection.connector_id,
@@ -583,13 +593,16 @@ impl PersonalViewSource<'_> {
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<Vec<floe_agent::ConfirmedInteractionView>, AgentFailure> {
-        let Model::Server(model) = self.model else {
+        let Model::Server(_) = self.model else {
             return Ok(vec![]);
         };
         if !self.server_fallback_allowed() {
             return Ok(vec![]);
         }
-        match model
+        let source_client = self
+            .source_client
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
+        match source_client
             .read_confirmed_interaction_view(people, deadline, cancellation)
             .await
         {
@@ -1087,6 +1100,7 @@ impl CapabilityHost for ConversationCapabilities<'_> {
                     .map_err(|_| AgentFailure::InvalidInput)?;
                 let personal = PersonalViewSource {
                     model: self.model,
+                    source_client: None,
                     policy: self.policy,
                     person_id: invocation.person_id,
                     people_reader: self.people_reader,
@@ -1227,7 +1241,7 @@ mod tests {
     use super::*;
 
     struct FixtureRemoteReader<'a> {
-        model: &'a ServerModelRunner,
+        source_client: &'a ServerSourceClient,
         person_id: PersonId,
     }
 
@@ -1269,7 +1283,7 @@ mod tests {
                             .ok_or(AgentFailure::InvalidInput)?;
                         (
                             serde_json::to_value(
-                                self.model
+                                self.source_client
                                     .read_communication_view(
                                         text,
                                         cursor as usize,
@@ -1286,7 +1300,7 @@ mod tests {
                     }
                     "work.context" => (
                         serde_json::to_value(
-                            self.model
+                            self.source_client
                                 .read_work_context_view(deadline, cancellation)
                                 .await?,
                         )
@@ -1296,7 +1310,7 @@ mod tests {
                     ),
                     "life.logistics" => (
                         serde_json::to_value(
-                            self.model
+                            self.source_client
                                 .read_logistics_view(deadline, cancellation)
                                 .await?,
                         )
@@ -1820,6 +1834,7 @@ mod tests {
         let policy = policy(&model, None);
         let result = PersonalViewSource {
             model: &model,
+            source_client: None,
             policy: &policy,
             person_id: PersonId::new(),
             people_reader: None,
@@ -2111,6 +2126,7 @@ mod tests {
         let person_id = PersonId::new();
         let experts = ConversationExperts {
             model: &model,
+            source_client: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2264,6 +2280,7 @@ mod tests {
         };
         let experts = ConversationExperts {
             model: &model,
+            source_client: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2302,6 +2319,7 @@ mod tests {
         let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
+            source_client: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2476,9 +2494,13 @@ mod tests {
             pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
+        let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
         let remote_reader = match &model {
-            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Server(_) => FixtureRemoteReader {
+                source_client: &source_client,
+                person_id,
+            },
             Model::Foundation(_) => unreachable!(),
         };
         let policy = policy(&model, Some(&route));
@@ -2492,6 +2514,7 @@ mod tests {
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             model: &model,
+            source_client: Some(&source_client),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2657,9 +2680,13 @@ mod tests {
             pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
+        let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let policy = policy(&model, Some(&route));
         let remote_reader = match &model {
-            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Server(_) => FixtureRemoteReader {
+                source_client: &source_client,
+                person_id,
+            },
             Model::Foundation(_) => unreachable!(),
         };
         let context = AgentContext {
@@ -2705,6 +2732,7 @@ mod tests {
         }];
         let experts = ConversationExperts {
             model: &model,
+            source_client: Some(&source_client),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -2877,10 +2905,14 @@ mod tests {
             pairing: None,
         };
         let model = Model::new(Some(route.clone())).unwrap();
+        let source_client = ServerSourceClient::new(route.clone()).unwrap();
         let person_id = PersonId::new();
         let policy = policy(&model, Some(&route));
         let remote_reader = match &model {
-            Model::Server(model) => FixtureRemoteReader { model, person_id },
+            Model::Server(_) => FixtureRemoteReader {
+                source_client: &source_client,
+                person_id,
+            },
             Model::Foundation(_) => unreachable!(),
         };
         let context = AgentContext {
@@ -2893,6 +2925,7 @@ mod tests {
         let recorder = FixtureResultRecorder;
         let experts = ConversationExperts {
             model: &model,
+            source_client: Some(&source_client),
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -3157,6 +3190,7 @@ mod tests {
         let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
+            source_client: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,
@@ -3222,6 +3256,7 @@ mod tests {
         let local_context = LocalContextStore::default();
         let experts = ConversationExperts {
             model: &model,
+            source_client: None,
             policy: &policy,
             context: &context,
             local_context: &local_context,

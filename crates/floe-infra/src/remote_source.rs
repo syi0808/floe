@@ -470,3 +470,301 @@ impl ServerSourceClient {
         Ok(response.view)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+    use crate::remote_model::ServerModelRunner;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn route() -> AgentRemoteRouteDto {
+        AgentRemoteRouteDto {
+            base_url: "http://127.0.0.1:8431".into(),
+            bearer_token: "secret_token_value_that_is_long_enough".into(),
+            purpose: "everyday_assistance".into(),
+            external: true,
+            allow_external: false,
+            calendar_connections: vec![],
+            pairing: None,
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_queued_source_read_never_opens_a_provider_connection() {
+        use std::{future::Future, task::Poll};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut route = route();
+        route.base_url = format!("http://{}", listener.local_addr().unwrap());
+        let mut runner = ServerSourceClient::new(route).unwrap();
+        runner.set_call_limiter(
+            CallLimiter::new(CallLimits {
+                max_running: 1,
+                max_pending: 1,
+                max_context_bytes: 65_536,
+                max_total_context_bytes: 131_072,
+            })
+            .unwrap(),
+        );
+        let parent = floe_agent::Cancellation::new();
+        let child = parent.child_scope();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let active = runner
+            .call_limiter()
+            .acquire(0, deadline, &parent)
+            .await
+            .unwrap();
+        let mut waiting = Box::pin(runner.read_communication_view("", 0, 1, deadline, &child));
+        assert!(
+            std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context)))
+                .await
+                .is_pending()
+        );
+        child.cancel();
+        assert!(matches!(waiting.await, Err(AgentFailure::Cancelled)));
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(!parent.is_cancelled());
+        let model = ServerModelRunner::new_model_only(self::route()).unwrap();
+        assert!(
+            model
+                .model_call_limiter()
+                .acquire(0, deadline, &parent)
+                .await
+                .is_ok()
+        );
+        drop(active);
+        assert!(
+            runner
+                .call_limiter()
+                .acquire(65_536, deadline, &parent)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn communication_view_read_is_authenticated_bounded_and_validated() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let expected_length = loop {
+                let mut chunk = [0_u8; 4096];
+                let read = socket.read(&mut chunk).await.unwrap();
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request);
+                if let Some(header_end) = text.find("\r\n\r\n") {
+                    let content_length = text[..header_end]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    if request.len() >= header_end + 4 + content_length {
+                        break header_end + 4 + content_length;
+                    }
+                }
+            };
+            let request = String::from_utf8(request[..expected_length].to_vec()).unwrap();
+            assert!(request.starts_with("POST /v1/views/mail.communication HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret_token_value_that_is_long_enough")
+            );
+            assert!(request.contains(r#""query":"reply""#));
+            assert!(!request.contains("send"));
+            let body = serde_json::json!({
+                "schema_version": 1,
+                "view": {
+                    "schema_version": 1,
+                    "view_id": "mail.communication",
+                    "source_handle": "mail:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "items": [{
+                        "evidence_handle": "mail:message",
+                        "thread_handle": "mail:thread",
+                        "received_unix_ms": now - 2,
+                        "from": "alex@example.com",
+                        "to": "person@example.com",
+                        "subject": "Reply needed",
+                        "snippet": "Please reply by Friday",
+                        "labels": ["INBOX"]
+                    }]
+                }
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let mut route = route();
+        route.base_url = format!("http://{address}");
+        let model = ServerSourceClient::new(route).unwrap();
+        let view = model
+            .read_communication_view(
+                "reply",
+                0,
+                25,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+                &floe_agent::Cancellation::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(view.items[0].subject, "Reply needed");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn portfolio_view_reads_use_fixed_routes_and_strict_validation() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (path, view) in [
+            (
+                "/v1/views/work.context",
+                json!({
+                    "schema_version": 1,
+                    "view_id": "work.context",
+                    "source_handle": "work:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "scope_handle": "workspace:fixture",
+                    "items": []
+                }),
+            ),
+            (
+                "/v1/views/life.logistics",
+                json!({
+                    "schema_version": 1,
+                    "view_id": "life.logistics",
+                    "source_handle": "logistics:fixture",
+                    "observed_at_unix_ms": now - 1,
+                    "expires_at_unix_ms": now + 299_999,
+                    "coverage_complete": true,
+                    "items": []
+                }),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let expected_path = path.to_owned();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let read = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with(&format!("POST {expected_path} HTTP/1.1\r\n")));
+                assert!(request.contains(r#"{"schema_version":1}"#));
+                let body = json!({"schema_version": 1, "view": view}).to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(), body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let mut route = route();
+            route.base_url = format!("http://{address}");
+            let model = ServerSourceClient::new(route).unwrap();
+            if path.ends_with("work.context") {
+                model
+                    .read_work_context_view(
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                        &floe_agent::Cancellation::default(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                model
+                    .read_logistics_view(
+                        tokio::time::Instant::now() + Duration::from_secs(5),
+                        &floe_agent::Cancellation::default(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn route_accepts_only_loopback_and_redacts_credentials() {
+        let valid = route();
+        assert!(ServerSourceClient::new(valid.clone()).is_ok());
+        let rendered = format!("{valid:?}");
+        assert!(!rendered.contains(&valid.bearer_token));
+        assert!(rendered.contains("[REDACTED]"));
+
+        for invalid in [
+            "https://127.0.0.1:8431",
+            "http://localhost:8431",
+            "http://127.0.0.1:8431/path",
+            "http://192.168.1.2:8431",
+            "http://127.0.0.1",
+            "http://127.0.0.1:8431?query=true",
+            "http://127.0.0.1:8431#fragment",
+        ] {
+            let mut candidate = route();
+            candidate.base_url = invalid.into();
+            assert!(ServerSourceClient::new(candidate).is_err());
+        }
+
+        for token in ["short".to_owned(), "x".repeat(257), " ".repeat(32)] {
+            let mut candidate = route();
+            candidate.bearer_token = token;
+            assert!(ServerSourceClient::new(candidate).is_err());
+        }
+        let mut wrong_purpose = route();
+        wrong_purpose.purpose = "other".into();
+        assert!(ServerSourceClient::new(wrong_purpose).is_err());
+
+        let mut invalid_binding = route();
+        invalid_binding.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
+            connector_id: "invalid.connector".into(),
+            connection_id: "invalid-connection".into(),
+            connection_revision: 0,
+        }];
+        assert!(ServerSourceClient::new(invalid_binding).is_err());
+
+        for (connection_id, revision) in [
+            ("not-a-uuid", 1),
+            ("00000000-0000-3000-8000-000000000001", 1),
+            ("00000000-0000-4000-8000-000000000001", 0),
+        ] {
+            let mut candidate = route();
+            candidate.calendar_connections = vec![AgentRemoteCalendarConnectionDto {
+                connector_id: "calendar.google".into(),
+                connection_id: connection_id.into(),
+                connection_revision: revision,
+            }];
+            assert!(ServerSourceClient::new(candidate).is_err());
+        }
+    }
+}

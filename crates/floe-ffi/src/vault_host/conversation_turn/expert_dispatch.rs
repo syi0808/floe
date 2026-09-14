@@ -24,6 +24,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
 
 pub(super) struct ConversationExperts<'model> {
     pub(super) model: &'model Model,
+    pub(super) source_client: Option<&'model floe_infra::ServerSourceClient>,
     pub(super) policy: &'model InferencePolicyDecision,
     pub(super) context: &'model AgentContext,
     pub(super) local_context: &'model LocalContextStore,
@@ -174,6 +175,7 @@ impl InProcessAgent for ConversationExperts<'_> {
         };
         let personal_views = PersonalViewSource {
             model: self.model,
+            source_client: self.source_client,
             policy: self.policy,
             person_id: request.person_id,
             people_reader: self.people_reader,
