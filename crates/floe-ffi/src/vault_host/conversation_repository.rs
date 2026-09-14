@@ -7,8 +7,9 @@ use floe_agent_contract::{
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
 use floe_conversation::{
-    AdmittedTurn, ConversationRepository, JournalEntry, RecoveryReceipt, RecoveryRequest,
-    RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode,
+    AdmittedTurn, CompactionReceipt, CompactionRequest, ConversationRepository, JournalEntry,
+    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, SessionArchiveRepository,
+    TurnAdmission, TurnAdmissionRequest, TurnMode,
 };
 use floe_core::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -19,6 +20,99 @@ use uuid::Uuid;
 
 pub(super) struct VaultConversationRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+}
+
+impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
+    for VaultConversationRepository<Keys>
+{
+    fn compact_session<'a>(
+        &'a self,
+        request: CompactionRequest,
+    ) -> BoxFuture<'a, Result<CompactionReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            if request.principal != self.vault.person_id().to_string() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let result = self
+                .vault
+                .compact_session(
+                    request.session_id,
+                    request.expected_session_revision,
+                    request.through_turn_id,
+                    request.summary.clone(),
+                )
+                .await?;
+            let pointer = archive_pointer(&result.recovery);
+            let receipt = CompactionReceipt {
+                session_id: result.session.id,
+                session_revision: result.session.revision,
+                pointer: pointer.clone(),
+                summary: ContractMessage {
+                    message_id: pointer.through_turn_id,
+                    role: MessageRole::Assistant,
+                    text: request.summary,
+                    call_id: None,
+                    coverage: result.summary_coverage,
+                },
+            };
+            receipt.validate()?;
+            Ok(receipt)
+        })
+    }
+
+    fn read_archive<'a>(
+        &'a self,
+        request: &'a floe_context::ArchiveReadRequest,
+    ) -> BoxFuture<'a, Result<floe_context::ArchiveSnapshot, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            if request.person_id != self.vault.person_id() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let recovery = legacy_recovery_pointer(&request.pointer);
+            let source = self.vault.recover_session_with_coverage(&recovery).await?;
+            if source.session.id != request.session_id
+                || source.session.person_id != request.person_id
+                || source.recovery != recovery
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let archived = source
+                .session
+                .messages
+                .get(..recovery.archived_message_count)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let messages = archived
+                .iter()
+                .enumerate()
+                .map(|(index, message)| {
+                    let turn_id = message.turn_id();
+                    let coverage = source
+                        .coverage_by_turn
+                        .get(&turn_id)
+                        .cloned()
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    let message_id = Uuid::new_v5(
+                        &recovery.archive_id,
+                        &u64::try_from(index)
+                            .map_err(|_| AgentFailure::StorageUnavailable)?
+                            .to_be_bytes(),
+                    );
+                    Ok(floe_context::ArchivedMessage {
+                        turn_id,
+                        message: contract_message(message, message_id, coverage)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, AgentFailure>>()?;
+            Ok(floe_context::ArchiveSnapshot {
+                person_id: request.person_id,
+                session_id: request.session_id,
+                pointer: request.pointer.clone(),
+                messages,
+            })
+        })
+    }
 }
 
 impl<Keys> VaultConversationRepository<Keys> {
@@ -356,53 +450,81 @@ fn transcript(
                 }
                 _ => turn_id,
             };
-            let (role, text, call_id) = match message {
-                AgentMessage::Compaction { summary, .. } => {
-                    (MessageRole::Assistant, summary.clone(), None)
-                }
-                AgentMessage::Preamble { text, .. } => (MessageRole::Preamble, text.clone(), None),
-                AgentMessage::User { text, .. } => (MessageRole::User, text.clone(), None),
-                AgentMessage::Assistant { text, .. } => {
-                    (MessageRole::Assistant, text.clone(), None)
-                }
-                AgentMessage::Capability {
-                    call_id, result, ..
-                } => (
-                    MessageRole::Tool,
-                    result
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_else(|failure| format!("unavailable: {failure:?}")),
-                    Some(*call_id),
-                ),
-                AgentMessage::Delegation { task, .. } => (
-                    MessageRole::Delegation,
-                    task.artifacts
-                        .iter()
-                        .flat_map(|artifact| &artifact.parts)
-                        .find_map(|part| match part {
-                            A2APart::Text { text } => Some(text.clone()),
-                            A2APart::Data { .. } => None,
-                        })
-                        .unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
-                    None,
-                ),
-            };
-            let message = ContractMessage {
+            contract_message(
+                message,
                 message_id,
-                role,
-                text,
-                call_id,
-                coverage: if matches!(message, AgentMessage::User { .. }) {
+                if matches!(message, AgentMessage::User { .. }) {
                     DependencyCoverage::Independent
                 } else {
                     DependencyCoverage::Unknown
                 },
-            };
-            message.validate()?;
-            Ok(message)
+            )
         })
         .collect()
+}
+
+fn contract_message(
+    message: &AgentMessage,
+    message_id: Uuid,
+    coverage: DependencyCoverage,
+) -> Result<ContractMessage, AgentFailure> {
+    let (role, text, call_id) = match message {
+        AgentMessage::Compaction { summary, .. } => (MessageRole::Assistant, summary.clone(), None),
+        AgentMessage::Preamble { text, .. } => (MessageRole::Preamble, text.clone(), None),
+        AgentMessage::User { text, .. } => (MessageRole::User, text.clone(), None),
+        AgentMessage::Assistant { text, .. } => (MessageRole::Assistant, text.clone(), None),
+        AgentMessage::Capability {
+            call_id, result, ..
+        } => (
+            MessageRole::Tool,
+            result
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|failure| format!("unavailable: {failure:?}")),
+            Some(*call_id),
+        ),
+        AgentMessage::Delegation { task, .. } => (
+            MessageRole::Delegation,
+            task.artifacts
+                .iter()
+                .flat_map(|artifact| &artifact.parts)
+                .find_map(|part| match part {
+                    A2APart::Text { text } => Some(text.clone()),
+                    A2APart::Data { .. } => None,
+                })
+                .unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
+            None,
+        ),
+    };
+    let message = ContractMessage {
+        message_id,
+        role,
+        text,
+        call_id,
+        coverage,
+    };
+    message.validate()?;
+    Ok(message)
+}
+
+fn archive_pointer(recovery: &floe_agent::SessionRecoveryPointer) -> floe_context::ArchivePointer {
+    floe_context::ArchivePointer {
+        archive_id: recovery.archive_id,
+        source_revision: recovery.source_revision,
+        through_turn_id: recovery.through_turn_id,
+        archived_message_count: recovery.archived_message_count,
+    }
+}
+
+fn legacy_recovery_pointer(
+    pointer: &floe_context::ArchivePointer,
+) -> floe_agent::SessionRecoveryPointer {
+    floe_agent::SessionRecoveryPointer {
+        archive_id: pointer.archive_id,
+        source_revision: pointer.source_revision,
+        through_turn_id: pointer.through_turn_id,
+        archived_message_count: pointer.archived_message_count,
+    }
 }
 
 fn terminal_messages(

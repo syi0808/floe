@@ -8,9 +8,9 @@ use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    ContinuationSnapshot, ConversationPorts, ConversationRepository, ManagerConfig,
-    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest, TurnMode, TurnRequest,
+    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
+    ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
@@ -291,6 +291,29 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         principal: &str,
     ) -> Result<ContinuationSnapshot, AgentFailure> {
         continuation(self.repository.as_ref(), run_id, principal).await
+    }
+
+    pub async fn compact_session(
+        &self,
+        request: CompactionRequest,
+    ) -> Result<CompactionReceipt, AgentFailure>
+    where
+        Repository: crate::SessionArchiveRepository,
+    {
+        super::archive::compact_session(self.repository.as_ref(), request).await
+    }
+
+    pub async fn read_archive<Authorize, AuthorizationFuture>(
+        &self,
+        request: &floe_context::ArchiveReadRequest,
+        authorize: Authorize,
+    ) -> Result<floe_context::ArchiveProjection, AgentFailure>
+    where
+        Repository: crate::SessionArchiveRepository,
+        Authorize: FnMut(floe_context::ContextDependency) -> AuthorizationFuture,
+        AuthorizationFuture: std::future::Future<Output = Result<bool, AgentFailure>>,
+    {
+        super::archive::read_archive(self.repository.as_ref(), request, authorize).await
     }
 }
 

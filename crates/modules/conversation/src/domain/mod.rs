@@ -4,6 +4,8 @@ use floe_agent_contract::{
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
+pub const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunState {
     Working,
@@ -276,6 +278,66 @@ pub struct ContinuationSnapshot {
     pub replay: Vec<ReplayReceipt>,
     pub completed_iterations: u32,
     pub usage: floe_execution::budget::ModelUsage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompactionRequest {
+    pub session_id: Uuid,
+    pub expected_session_revision: u64,
+    pub principal: String,
+    pub through_turn_id: Uuid,
+    pub summary: String,
+}
+
+impl CompactionRequest {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.session_id.is_nil()
+            || self.expected_session_revision == 0
+            || self.principal.trim() != self.principal
+            || self.principal.is_empty()
+            || self.principal.len() > 256
+            || self.principal.chars().any(char::is_control)
+            || self.through_turn_id.is_nil()
+            || self.summary.trim() != self.summary
+            || self.summary.is_empty()
+            || self.summary.len() > MAX_COMPACTION_SUMMARY_BYTES
+            || self
+                .summary
+                .chars()
+                .any(|character| character.is_control() && character != '\n')
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompactionReceipt {
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub pointer: floe_context::ArchivePointer,
+    pub summary: AgentMessage,
+}
+
+impl CompactionReceipt {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.pointer
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        self.summary
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if self.session_id.is_nil()
+            || self.session_revision == 0
+            || self.summary.message_id != self.pointer.through_turn_id
+            || self.summary.role != floe_agent_contract::MessageRole::Assistant
+            || self.summary.call_id.is_some()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
 }
 
 impl RecoveryReceipt {

@@ -728,6 +728,43 @@ async fn session_archive_search_compaction_and_recovery_survive_reopen() {
 }
 
 #[tokio::test]
+async fn session_compaction_rejects_a_boundary_that_splits_a_turn() {
+    let root = private_root();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let interleaved_turn = Uuid::new_v4();
+    let boundary_turn = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id: interleaved_turn,
+            text: "first half".into(),
+        },
+        AgentMessage::User {
+            turn_id: boundary_turn,
+            text: "boundary".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id: interleaved_turn,
+            text: "second half".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    vault.compare_and_swap(&session, 0).await.unwrap();
+
+    assert_eq!(
+        vault
+            .compact_session(session.id, 1, boundary_turn, "must not split".into())
+            .await,
+        Err(AgentFailure::InvalidInput)
+    );
+    assert_eq!(vault.load(person, session.id).await.unwrap(), session);
+}
+
+#[tokio::test]
 async fn encrypted_messages_and_tool_results_survive_wal_and_checkpoint_reopen() {
     let root = private_root();
     let person = PersonId::new();

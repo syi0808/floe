@@ -41,7 +41,7 @@ pub use agent_vault::{
     RemoteCalendarAuthorizationExpectation, RemoteCalendarGrantBinding,
     RemoteCalendarSourceReference, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
     RemotePairingChallenge, RemoteProducerIdentity, RemoteViewGrantBinding,
-    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit,
+    RemoteViewSourceReference, SessionArchiveSnapshot, SessionCompactionResult, SessionSearchHit,
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
     VaultConversationContinuationRef, VaultConversationJournalEntry, VaultConversationRunRecord,
     VaultConversationRunState, VaultConversationTerminal, VaultKey, VaultKeyProvider,

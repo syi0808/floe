@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use floe_agent::{AgentFailure, AgentMessage, AgentSession, SessionRecoveryPointer};
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,14 @@ pub struct SessionSearchHit {
 pub struct SessionCompactionResult {
     pub session: AgentSession,
     pub recovery: SessionRecoveryPointer,
+    pub summary_coverage: floe_domain::DependencyCoverage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionArchiveSnapshot {
+    pub session: AgentSession,
+    pub recovery: SessionRecoveryPointer,
+    pub coverage_by_turn: BTreeMap<Uuid, floe_domain::DependencyCoverage>,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -128,6 +136,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .rposition(|message| message.turn_id() == through_turn_id)
                 .map(|position| position + 1)
                 .ok_or(AgentFailure::NotFound)?;
+            if split > floe_agent_contract::MAX_AGENT_MESSAGES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            let retained_turns: HashSet<_> = source.messages[split..]
+                .iter()
+                .map(AgentMessage::turn_id)
+                .collect();
+            if source.messages[..split]
+                .iter()
+                .any(|message| retained_turns.contains(&message.turn_id()))
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
             let archived_turns: HashSet<_> = source.messages[..split]
                 .iter()
                 .map(AgentMessage::turn_id)
@@ -183,13 +204,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             session.model_attempts.retain(|record| !archived_turns.contains(&record.turn_id));
             session.capability_executions.retain(|record| !archived_turns.contains(&record.turn_id));
             session.delegation_executions.retain(|record| !archived_turns.contains(&record.turn_id));
-            if let Some(coverage) = archived_coverage {
+            let summary_coverage = archived_coverage.ok_or(AgentFailure::VaultUnavailable)?;
+            {
                 merge_context_dependency_coverage(
                     &transaction,
                     self.person_id,
                     session_id,
                     through_turn_id,
-                    coverage,
+                    summary_coverage.clone(),
                 )
                 .await?;
             }
@@ -216,7 +238,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.index_session_on(&transaction, &source, &archive_id.to_string())
                 .await?;
             self.check_access()?;
-            Ok(SessionCompactionResult { session, recovery })
+            Ok(SessionCompactionResult {
+                session,
+                recovery,
+                summary_coverage,
+            })
         }.await;
         match result {
             Ok(result) => {
@@ -234,31 +260,93 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         recovery: &SessionRecoveryPointer,
     ) -> Result<AgentSession, AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection.query(
-            "SELECT session_id, source_revision, through_turn_id, message_count, payload FROM agent_session_archives WHERE id = ?",
-            [recovery.archive_id.to_string()],
-        ).await.map_err(storage)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(storage)?
-            .ok_or(AgentFailure::NotFound)?;
-        let session: AgentSession =
-            serde_json::from_str(&row.get::<String>(4).map_err(storage)?).map_err(unavailable)?;
-        if session.id.to_string() != row.get::<String>(0).map_err(storage)?
-            || session.revision
-                != u64::try_from(row.get::<i64>(1).map_err(storage)?).map_err(unavailable)?
-            || recovery.source_revision != session.revision
-            || recovery.through_turn_id.to_string() != row.get::<String>(2).map_err(storage)?
-            || recovery.archived_message_count
-                != usize::try_from(row.get::<i64>(3).map_err(storage)?).map_err(unavailable)?
+        Ok(self.recover_session_with_coverage(recovery).await?.session)
+    }
+
+    pub async fn recover_session_with_coverage(
+        &self,
+        recovery: &SessionRecoveryPointer,
+    ) -> Result<SessionArchiveSnapshot, AgentFailure> {
+        if recovery.archive_id.is_nil()
+            || recovery.source_revision == 0
+            || recovery.through_turn_id.is_nil()
+            || recovery.archived_message_count == 0
+            || recovery.archived_message_count > floe_agent_contract::MAX_AGENT_MESSAGES
         {
-            return Err(AgentFailure::VaultUnavailable);
+            return Err(AgentFailure::InvalidInput);
         }
-        self.payload(&session)?;
-        self.check_access()?;
-        Ok(session)
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(storage)?;
+        let result = async {
+            let mut rows = transaction.query(
+                "SELECT session_id, source_revision, through_turn_id, message_count, payload FROM agent_session_archives WHERE id = ?",
+                [recovery.archive_id.to_string()],
+            ).await.map_err(storage)?;
+            let row = rows
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::NotFound)?;
+            let session: AgentSession = serde_json::from_str(
+                &row.get::<String>(4).map_err(storage)?,
+            )
+            .map_err(unavailable)?;
+            if session.id.to_string() != row.get::<String>(0).map_err(storage)?
+                || session.revision
+                    != u64::try_from(row.get::<i64>(1).map_err(storage)?).map_err(unavailable)?
+                || recovery.source_revision != session.revision
+                || recovery.through_turn_id.to_string() != row.get::<String>(2).map_err(storage)?
+                || recovery.archived_message_count
+                    != usize::try_from(row.get::<i64>(3).map_err(storage)?).map_err(unavailable)?
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            drop(rows);
+            self.payload(&session)?;
+            let archived = session
+                .messages
+                .get(..recovery.archived_message_count)
+                .ok_or(AgentFailure::VaultUnavailable)?;
+            if archived.last().map(AgentMessage::turn_id) != Some(recovery.through_turn_id) {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let mut coverage_by_turn = BTreeMap::new();
+            for turn_id in archived.iter().map(AgentMessage::turn_id) {
+                if coverage_by_turn.contains_key(&turn_id) {
+                    continue;
+                }
+                coverage_by_turn.insert(
+                    turn_id,
+                    read_context_dependency_coverage(
+                        &transaction,
+                        self.person_id,
+                        session.id,
+                        turn_id,
+                    )
+                    .await?,
+                );
+            }
+            self.check_access()?;
+            Ok(SessionArchiveSnapshot {
+                session,
+                recovery: recovery.clone(),
+                coverage_by_turn,
+            })
+        }
+        .await;
+        match result {
+            Ok(result) => {
+                transaction.commit().await.map_err(storage)?;
+                Ok(result)
+            }
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                Err(error)
+            }
+        }
     }
 
     async fn recovery_pointer(

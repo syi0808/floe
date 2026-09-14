@@ -4,8 +4,8 @@ use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, CommandId, RunId};
 
 use crate::{
-    AdmittedTurn, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
-    TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, CompactionReceipt, CompactionRequest, JournalEntry, RecoveryReceipt,
+    RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 
 pub trait ConversationRepository: Send + Sync {
@@ -47,4 +47,16 @@ pub trait ConversationRepository: Send + Sync {
         &'a self,
         run_id: RunId,
     ) -> BoxFuture<'a, Result<Vec<JournalEntry>, AgentFailure>>;
+}
+
+pub trait SessionArchiveRepository: Send + Sync {
+    fn compact_session<'a>(
+        &'a self,
+        request: CompactionRequest,
+    ) -> BoxFuture<'a, Result<CompactionReceipt, AgentFailure>>;
+
+    fn read_archive<'a>(
+        &'a self,
+        request: &'a floe_context::ArchiveReadRequest,
+    ) -> BoxFuture<'a, Result<floe_context::ArchiveSnapshot, AgentFailure>>;
 }

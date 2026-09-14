@@ -876,6 +876,7 @@ version = "0.1.0"
 dependencies = [
  "floe-agent-contract",
  "floe-agent-runtime",
+ "floe-context",
  "floe-execution",
  "floe-kernel",
  "tokio",

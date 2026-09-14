@@ -120,6 +120,73 @@ struct ReadTool {
     calls: std::sync::atomic::AtomicUsize,
 }
 
+#[derive(Default)]
+struct ToolThenAnswerModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for ToolThenAnswerModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: if call == 0 {
+                    vec![ModelStep::CallTool {
+                        tool_id: "actions.receipt".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }]
+                } else {
+                    vec![ModelStep::Answer {
+                        text: "source-derived answer".into(),
+                        artifacts: vec![],
+                    }]
+                },
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+struct DependentReceiptTool {
+    coverage: DependencyCoverage,
+}
+
+impl ToolPort for DependentReceiptTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        let coverage = self.coverage.clone();
+        Box::pin(async move {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "source observation".into(),
+                artifacts: vec![ContractArtifact {
+                    artifact_id: Uuid::new_v4(),
+                    name: "Action receipt".into(),
+                    parts: vec![ContractArtifactPart::Data {
+                        media_type: "application/vnd.floe.action-receipt+json".into(),
+                        data: "{\"status\":\"settled\"}".into(),
+                    }],
+                    coverage: coverage.clone(),
+                }],
+                coverage,
+                issue: None,
+            })
+        })
+    }
+}
+
 impl ToolPort for ReadTool {
     fn invoke<'a>(
         &'a self,
@@ -238,6 +305,44 @@ fn request(
     }
 }
 
+fn archive_dependency(person_id: PersonId) -> floe_context::ContextDependency {
+    use chrono::{Duration, Utc};
+    use floe_domain::{
+        ConnectionId, ConnectorId, ConsumerPolicyAuthority, ExecutionOwnerId, GrantAuthority,
+        GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+
+    let now = Utc::now();
+    floe_context::ContextDependency::try_new(
+        person_id,
+        GrantId::new(),
+        GrantAuthority::new(),
+        GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("archive-connection").unwrap(),
+            ConnectorId::try_new("archive-connector").unwrap(),
+            ExecutionOwnerId::try_new("archive-owner").unwrap(),
+            SourceAuthority::new(),
+        )
+        .unwrap(),
+        vec![ResourceHandle::try_new("action/receipt").unwrap()],
+        vec![GrantDataCategory::Metadata],
+        GrantOperation::Read,
+        GrantPurpose::Scheduling,
+        GrantConsumer::builtin("manager").unwrap(),
+        ProcessingRestriction::LocalOnly,
+        ConsumerPolicyAuthority::new(),
+        Uuid::new_v4(),
+        b"archive-query".to_vec(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        now,
+        now + Duration::minutes(5),
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
     let root = tempfile::tempdir().unwrap();
@@ -320,6 +425,214 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(replay, receipt);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn t28_compaction_preserves_recovery_and_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_service(Arc::clone(&repository));
+    let dependency = archive_dependency(person_id);
+    let tools = DependentReceiptTool {
+        coverage: DependencyCoverage::dependent(dependency.clone()).unwrap(),
+    };
+    let mut first_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    first_request.principal = person_id.to_string();
+    first_request.prompt = "find the source and retain its action receipt".into();
+    first_request.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "actions.receipt".into(),
+            definition_revision: 1,
+            description: "Read a source-bound action receipt.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "personal".into(),
+        }],
+        revision: 1,
+    };
+    let first = service
+        .run_turn(
+            first_request,
+            ConversationPorts {
+                model: &ToolThenAnswerModel::default(),
+                tools: &tools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.state, RunState::Completed);
+    assert!(matches!(
+        first.coverage,
+        DependencyCoverage::Dependent { .. }
+    ));
+    let journal_before = vault.conversation_journal(first.run_id).await.unwrap();
+    assert!(journal_before.iter().any(|entry| {
+        entry.kind == "result"
+            && entry
+                .payload
+                .contains("application/vnd.floe.action-receipt+json")
+    }));
+
+    let mut second_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    second_request.principal = person_id.to_string();
+    second_request.expected_session_revision = first.session_revision;
+    second_request.prompt = "keep this later turn".into();
+    let second = service
+        .run_turn(
+            second_request,
+            ConversationPorts {
+                model: &Model::default(),
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.state, RunState::Completed);
+
+    let compacted = service
+        .compact_session(floe_conversation::CompactionRequest {
+            session_id: session.id,
+            expected_session_revision: second.session_revision,
+            principal: person_id.to_string(),
+            through_turn_id: first.run_id.as_uuid(),
+            summary: "source-derived compacted summary".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(compacted.session_revision, second.session_revision + 1);
+    assert!(matches!(
+        compacted.summary.coverage,
+        DependencyCoverage::Dependent { .. }
+    ));
+    let live = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(live.messages.len(), 3);
+    assert!(matches!(
+        &live.messages[0],
+        AgentMessage::Compaction { summary, .. }
+            if summary == "source-derived compacted summary"
+    ));
+    assert!(
+        live.messages[1..]
+            .iter()
+            .all(|message| message.turn_id() == second.run_id.as_uuid())
+    );
+    assert_eq!(
+        vault.conversation_journal(first.run_id).await.unwrap(),
+        journal_before
+    );
+
+    let archive_request = floe_context::ArchiveReadRequest {
+        person_id,
+        session_id: session.id,
+        pointer: compacted.pointer.clone(),
+        max_messages: 8,
+        max_bytes: 4 * 1024,
+    };
+    let denied = service
+        .read_archive(&archive_request, |candidate| {
+            let expected = dependency.clone();
+            async move { Ok(candidate != expected) }
+        })
+        .await
+        .unwrap();
+    assert!(denied.messages.is_empty());
+    assert_eq!(
+        service
+            .read_archive(&archive_request, |_| async {
+                Err(AgentFailure::VaultUnavailable)
+            })
+            .await,
+        Err(AgentFailure::VaultUnavailable)
+    );
+    let recovered = service
+        .read_archive(&archive_request, |_| async { Ok(true) })
+        .await
+        .unwrap();
+    assert_eq!(recovered.messages.len(), 2);
+    assert!(
+        recovered
+            .messages
+            .iter()
+            .all(|message| message.turn_id == first.run_id.as_uuid())
+    );
+    assert!(
+        serde_json::to_vec(
+            &recovered
+                .messages
+                .iter()
+                .map(|message| &message.message)
+                .collect::<Vec<_>>()
+        )
+        .unwrap()
+        .len()
+            <= archive_request.max_bytes
+    );
+
+    drop(service);
+    drop(repository);
+    drop(vault);
+    let reopened = Arc::new(
+        EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap(),
+    );
+    reopened.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&reopened)));
+    let service = build_service(Arc::clone(&repository));
+    assert_eq!(
+        reopened.conversation_journal(first.run_id).await.unwrap(),
+        journal_before
+    );
+    let recovered = service
+        .read_archive(&archive_request, |_| async { Ok(true) })
+        .await
+        .unwrap();
+    assert_eq!(recovered.messages.len(), 2);
+
+    let mut third_request = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    third_request.principal = person_id.to_string();
+    third_request.expected_session_revision = compacted.session_revision;
+    third_request.prompt = "continue after compaction".into();
+    let third = service
+        .run_turn(
+            third_request,
+            ConversationPorts {
+                model: &Model::default(),
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(third.state, RunState::Completed);
+    assert_eq!(third.session_revision, compacted.session_revision + 2);
 }
 
 #[tokio::test]

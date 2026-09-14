@@ -8,8 +8,8 @@ rust-version.workspace = true
 [dependencies]
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
+floe-context = { path = "../context" }
 floe-execution = { path = "../../runtime/execution" }
 floe-kernel = { path = "../../contracts/kernel" }
 tokio.workspace = true
 uuid.workspace = true
-
