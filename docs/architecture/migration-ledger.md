@@ -3013,3 +3013,45 @@ lifetime and Calendar-root removal remain pending. The next executable P02/P12
 task is to make continuation budget and settled replay state cumulative across
 the bounded continuation chain without re-executing any recorded tool or Task.
 P12 remains partial.
+
+### P02/P12 cumulative continuation chain checkpoint (2026-09-15)
+
+Code checkpoint `6e4d7a1` makes bounded continuation replay cumulative across
+its encrypted Run ancestry instead of projecting only the immediately previous
+Run. Each continuation Run now persists both the source RunId and the exact
+source executor generation used at admission. Recovery walks at most four Runs
+(the original plus three continuations), rejects cycles, broken levels,
+principal/Session/profile changes and generation mismatches, and globally caps
+the combined journals at 512 entries and replay receipts at 128.
+
+Every ancestor journal is independently checked for contiguous revisions,
+settled model/tool/Task pairs, unique invocation and call identities, and the
+absence of a final Output. Safe observations are accumulated oldest-first;
+model attempts, tokens, cost and completed iterations are summed with checked
+arithmetic. The resulting totals seed the next root budget and reduce its
+remaining iteration count, so a later continuation cannot reset work already
+charged to an earlier Run. Exact acknowledgement replay reconstructs the
+original generation-bound reference from the continued Run itself. The local
+Conversation Vault schema is version 4; earlier disposable development Vaults
+must be reset rather than migrated.
+
+Implemented and wired: durable source-generation linkage, receipt-only ancestor
+reads, cumulative replay/observation projection and cumulative execution
+budget seeding. Direct validation committed two encrypted timed-out Runs with
+distinct settled tool observations, recovered both receipts in order, observed
+two attempts and the summed token usage, and completed the third Manager root
+without another user entry. Seven Conversation tests, all 193 Core library
+tests and all 90 FFI library tests passed. Workspace all-target check, focused
+Conversation Clippy with warnings denied, diff check and the migration boundary
+gate passed (20 nodes / 68 edges / no errors). The actual worker continuation
+flow remains covered for one hop; no Apple UI, device-local model, live provider
+or three-hop worker flow was exercised.
+
+Blocker/remove-by: P02/P12 still lacks the reserved one-shot tool-free
+finalization path and a durable separation between execution outcome and reply
+outcome. Conversation Engine progress remains terminal-only; Session bootstrap,
+archive/compaction, global worker-job lifetime and Calendar-root removal also
+remain pending later cutovers. The next executable P02/P12 task is to use the
+existing finalization budget partition for one bounded answer-only attempt after
+a recoverable root exhaustion, without allowing cancel, consent or Vault
+failures to trigger another model call. P12 remains partial.
