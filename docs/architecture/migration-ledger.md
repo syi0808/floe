@@ -1367,3 +1367,42 @@ Canonical Inference ownership, typed profile/status/recipient contracts,
 authoritative attempt journaling and dispatch accounting, retry/fallback policy,
 credential-handle ownership and removal of the combined source/model host API
 remain unfinished.
+
+## P07/P14 production source-client cutover — 2026-09-14
+
+Code checkpoints `2198667` and `c7d8c0a` supersede the combined-constructor bridge
+described above. General conversation owns an explicit `ServerSourceClient`;
+the governed remote reader and expert source reads borrow it directly. General
+and schedule model constructors use `new_model_only`. `ServerModelRunner` no
+longer has a source client, source forwarding methods, the combined constructor
+or the calendar request re-export. Source-only HTTP and validation regressions
+now live beside the source adapter. Pairing/person/device checks, exact source
+authorization, source response validation and consent gates are retained.
+
+The new model-only loopback regression sends a complete authenticated
+`POST /v1/agent` request and receives a normalized fixture answer despite
+deliberately malformed source bindings. It asserts purpose, external consent,
+absence of source fields in model transport, answer and token usage. Model and
+source constructor tests retain loopback/token/purpose validation separately;
+the source constructor still rejects invalid connector/UUID/revision bindings.
+Source cancellation still opens no socket and leaves the parent and independent
+model lane usable. The model type itself no longer exposes source authority.
+
+Parent integration verification: infra library tests (29 passed), FFI
+conversation tests serially (27 passed), `cargo check --workspace`, rebuilt
+`cargo build -p floe-ffi`, and `flutter build macos --debug` all passed. Actual
+Flutter-to-Rust calendar gateway/action ABI fixtures passed (9); server HTTP
+and route-isolation fixtures passed (5). The initial integrated conversation
+run exposed `WouldBlock` in the signed-calendar test producer's blocking read
+after nonblocking accept. Its accepted stream now explicitly uses blocking
+mode with the existing read/write timeouts; the complete 27-test rerun passed
+without changing any signature, authority, provenance or request-count assertion.
+
+Remaining scope is not narrowed: the general host still constructs a source
+client from the legacy route DTO and validates it before starting a turn.
+Some source availability decisions still depend on legacy model placement and
+consent policy. Typed independent model/source plans, credential handles,
+canonical Inference attempt ownership, async catalog independence, final crate
+placement and AppHost cutover remain pending. The loopback answer is not an
+external-provider result, and a successful macOS build/ABI fixture does not
+prove an actual Apple UI conversation or full T10/P07/P14 completion.
