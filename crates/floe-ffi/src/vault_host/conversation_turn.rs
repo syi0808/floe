@@ -73,6 +73,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     command_id: floe_agent_contract::CommandId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let text = request.text.trim();
@@ -128,7 +129,14 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         schedule_endpoint,
         legacy_expert_endpoint,
     };
-    Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
+    Box::pin(expert_dispatch::run(
+        &inputs,
+        context,
+        cancellation,
+        on_admitted,
+        emit,
+    ))
+    .await
 }
 
 #[cfg(test)]
@@ -156,6 +164,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_agent::Cancellation,
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     mut emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let core = inputs.core;
@@ -413,7 +422,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             floe_conversation::TurnMode::New
         };
         let receipt = service
-            .run_turn(
+            .run_turn_observed(
                 floe_conversation::TurnRequest {
                     command_id: inputs.command_id,
                     session_id,
@@ -438,6 +447,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     delegation: &delegation_port,
                     validator: &engine_ports::ManagerPayloadValidator,
                 },
+                on_admitted,
             )
             .await?;
         let session = vault.load(person_id, session_id).await?;

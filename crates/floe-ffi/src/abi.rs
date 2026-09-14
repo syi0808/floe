@@ -148,6 +148,16 @@ pub extern "C" fn floe_protocol_version() -> u32 {
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
 #[cfg(unix)]
+pub unsafe extern "C" fn floe_core_command_v2(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    invoke_json_v2(handle_ptr, request_json, app_wire::command)
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
+#[cfg(unix)]
 pub unsafe extern "C" fn floe_core_query_v2(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,

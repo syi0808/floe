@@ -73,6 +73,11 @@ impl Core {
         let request = CString::new(request.to_string()).unwrap();
         take_json(unsafe { floe_core_query_v2(self.0, request.as_ptr()) })
     }
+
+    fn command_v2(&self, request: Value) -> Value {
+        let request = CString::new(request.to_string()).unwrap();
+        take_json(unsafe { floe_core_command_v2(self.0, request.as_ptr()) })
+    }
 }
 
 #[test]
@@ -104,6 +109,26 @@ fn product_open_binds_native_identity_before_database_side_effects() {
     let mut injected = query;
     injected["query"]["bearer_token"] = json!("must-not-cross-app-wire");
     assert_eq!(core.query_v2(injected)["error"]["code"], "validation");
+
+    let start_request_id = Uuid::new_v4();
+    let start = json!({
+        "schema_version": 2,
+        "request_id": start_request_id,
+        "command_id": Uuid::new_v4(),
+        "command": {
+            "kind": "conversation.start_turn",
+            "session_id": Uuid::new_v4(),
+            "expected_revision": 0,
+            "text": "Use only the host-selected route",
+            "mode": {"kind": "new_turn"}
+        }
+    });
+    let locked = core.command_v2(start.clone());
+    assert_eq!(locked["request_id"], start_request_id.to_string());
+    assert_eq!(locked["error"]["code"], "unavailable");
+    let mut injected = start;
+    injected["command"]["remote_route"] = json!({"bearer_token": "must-not-cross-app-wire"});
+    assert_eq!(core.command_v2(injected)["error"]["code"], "validation");
     drop(core);
 
     let missing_directory = tempfile::tempdir().unwrap();

@@ -52,10 +52,20 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         request: TurnRequest,
         ports: ConversationPorts<'_>,
     ) -> Result<RunReceipt, AgentFailure> {
+        self.run_turn_observed(request, ports, |_| {}).await
+    }
+
+    pub async fn run_turn_observed(
+        &self,
+        request: TurnRequest,
+        ports: ConversationPorts<'_>,
+        mut on_admitted: impl FnMut(&RunReceipt),
+    ) -> Result<RunReceipt, AgentFailure> {
         request.validate()?;
         let request_digest = turn_digest(&request);
         if let Some(receipt) = self.repository.find_command(request.command_id).await? {
             verify_existing(&request, request_digest, &receipt)?;
+            on_admitted(&receipt);
             return Ok(receipt);
         }
         let continuation = match &request.mode {
@@ -137,6 +147,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
+        on_admitted(&admitted.receipt);
         let expected_aggregate_revision = admitted.receipt.aggregate_revision;
         let _cancellation_guard = match self.run_cancellations.register(
             run_id,

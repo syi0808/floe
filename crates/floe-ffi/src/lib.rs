@@ -55,6 +55,77 @@ impl HostServices for LegacyComposition {
     }
 }
 
+#[cfg(unix)]
+impl floe_app::ConversationCommands for LegacyComposition {
+    fn start_turn(
+        &self,
+        caller: &floe_app::CallerContext,
+        request: floe_app::StartTurn,
+    ) -> Result<floe_app::CommandReceipt, floe_app::ServiceError> {
+        request.validate()?;
+        if request.retry_of.is_some() || !matches!(request.mode, floe_app::TurnMode::New) {
+            return Err(floe_app::ServiceError::Unavailable);
+        }
+        let command_id = floe_kernel::CommandId::from_uuid(request.command_id)
+            .ok_or(floe_app::ServiceError::InvalidInput)?;
+        let receipt = self
+            .agent_vault
+            .start_conversation(
+                floe_kernel::PersonId(caller.person_id()),
+                command_id,
+                AgentConversationTurnRequestDto {
+                    session_id: request.session_id.to_string(),
+                    expected_revision: request.expected_revision,
+                    text: request.text,
+                    device_id: caller.device_id().to_owned(),
+                    continuation: false,
+                    remote_route: None,
+                },
+            )
+            .map_err(service_failure)?;
+        Ok(floe_app::CommandReceipt {
+            command_id: receipt.command_id.as_uuid(),
+            run_id: receipt.run_id.as_uuid(),
+            session_revision: receipt.session_revision,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn service_failure(failure: floe_kernel::AgentFailure) -> floe_app::ServiceError {
+    use floe_app::ServiceError;
+    use floe_kernel::AgentFailure;
+
+    match failure {
+        AgentFailure::InvalidInput | AgentFailure::UnsupportedVersion => ServiceError::InvalidInput,
+        AgentFailure::NotFound => ServiceError::NotFound,
+        AgentFailure::Conflict => ServiceError::Conflict,
+        AgentFailure::PolicyDenied
+        | AgentFailure::ConsentRequired
+        | AgentFailure::CapabilityDenied
+        | AgentFailure::AccessReviewRequired => ServiceError::AccessDenied,
+        AgentFailure::StorageUnavailable
+        | AgentFailure::VaultUnavailable
+        | AgentFailure::ModelUnavailable
+        | AgentFailure::LocalModelUnavailable
+        | AgentFailure::ServerModelUnavailable
+        | AgentFailure::ServerModelTimeout
+        | AgentFailure::ServerModelRequestRejected
+        | AgentFailure::CredentialExpired
+        | AgentFailure::QuotaExceeded
+        | AgentFailure::CapabilityUnavailable
+        | AgentFailure::StaleContext
+        | AgentFailure::BudgetExceeded
+        | AgentFailure::Cancelled
+        | AgentFailure::DeadlineExceeded
+        | AgentFailure::Interrupted => ServiceError::Unavailable,
+        AgentFailure::InvalidModelOutput
+        | AgentFailure::LocalModelInvalidOutput
+        | AgentFailure::ServerModelInvalidOutput
+        | AgentFailure::Stalled => ServiceError::Internal,
+    }
+}
+
 impl FloeHandle {
     fn services(&self) -> &LegacyComposition {
         self.app.legacy_services()

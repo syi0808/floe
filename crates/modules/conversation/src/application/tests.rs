@@ -708,6 +708,43 @@ async fn one_session_rejects_a_second_root_while_first_model_is_waiting() {
 }
 
 #[tokio::test]
+async fn admission_observer_receives_durable_receipt_before_model_completion() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = Arc::new(service(repository));
+    let model = Arc::new(BlockingModel {
+        calls: Default::default(),
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+    });
+    let command_id = CommandId::new();
+    let (admitted, admission) = tokio::sync::oneshot::channel();
+    let mut admitted = Some(admitted);
+    let running_service = Arc::clone(&service);
+    let running_model = Arc::clone(&model);
+    let running = tokio::spawn(async move {
+        running_service
+            .run_turn_observed(
+                request(command_id, session_id, 0, "first"),
+                ports(running_model.as_ref()),
+                move |receipt| {
+                    admitted.take().unwrap().send(receipt.clone()).unwrap();
+                },
+            )
+            .await
+    });
+
+    let receipt = admission.await.unwrap();
+    assert_eq!(receipt.command_id, command_id);
+    assert_eq!(receipt.state, RunState::Working);
+    model.entered.acquire().await.unwrap().forget();
+    assert!(!running.is_finished());
+    model.release.add_permits(1);
+    assert_eq!(running.await.unwrap().unwrap().state, RunState::Completed);
+}
+
+#[tokio::test]
 async fn admitted_root_is_cancelled_by_owner_identity_and_then_becomes_inactive() {
     let repository = Arc::new(MemoryRepository::default());
     let session_id = Uuid::new_v4();

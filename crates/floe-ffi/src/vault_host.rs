@@ -7,7 +7,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -206,6 +206,16 @@ impl VaultBridge {
         self.worker()?.conversation_query(person, query)
     }
 
+    pub(crate) fn start_conversation(
+        &self,
+        person: PersonId,
+        command_id: floe_kernel::CommandId,
+        request: AgentConversationTurnRequestDto,
+    ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
+        self.worker()?
+            .start_conversation(person, command_id, request)
+    }
+
     fn worker(&self) -> Result<RefMut<'_, Worker>, AgentFailure> {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
@@ -354,7 +364,45 @@ struct Job {
     action: AgentVaultActionDto,
     cancellation: Cancellation,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
+    admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
+    admission_ready: Condvar,
     progress: Mutex<Progress>,
+}
+
+impl Job {
+    fn publish_admission(&self, result: Result<floe_conversation::RunReceipt, AgentFailure>) {
+        if let Ok(mut admission) = self.admission.lock()
+            && admission.is_none()
+        {
+            *admission = Some(result);
+            self.admission_ready.notify_all();
+        }
+    }
+
+    fn wait_for_admission(&self) -> Result<floe_conversation::RunReceipt, AgentFailure> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut admission = self
+            .admission
+            .lock()
+            .map_err(|_| AgentFailure::Interrupted)?;
+        loop {
+            if let Some(result) = admission.as_ref() {
+                return result.clone();
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            let (next, timeout) = self
+                .admission_ready
+                .wait_timeout(admission, remaining)
+                .map_err(|_| AgentFailure::Interrupted)?;
+            admission = next;
+            if timeout.timed_out() && admission.is_none() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+        }
+    }
 }
 
 enum WorkerMessage {
@@ -774,72 +822,10 @@ impl Worker {
         id: Uuid,
         operation: AgentVaultOperationDto,
     ) -> Result<VaultJobResult, AgentFailure> {
-        let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let AgentVaultOperationDto::Submit { ref action } = operation {
-            if let Some(job) = jobs.get(&id) {
-                if job.person != person {
-                    return Err(AgentFailure::NotFound);
-                }
-                if &job.action != action {
-                    return Err(AgentFailure::Conflict);
-                }
-            } else {
-                let mut in_flight = 0_usize;
-                let mut exclusive_in_flight = false;
-                let mut incompatible_in_flight = false;
-                let mut completed = Vec::new();
-                for (request_id, job) in jobs.iter() {
-                    if job
-                        .progress
-                        .lock()
-                        .map_err(|_| AgentFailure::Interrupted)?
-                        .done
-                    {
-                        completed.push(*request_id);
-                    } else {
-                        in_flight += 1;
-                        exclusive_in_flight |= exclusive_host_action(&job.action);
-                        incompatible_in_flight |= !matches!(
-                            job.action,
-                            AgentVaultActionDto::ConversationTurn { .. }
-                        );
-                    }
-                }
-                if in_flight >= MAX_IN_FLIGHT_VAULT_JOBS
-                    || (in_flight > 0 && exclusive_host_action(action))
-                    || exclusive_in_flight
-                    || (in_flight > 0
-                        && (!concurrent_host_action(action) || incompatible_in_flight))
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                if jobs.len() >= MAX_VAULT_JOBS {
-                    for request_id in completed {
-                        jobs.remove(&request_id);
-                        if jobs.len() < MAX_VAULT_JOBS {
-                            break;
-                        }
-                    }
-                }
-                if jobs.len() >= MAX_VAULT_JOBS {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                let job = Arc::new(Job {
-                    person,
-                    id,
-                    action: action.clone(),
-                    cancellation: Cancellation::default(),
-                    run_cancellations: Arc::clone(&self.run_cancellations),
-                    progress: Mutex::new(Progress::default()),
-                });
-                self.learner_scheduling.foreground_submitted()?;
-                if self.sender.try_send(WorkerMessage::Job(job.clone())).is_err() {
-                    let _ = self.learner_scheduling.foreground_finished();
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                jobs.insert(id, job);
-            }
+            self.submit_job(person, id, action.clone())?;
         }
+        let jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
         let job = jobs.get(&id).cloned().ok_or(AgentFailure::NotFound)?;
         if job.person != person {
             return Err(AgentFailure::NotFound);
@@ -915,6 +901,93 @@ impl Worker {
                 .remove(&id);
         }
         Ok(response)
+    }
+
+    fn start_conversation(
+        &self,
+        person: PersonId,
+        command_id: floe_kernel::CommandId,
+        request: AgentConversationTurnRequestDto,
+    ) -> Result<floe_conversation::RunReceipt, AgentFailure> {
+        let job = self.submit_job(
+            person,
+            command_id.as_uuid(),
+            AgentVaultActionDto::ConversationTurn { request },
+        )?;
+        job.wait_for_admission()
+    }
+
+    fn submit_job(
+        &self,
+        person: PersonId,
+        id: Uuid,
+        action: AgentVaultActionDto,
+    ) -> Result<Arc<Job>, AgentFailure> {
+        let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if let Some(job) = jobs.get(&id) {
+            if job.person != person {
+                return Err(AgentFailure::NotFound);
+            }
+            if job.action != action {
+                return Err(AgentFailure::Conflict);
+            }
+            return Ok(Arc::clone(job));
+        }
+        let mut in_flight = 0_usize;
+        let mut exclusive_in_flight = false;
+        let mut incompatible_in_flight = false;
+        let mut completed = Vec::new();
+        for (request_id, job) in jobs.iter() {
+            if job
+                .progress
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?
+                .done
+            {
+                completed.push(*request_id);
+            } else {
+                in_flight += 1;
+                exclusive_in_flight |= exclusive_host_action(&job.action);
+                incompatible_in_flight |=
+                    !matches!(job.action, AgentVaultActionDto::ConversationTurn { .. });
+            }
+        }
+        if in_flight >= MAX_IN_FLIGHT_VAULT_JOBS
+            || (in_flight > 0 && exclusive_host_action(&action))
+            || exclusive_in_flight
+            || (in_flight > 0
+                && (!concurrent_host_action(&action) || incompatible_in_flight))
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if jobs.len() >= MAX_VAULT_JOBS {
+            for request_id in completed {
+                jobs.remove(&request_id);
+                if jobs.len() < MAX_VAULT_JOBS {
+                    break;
+                }
+            }
+        }
+        if jobs.len() >= MAX_VAULT_JOBS {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let job = Arc::new(Job {
+            person,
+            id,
+            action,
+            cancellation: Cancellation::default(),
+            run_cancellations: Arc::clone(&self.run_cancellations),
+            admission: Mutex::new(None),
+            admission_ready: Condvar::new(),
+            progress: Mutex::new(Progress::default()),
+        });
+        self.learner_scheduling.foreground_submitted()?;
+        if self.sender.try_send(WorkerMessage::Job(job.clone())).is_err() {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        jobs.insert(id, Arc::clone(&job));
+        Ok(job)
     }
 
     fn conversation_query(
@@ -1266,6 +1339,9 @@ fn finish_job(
     vault_available: bool,
     learner_scheduling: &floe_knowledge::LearnerScheduling,
 ) {
+    if let Err(failure) = &result {
+        job.publish_admission(Err(*failure));
+    }
     if let Ok(mut progress) = job.progress.lock() {
         match result {
             Ok(result) => {
@@ -1380,6 +1456,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
             .ok_or(AgentFailure::InvalidInput)?,
         request,
         job.cancellation.clone(),
+        |receipt| job.publish_admission(Ok(receipt.clone())),
         |event| {
             if let Ok(mut progress) = job.progress.lock() {
                 if progress.events.len() < 2048 {

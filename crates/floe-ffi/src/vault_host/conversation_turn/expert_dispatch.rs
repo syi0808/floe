@@ -265,9 +265,17 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_agent::Cancellation,
+    on_admitted: impl FnMut(&floe_conversation::RunReceipt),
     emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
-    Box::pin(run_general_turn(inputs, context, cancellation, emit)).await
+    Box::pin(run_general_turn(
+        inputs,
+        context,
+        cancellation,
+        on_admitted,
+        emit,
+    ))
+    .await
 }
 
 pub(super) struct ConversationExperts<'model> {

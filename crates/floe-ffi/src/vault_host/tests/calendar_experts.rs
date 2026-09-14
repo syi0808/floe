@@ -906,24 +906,42 @@ fn t08_stop_cancels_the_admitted_production_root() {
         device_id: "mac-local".into(),
     });
     let request_id = Uuid::new_v4();
-    worker
-        .request(
+    let request = floe_protocol::AgentConversationTurnRequestDto {
+        session_id: session.id.to_string(),
+        expected_revision: session.revision,
+        text: "Cancel this run".into(),
+        device_id: "mac-local".into(),
+        continuation: false,
+        remote_route: Some(route),
+    };
+    let admitted = worker
+        .start_conversation(
             person,
-            request_id,
-            AgentVaultOperationDto::Submit {
-                action: AgentVaultActionDto::ConversationTurn {
-                    request: floe_protocol::AgentConversationTurnRequestDto {
-                        session_id: session.id.to_string(),
-                        expected_revision: session.revision,
-                        text: "Cancel this run".into(),
-                        device_id: "mac-local".into(),
-                        continuation: false,
-                        remote_route: Some(route),
-                    },
-                },
-            },
+            floe_kernel::CommandId::from_uuid(request_id).unwrap(),
+            request.clone(),
         )
         .unwrap();
+    assert_eq!(admitted.state, floe_conversation::RunState::Working);
+    assert_eq!(
+        worker
+            .start_conversation(
+                person,
+                floe_kernel::CommandId::from_uuid(request_id).unwrap(),
+                request.clone(),
+            )
+            .unwrap(),
+        admitted
+    );
+    let mut conflicting = request;
+    conflicting.text = "Different payload".into();
+    assert_eq!(
+        worker.start_conversation(
+            person,
+            floe_kernel::CommandId::from_uuid(request_id).unwrap(),
+            conflicting,
+        ),
+        Err(AgentFailure::Conflict)
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     while !entered.load(Ordering::Acquire) {
         assert!(Instant::now() < deadline);
