@@ -1207,3 +1207,49 @@ Apple UI, iPhone/iPad, real providers, and T23/T25/T28 end-to-end acceptance rem
 unverified. Direct macOS UI automation could not initialize: the earlier native
 pipe startup failed, and a reset/retry reported missing
 `CUA_REPL_ENABLED_SURFACES`. No Floe application data was reset for these checks.
+
+## P04 canonical grant and authority policy — 2026-09-14
+
+Code checkpoint `e409ff5` adds `floe-access` at `crates/modules/access`.
+`DataAccessGrant`, state transitions, and their four original regressions move
+without behavioral changes from the legacy domain; immutable source/grant/scope
+values remain in context-contract. Vault creation and mutation now call Access
+policy with the admitted person, vault owner, and expected grant authority.
+Review/Activate/ReviewActive/Pause/Revoke decisions are outside the SQL adapter,
+while authority updates, action invalidation and cleanup intent persistence stay
+inside the existing immediate transaction. Schema validation, key-loss latching,
+CAS comparisons, and cleanup limits are not weakened.
+
+Parent additionally moved exact replay admission into Access and wired the legacy
+domain re-export to it. Native calendar read identity/fingerprint/generation
+checks now call provider-generic Access policy; actual provider acquisition,
+lease tracking, signature checks and connection validation remain in existing
+adapters. The borrowed `ReadAuthorityEvidence` is input to a checker, not a
+dispatch/release permit, and is not proof that a remote signature was verified.
+
+Parent verification:
+- `cargo test -p floe-access`: 5 passed (4 preserved domain tests plus policy
+  person/owner/epoch rejection with unchanged state assertions).
+- `cargo test -p floe-core --lib access_grants::tests`: 8 passed with actual
+  encrypted temporary Vault stores, including competing mutations, precommit
+  key loss, write-constraint rollback, cleanup corruption and restart.
+- `cargo test -p floe-domain context_dependency::tests`: 7 passed, including the
+  exact canonical replay authority/intent and paused/revoked/expired rejection.
+- `cargo test -p floe-core --lib calendar_view::tests`: 21 passed, including
+  native subject changes during acquisition/before egress, generation changes,
+  scoped denial, cancellation, and the real expert/encrypted bridge fixture.
+- `cargo test -p floe-ffi --lib
+  native_grants_capture_authority_only_on_explicit_review -- --test-threads=1`:
+  1 passed. This is a Rust FFI-host fixture, not a live Apple permission dialog.
+- Access all-target Clippy with `-D warnings` and `cargo check --workspace`
+  passed. Migration checker: 14 nodes / 37 edges / 0 errors, not the final gate.
+
+Remaining P04 work is substantive: private-constructor Acquire/Dispatch/Release
+permits, owner-injected authority/repository/vault-health ports, durable vault
+epoch ownership, and a single current-authority release fence are not yet
+implemented. Legacy Vault remains the transaction/health owner until P13/P16;
+FFI BoundAccess and connection trust decisions still require extraction. No
+claim of T05/T12/T13/T14/T15/T21/T27/T33 end-to-end completion, real provider
+acceptance, or new macOS UI validation is made. Previous goal turn and this turn
+both made committed implementation progress; the complete P00–P25 objective
+remains active.
