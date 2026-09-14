@@ -2365,3 +2365,47 @@ selection. T01 and the generic source cutover are not complete until P11/P15
 register Schedule behind the common Manager decision and the Calendar root is
 removed by P24. ArchiveReader, generic native source adapters and complete
 Context/Conversation ownership also remain pending P09/P12/P13.
+
+### P11 registered endpoint and Task owner foundation checkpoint (2026-09-15)
+
+Code checkpoint `d772b99` adds the target `floe-experts` module and the
+role-neutral `AgentEndpoint`/`EndpointInvocation`/`ExpertReport` contract. The
+Directory exposes only reviewed, enabled, principal/purpose-eligible versioned
+cards and resolves in-process endpoints by exact AgentId and definition revision;
+it does not acquire source payloads or accept model-provided URLs.
+
+`TaskCoordinator` is now a concrete `DelegationPort` consumer for the extracted
+Engine. It validates TaskId, parent Run, principal, invocation identity, request
+digest and descriptor revision before dispatch. The repository port makes
+admission atomic and carries aggregate revision plus executor generation through
+CAS transitions. Exact retries return the existing Task receipt, mismatched
+retries conflict, nonterminal receipts cannot be consumed by the Manager, and
+disabled/unregistered selections are durably represented as rejected Tasks.
+Task reads and explicit cancellation are principal/parent-Run scoped. Endpoint
+failures retain Failed/Rejected/Cancelled/TimedOut/Interrupted states rather than
+being rewritten as Completed, and successful report coverage is required and is
+propagated into the Manager's next model observation and replay shape.
+
+Implemented/wired: the extracted Engine can use the new TaskCoordinator through
+its existing DelegationPort. Controlled end-to-end Engine fixtures prove that an
+eligible Schedule card does not redirect an explicit Communication selection,
+a failed child Task returns an observation and the Manager root continues, and a
+ninth registered AgentId executes without dispatcher changes. Additional
+fixtures cover exact retry after endpoint disablement, stale/disabled rejection,
+authorized explicit child cancellation without parent cancellation, Task read
+authorization, CAS/generation validation and result coverage.
+
+Direct validation on `d772b99` passed Agent contract/Engine/Experts targeted
+tests (13 total, including six new Experts integration cases), targeted
+all-target Clippy with `-D warnings`, workspace all-target check, diff check and
+the migration gate (19 nodes / 58 edges / no errors). These are controlled local
+fixtures; no Apple UI, live external account or actual model was exercised.
+
+Blocker/remove-by: no Vault-backed TaskRepository, restart claim/recovery or
+production FFI composition uses `floe-experts` yet, so P11 is not complete and
+the legacy in-process task map remains authoritative in the app. A root
+deadline/owner drop can still require P11/P12 recovery to settle an admitted
+Working Task after the runtime fence stops polling it. P15 must next expose the
+protected Schedule implementation as a direct endpoint, register it in this
+Directory and only then remove `schedule::try_run`; until that cutover, an active
+Calendar setup can still select the legacy Calendar root before the Manager.
