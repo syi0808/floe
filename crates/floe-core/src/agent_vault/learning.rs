@@ -2,15 +2,16 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
-    AgentFailure, AgentOutcome, ContextMemory, DataClass, LearnerJobSettlement, LearnerJobState,
-    LearnerReviewInput, LearnerReviewJob, LearningObservation, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, retryable_learner_failure,
+    AgentFailure, AgentOutcome, ContextMemory, DataClass, LearnerReviewInput, LearnerReviewJob,
+    LearningObservation, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
 };
 use floe_knowledge::{
     KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
     KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
+    LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState,
     LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservationKind, StageMemoryCandidate,
+    claim_learner_job, reject_learner_claim, settle_learner_job, validate_learner_job_lifecycle,
     validate_learning_evidence, validate_stage_request,
 };
 use serde::Serialize;
@@ -22,8 +23,6 @@ use super::*;
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
-const LEARNER_JOB_LEASE_SECONDS: i64 = 30;
-const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
 const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
 const MAX_LEARNER_DISCOVERY_SESSIONS: i64 = 64;
 const MAX_LEARNER_DIGEST_TEXT_BYTES: usize = 1536;
@@ -703,49 +702,85 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::VaultUnavailable);
             }
-            if job.attempts >= MAX_LEARNER_JOB_ATTEMPTS {
-                job.state = LearnerJobState::Failed;
-                job.finished_at = Some(now);
-                job.last_failure = Some(AgentFailure::Stalled);
-                transaction.execute(
-                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ?",
-                    (payload(&job)?, job.id.to_string()),
-                ).await.map_err(storage)?;
-                self.check_access()?;
-                return Ok(None);
-            }
-            if let Err(failure) = validate_learner_source(&transaction, &job.input).await {
-                if !matches!(
-                    failure,
-                    AgentFailure::StaleContext
-                        | AgentFailure::NotFound
-                        | AgentFailure::PolicyDenied
-                ) {
-                    return Err(failure);
+            let previous_state = learner_job_state(job.state).to_owned();
+            let previous_attempts = job.attempts;
+            let previous_available_at = timestamp(job.available_at);
+            let lifecycle = LearnerJobLifecycle {
+                state: job.state,
+                attempts: job.attempts,
+                available_at: job.available_at,
+                claimed_at: job.claimed_at,
+                finished_at: job.finished_at,
+                candidate_id: job.candidate_id,
+                last_failure: job.last_failure,
+            };
+            let claim = claim_learner_job(&lifecycle, now)?;
+            let claimed = match claim {
+                LearnerJobClaim::Exhausted(exhausted) => {
+                    job.state = exhausted.state;
+                    job.finished_at = exhausted.finished_at;
+                    job.last_failure = exhausted.last_failure;
+                    let changed = transaction.execute(
+                        "UPDATE learner_review_jobs SET state = ?, payload = ? WHERE id = ? AND state = ? AND attempts = ? AND available_at = ?",
+                        (
+                            learner_job_state(job.state),
+                            payload(&job)?,
+                            job.id.to_string(),
+                            previous_state,
+                            i64::from(previous_attempts),
+                            previous_available_at,
+                        ),
+                    ).await.map_err(storage)?;
+                    if changed != 1 {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    self.check_access()?;
+                    return Ok(None);
                 }
-                job.state = LearnerJobState::Failed;
-                job.finished_at = Some(now);
-                job.last_failure = Some(failure);
-                transaction.execute(
-                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ?",
-                    (payload(&job)?, job.id.to_string()),
+                LearnerJobClaim::Claimed(claimed) => claimed,
+            };
+            if let Err(failure) = validate_learner_source(&transaction, &job.input).await {
+                let rejected = reject_learner_claim(&lifecycle, failure, now)?;
+                job.state = rejected.state;
+                job.attempts = rejected.attempts;
+                job.available_at = rejected.available_at;
+                job.claimed_at = rejected.claimed_at;
+                job.finished_at = rejected.finished_at;
+                job.candidate_id = rejected.candidate_id;
+                job.last_failure = rejected.last_failure;
+                let changed = transaction.execute(
+                    "UPDATE learner_review_jobs SET state = 'failed', payload = ? WHERE id = ? AND state = ? AND attempts = ? AND available_at = ?",
+                    (
+                        payload(&job)?,
+                        job.id.to_string(),
+                        previous_state,
+                        i64::from(previous_attempts),
+                        previous_available_at,
+                    ),
                 ).await.map_err(storage)?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
                 self.check_access()?;
                 return Ok(None);
             }
-            job.state = LearnerJobState::Running;
-            job.attempts = job.attempts.checked_add(1).ok_or(AgentFailure::VaultUnavailable)?;
-            job.claimed_at = Some(now);
-            job.available_at = now + chrono::Duration::seconds(LEARNER_JOB_LEASE_SECONDS);
-            job.finished_at = None;
-            job.last_failure = None;
+            job.state = claimed.state;
+            job.attempts = claimed.attempts;
+            job.available_at = claimed.available_at;
+            job.claimed_at = claimed.claimed_at;
+            job.finished_at = claimed.finished_at;
+            job.candidate_id = claimed.candidate_id;
+            job.last_failure = claimed.last_failure;
             let changed = transaction.execute(
-                "UPDATE learner_review_jobs SET state = 'running', attempts = ?, available_at = ?, payload = ? WHERE id = ?",
+                "UPDATE learner_review_jobs SET state = 'running', attempts = ?, available_at = ?, payload = ? WHERE id = ? AND state = ? AND attempts = ? AND available_at = ?",
                 (
                     i64::from(job.attempts),
                     timestamp(job.available_at),
                     payload(&job)?,
                     job.id.to_string(),
+                    previous_state,
+                    i64::from(previous_attempts),
+                    previous_available_at,
                 ),
             ).await.map_err(storage)?;
             if changed != 1 {
@@ -776,69 +811,52 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if job.state != LearnerJobState::Running || job.attempts != expected_attempt {
                 return Err(AgentFailure::Conflict);
             }
-            match settlement {
-                LearnerJobSettlement::Completed { candidate_id } => {
-                    if let Some(candidate_id) = candidate_id {
-                        let candidate =
-                            candidate_by_id(&transaction, self.person_id, candidate_id).await?;
-                        let expected_sources = job
-                            .input
-                            .turn_ids
-                            .iter()
-                            .map(|turn_id| LearningEvidenceRef {
-                                session_id: job.input.session_id,
-                                turn_id: *turn_id,
-                            })
-                            .collect::<Vec<_>>();
-                        if candidate.actor
-                            != (KnowledgeActor::Learner {
-                                run_id: job.input.run_id,
-                            })
-                            || candidate.source_refs != expected_sources
-                        {
-                            return Err(AgentFailure::PolicyDenied);
-                        }
-                        if !evidence_is_independent(
-                            &transaction,
-                            self.person_id,
-                            &candidate.source_refs,
-                        )
-                        .await?
-                        {
-                            return Err(AgentFailure::PolicyDenied);
-                        }
-                    }
-                    job.state = LearnerJobState::Completed;
-                    job.finished_at = Some(settled_at);
-                    job.candidate_id = candidate_id;
-                    job.last_failure = None;
+            if let LearnerJobSettlement::Completed { candidate_id: Some(candidate_id) } = settlement {
+                let candidate = candidate_by_id(&transaction, self.person_id, candidate_id).await?;
+                let expected_sources = job
+                    .input
+                    .turn_ids
+                    .iter()
+                    .map(|turn_id| LearningEvidenceRef {
+                        session_id: job.input.session_id,
+                        turn_id: *turn_id,
+                    })
+                    .collect::<Vec<_>>();
+                if candidate.actor
+                    != (KnowledgeActor::Learner {
+                        run_id: job.input.run_id,
+                    })
+                    || candidate.source_refs != expected_sources
+                {
+                    return Err(AgentFailure::PolicyDenied);
                 }
-                LearnerJobSettlement::Deferred {
-                    available_at,
-                    failure,
-                } => {
-                    if available_at <= settled_at
-                        || !retryable_learner_failure(failure)
-                    {
-                        return Err(AgentFailure::InvalidInput);
-                    }
-                    if job.attempts >= MAX_LEARNER_JOB_ATTEMPTS {
-                        job.state = LearnerJobState::Failed;
-                        job.finished_at = Some(settled_at);
-                        job.last_failure = Some(failure);
-                    } else {
-                        job.state = LearnerJobState::Deferred;
-                        job.available_at = available_at;
-                        job.claimed_at = None;
-                        job.last_failure = Some(failure);
-                    }
-                }
-                LearnerJobSettlement::Failed { failure } => {
-                    job.state = LearnerJobState::Failed;
-                    job.finished_at = Some(settled_at);
-                    job.last_failure = Some(failure);
+                if !evidence_is_independent(
+                    &transaction,
+                    self.person_id,
+                    &candidate.source_refs,
+                )
+                .await?
+                {
+                    return Err(AgentFailure::PolicyDenied);
                 }
             }
+            let lifecycle = LearnerJobLifecycle {
+                state: job.state,
+                attempts: job.attempts,
+                available_at: job.available_at,
+                claimed_at: job.claimed_at,
+                finished_at: job.finished_at,
+                candidate_id: job.candidate_id,
+                last_failure: job.last_failure,
+            };
+            let settled = settle_learner_job(&lifecycle, expected_attempt, settlement, settled_at)?;
+            job.state = settled.state;
+            job.attempts = settled.attempts;
+            job.available_at = settled.available_at;
+            job.claimed_at = settled.claimed_at;
+            job.finished_at = settled.finished_at;
+            job.candidate_id = settled.candidate_id;
+            job.last_failure = settled.last_failure;
             let changed = transaction.execute(
                 "UPDATE learner_review_jobs SET state = ?, available_at = ?, payload = ? WHERE id = ? AND state = 'running' AND attempts = ?",
                 (
@@ -1057,46 +1075,21 @@ fn validate_learner_job(
     job: &LearnerReviewJob,
     person_id: floe_domain::PersonId,
 ) -> Result<(), AgentFailure> {
-    let valid_lifecycle = match job.state {
-        LearnerJobState::Queued => {
-            job.attempts == 0
-                && job.claimed_at.is_none()
-                && job.finished_at.is_none()
-                && job.candidate_id.is_none()
-                && job.last_failure.is_none()
-        }
-        LearnerJobState::Running => {
-            (1..=MAX_LEARNER_JOB_ATTEMPTS).contains(&job.attempts)
-                && job.claimed_at.is_some()
-                && job.finished_at.is_none()
-                && job.candidate_id.is_none()
-                && job.last_failure.is_none()
-        }
-        LearnerJobState::Deferred => {
-            (1..MAX_LEARNER_JOB_ATTEMPTS).contains(&job.attempts)
-                && job.claimed_at.is_none()
-                && job.finished_at.is_none()
-                && job.candidate_id.is_none()
-                && job.last_failure.is_some_and(retryable_learner_failure)
-        }
-        LearnerJobState::Completed => {
-            job.attempts > 0 && job.finished_at.is_some() && job.last_failure.is_none()
-        }
-        LearnerJobState::Failed => {
-            job.attempts <= MAX_LEARNER_JOB_ATTEMPTS
-                && job.finished_at.is_some()
-                && job.candidate_id.is_none()
-                && job.last_failure.is_some()
-        }
-    };
     if job.schema_version != KNOWLEDGE_VERSION
         || job.idempotency_key.is_empty()
-        || job.attempts > MAX_LEARNER_JOB_ATTEMPTS
         || job.input.run_id != job.id
-        || !valid_lifecycle
     {
         return Err(AgentFailure::VaultUnavailable);
     }
+    validate_learner_job_lifecycle(&LearnerJobLifecycle {
+        state: job.state,
+        attempts: job.attempts,
+        available_at: job.available_at,
+        claimed_at: job.claimed_at,
+        finished_at: job.finished_at,
+        candidate_id: job.candidate_id,
+        last_failure: job.last_failure,
+    })?;
     validate_learner_input(&job.input, person_id).map_err(|_| AgentFailure::VaultUnavailable)
 }
 

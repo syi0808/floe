@@ -10,8 +10,13 @@ use crate::{
     AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentOutcome, AgentUsage,
     Cancellation, ContextMemory, DataClass, InferencePolicyDecision, KNOWLEDGE_VERSION,
     KnowledgeActor, KnowledgeCandidate, LearningObservationKind, ModelPlacement, ModelRequest,
-    ModelRunner, ModelStep, PersonalMemoryValue, StageMemoryCandidate, TransferConsent,
-    UsageLedger, generate_with_recovery, learner_prompt,
+    ModelRunner, ModelStep, StageMemoryCandidate, TransferConsent, UsageLedger,
+    generate_with_recovery, learner_prompt,
+};
+
+pub use floe_knowledge::{
+    LearnerBudget, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal,
+    LearnerReviewOutput, retryable_learner_failure, settlement_for_learner_result,
 };
 
 const MAX_LEARNER_VERSION_BYTES: usize = 128;
@@ -75,27 +80,6 @@ pub struct LearnerReviewInput {
     pub observed_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearnerMemoryProposal {
-    pub observation_kind: LearningObservationKind,
-    pub value: PersonalMemoryValue,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_id: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_revision: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearnerReviewOutput {
-    pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proposal: Option<LearnerMemoryProposal>,
-    pub used_tokens: u64,
-    pub cost_micros: u64,
-}
-
 #[derive(Clone)]
 pub struct LearnerModelRequest {
     pub input: LearnerReviewInput,
@@ -104,16 +88,6 @@ pub struct LearnerModelRequest {
     pub max_output_bytes: usize,
     pub deadline: Instant,
     pub cancellation: Cancellation,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LearnerJobState {
-    Queued,
-    Running,
-    Deferred,
-    Completed,
-    Failed,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -134,53 +108,6 @@ pub struct LearnerReviewJob {
     pub candidate_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_failure: Option<AgentFailure>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LearnerJobSettlement {
-    Completed {
-        candidate_id: Option<Uuid>,
-    },
-    Deferred {
-        available_at: DateTime<Utc>,
-        failure: AgentFailure,
-    },
-    Failed {
-        failure: AgentFailure,
-    },
-}
-
-pub const fn retryable_learner_failure(failure: AgentFailure) -> bool {
-    matches!(
-        failure,
-        AgentFailure::Cancelled
-            | AgentFailure::DeadlineExceeded
-            | AgentFailure::ModelUnavailable
-            | AgentFailure::LocalModelUnavailable
-            | AgentFailure::QuotaExceeded
-            | AgentFailure::Interrupted
-    )
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LearnerBudget {
-    pub max_input_bytes: usize,
-    pub max_output_bytes: usize,
-    pub max_model_tokens: u64,
-    pub max_model_cost_micros: u64,
-    pub deadline_ms: u64,
-}
-
-impl Default for LearnerBudget {
-    fn default() -> Self {
-        Self {
-            max_input_bytes: 16 * 1024,
-            max_output_bytes: 4 * 1024,
-            max_model_tokens: 8_192,
-            max_model_cost_micros: 50_000,
-            deadline_ms: 15_000,
-        }
-    }
 }
 
 pub trait LearnerModel {
@@ -407,6 +334,8 @@ impl<Model: LearnerModel + Sync, Sink: MemoryCandidateSink + Sync> LearnerRuntim
 
 #[cfg(test)]
 mod tests {
+    use floe_knowledge::PersonalMemoryValue;
+
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},

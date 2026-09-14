@@ -741,6 +741,45 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
     );
     let second = vault.claim_learner_review(retry_at).await.unwrap().unwrap();
     assert_eq!(second.attempts, 2);
+    for stale_settlement in [
+        LearnerJobSettlement::Completed { candidate_id: None },
+        LearnerJobSettlement::Deferred {
+            available_at: retry_at + chrono::Duration::minutes(1),
+            failure: AgentFailure::Cancelled,
+        },
+        LearnerJobSettlement::Failed {
+            failure: AgentFailure::InvalidModelOutput,
+        },
+    ] {
+        assert_eq!(
+            vault
+                .settle_learner_review(first.id, first.attempts, stale_settlement, retry_at)
+                .await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            vault.enqueue_learner_review(input.clone(), now).await.unwrap(),
+            second
+        );
+    }
+    assert_eq!(
+        vault
+            .settle_learner_review(
+                second.id,
+                second.attempts,
+                LearnerJobSettlement::Deferred {
+                    available_at: retry_at + chrono::Duration::minutes(1),
+                    failure: AgentFailure::VaultUnavailable,
+                },
+                retry_at,
+            )
+            .await,
+        Err(AgentFailure::InvalidInput)
+    );
+    assert_eq!(
+        vault.enqueue_learner_review(input.clone(), now).await.unwrap(),
+        second
+    );
     assert_eq!(
         vault
             .settle_learner_review(
@@ -814,6 +853,26 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
             .unwrap()
             .unwrap();
         assert_eq!(claimed.attempts, attempt);
+        if attempt > 1 {
+            assert_eq!(
+                vault
+                    .settle_learner_review(
+                        claimed.id,
+                        attempt - 1,
+                        LearnerJobSettlement::Completed { candidate_id: None },
+                        claimed_at,
+                    )
+                    .await,
+                Err(AgentFailure::Conflict)
+            );
+            assert_eq!(
+                vault
+                    .enqueue_learner_review(abandoned_input.clone(), lease_start)
+                    .await
+                    .unwrap(),
+                claimed
+            );
+        }
         if attempt == 3 {
             exhausted = Some(
                 vault

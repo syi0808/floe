@@ -87,11 +87,12 @@ pub use experts::{
     LifeLogisticsExpertResult, LogisticsPreparation, LogisticsUrgency, PortfolioExpertInvocation,
     WorkContextExpertResult, WorkInsight, run_life_logistics_expert, run_work_context_expert,
 };
+pub use floe_execution::{CancelReason, Cancellation};
 pub use learner::{
     LearnerBudget, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
     LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
     MemoryCandidateSink, StructuredLearnerModel, explicit_learning_signal,
-    retryable_learner_failure,
+    retryable_learner_failure, settlement_for_learner_result,
 };
 pub use learning::{
     EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
@@ -148,5 +149,4 @@ pub use registry::{
     PackageKind, PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
     RegistrySnapshot,
 };
-pub use floe_execution::{CancelReason, Cancellation};
 pub use runtime::AgentRuntime;
