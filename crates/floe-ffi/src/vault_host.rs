@@ -177,6 +177,7 @@ struct Worker {
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
     _conversation_repository: Arc<VaultConversationRepository<Keys>>,
+    _recovered_conversation_runs: Vec<floe_core::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
@@ -189,7 +190,9 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         local_context: Arc<LocalContextStore>,
     ) -> Result<Self, AgentFailure> {
         let vault = Arc::new(vault);
-        let conversation_repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+        let conversation_activation = vault.activate_conversation_executor().await?;
+        let conversation_repository =
+            Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
         let directory = Directory::default();
         let schedule_endpoint = Arc::new(
             conversation_turn::expert_dispatch::schedule::ScheduleEndpoint::new(
@@ -220,6 +223,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         Ok(Self {
             vault,
             _conversation_repository: conversation_repository,
+            _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
             schedule_endpoint,
             _recovered_tasks: recovered_tasks,

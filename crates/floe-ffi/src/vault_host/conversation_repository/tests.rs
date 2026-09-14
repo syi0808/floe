@@ -13,10 +13,11 @@ use floe_agent_contract::{
 use floe_conversation::{
     ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnRequest,
 };
-use floe_core::VaultKey;
+use floe_core::{FloeCore, VaultConversationAdmissionRequest, VaultKey};
 use floe_domain::PersonId;
 
 use super::*;
+use crate::vault_host::OpenVault;
 
 #[derive(Clone, Default)]
 struct Keys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -161,6 +162,7 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
             .unwrap(),
     );
     let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
     let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
     let service = build_service(Arc::clone(&repository));
     let model = Model::default();
@@ -206,6 +208,8 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
             .await
             .unwrap(),
     );
+    let activation = reopened.activate_conversation_executor().await.unwrap();
+    assert!(activation.interrupted.is_empty());
     let reopened_repository = Arc::new(VaultConversationRepository::new(reopened));
     let reopened_service = build_service(reopened_repository);
     turn.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -223,4 +227,55 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(replay, receipt);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    let command_id = floe_agent_contract::CommandId::new();
+    vault
+        .admit_conversation_turn(VaultConversationAdmissionRequest {
+            run_id,
+            command_id,
+            session_id: session.id,
+            person_id,
+            expected_session_revision: 0,
+            request_digest: [9; 32],
+            text: "unfinished".into(),
+        })
+        .await
+        .unwrap();
+    drop(vault);
+
+    let opened = OpenVault::activate(
+        EncryptedAgentVault::open(root.path(), person_id, keys)
+            .await
+            .unwrap(),
+        Arc::new(FloeCore::open(":memory:").await.unwrap()),
+        Arc::new(crate::local_context::LocalContextStore::default()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(opened._recovered_conversation_runs.len(), 1);
+    let recovered = &opened._recovered_conversation_runs[0];
+    assert_eq!(recovered.run_id, run_id);
+    assert_eq!(recovered.command_id, command_id);
+    assert_eq!(recovered.state, VaultConversationRunState::Interrupted);
+    assert_eq!(recovered.issue, Some(AgentFailure::Interrupted));
+    assert_eq!(recovered.executor_generation, 2);
+    let recovered_session = opened.load(person_id, session.id).await.unwrap();
+    assert_eq!(recovered_session.active_turn, None);
+    assert_eq!(
+        opened.conversation_run(run_id).await.unwrap().unwrap(),
+        *recovered
+    );
 }

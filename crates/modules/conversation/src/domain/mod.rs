@@ -31,6 +31,7 @@ pub struct RunReceipt {
     pub issue: Option<AgentFailure>,
     pub session_revision: u64,
     pub aggregate_revision: u64,
+    pub executor_generation: u64,
 }
 
 impl RunReceipt {
@@ -45,6 +46,7 @@ impl RunReceipt {
             || self.request_digest == [0; 32]
             || self.session_revision == 0
             || self.aggregate_revision == 0
+            || self.executor_generation == 0
             || self.coverage.validate().is_err()
             || self
                 .output

@@ -209,6 +209,7 @@ fn run_receipt(record: VaultConversationRunRecord) -> Result<RunReceipt, AgentFa
         issue: record.issue,
         session_revision: record.session_revision,
         aggregate_revision: record.aggregate_revision,
+        executor_generation: record.executor_generation,
     };
     receipt.validate()?;
     Ok(receipt)

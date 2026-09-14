@@ -96,6 +96,7 @@ impl ConversationRepository for MemoryRepository {
                 issue: None,
                 session_revision: session.revision,
                 aggregate_revision: 1,
+                executor_generation: 1,
             };
             receipt.validate()?;
             let admitted = AdmittedTurn {

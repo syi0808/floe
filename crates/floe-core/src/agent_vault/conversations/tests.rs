@@ -61,6 +61,14 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
     let mut vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
         .await
         .unwrap();
+    assert_eq!(
+        vault
+            .activate_conversation_executor()
+            .await
+            .unwrap()
+            .executor_generation,
+        1
+    );
     let session = vault.create_session().await.unwrap();
     let run_id = RunId::new();
     let command_id = CommandId::new();
@@ -143,6 +151,9 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
     vault = EncryptedAgentVault::open(root.path(), person_id, keys)
         .await
         .unwrap();
+    let activation = vault.activate_conversation_executor().await.unwrap();
+    assert_eq!(activation.executor_generation, 2);
+    assert!(activation.interrupted.is_empty());
     assert_eq!(
         vault.conversation_run(run_id).await.unwrap(),
         Some(terminal)
@@ -157,6 +168,7 @@ async fn active_claim_blocks_another_command_and_invalid_terminal_cannot_release
     let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
         .await
         .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
     let session = vault.create_session().await.unwrap();
     let run_id = RunId::new();
     vault
@@ -211,4 +223,84 @@ async fn active_claim_blocks_another_command_and_invalid_terminal_cannot_release
         vault.load(person_id, session.id).await.unwrap().active_turn,
         None
     );
+}
+
+#[tokio::test]
+async fn activation_interrupts_orphan_and_releases_claim_without_replaying_work() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let keys = Keys::default();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, keys.clone())
+        .await
+        .unwrap();
+    let first_activation = vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    let command_id = CommandId::new();
+    let admission = request(person_id, session.id, run_id, command_id);
+    let VaultConversationAdmission::Created { record, .. } = vault
+        .admit_conversation_turn(admission.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("expected created admission");
+    };
+    assert_eq!(
+        record.executor_generation,
+        first_activation.executor_generation
+    );
+
+    drop(vault);
+    let vault = EncryptedAgentVault::open(root.path(), person_id, keys)
+        .await
+        .unwrap();
+    let recovery = vault.activate_conversation_executor().await.unwrap();
+    assert_eq!(recovery.executor_generation, 2);
+    assert_eq!(recovery.interrupted.len(), 1);
+    let interrupted = &recovery.interrupted[0];
+    assert_eq!(interrupted.run_id, run_id);
+    assert_eq!(interrupted.state, VaultConversationRunState::Interrupted);
+    assert_eq!(interrupted.issue, Some(AgentFailure::Interrupted));
+    assert_eq!(interrupted.executor_generation, 2);
+    assert_eq!(interrupted.aggregate_revision, 2);
+    assert_eq!(interrupted.session_revision, 2);
+    let recovered_session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(recovered_session.active_turn, None);
+    assert_eq!(
+        recovered_session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::Interrupted
+        })
+    );
+    assert_eq!(
+        vault.admit_conversation_turn(admission).await.unwrap(),
+        VaultConversationAdmission::Existing(interrupted.clone())
+    );
+    assert_eq!(
+        vault
+            .finish_conversation_run(
+                run_id,
+                1,
+                VaultConversationTerminal {
+                    state: VaultConversationRunState::Completed,
+                    output: Some("late".into()),
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                    appended_messages: vec![AgentMessage::Assistant {
+                        turn_id: run_id.as_uuid(),
+                        text: "late".into(),
+                    }],
+                },
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+
+    let mut next = request(person_id, session.id, RunId::new(), CommandId::new());
+    next.expected_session_revision = interrupted.session_revision;
+    assert!(matches!(
+        vault.admit_conversation_turn(next).await.unwrap(),
+        VaultConversationAdmission::Created { .. }
+    ));
 }

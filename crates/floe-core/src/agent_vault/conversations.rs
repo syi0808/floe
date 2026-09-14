@@ -44,6 +44,7 @@ pub struct VaultConversationRunRecord {
     pub session_revision: u64,
     pub aggregate_revision: u64,
     pub journal_revision: u64,
+    pub executor_generation: u64,
 }
 
 impl VaultConversationRunRecord {
@@ -63,6 +64,7 @@ impl VaultConversationRunRecord {
             || self.request_digest == [0; 32]
             || self.session_revision <= self.initial_session_revision
             || self.aggregate_revision == 0
+            || self.executor_generation == 0
             || self.journal_revision > MAX_JOURNAL_ENTRIES
             || self.coverage.validate().is_err()
             || self
@@ -148,6 +150,12 @@ pub enum VaultConversationAdmission {
     Existing(VaultConversationRunRecord),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationActivation {
+    pub executor_generation: u64,
+    pub interrupted: Vec<VaultConversationRunRecord>,
+}
+
 #[derive(Clone, Debug)]
 pub struct VaultConversationTerminal {
     pub state: VaultConversationRunState,
@@ -217,6 +225,127 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    pub async fn activate_conversation_executor(
+        &self,
+    ) -> Result<VaultConversationActivation, AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            initialize(&transaction).await?;
+            let current_generation = executor_generation(&transaction).await?;
+            let next_generation = current_generation
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            let mut rows = transaction
+                .query(
+                    "SELECT run_id FROM agent_conversation_runs WHERE state = 'working' ORDER BY run_id LIMIT 4097",
+                    (),
+                )
+                .await
+                .map_err(storage)?;
+            let mut run_ids = Vec::new();
+            while let Some(row) = rows.next().await.map_err(storage)? {
+                run_ids.push(parse_run_id(&row.get::<String>(0).map_err(storage)?)?);
+            }
+            drop(rows);
+            if run_ids.len() > usize::try_from(MAX_RUN_ROWS).unwrap_or(usize::MAX) {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            let mut interrupted = Vec::with_capacity(run_ids.len());
+            for run_id in run_ids {
+                let current = self
+                    .conversation_run_on(&transaction, run_id)
+                    .await?
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                if current.state != VaultConversationRunState::Working
+                    || current.executor_generation >= next_generation
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                let mut session = self.session_on(&transaction, current.session_id).await?;
+                if session.person_id != self.person_id
+                    || session.revision != current.session_revision
+                    || session.active_turn != Some(run_id.as_uuid())
+                {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                let previous_session_revision = session.revision;
+                session.revision = session
+                    .revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::Conflict)?;
+                session.active_turn = None;
+                session.continuation = None;
+                session.last_outcome = Some(AgentOutcome::Halted {
+                    reason: AgentFailure::Interrupted,
+                });
+                let changed = transaction
+                    .execute(
+                        "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                        (
+                            integer(session.revision)?,
+                            self.payload(&session)?,
+                            session.id.to_string(),
+                            integer(previous_session_revision)?,
+                        ),
+                    )
+                    .await
+                    .map_err(storage)?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
+                let next = VaultConversationRunRecord {
+                    state: VaultConversationRunState::Interrupted,
+                    issue: Some(AgentFailure::Interrupted),
+                    session_revision: session.revision,
+                    aggregate_revision: current
+                        .aggregate_revision
+                        .checked_add(1)
+                        .ok_or(AgentFailure::Conflict)?,
+                    executor_generation: next_generation,
+                    ..current.clone()
+                };
+                next.validate(self.person_id)?;
+                let changed = write_run(
+                    &transaction,
+                    &next,
+                    current.aggregate_revision,
+                    current.executor_generation,
+                )
+                .await?;
+                if changed != 1 {
+                    return Err(AgentFailure::Conflict);
+                }
+                interrupted.push(next);
+            }
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_conversation_executor SET generation = ? WHERE id = 1 AND generation = ?",
+                    (integer(next_generation)?, integer(current_generation)?),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            self.check_access()?;
+            Ok(VaultConversationActivation {
+                executor_generation: next_generation,
+                interrupted,
+            })
+        }
+        .await;
+        let activation = self
+            .finish_registry_transaction_checked(transaction, result)
+            .await?;
+        self.conversation_executor_generation
+            .store(activation.executor_generation, Ordering::Release);
+        Ok(activation)
+    }
+
     pub async fn admit_conversation_turn(
         &self,
         request: VaultConversationAdmissionRequest,
@@ -242,6 +371,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     Err(AgentFailure::Conflict)
                 };
             }
+            let executor_generation = self
+                .active_conversation_executor_generation(&transaction)
+                .await?;
             let mut session = self.session_on(&transaction, request.session_id).await?;
             if session.person_id != request.person_id
                 || session.scope.is_some()
@@ -316,17 +448,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 session_revision: session.revision,
                 aggregate_revision: 1,
                 journal_revision: 0,
+                executor_generation,
             };
             record.validate(self.person_id)?;
             transaction
                 .execute(
-                    "INSERT INTO agent_conversation_runs (run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload) VALUES (?, ?, ?, ?, ?, 1, 0, ?)",
+                    "INSERT INTO agent_conversation_runs (run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)",
                     (
                         record.run_id.as_uuid().to_string(),
                         record.command_id.as_uuid().to_string(),
                         record.session_id.to_string(),
                         record.person_id.to_string(),
                         state_name(record.state),
+                        integer(record.executor_generation)?,
                         encode_record(&record)?,
                     ),
                 )
@@ -367,6 +501,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .conversation_run_on(&transaction, run_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
+            if record.executor_generation
+                != self.active_conversation_executor_generation(&transaction).await?
+            {
+                return Err(AgentFailure::Conflict);
+            }
             if record.state != VaultConversationRunState::Working
                 || record.journal_revision >= MAX_JOURNAL_ENTRIES
             {
@@ -426,6 +565,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .conversation_run_on(&transaction, run_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
+            if current.executor_generation
+                != self.active_conversation_executor_generation(&transaction).await?
+            {
+                return Err(AgentFailure::Conflict);
+            }
             if current.state != VaultConversationRunState::Working
                 || current.aggregate_revision != expected_aggregate_revision
             {
@@ -491,13 +635,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             next.validate(self.person_id)?;
             let changed = transaction
                 .execute(
-                    "UPDATE agent_conversation_runs SET state = ?, aggregate_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND aggregate_revision = ?",
+                    "UPDATE agent_conversation_runs SET state = ?, aggregate_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND aggregate_revision = ? AND executor_generation = ?",
                     (
                         state_name(next.state),
                         integer(next.aggregate_revision)?,
                         encode_record(&next)?,
                         run_id.as_uuid().to_string(),
                         integer(expected_aggregate_revision)?,
+                        integer(current.executor_generation)?,
                     ),
                 )
                 .await
@@ -535,7 +680,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         read_record(
             self.person_id,
             connection,
-            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs WHERE command_id = ?",
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs WHERE command_id = ?",
             command_id.as_uuid().to_string(),
         )
         .await
@@ -549,17 +694,30 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         read_record(
             self.person_id,
             connection,
-            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs WHERE run_id = ?",
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs WHERE run_id = ?",
             run_id.as_uuid().to_string(),
         )
         .await
+    }
+
+    async fn active_conversation_executor_generation(
+        &self,
+        connection: &turso::Connection,
+    ) -> Result<u64, AgentFailure> {
+        let active = self
+            .conversation_executor_generation
+            .load(Ordering::Acquire);
+        if active == 0 || active != executor_generation_on(connection).await? {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(active)
     }
 }
 
 async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     let mut tables = transaction
         .query(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_runs', 'agent_conversation_journal')",
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_executor', 'agent_conversation_runs', 'agent_conversation_journal')",
             (),
         )
         .await
@@ -579,7 +737,14 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_runs (run_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('working', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), journal_revision INTEGER NOT NULL CHECK (journal_revision >= 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
+                "CREATE TABLE agent_conversation_executor (id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL CHECK (generation >= 0))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "CREATE TABLE agent_conversation_runs (run_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('working', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), journal_revision INTEGER NOT NULL CHECK (journal_revision >= 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
                 (),
             )
             .await
@@ -605,10 +770,18 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             )
             .await
             .map_err(storage)?;
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_executor (id, generation) VALUES (1, 0)",
+                (),
+            )
+            .await
+            .map_err(storage)?;
         return Ok(());
     }
     if found
         != [
+            "agent_conversation_executor".to_owned(),
             "agent_conversation_journal".to_owned(),
             "agent_conversation_runs".to_owned(),
             "agent_conversation_schema".to_owned(),
@@ -633,7 +806,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     }
     transaction
         .query(
-            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs LIMIT 0",
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs LIMIT 0",
             (),
         )
         .await
@@ -657,6 +830,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     {
         return Err(AgentFailure::VaultUnavailable);
     }
+    executor_generation(transaction).await?;
     Ok(())
 }
 
@@ -674,7 +848,7 @@ async fn read_record(
         return Ok(None);
     };
     let record: VaultConversationRunRecord =
-        serde_json::from_str(&row.get::<String>(7).map_err(storage)?).map_err(unavailable)?;
+        serde_json::from_str(&row.get::<String>(8).map_err(storage)?).map_err(unavailable)?;
     record.validate(person_id)?;
     if row.get::<String>(0).map_err(storage)? != record.run_id.as_uuid().to_string()
         || row.get::<String>(1).map_err(storage)? != record.command_id.as_uuid().to_string()
@@ -683,11 +857,70 @@ async fn read_record(
         || row.get::<String>(4).map_err(storage)? != state_name(record.state)
         || row.get::<i64>(5).map_err(storage)? != integer(record.aggregate_revision)?
         || row.get::<i64>(6).map_err(storage)? != integer(record.journal_revision)?
+        || row.get::<i64>(7).map_err(storage)? != integer(record.executor_generation)?
         || rows.next().await.map_err(storage)?.is_some()
     {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(Some(record))
+}
+
+async fn executor_generation(connection: &turso::Connection) -> Result<u64, AgentFailure> {
+    let generation = executor_generation_on(connection).await?;
+    if generation > i64::MAX as u64 {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(generation)
+}
+
+async fn executor_generation_on(connection: &turso::Connection) -> Result<u64, AgentFailure> {
+    let mut rows = connection
+        .query(
+            "SELECT generation FROM agent_conversation_executor WHERE id = 1",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    let value = rows
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::VaultUnavailable)?
+        .get::<i64>(0)
+        .map_err(storage)?;
+    if value < 0 || rows.next().await.map_err(storage)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(value as u64)
+}
+
+async fn write_run(
+    transaction: &Transaction<'_>,
+    next: &VaultConversationRunRecord,
+    expected_revision: u64,
+    expected_generation: u64,
+) -> Result<u64, AgentFailure> {
+    transaction
+        .execute(
+            "UPDATE agent_conversation_runs SET state = ?, aggregate_revision = ?, executor_generation = ?, payload = ? WHERE run_id = ? AND aggregate_revision = ? AND executor_generation = ?",
+            (
+                state_name(next.state),
+                integer(next.aggregate_revision)?,
+                integer(next.executor_generation)?,
+                encode_record(next)?,
+                next.run_id.as_uuid().to_string(),
+                integer(expected_revision)?,
+                integer(expected_generation)?,
+            ),
+        )
+        .await
+        .map_err(storage)
+}
+
+fn parse_run_id(value: &str) -> Result<RunId, AgentFailure> {
+    Uuid::parse_str(value)
+        .map_err(unavailable)
+        .and_then(|value| RunId::from_uuid(value).ok_or(AgentFailure::VaultUnavailable))
 }
 
 fn encode_record(record: &VaultConversationRunRecord) -> Result<String, AgentFailure> {

@@ -39,8 +39,8 @@ pub use access_grants::AccessGrantCleanup;
 pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
-    VaultConversationAdmission, VaultConversationAdmissionRequest, VaultConversationRunRecord,
-    VaultConversationRunState, VaultConversationTerminal,
+    VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
+    VaultConversationRunRecord, VaultConversationRunState, VaultConversationTerminal,
 };
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
@@ -100,6 +100,7 @@ pub struct EncryptedAgentVault<Keys> {
     person_id: PersonId,
     vault_id: Uuid,
     unavailable: AtomicBool,
+    conversation_executor_generation: AtomicU64,
     task_executor_generation: AtomicU64,
     _host_lock: File,
 }
@@ -453,6 +454,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
         };
@@ -522,6 +524,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             person_id,
             vault_id,
             unavailable: AtomicBool::new(false),
+            conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
             _host_lock: host_lock,
         };
