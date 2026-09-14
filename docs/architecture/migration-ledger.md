@@ -1946,3 +1946,49 @@ trace integration, final app-host/scheduler placement, Conversation and reposito
 ownership, full Playbook delivery, real learner quality, Apple review UI and
 complete T11/T28/T31 evidence still require work. The previously recorded Flutter
 fixture and normal-app secure-storage failures remain open.
+
+## P08 native subject and validity quality correction — 2026-09-14
+
+Code checkpoint `d572a7e`: the native learner grammar separates subject from
+claim and explicitly represents timeless, start-only, end-only and ranged
+validity. Serialization preserves the existing Knowledge wire fields and all
+target/revision, confidence, epistemic and date-order checks. Date parsing still
+supports fractional RFC3339 input; Knowledge's strict parser remains authoritative.
+No temporal feature was removed, no invalid output was normalized into null,
+and the response token ceiling was not reduced to fit the smoke fixture.
+
+Knowledge role/protocol and extractor metadata are versioned at v3. Prompts retain
+untrusted-evidence boundaries, supported facts only, exact subject preservation,
+create/revise/explicit-retire conditions, no external actions and runtime-owned
+observation time. During exploration an expanded prompt exceeded the existing
+4096-byte native instruction cap; it was compacted rather than raising the cap.
+That temporary budget failure does not explain the earlier in-budget date and
+subject hallucinations. The final examples use a different claim from the live
+fixture, avoiding an answer copied from a fixture-specific prompt example.
+
+Final signed on-device validation passed for three paths: ordinary general
+answer, the unchanged fictional Alex preference with no dates, and a new explicit
+expiry-only fixture. Both learner cases invoke the production Knowledge service
+with actual Foundation availability/profile routing and disposable encrypted
+Vault storage. Each produces exactly one pending candidate, preserves fictional
+Alex and the afternoon preference, and passes persisted settlement/candidate
+linkage checks. The timeless case has both dates null; the expiry case copies the
+supplied expiry and leaves its start date null. Neither is automatically approved.
+
+The first expiry-only attempt incorrectly omitted its explicit expiry and the
+new fixture correctly failed. A native field guide distinguishing the four
+validity forms corrected it; the timeless case was then rerun successfully with
+the same final schema. These two examples are evidence of useful positive paths,
+not proof of arbitrary model correctness, revise/retire behavior, date ranges,
+multilingual inputs or adversarial robustness. Those broader acceptance cases
+remain open. Candidate review remains necessary.
+
+Regression coverage retains the original native invalid/equal/fractional date
+assertions under the new grammar, adds start/end-only support and rejects empty
+subjects/claims and malformed expiry dates. Swift host tests and actual Infra
+local-model tests (8) pass; Infra learner tests (8), Knowledge tests (21), workspace
+all-target checking and Knowledge Clippy also pass. Earlier in this turn the full
+FFI library suite (77) passed after the service/scheduling cutover. No normal app
+rebuild, Apple review UI or iOS device validation was performed. All live learner
+fixtures use temporary encrypted storage/in-memory keys, not normal app or
+external-account data. P08 and the full P00–P25 goal remain active.
