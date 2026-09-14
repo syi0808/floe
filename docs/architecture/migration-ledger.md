@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: production new-turn caller and built-in Task delegation use extracted services; continuation pending |
+| P12 | Partial: new-turn/recovery callers and built-in Tasks use extracted services; continuation admission pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2896,3 +2896,44 @@ The next executable task is to add a generation-bound continuation reference
 and bounded journal read/replay contract, then admit Continue through
 `ConversationService` without appending a duplicate user message. P12 remains
 partial; the legacy continuation branch is removed by that checkpoint.
+
+### P12 durable continuation journal projection checkpoint (2026-09-15)
+
+Code checkpoint `c408acb` adds the bounded read half of the continuation
+contract. The encrypted Conversation store now returns a Run journal only when
+all revisions from one through the recorded journal revision are present and
+within the 512-entry/entry-size bounds. The FFI repository strictly decodes
+each encrypted payload as a typed `JournalEvent` and verifies that its stored
+phase matches the event kind; malformed, relabelled or incomplete storage is
+not exposed as replay input.
+
+Conversation now owns `JournalEntry` and `ContinuationSnapshot` plus a
+projection that accepts only terminal DeadlineExceeded or BudgetExceeded Runs.
+It pairs every model, tool and delegation intent with its exact result, rejects
+duplicate identities and non-terminal Tasks, preserves result coverage in the
+bounded continuation transcript, and constructs model replay receipts from
+settled work. An unmatched model/tool/Task intent is `Interrupted`, and a
+journal containing a final Output is not eligible for continuation. A Session
+whose revision advanced after the source Run is rejected before projection, so
+an old continuation cannot be grafted onto newer conversation state.
+
+Implemented and wired: encrypted journal reads, typed FFI conversion, and the
+Conversation-owned settled-work continuation projection. Direct validation
+passed 5 Conversation tests, including exact tool pairing and rejection of an
+unsettled intent; 3 encrypted Core Conversation tests, including exact raw
+journal recovery; and an FFI encrypted-Vault test that terminalized a Run after
+a settled tool, projected its observation and replay receipt, and preserved the
+original call identity. All 88 FFI library tests passed. Focused Conversation
+Clippy passed with warnings denied, workspace all-target check and diff check
+passed, and the migration boundary gate passed (20 nodes / 68 edges / no
+errors). No Apple UI or production continuation submission was exercised.
+
+Blocker/remove-by: continuation admission is not yet represented in the Run
+request or encrypted admission transaction, and terminalization does not yet
+persist a generation-bound continuation reference. The production
+`continuation: true` caller therefore remains on legacy `AgentRuntime`; cutting
+it over now would append a duplicate user message and could accept a stale
+cursor. The next executable task is to add `NewTurn | Continue` admission,
+persist the resumable Run reference on bounded failure, and feed this snapshot
+to the next Manager Engine root. The legacy continuation branch is removed by
+that P12 checkpoint.
