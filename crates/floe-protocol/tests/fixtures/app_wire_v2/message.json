@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000007",
+  "status": "ok",
+  "result": {
+    "kind": "message",
+    "message_id": "00000000-0000-0000-0000-000000000004",
+    "role": "assistant",
+    "text": "오늘은 중요한 일부터 시작하세요."
+  }
+}

@@ -12,6 +12,7 @@ pub enum AppWireErrorCodeDto {
     UnsupportedVersion,
     CommandIdConflict,
     SessionBusy,
+    Conflict,
     NotFound,
     AccessDenied,
     Unavailable,

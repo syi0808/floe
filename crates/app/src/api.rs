@@ -28,7 +28,7 @@ pub trait HostServices {
 pub struct CallerContext {
     person_id: Uuid,
     device_id: String,
-    runtime_epoch: Uuid,
+    runtime_epoch: u64,
 }
 
 impl CallerContext {
@@ -40,20 +40,20 @@ impl CallerContext {
         &self.device_id
     }
 
-    pub fn runtime_epoch(&self) -> Uuid {
+    pub fn runtime_epoch(&self) -> u64 {
         self.runtime_epoch
     }
 
     pub(crate) fn verified(
         claim: LocalIdentityClaim,
-        runtime_epoch: Uuid,
+        runtime_epoch: u64,
     ) -> Result<Self, HostError> {
         if claim.person_id.is_nil()
             || claim.device_id.trim() != claim.device_id
             || claim.device_id.is_empty()
             || claim.device_id.len() > 128
             || claim.device_id.chars().any(char::is_control)
-            || runtime_epoch.is_nil()
+            || runtime_epoch == 0
         {
             return Err(HostError::InvalidIdentity);
         }

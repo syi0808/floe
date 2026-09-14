@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{RefCell, RefMut},
     collections::HashMap,
     fs,
     ops::Deref,
@@ -186,21 +186,8 @@ impl VaultBridge {
         let person = parse_person(&request.person_id)?;
         let id = parse_id(&request.request_id, "request_id", |id| id)?;
         let operation = operation_name(&request.operation);
-        let mut worker = self.worker.borrow_mut();
-        if worker.is_none() {
-            *worker = Some(
-                Worker::with_core(
-                    self.root.clone(),
-                    PlatformVaultKeys,
-                    self.core.clone(),
-                    self.local_context.clone(),
-                )
-                .map_err(agent_failure)?,
-            );
-        }
+        let worker = self.worker().map_err(agent_failure)?;
         worker
-            .as_ref()
-            .unwrap()
             .request(person, id, request.operation)
             .and_then(VaultJobResult::into_protocol)
             .map_err(|failure| {
@@ -211,13 +198,36 @@ impl VaultBridge {
             })
     }
 
+    pub(crate) fn conversation_query(
+        &self,
+        person: PersonId,
+        query: ConversationQuery,
+    ) -> Result<Option<floe_conversation::RunReceipt>, AgentFailure> {
+        self.worker()?.conversation_query(person, query)
+    }
+
+    fn worker(&self) -> Result<RefMut<'_, Worker>, AgentFailure> {
+        let mut worker = self.worker.borrow_mut();
+        if worker.is_none() {
+            *worker = Some(Worker::with_core(
+                self.root.clone(),
+                PlatformVaultKeys,
+                self.core.clone(),
+                self.local_context.clone(),
+            )?);
+        }
+        Ok(RefMut::map(worker, |worker| {
+            worker.as_mut().expect("worker was initialized")
+        }))
+    }
+
     pub(crate) fn shutdown(&self) {
         self.worker.borrow_mut().take();
     }
 }
 
 struct Worker {
-    sender: mpsc::SyncSender<Arc<Job>>,
+    sender: mpsc::SyncSender<WorkerMessage>,
     jobs: Mutex<HashMap<Uuid, Arc<Job>>>,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     closing: Arc<AtomicBool>,
@@ -227,7 +237,7 @@ struct Worker {
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
     available: AtomicBool,
-    _conversation_repository: Arc<VaultConversationRepository<Keys>>,
+    conversation_repository: Arc<VaultConversationRepository<Keys>>,
     _recovered_conversation_runs: Vec<floe_core::VaultConversationRunRecord>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     directory: Directory,
@@ -283,7 +293,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         Ok(Self {
             vault,
             available: AtomicBool::new(true),
-            _conversation_repository: conversation_repository,
+            conversation_repository,
             _recovered_conversation_runs: conversation_activation.interrupted,
             task_coordinator,
             directory,
@@ -345,6 +355,23 @@ struct Job {
     cancellation: Cancellation,
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     progress: Mutex<Progress>,
+}
+
+enum WorkerMessage {
+    Job(Arc<Job>),
+    ConversationQuery(ConversationQueryJob),
+}
+
+pub(crate) enum ConversationQuery {
+    Command(floe_kernel::CommandId),
+    Run(floe_kernel::RunId),
+    Message(floe_kernel::RunId),
+}
+
+struct ConversationQueryJob {
+    person: PersonId,
+    query: ConversationQuery,
+    reply: mpsc::SyncSender<Result<Option<floe_conversation::RunReceipt>, AgentFailure>>,
 }
 
 #[derive(Default)]
@@ -456,7 +483,7 @@ impl Worker {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextStore>,
     ) -> Result<Self, AgentFailure> {
-        let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(MAX_IN_FLIGHT_VAULT_JOBS);
+        let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
         let run_cancellations = Arc::new(floe_conversation::RunCancellationRegistry::default());
         let worker_closing = closing.clone();
@@ -478,7 +505,7 @@ impl Worker {
                 let mut learner_delay = LEARNER_IDLE_DELAY;
                 loop {
                     match receiver.recv_timeout(learner_delay) {
-                        Ok(job) => {
+                        Ok(message) => {
                             learner_delay = LEARNER_IDLE_DELAY;
                             if worker_closing.load(Ordering::Acquire) {
                                 break;
@@ -489,6 +516,53 @@ impl Worker {
                             {
                                 vault = None;
                             }
+                            let job = match message {
+                                WorkerMessage::Job(job) => job,
+                                WorkerMessage::ConversationQuery(query) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person == query.person =>
+                                        {
+                                            runtime.block_on(async {
+                                                match query.query {
+                                                    ConversationQuery::Command(command_id) => {
+                                                        floe_conversation::get_command(
+                                                            open_vault
+                                                                .conversation_repository
+                                                                .as_ref(),
+                                                            floe_conversation::CommandQuery {
+                                                                principal: query.person.to_string(),
+                                                                command_id,
+                                                            },
+                                                        )
+                                                        .await
+                                                    }
+                                                    ConversationQuery::Run(run_id)
+                                                    | ConversationQuery::Message(run_id) => {
+                                                        floe_conversation::get_run(
+                                                            open_vault
+                                                                .conversation_repository
+                                                                .as_ref(),
+                                                            floe_conversation::RunQuery {
+                                                                principal: query.person.to_string(),
+                                                                run_id,
+                                                            },
+                                                        )
+                                                        .await
+                                                    }
+                                                }
+                                            })
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = query.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
+                            };
                             let operation = action_name(&job.action);
                             let started = Instant::now();
                             let trace_context = diagnostics::trace_context(job.id);
@@ -759,7 +833,7 @@ impl Worker {
                     progress: Mutex::new(Progress::default()),
                 });
                 self.learner_scheduling.foreground_submitted()?;
-                if self.sender.try_send(job.clone()).is_err() {
+                if self.sender.try_send(WorkerMessage::Job(job.clone())).is_err() {
                     let _ = self.learner_scheduling.foreground_finished();
                     return Err(AgentFailure::VaultUnavailable);
                 }
@@ -841,6 +915,30 @@ impl Worker {
                 .remove(&id);
         }
         Ok(response)
+    }
+
+    fn conversation_query(
+        &self,
+        person: PersonId,
+        query: ConversationQuery,
+    ) -> Result<Option<floe_conversation::RunReceipt>, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::ConversationQuery(ConversationQueryJob {
+                person,
+                query,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))
     }
 }
 
@@ -1275,7 +1373,7 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
         &vault.task_coordinator,
         &vault.schedule_endpoint,
         &vault.legacy_expert_endpoint,
-        &vault._conversation_repository,
+        &vault.conversation_repository,
         &job.run_cancellations,
         job.person,
         floe_agent_contract::CommandId::from_uuid(job.id)
@@ -1715,7 +1813,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                         .await?;
                     }
                     let receipt = floe_conversation::start_session(
-                        vault._conversation_repository.as_ref(),
+                        vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {
                             principal: job.person.to_string(),
                         },
@@ -1725,7 +1823,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 }
                 AgentConversationSessionOperationDto::Resume {} => {
                     let receipt = floe_conversation::resume_session(
-                        vault._conversation_repository.as_ref(),
+                        vault.conversation_repository.as_ref(),
                         floe_conversation::SessionRequest {
                             principal: job.person.to_string(),
                         },
@@ -1735,7 +1833,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 }
                 AgentConversationSessionOperationDto::Get { session_id } => {
                     let receipt = floe_conversation::get_session(
-                        vault._conversation_repository.as_ref(),
+                        vault.conversation_repository.as_ref(),
                         floe_conversation::SessionReadRequest {
                             principal: job.person.to_string(),
                             session_id: session_uuid(session_id)?,
@@ -1750,7 +1848,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 } => {
                     conversation_turn::recover(
                         vault,
-                        &vault._conversation_repository,
+                        &vault.conversation_repository,
                         job.person,
                         session_id,
                         *expected_revision,

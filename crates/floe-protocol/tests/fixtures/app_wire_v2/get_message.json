@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000007",
+  "query": {
+    "kind": "conversation.get_message",
+    "message_id": "00000000-0000-0000-0000-000000000004"
+  }
+}

@@ -2,6 +2,8 @@ mod abi;
 mod agent_run;
 #[cfg(target_os = "android")]
 mod android_vault_keys;
+#[cfg(unix)]
+mod app_wire;
 mod conversion;
 mod diagnostics;
 

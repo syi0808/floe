@@ -1,6 +1,6 @@
 use floe_protocol::{
     APP_WIRE_VERSION, AppCommandRequestDto, AppCommandResultDto, AppEventsResultDto,
-    AppQueryRequestDto, AppResponseDto, PROTOCOL_VERSION,
+    AppQueryRequestDto, AppQueryResultDto, AppResponseDto, PROTOCOL_VERSION,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -10,6 +10,8 @@ fn fixture(name: &str) -> Value {
         "start_turn" => include_str!("fixtures/app_wire_v2/start_turn.json"),
         "command_receipt" => include_str!("fixtures/app_wire_v2/command_receipt.json"),
         "get_run" => include_str!("fixtures/app_wire_v2/get_run.json"),
+        "get_message" => include_str!("fixtures/app_wire_v2/get_message.json"),
+        "message" => include_str!("fixtures/app_wire_v2/message.json"),
         "resync_required" => include_str!("fixtures/app_wire_v2/resync_required.json"),
         _ => panic!("unknown fixture"),
     };
@@ -30,6 +32,8 @@ fn app_wire_v2_golden_fixtures_are_stable() {
     assert_round_trip::<AppCommandRequestDto>("start_turn");
     assert_round_trip::<AppResponseDto<AppCommandResultDto>>("command_receipt");
     assert_round_trip::<AppQueryRequestDto>("get_run");
+    assert_round_trip::<AppQueryRequestDto>("get_message");
+    assert_round_trip::<AppResponseDto<AppQueryResultDto>>("message");
     assert_round_trip::<AppResponseDto<AppEventsResultDto>>("resync_required");
 }
 

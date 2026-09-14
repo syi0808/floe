@@ -30,6 +30,8 @@ pub enum AppQueryDto {
     ConversationGetCommand { command_id: Uuid },
     #[serde(rename = "conversation.get_run")]
     ConversationGetRun { run_id: Uuid },
+    #[serde(rename = "conversation.get_message")]
+    ConversationGetMessage { message_id: Uuid },
 }
 
 impl AppQueryDto {
@@ -37,6 +39,7 @@ impl AppQueryDto {
         let (field, id) = match self {
             Self::ConversationGetCommand { command_id } => ("query.command_id", command_id),
             Self::ConversationGetRun { run_id } => ("query.run_id", run_id),
+            Self::ConversationGetMessage { message_id } => ("query.message_id", message_id),
         };
         if id.is_nil() { Err(field) } else { Ok(()) }
     }
@@ -56,6 +59,25 @@ pub enum AppQueryResultDto {
         #[serde(flatten)]
         run: AppRunSnapshotDto,
     },
+    Message {
+        #[serde(flatten)]
+        message: AppMessageDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppMessageDto {
+    pub message_id: Uuid,
+    pub role: AppMessageRoleDto,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppMessageRoleDto {
+    User,
+    Assistant,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

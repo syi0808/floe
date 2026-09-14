@@ -61,6 +61,6 @@ pub use local_context::{
     LocalContextRequestDto, LocalContextResultDto,
 };
 pub use queries::{
-    AppQueryDto, AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto,
-    AppRunStateDto, AppTurnExecutionDto, AppTurnReportDto,
+    AppMessageDto, AppMessageRoleDto, AppQueryDto, AppQueryRequestDto, AppQueryResultDto,
+    AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto, AppTurnReportDto,
 };

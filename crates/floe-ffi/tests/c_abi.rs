@@ -68,6 +68,11 @@ impl Core {
         .unwrap();
         take_json(unsafe { floe_core_local_context(self.0, request.as_ptr()) })
     }
+
+    fn query_v2(&self, request: Value) -> Value {
+        let request = CString::new(request.to_string()).unwrap();
+        take_json(unsafe { floe_core_query_v2(self.0, request.as_ptr()) })
+    }
 }
 
 #[test]
@@ -78,8 +83,28 @@ fn product_open_binds_native_identity_before_database_side_effects() {
     std::fs::create_dir_all(&person_directory).unwrap();
     std::fs::write(directory.path().join("local_device_id"), "local-device-1").unwrap();
     let database = person_directory.join("floe.db");
-    drop(Core::open(database.to_str().unwrap()));
+    let core = Core::open(database.to_str().unwrap());
     assert!(database.exists());
+    let request_id = Uuid::new_v4();
+    let command_id = Uuid::new_v4();
+    let query = json!({
+        "schema_version": 2,
+        "request_id": request_id,
+        "query": {"kind": "conversation.get_command", "command_id": command_id}
+    });
+    let locked = core.query_v2(query.clone());
+    assert_eq!(locked["schema_version"], 2);
+    assert_eq!(locked["request_id"], request_id.to_string());
+    assert_eq!(locked["error"]["code"], "unavailable");
+    let mut wrong_version = query.clone();
+    wrong_version["schema_version"] = json!(1);
+    let wrong_version = core.query_v2(wrong_version);
+    assert_eq!(wrong_version["error"]["code"], "unsupported_version");
+    assert_eq!(wrong_version["error"]["field"], "schema_version");
+    let mut injected = query;
+    injected["query"]["bearer_token"] = json!("must-not-cross-app-wire");
+    assert_eq!(core.query_v2(injected)["error"]["code"], "validation");
+    drop(core);
 
     let missing_directory = tempfile::tempdir().unwrap();
     let missing_person_directory = missing_directory

@@ -940,6 +940,26 @@ fn t08_stop_cancels_the_admitted_production_root() {
             reason: AgentFailure::Cancelled,
         })
     );
+    let command = worker
+        .conversation_query(
+            person,
+            ConversationQuery::Command(floe_kernel::CommandId::from_uuid(request_id).unwrap()),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(command.state, floe_conversation::RunState::Cancelled);
+    assert_eq!(
+        worker
+            .conversation_query(person, ConversationQuery::Run(command.run_id))
+            .unwrap(),
+        Some(command.clone())
+    );
+    assert_eq!(
+        worker
+            .conversation_query(person, ConversationQuery::Message(command.run_id))
+            .unwrap(),
+        Some(command)
+    );
     worker
         .request(person, request_id, AgentVaultOperationDto::Release {})
         .unwrap();

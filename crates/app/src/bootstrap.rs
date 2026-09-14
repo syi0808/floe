@@ -16,7 +16,7 @@ impl<Services: HostServices> AppHost<Services> {
         services: Services,
         identity: crate::LocalIdentityClaim,
     ) -> Result<Self, HostError> {
-        let caller = CallerContext::verified(identity, Uuid::new_v4())?;
+        let caller = CallerContext::verified(identity, runtime_epoch())?;
         Ok(Self::with_caller(services, caller))
     }
 
@@ -29,6 +29,11 @@ impl<Services: HostServices> AppHost<Services> {
         };
         Self::bootstrap_claim(services, identity)
     }
+}
+
+fn runtime_epoch() -> u64 {
+    let value = Uuid::new_v4().as_u128();
+    ((value >> 64) as u64 ^ value as u64).max(1)
 }
 
 pub fn local_identity_for_database(
