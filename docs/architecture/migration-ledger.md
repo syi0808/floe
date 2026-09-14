@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: new-turn/recovery callers and built-in Tasks use extracted services; continuation admission pending |
+| P12 | Partial: new-turn/recovery/continuation callers and built-in Tasks use extracted services; archive/finalization ownership pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2937,3 +2937,46 @@ cursor. The next executable task is to add `NewTurn | Continue` admission,
 persist the resumable Run reference on bounded failure, and feed this snapshot
 to the next Manager Engine root. The legacy continuation branch is removed by
 that P12 checkpoint.
+
+### P12 durable continuation admission checkpoint (2026-09-15)
+
+Code checkpoint `b687d0e` adds the Conversation-owned `New | Continue`
+admission contract and removes the production `continuation: true` fallback to
+legacy `AgentRuntime`. A resumable DeadlineExceeded or BudgetExceeded Run now
+projects a bounded continuation reference containing its RunId, executor
+generation and level. The encrypted admission transaction verifies that exact
+source Run, principal, Session, terminal reason, Session revision, model
+placement, executor generation and next level before claiming the Session. It
+does not append a second user message. The continuation level is capped at
+three, and exact command replay is checked before a consumed continuation
+pointer can reject an acknowledgement retry.
+
+The next Manager root receives only typed, settled journal observations and
+replay receipts. Prior model usage and completed iterations from that source
+journal seed the new execution ledger and reduce its remaining iteration
+budget. Terminalization publishes the resumable pointer to the encrypted
+Session only for the two approved failure shapes and clears it after success.
+The Vault Conversation schema is now version 3; no compatibility shim was
+added because Floe local development data is disposable, so an existing local
+test Vault using the previous schema must be reset.
+
+Implemented and wired: generation-bound continuation admission, encrypted Run
+linkage and placement binding, bounded settled-work replay, exact continuation
+command replay, and the production FFI caller cutover. Direct validation seeded
+an encrypted timed-out Run, locked and reopened the actual Vault worker,
+submitted a remote-server-local continuation, observed one user message and
+one assistant answer, then replayed the same command after Release with one
+total HTTP/model dispatch. Six Conversation tests, all 193 Core library tests
+and all 89 FFI library tests passed. Workspace all-target check, focused
+Conversation Clippy with warnings denied, diff check and the migration boundary
+gate passed (20 nodes / 68 edges / no errors). No Apple UI, device-local model,
+live provider, or multi-hop continuation chain was exercised.
+
+Blocker/remove-by: cumulative usage and settled observation carry-forward over
+multiple continuation hops remains part of the P02/P12 finalization-budget
+work. Built-in installation is still a production turn prerequisite, Engine
+progress is still projected only as terminal Finished, and archive/compaction,
+global worker-job lifetime and Calendar-root removal remain pending P12/P13 and
+P16/P19 cutovers. The next executable P12 task is to stop requiring built-in
+setup for an otherwise valid general Manager turn while preserving the
+Directory revision and eligible-card catalog checks. P12 remains partial.
