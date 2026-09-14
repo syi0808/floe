@@ -795,7 +795,25 @@ name = "floe-agent-contract"
 version = "0.1.0"
 dependencies = [
  "floe-context-contract",
+ "floe-execution",
  "floe-kernel",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
+name = "floe-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "floe-agent-contract",
+ "floe-diagnostics",
+ "floe-execution",
+ "jsonschema",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

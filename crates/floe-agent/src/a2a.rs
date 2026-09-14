@@ -5,47 +5,13 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::{AGENT_VERSION, AgentFailure, Cancellation, UsageLedger};
+use crate::{AgentFailure, Cancellation, UsageLedger};
 
-pub const A2A_PROTOCOL_VERSION: &str = "1.0";
+#[cfg(test)]
+use crate::AGENT_VERSION;
+
+pub use floe_agent_contract::{A2A_PROTOCOL_VERSION, AgentCard};
 pub const EXPERT_RESULT_MEDIA_TYPE: &str = "application/vnd.floe.expert-result+json;version=1";
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentCard {
-    pub schema_version: u32,
-    pub protocol_version: String,
-    pub id: String,
-    pub version: String,
-    pub name: String,
-    pub description: String,
-    #[serde(default)]
-    pub domain_tags: Vec<String>,
-    #[serde(default)]
-    pub skills: Vec<String>,
-}
-
-impl AgentCard {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.schema_version != AGENT_VERSION
-            || self.protocol_version != A2A_PROTOCOL_VERSION
-            || !bounded_text(&self.id, 128)
-            || !bounded_text(&self.version, 64)
-            || !bounded_text(&self.name, 128)
-            || !bounded_text(&self.description, 512)
-            || self.domain_tags.len() > 8
-            || self.skills.len() > 8
-            || self
-                .domain_tags
-                .iter()
-                .any(|value| !bounded_text(value, 64))
-            || self.skills.iter().any(|value| !bounded_text(value, 256))
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -369,6 +335,33 @@ fn bounded_text(value: &str, maximum: usize) -> bool {
 mod tests {
     use super::*;
     use tokio::sync::Notify;
+
+    #[test]
+    fn canonical_card_preserves_legacy_limits_and_wire_shape() {
+        let mut card = AgentCard {
+            schema_version: AGENT_VERSION,
+            protocol_version: A2A_PROTOCOL_VERSION.to_owned(),
+            id: "expert".to_owned(),
+            version: "1".to_owned(),
+            name: "Expert".to_owned(),
+            description: "Bounded expert".to_owned(),
+            domain_tags: vec!["day".to_owned(); 8],
+            skills: vec!["read".to_owned(); 8],
+        };
+        let canonical: floe_agent_contract::AgentCard = card.clone();
+        canonical.validate().unwrap();
+        let encoded = serde_json::to_value(&card).unwrap();
+        assert_eq!(encoded["schema_version"], AGENT_VERSION);
+        assert!(encoded.get("definition_revision").is_none());
+        card.skills.push("ninth".to_owned());
+        assert_eq!(card.validate(), Err(AgentFailure::InvalidInput));
+        card.skills.pop();
+        card.domain_tags.push("ninth".to_owned());
+        assert_eq!(card.validate(), Err(AgentFailure::InvalidInput));
+        card.domain_tags.pop();
+        card.name.push('\t');
+        assert_eq!(card.validate(), Err(AgentFailure::InvalidInput));
+    }
 
     struct TestAgent {
         person_id: PersonId,
