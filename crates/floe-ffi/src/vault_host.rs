@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     fs,
+    ops::Deref,
     os::unix::fs::DirBuilderExt,
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -32,6 +33,7 @@ use floe_domain::{
     GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, GrantState,
     PersonId, ProcessingRestriction, ResourceHandle,
 };
+use floe_experts::{Directory, TaskCoordinator};
 use floe_infra::remote_authorization::{RemoteAuthorizationClient, RemotePairingClient};
 use floe_knowledge::{KnowledgeActor, KnowledgeDecisionKind};
 use floe_protocol::*;
@@ -46,6 +48,9 @@ mod conversation_turn;
 mod learner_worker;
 mod personal_grants;
 mod remote_views;
+mod task_repository;
+
+use task_repository::VaultTaskRepository;
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
 const LEARNER_EMPTY_DELAY: Duration = Duration::from_secs(30);
@@ -165,6 +170,42 @@ struct Worker {
     active: Mutex<Option<Arc<Job>>>,
     closing: Arc<AtomicBool>,
     learner_scheduling: floe_knowledge::LearnerScheduling,
+}
+
+struct OpenVault<Keys> {
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    _directory: Directory,
+    _task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
+    _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
+}
+
+impl<Keys: VaultKeyProvider> OpenVault<Keys> {
+    async fn activate(vault: EncryptedAgentVault<Keys>) -> Result<Self, AgentFailure> {
+        let vault = Arc::new(vault);
+        let directory = Directory::default();
+        let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
+        let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
+            directory.clone(),
+            repository,
+            "everyday-assistance",
+            floe_agent_contract::MAX_OUTPUT_BYTES,
+        )
+        .await?;
+        Ok(Self {
+            vault,
+            _directory: directory,
+            _task_coordinator: task_coordinator,
+            _recovered_tasks: recovered_tasks,
+        })
+    }
+}
+
+impl<Keys> Deref for OpenVault<Keys> {
+    type Target = EncryptedAgentVault<Keys>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.vault
+    }
 }
 
 struct Job {
@@ -857,7 +898,7 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
     keys: &Keys,
     core: &FloeCore,
     local_context: &LocalContextStore,
-    current: &mut Option<(PersonId, EncryptedAgentVault<Keys>)>,
+    current: &mut Option<(PersonId, OpenVault<Keys>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     if current
@@ -885,7 +926,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
     keys: &Keys,
     core: &FloeCore,
     local_context: &LocalContextStore,
-    current: &mut Option<(PersonId, EncryptedAgentVault<Keys>)>,
+    current: &mut Option<(PersonId, OpenVault<Keys>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
     match &job.action {
@@ -906,7 +947,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(_) => return Err(AgentFailure::VaultUnavailable),
             }
-            let vault = EncryptedAgentVault::create(root, job.person, keys.clone()).await?;
+            let vault = OpenVault::activate(
+                EncryptedAgentVault::create(root, job.person, keys.clone()).await?,
+            )
+            .await?;
             *current = Some((job.person, vault));
             Ok(VaultExecutionResult::ready())
         }
@@ -914,7 +958,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
             if current.is_some() {
                 return Err(AgentFailure::Conflict);
             }
-            let vault = EncryptedAgentVault::open(root, job.person, keys.clone()).await?;
+            let vault = OpenVault::activate(
+                EncryptedAgentVault::open(root, job.person, keys.clone()).await?,
+            )
+            .await?;
             *current = Some((job.person, vault));
             Ok(VaultExecutionResult::ready())
         }
@@ -928,15 +975,15 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 AgentFixtureOperationDto::Start {} => vault.create_sample_session().await?,
                 AgentFixtureOperationDto::Resume {} => vault.resume_sample_session().await?,
                 AgentFixtureOperationDto::Get { session_id } => {
-                    sample_session(vault, job.person, session_uuid(session_id)?).await?
+                    sample_session(&**vault, job.person, session_uuid(session_id)?).await?
                 }
                 AgentFixtureOperationDto::Recover {
                     session_id,
                     expected_revision,
                 } => {
-                    sample_session(vault, job.person, session_uuid(session_id)?).await?;
+                    sample_session(&**vault, job.person, session_uuid(session_id)?).await?;
                     recover_agent_sample(
-                        vault,
+                        &**vault,
                         job.person,
                         session_uuid(session_id)?,
                         *expected_revision,

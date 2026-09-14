@@ -13,11 +13,13 @@ base64 = "0.22.1"
 chrono.workspace = true
 floe-core = { path = "../floe-core" }
 floe-agent = { path = "../floe-agent" }
+floe-agent-contract = { path = "../contracts/agent" }
 floe-diagnostics = { path = "../platform/diagnostics" }
 floe-domain = { path = "../floe-domain" }
 floe-infra = { path = "../floe-infra" }
 floe-knowledge = { path = "../modules/knowledge" }
 floe-context = { path = "../modules/context" }
+floe-experts = { path = "../modules/experts" }
 floe-protocol = { path = "../floe-protocol" }
 serde.workspace = true
 serde_json.workspace = true
