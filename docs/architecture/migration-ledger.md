@@ -1595,3 +1595,50 @@ delivery is also not established by registry unit tests. No new Apple UI flow
 was exercised in this checkpoint; the previously observed secure-storage
 failure remains an unverified UI limitation, not permission to bypass Vault
 protection. No local app data or external account/provider data was changed.
+
+## P08 learner lifecycle and fatal storage propagation — 2026-09-14
+
+Code checkpoints `a751af8` and `e065f8f`: Knowledge owns learner job state,
+settlement, budget, proposal/output types, lifecycle validation, claim/reject/
+settle transitions and retry classification. Core loads authoritative job and
+source data inside its immediate transaction and applies the returned lifecycle;
+the metadata is not an authorization permit. Legacy Agent retains the model
+runtime/input/job container and re-exports moved types. No Knowledge dependency
+on legacy Agent or generic Agent runtime was introduced.
+
+The 30-second lease, three-attempt limit and five-second retry delay remain.
+Knowledge checks eligibility for queued/deferred jobs and expired running jobs,
+rejects malformed lifecycle metadata, and does not permit terminal jobs to be
+rejected as new claims. Exhaustion is handled before source reads, preserving
+the old Stalled outcome. Source reads and candidate run/source-ref/independence
+checks remain transactional. Claim updates additionally compare the loaded
+state, attempt and availability; settlement retains its running/attempt CAS.
+Person, source, schema, key-health and rollback protections remain enforced.
+
+Parent inspection found that the old FFI worker converted every nonretryable
+runtime error into a Failed settlement, potentially returning success after a
+storage error. The live worker now delegates result classification to Knowledge
+and immediately propagates VaultUnavailable/StorageUnavailable without a terminal
+write. Other permanent learner failures still settle only that job; transient
+model/cancellation failures retain bounded deferral. This does not classify all
+storage errors as proven integrity faults or complete optional-context semantics.
+
+Validation: Knowledge tests (11), legacy Agent library tests (23), all Core
+encrypted-Vault tests (18), FFI learner worker tests (2), workspace check,
+Knowledge all-target Clippy with `-D warnings`, and migration checker passed
+(17 nodes / 47 edges / 0 errors). After final owner metadata guards, Knowledge
+tests/Clippy and the two Core learner queue tests passed again. Core regression
+now proves old-attempt Completed/Deferred/Failed replies cannot overwrite a new
+attempt, including expired-lease reclaim; invalid storage-error deferral leaves
+the current job unchanged. The new FFI regression uses the production claimed-
+job path with an injected model and real encrypted Vault: both storage error
+variants escape with the exact Running record unchanged, whereas invalid model
+output produces a local Failed record. Fixture setup obeys the existing private
+directory requirement rather than weakening it.
+
+Full P08 and T11/T28/T31 acceptance remain unproven. Learner input, prompt/model
+adapter and scheduler orchestration, foreground-priority scope ownership,
+evidence coverage/purpose/current-state ports, optional memory context and
+owner repository storage remain pending. The new test injects failure variants;
+it does not simulate an actual Apple secure-storage incident or exercise the
+Apple UI/model. No local Floe app data or external account/provider data changed.
