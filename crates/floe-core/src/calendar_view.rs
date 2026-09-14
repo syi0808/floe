@@ -23,12 +23,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use floe_context::MAX_LEASE_BYTES;
-
 use crate::FloeCore;
-use crate::calendar_lease::{
-    CalendarLeaseDependencies, CalendarLeaseEntry, CalendarLeaseKey,
-};
+use crate::calendar_lease::{CalendarLeaseKey, calendar_lease_dependency};
 
 #[derive(Clone)]
 pub struct CalendarTimelineGrant {
@@ -251,7 +247,7 @@ pub struct CalendarTimelineViews<'host, Access, Clock> {
     live_observation_expires_at: Mutex<Option<DateTime<Utc>>>,
     invocation_id: Uuid,
     process_incarnation: Uuid,
-    leases: Mutex<HashMap<CalendarLeaseKey, Arc<CalendarLeaseEntry>>>,
+    leases: Mutex<HashMap<CalendarLeaseKey, Arc<floe_context::SourceView<ExpertTimelineView>>>>,
     consumed: floe_context::ConsumedLineage,
     acquisition: tokio::sync::Mutex<()>,
     source_observed: AtomicBool,
@@ -291,18 +287,9 @@ struct AuthorizedRead {
 
 fn admission_matches(
     admission: &CalendarReadAccessAdmission,
-    dependency: &CalendarLeaseDependencies,
+    view: &floe_context::SourceView<ExpertTimelineView>,
 ) -> bool {
-    admission.person_id == dependency.person_id
-        && admission.grant_id == dependency.grant_id
-        && admission.grant_authority == dependency.grant_authority
-        && admission.source == dependency.source
-        && admission.scope == dependency.scope
-        && admission.consumer_policy == dependency.consumer_policy
-        && admission.operation == dependency.operation
-        && admission.purpose == dependency.purpose
-        && admission.consumer == dependency.consumer
-        && admission.processing == dependency.processing
+    admission.scope == *view.scope() && admission_matches_dependency(admission, view.dependency())
 }
 
 fn admission_matches_dependency(
@@ -460,7 +447,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
     fn cached_lease(
         &self,
         key: &CalendarLeaseKey,
-    ) -> Result<Option<Arc<CalendarLeaseEntry>>, AgentFailure> {
+    ) -> Result<Option<Arc<floe_context::SourceView<ExpertTimelineView>>>, AgentFailure> {
         let mut leases = self
             .leases
             .lock()
@@ -487,7 +474,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             let Some(admission) = admission else {
                 return Err(AgentFailure::StaleContext);
             };
-            if !admission_matches(admission, &lease.dependencies) {
+            if !admission_matches(admission, lease) {
                 return Err(AgentFailure::StaleContext);
             }
         }
@@ -549,13 +536,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         }
         let observation_id = Uuid::new_v4();
         view.source_handle = format!("calendar.lease:{observation_id}");
-        let bytes = serde_json::to_vec(&view)
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .len();
-        if bytes == 0 || bytes > MAX_LEASE_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let dependency = CalendarLeaseDependencies::from_admission(
+        let dependency = calendar_lease_dependency(
             self.invocation_id,
             self.process_incarnation,
             observation_id,
@@ -565,15 +546,15 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             expires_at,
         )?;
         let reservation = reservation.ok_or(AgentFailure::CapabilityUnavailable)?;
-        let lease = Arc::new(CalendarLeaseEntry {
-            _key: key.clone(),
-            dependencies: dependency.clone(),
-            view: view.clone(),
-            expires_at: expires_at_monotonic,
-            _reservation: reservation,
-        });
+        let lease = Arc::new(floe_context::SourceView::try_new(
+            dependency.clone(),
+            admission.scope.clone(),
+            view.clone(),
+            expires_at_monotonic,
+            reservation,
+        )?);
         self.core.lease_registry.retain_observation(
-            dependency.dependency.clone(),
+            dependency.clone(),
             before.stamp.native_subject_fingerprint.clone(),
             expires_at_monotonic,
         )?;
@@ -582,8 +563,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             .map_err(|_| AgentFailure::CapabilityUnavailable)?
             .insert(key, lease);
         self.consumed.record(
-            dependency.dependency,
-            dependency.scope,
+            dependency,
+            admission.scope,
             expires_at_monotonic,
         )?;
         let mut saved = self
@@ -813,8 +794,8 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             let Some(admission) = before.admission.as_ref() else {
                 return Err(AgentFailure::StaleContext);
             };
-            if admission_matches(admission, &lease.dependencies) {
-                return Ok(lease.view.clone());
+            if admission_matches(admission, &lease) {
+                return Ok(lease.payload().clone());
             }
             self.leases
                 .lock()

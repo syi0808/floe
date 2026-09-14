@@ -11,6 +11,7 @@ floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-knowledge = { path = "../knowledge" }
 serde_json.workspace = true
+serde.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 

@@ -2258,3 +2258,42 @@ The adapter still scans/serializes message sizes, and existing runtime context
 accounting is not a complete provider wire-request-size accounting scheme.
 ArchiveReader, safe archive selection/recovery integration, SourceViews, final
 Conversation ownership and full T28/P09/P00–P25 acceptance remain pending.
+
+### P09 immutable source view checkpoint (2026-09-14)
+
+Context owns SourceView, containing canonical dependency, full acquired grant
+scope, typed payload, monotonic deadline and live quota reservation behind
+read-only accessors. Construction validates canonical evidence, scope coverage
+of the selected resources/categories/operation/purpose/consumer/processing,
+future monotonic deadline, reservation Person/process binding and serialized
+payload size against the reserved capacity. A view is not source authorization;
+the adapter still validates current access before reuse or release.
+
+Calendar now caches Arc<SourceView<ExpertTimelineView>> directly. The old
+CalendarLeaseEntry and redundant public CalendarLeaseDependencies are removed;
+the adapter factory returns the canonical ContextDependency. CalendarLeaseKey
+serialization is unchanged, retaining the exact range/query fingerprint. Current
+admission comparison still checks the full acquired scope plus canonical
+dependency identity. Native fingerprint/generation acquisition checks, wall-clock
+rollback detection and consumed-lineage revalidation remain unchanged.
+
+SourceView owns the final serialized-payload quota check, including the final
+lease handle, rather than trusting only the earlier per-request adapter check.
+The reservation cannot be borrowed from a different Person or process, and shared
+view owners retain the quota until the final Arc is dropped. Calendar query/range
+conversion and native source dispatch remain adapter responsibilities. The
+existing injected wall clock is retained; SourceView does not substitute the
+machine wall clock for deterministic caller time.
+
+Validation exercises real controlled Calendar runtime fixtures and focused
+provider-neutral view construction/ownership tests, not live Apple UI or external
+account reads. New regressions cover canonical views, scope rejection, stale and
+wrong-Person/process reservations, oversized final payload and shared quota
+lifetime. The original Calendar observation identity/restart/expiry assertions
+remain with canonical fixtures. Generic source acquisition ports, ArchiveReader,
+history guard replacement and full P09/P00–P25 acceptance remain pending.
+
+Validation passed: Context tests (34, including five new SourceView tests), Core
+Calendar lease tests (2), Core Calendar runtime tests (37), workspace all-target
+check, Context all-target Clippy with `-D warnings`, diff check and migration
+gate (18 nodes / 57 edges / no errors). Apple UI/iOS validation remains open.

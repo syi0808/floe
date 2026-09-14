@@ -5,6 +5,7 @@ pub mod application {
     pub mod history;
     pub mod leases;
     pub mod projection;
+    pub mod source_view;
 }
 
 pub mod ports {
@@ -21,4 +22,5 @@ pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
 pub use application::projection::{CoverageProjection, project_coverage};
+pub use application::source_view::SourceView;
 pub use ports::evidence_reader::EvidenceReader;

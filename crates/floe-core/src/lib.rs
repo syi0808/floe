@@ -46,7 +46,6 @@ pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
     CalendarActionState, CalendarCreateReceipt, CalendarMutation, CalendarPreflight,
 };
-pub use calendar_lease::CalendarLeaseDependencies;
 pub use calendar_view::{
     CalendarObservation, CalendarObserveRequest, CalendarReadAccess, CalendarReadAccessAdmission,
     CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarTimelineGrant,

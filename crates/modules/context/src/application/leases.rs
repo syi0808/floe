@@ -40,6 +40,29 @@ pub struct SourceLeaseReservation {
     _drop: Arc<LeaseReservationDrop>,
 }
 
+impl SourceLeaseReservation {
+    pub(crate) fn validate_binding(
+        &self,
+        person_id: PersonId,
+        process_incarnation_id: Uuid,
+        payload_bytes: usize,
+    ) -> Result<(), AgentFailure> {
+        if self._drop.person_id != person_id
+            || self._drop.registry.process_incarnation() != process_incarnation_id
+        {
+            return Err(AgentFailure::StaleContext);
+        }
+        if self._drop.bytes == 0
+            || self._drop.bytes > MAX_LEASE_BYTES
+            || payload_bytes == 0
+            || payload_bytes > self._drop.bytes
+        {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(())
+    }
+}
+
 pub struct SourceLeaseRegistry {
     process_incarnation: Uuid,
     usage: Mutex<HashMap<PersonId, PersonLeaseUsage>>,
