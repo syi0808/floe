@@ -1407,8 +1407,14 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                     session_id,
                     expected_revision,
                 } => {
-                    conversation_turn::recover(vault, job.person, session_id, *expected_revision)
-                        .await?
+                    conversation_turn::recover(
+                        vault,
+                        &vault._conversation_repository,
+                        job.person,
+                        session_id,
+                        *expected_revision,
+                    )
+                    .await?
                 }
             };
             Ok(VaultExecutionResult {
@@ -3728,6 +3734,34 @@ mod tests {
         .unwrap();
         assert!(created.scope.is_none());
         assert_eq!(created.data_classes, [floe_agent::DataClass::Personal]);
+        assert_eq!(
+            perform(
+                &worker,
+                person,
+                AgentVaultActionDto::ConversationSession {
+                    operation: AgentConversationSessionOperationDto::Recover {
+                        session_id: created.id.to_string(),
+                        expected_revision: created.revision + 1,
+                    },
+                },
+            )
+            .failure,
+            Some(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            perform(
+                &worker,
+                person,
+                AgentVaultActionDto::ConversationSession {
+                    operation: AgentConversationSessionOperationDto::Recover {
+                        session_id: created.id.to_string(),
+                        expected_revision: created.revision,
+                    },
+                },
+            )
+            .session,
+            Some(created.clone())
+        );
         let installed_revision = perform(
             &worker,
             person,

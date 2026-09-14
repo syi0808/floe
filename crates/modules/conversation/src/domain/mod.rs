@@ -142,6 +142,42 @@ pub enum TurnAdmission {
     Existing(RunReceipt),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryRequest {
+    pub session_id: Uuid,
+    pub expected_session_revision: u64,
+    pub principal: String,
+}
+
+impl RecoveryRequest {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.session_id.is_nil()
+            || self.principal.trim() != self.principal
+            || self.principal.is_empty()
+            || self.principal.len() > 256
+            || self.principal.chars().any(char::is_control)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryReceipt {
+    pub session_id: Uuid,
+    pub session_revision: u64,
+}
+
+impl RecoveryReceipt {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.session_id.is_nil() {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunTerminal {
     pub state: RunState,

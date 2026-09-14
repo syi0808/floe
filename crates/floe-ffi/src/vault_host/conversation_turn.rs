@@ -496,28 +496,33 @@ async fn optional_task_views(
     Ok(acquired.value.into_iter().collect())
 }
 
-pub(super) async fn recover<Keys: VaultKeyProvider>(
+pub(super) async fn recover<Keys: VaultKeyProvider + 'static>(
     vault: &EncryptedAgentVault<Keys>,
+    conversation_repository: &std::sync::Arc<
+        crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
+    >,
     person_id: PersonId,
     session_id: &str,
     expected_revision: u64,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let session_id = session_uuid(session_id)?;
+    let receipt = floe_conversation::recover_session(
+        conversation_repository.as_ref(),
+        floe_conversation::RecoveryRequest {
+            session_id,
+            expected_session_revision: expected_revision,
+            principal: person_id.to_string(),
+        },
+    )
+    .await?;
     let session = vault.load(person_id, session_id).await?;
-    if session.scope.is_some() || session.data_classes != [DataClass::Personal] {
-        return Err(AgentFailure::PolicyDenied);
+    if session.revision != receipt.session_revision
+        || session.scope.is_some()
+        || session.data_classes != [DataClass::Personal]
+    {
+        return Err(AgentFailure::StorageUnavailable);
     }
-    let model = Model::Foundation(FoundationModelRunner::encrypted());
-    let policy = policy(&model, None);
-    AgentRuntime {
-        store: vault,
-        model: &model,
-        capabilities: &NoCapabilities,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    }
-    .recover_interrupted(person_id, session_id, expected_revision)
-    .await
+    Ok(session)
 }
 
 fn policy(model: &Model, route: Option<&AgentRemoteRouteDto>) -> InferencePolicyDecision {
@@ -896,8 +901,10 @@ impl PersonalViewSource<'_> {
     }
 }
 
+#[cfg(test)]
 struct NoCapabilities;
 
+#[cfg(test)]
 impl CapabilityHost for NoCapabilities {
     fn descriptors(&self, _: PersonId) -> Vec<CapabilityDescriptor> {
         vec![]

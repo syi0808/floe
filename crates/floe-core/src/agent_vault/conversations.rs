@@ -672,6 +672,58 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(result)
     }
 
+    pub async fn recover_conversation_session(
+        &self,
+        session_id: Uuid,
+        person_id: PersonId,
+        expected_session_revision: u64,
+    ) -> Result<u64, AgentFailure> {
+        if session_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            let session = self.session_on(&transaction, session_id).await?;
+            if session.person_id != person_id
+                || session.scope.is_some()
+                || session.data_classes != [DataClass::Personal]
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if session.revision != expected_session_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            if let Some(active_turn) = session.active_turn {
+                let run_id = RunId::from_uuid(active_turn).ok_or(AgentFailure::VaultUnavailable)?;
+                let run = self
+                    .conversation_run_on(&transaction, run_id)
+                    .await?
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                if run.state == VaultConversationRunState::Working
+                    && run.executor_generation
+                        == self
+                            .active_conversation_executor_generation(&transaction)
+                            .await?
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            self.check_access()?;
+            Ok(session.revision)
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
     async fn conversation_run_by_command_on(
         &self,
         connection: &turso::Connection,

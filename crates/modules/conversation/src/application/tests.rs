@@ -15,8 +15,9 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
-    AdmittedTurn, ConversationPorts, ConversationRepository, ManagerConfig, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnRequest,
+    AdmittedTurn, ConversationPorts, ConversationRepository, ManagerConfig, RecoveryReceipt,
+    RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest,
+    TurnRequest,
 };
 
 use super::ConversationService;
@@ -185,6 +186,33 @@ impl ConversationRepository for MemoryRepository {
                 .runs
                 .get(&run_id)
                 .map(|stored| stored.admitted.clone()))
+        })
+    }
+
+    fn recover_session<'a>(
+        &'a self,
+        request: RecoveryRequest,
+    ) -> BoxFuture<'a, Result<RecoveryReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            let state = self.state.lock().unwrap();
+            let session = state
+                .sessions
+                .get(&request.session_id)
+                .ok_or(AgentFailure::NotFound)?;
+            if session.principal != request.principal {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            if session.revision != request.expected_session_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            if session.active_run.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            Ok(RecoveryReceipt {
+                session_id: request.session_id,
+                session_revision: session.revision,
+            })
         })
     }
 }
@@ -498,4 +526,68 @@ async fn cancelled_root_is_terminalized_without_model_dispatch_and_releases_the_
         .unwrap();
     assert_eq!(next.state, RunState::Completed);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn recovery_is_revision_bound_and_never_interrupts_a_live_root() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = Arc::new(service(Arc::clone(&repository)));
+    assert_eq!(
+        service
+            .recover_session(RecoveryRequest {
+                session_id,
+                expected_session_revision: 0,
+                principal: "person-a".into(),
+            })
+            .await
+            .unwrap(),
+        RecoveryReceipt {
+            session_id,
+            session_revision: 0,
+        }
+    );
+
+    let model = Arc::new(BlockingModel {
+        calls: Default::default(),
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+    });
+    let running_service = Arc::clone(&service);
+    let running_model = Arc::clone(&model);
+    let running = tokio::spawn(async move {
+        running_service
+            .run_turn(
+                request(CommandId::new(), session_id, 0, "first"),
+                ports(running_model.as_ref()),
+            )
+            .await
+    });
+    model.entered.acquire().await.unwrap().forget();
+    assert_eq!(
+        service
+            .recover_session(RecoveryRequest {
+                session_id,
+                expected_session_revision: 1,
+                principal: "person-a".into(),
+            })
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    model.release.add_permits(1);
+    let completed = running.await.unwrap().unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(
+        service
+            .recover_session(RecoveryRequest {
+                session_id,
+                expected_session_revision: completed.session_revision,
+                principal: "person-a".into(),
+            })
+            .await
+            .unwrap()
+            .session_revision,
+        completed.session_revision
+    );
 }

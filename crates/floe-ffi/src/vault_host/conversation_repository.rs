@@ -7,8 +7,8 @@ use floe_agent_contract::{
     ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId, TaskReceipt, TaskState,
 };
 use floe_conversation::{
-    AdmittedTurn, ConversationRepository, RunReceipt, RunState, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest,
+    AdmittedTurn, ConversationRepository, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_core::{
     EncryptedAgentVault, VaultConversationAdmission, VaultConversationAdmissionRequest,
@@ -132,6 +132,30 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 receipt,
                 transcript,
             }))
+        })
+    }
+
+    fn recover_session<'a>(
+        &'a self,
+        request: RecoveryRequest,
+    ) -> BoxFuture<'a, Result<RecoveryReceipt, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            if request.principal != self.vault.person_id().to_string() {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let session_revision = self
+                .vault
+                .recover_conversation_session(
+                    request.session_id,
+                    self.vault.person_id(),
+                    request.expected_session_revision,
+                )
+                .await?;
+            Ok(RecoveryReceipt {
+                session_id: request.session_id,
+                session_revision,
+            })
         })
     }
 }

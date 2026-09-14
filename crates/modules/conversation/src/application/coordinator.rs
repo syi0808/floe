@@ -8,8 +8,8 @@ use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    ConversationPorts, ConversationRepository, ManagerConfig, RunReceipt, RunState, RunTerminal,
-    TurnAdmission, TurnAdmissionRequest, TurnRequest,
+    ConversationPorts, ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest,
+    RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnRequest,
 };
 
 pub struct ConversationService<Repository> {
@@ -163,6 +163,28 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             .finish_run(run_id, expected_aggregate_revision, terminal)
             .await
     }
+
+    pub async fn recover_session(
+        &self,
+        request: RecoveryRequest,
+    ) -> Result<RecoveryReceipt, AgentFailure> {
+        recover_session(self.repository.as_ref(), request).await
+    }
+}
+
+pub async fn recover_session<Repository: ConversationRepository>(
+    repository: &Repository,
+    request: RecoveryRequest,
+) -> Result<RecoveryReceipt, AgentFailure> {
+    request.validate()?;
+    let expected_session_id = request.session_id;
+    let expected_revision = request.expected_session_revision;
+    let receipt = repository.recover_session(request).await?;
+    receipt.validate()?;
+    if receipt.session_id != expected_session_id || receipt.session_revision != expected_revision {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(receipt)
 }
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {

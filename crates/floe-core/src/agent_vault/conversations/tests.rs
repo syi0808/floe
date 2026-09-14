@@ -175,6 +175,12 @@ async fn active_claim_blocks_another_command_and_invalid_terminal_cannot_release
         .admit_conversation_turn(request(person_id, session.id, run_id, CommandId::new()))
         .await
         .unwrap();
+    assert_eq!(
+        vault
+            .recover_conversation_session(session.id, person_id, 1)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
     let mut second = request(person_id, session.id, RunId::new(), CommandId::new());
     second.expected_session_revision = 1;
     assert_eq!(
@@ -222,6 +228,13 @@ async fn active_claim_blocks_another_command_and_invalid_terminal_cannot_release
     assert_eq!(
         vault.load(person_id, session.id).await.unwrap().active_turn,
         None
+    );
+    assert_eq!(
+        vault
+            .recover_conversation_session(session.id, person_id, cancelled.session_revision)
+            .await
+            .unwrap(),
+        cancelled.session_revision
     );
 }
 
@@ -272,6 +285,13 @@ async fn activation_interrupts_orphan_and_releases_claim_without_replaying_work(
         Some(AgentOutcome::Halted {
             reason: AgentFailure::Interrupted
         })
+    );
+    assert_eq!(
+        vault
+            .recover_conversation_session(session.id, person_id, interrupted.session_revision,)
+            .await
+            .unwrap(),
+        interrupted.session_revision
     );
     assert_eq!(
         vault.admit_conversation_turn(admission).await.unwrap(),

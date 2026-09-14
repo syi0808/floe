@@ -1,6 +1,6 @@
 mod coordinator;
 
-pub use coordinator::ConversationService;
+pub use coordinator::{ConversationService, recover_session};
 
 #[cfg(test)]
 mod tests;
