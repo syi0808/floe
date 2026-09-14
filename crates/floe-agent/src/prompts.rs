@@ -1,3 +1,6 @@
+use floe_knowledge::prompts::{
+    LEARNER_PROTOCOL, LEARNER_PROTOCOL_REVISION, LEARNER_ROLE, LEARNER_ROLE_REVISION,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{AGENT_VERSION, AgentFailure};
@@ -13,8 +16,6 @@ const FOCUS_EXPERT_ROLE: &str = include_str!("../prompts/focus_expert_role.txt")
 const WELLBEING_EXPERT_ROLE: &str = include_str!("../prompts/wellbeing_expert_role.txt");
 const WORK_CONTEXT_EXPERT_ROLE: &str = include_str!("../prompts/work_context_expert_role.txt");
 const LIFE_LOGISTICS_EXPERT_ROLE: &str = include_str!("../prompts/life_logistics_expert_role.txt");
-const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
-const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
 const DEFAULT_PERSONA: &str = include_str!("../prompts/default_persona.txt");
 const BEHAVIOR_KERNEL_REVISION: u64 = 2;
 const CAPABILITY_PROTOCOL_REVISION: u64 = 3;
@@ -300,11 +301,16 @@ pub fn learner_prompt() -> PromptAssembly {
                 BEHAVIOR_KERNEL_REVISION,
                 BEHAVIOR_KERNEL,
             ),
-            product_component(PromptComponentKind::Role, "learner-role", 1, LEARNER_ROLE),
+            product_component(
+                PromptComponentKind::Role,
+                "learner-role",
+                LEARNER_ROLE_REVISION,
+                LEARNER_ROLE,
+            ),
             product_component(
                 PromptComponentKind::CapabilityProtocol,
                 "learner-protocol",
-                1,
+                LEARNER_PROTOCOL_REVISION,
                 LEARNER_PROTOCOL,
             ),
         ],
@@ -432,6 +438,10 @@ mod tests {
         let learner = learner_prompt();
         assert_eq!(learner.role, PromptRole::Learner);
         assert_eq!(learner.validate(), Ok(()));
+        assert_eq!(learner.components[1].content, LEARNER_ROLE.trim());
+        assert_eq!(learner.components[1].revision, LEARNER_ROLE_REVISION);
+        assert_eq!(learner.components[2].content, LEARNER_PROTOCOL.trim());
+        assert_eq!(learner.components[2].revision, LEARNER_PROTOCOL_REVISION);
         assert!(
             !learner
                 .components

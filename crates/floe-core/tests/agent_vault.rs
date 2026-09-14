@@ -308,7 +308,11 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         std::slice::from_ref(&active_revision)
     );
     assert_eq!(
-        vault.knowledge_mutations(revision.target_id).await.unwrap().len(),
+        vault
+            .knowledge_mutations(revision.target_id)
+            .await
+            .unwrap()
+            .len(),
         2
     );
     let rejected = vault
@@ -688,7 +692,7 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
         session_id: session.id,
         session_revision: session.revision,
         turn_ids: vec![turn_id],
-        outcome: AgentOutcome::Completed,
+        outcome: AgentOutcome::Completed.into(),
         digest: "User explicitly asked to remember a morning focus preference".into(),
         current_memories: vec![],
         observed_at: now,
@@ -758,7 +762,10 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
             Err(AgentFailure::Conflict)
         );
         assert_eq!(
-            vault.enqueue_learner_review(input.clone(), now).await.unwrap(),
+            vault
+                .enqueue_learner_review(input.clone(), now)
+                .await
+                .unwrap(),
             second
         );
     }
@@ -777,7 +784,10 @@ async fn learner_review_queue_is_idempotent_leased_deferred_and_persistent() {
         Err(AgentFailure::InvalidInput)
     );
     assert_eq!(
-        vault.enqueue_learner_review(input.clone(), now).await.unwrap(),
+        vault
+            .enqueue_learner_review(input.clone(), now)
+            .await
+            .unwrap(),
         second
     );
     assert_eq!(
@@ -943,7 +953,7 @@ async fn learner_review_queue_rejects_stale_sources_before_model_claim() {
         session_id: session.id,
         session_revision: 1,
         turn_ids: vec![turn_id],
-        outcome: AgentOutcome::Completed,
+        outcome: AgentOutcome::Completed.into(),
         digest: "Explicit remember request".into(),
         current_memories: vec![],
         observed_at: now,
@@ -1150,7 +1160,7 @@ async fn lineage_revocation_blocks_approval_settlement_and_memory_projection() {
         session_id: settlement_session.id,
         session_revision: 1,
         turn_ids: vec![settlement_turn],
-        outcome: AgentOutcome::Completed,
+        outcome: AgentOutcome::Completed.into(),
         digest: "learner review".into(),
         current_memories: vec![],
         observed_at: now,

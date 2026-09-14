@@ -1,123 +1,20 @@
-use std::collections::HashSet;
+use serde::Deserialize;
 
-use chrono::{DateTime, Utc};
-use floe_domain::PersonId;
-use serde::{Deserialize, Serialize};
-use tokio::time::{Duration, Instant};
-use uuid::Uuid;
-
+use crate::ModelPlacement;
 use crate::{
-    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentOutcome, AgentUsage,
-    Cancellation, ContextMemory, DataClass, InferencePolicyDecision, KNOWLEDGE_VERSION,
-    KnowledgeActor, KnowledgeCandidate, LearningObservationKind, ModelPlacement, ModelRequest,
-    ModelRunner, ModelStep, StageMemoryCandidate, TransferConsent, UsageLedger,
+    AGENT_VERSION, AgentContext, AgentFailure, AgentMessage, AgentUsage, DataClass,
+    InferencePolicyDecision, ModelRequest, ModelRunner, ModelStep, TransferConsent, UsageLedger,
     generate_with_recovery, learner_prompt,
+};
+pub use floe_knowledge::{
+    LearnerMemoryProposal, LearnerModel, LearnerModelRequest, LearnerReviewOutput,
 };
 
 pub use floe_knowledge::{
-    LearnerBudget, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal,
-    LearnerReviewOutput, retryable_learner_failure, settlement_for_learner_result,
+    LearnerBudget, LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState,
+    LearnerReviewInput, LearnerReviewJob, LearnerRuntime, MemoryCandidateSink,
+    explicit_learning_signal, retryable_learner_failure, settlement_for_learner_result,
 };
-
-const MAX_LEARNER_VERSION_BYTES: usize = 128;
-
-pub fn explicit_learning_signal(text: &str) -> Option<LearningObservationKind> {
-    let normalized = text.trim().to_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-    if normalized.starts_with("remember ")
-        || [
-            "please remember",
-            "기억해줘",
-            "기억해 줘",
-            "기억해 주세요",
-            "기억해둬",
-            "기억해 둬",
-        ]
-        .iter()
-        .any(|signal| normalized.contains(signal))
-    {
-        return Some(LearningObservationKind::ExplicitRemember);
-    }
-    if normalized.starts_with("forget ")
-        || ["please forget", "잊어줘", "잊어 줘", "기억에서 지워"]
-            .iter()
-            .any(|signal| normalized.contains(signal))
-    {
-        return Some(LearningObservationKind::UserCorrection);
-    }
-    if [
-        "actually,",
-        "correction:",
-        "that's not right",
-        "that is not right",
-        "정확히는",
-        "정정할게",
-        "정정할게요",
-        "그게 아니라",
-    ]
-    .iter()
-    .any(|signal| normalized.contains(signal))
-    {
-        return Some(LearningObservationKind::UserCorrection);
-    }
-    None
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearnerReviewInput {
-    pub schema_version: u32,
-    pub run_id: Uuid,
-    pub person_id: PersonId,
-    pub session_id: Uuid,
-    pub session_revision: u64,
-    pub turn_ids: Vec<Uuid>,
-    pub outcome: AgentOutcome,
-    pub digest: String,
-    pub current_memories: Vec<ContextMemory>,
-    pub observed_at: DateTime<Utc>,
-}
-
-#[derive(Clone)]
-pub struct LearnerModelRequest {
-    pub input: LearnerReviewInput,
-    pub remaining_tokens: u64,
-    pub remaining_cost_micros: u64,
-    pub max_output_bytes: usize,
-    pub deadline: Instant,
-    pub cancellation: Cancellation,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LearnerReviewJob {
-    pub schema_version: u32,
-    pub id: Uuid,
-    pub idempotency_key: String,
-    pub input: LearnerReviewInput,
-    pub state: LearnerJobState,
-    pub attempts: u8,
-    pub available_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate_id: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_failure: Option<AgentFailure>,
-}
-
-pub trait LearnerModel {
-    fn placement(&self) -> ModelPlacement;
-
-    fn review(
-        &self,
-        request: LearnerModelRequest,
-    ) -> impl Future<Output = Result<LearnerReviewOutput, AgentFailure>> + Send;
-}
 
 pub struct StructuredLearnerModel<Model> {
     model: Model,
@@ -198,7 +95,7 @@ impl<Model: ModelRunner + Sync> LearnerModel for StructuredLearnerModel<Model> {
         };
         let answer: StructuredLearnerAnswer =
             serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
-        if answer.schema_version != KNOWLEDGE_VERSION {
+        if answer.schema_version != floe_knowledge::KNOWLEDGE_VERSION {
             return Err(AgentFailure::InvalidModelOutput);
         }
         Ok(LearnerReviewOutput {
@@ -217,124 +114,17 @@ struct StructuredLearnerAnswer {
     proposal: Option<LearnerMemoryProposal>,
 }
 
-pub trait MemoryCandidateSink {
-    fn person_id(&self) -> PersonId;
-
-    fn stage_memory_candidate(
-        &self,
-        request: StageMemoryCandidate,
-    ) -> impl Future<Output = Result<KnowledgeCandidate, AgentFailure>> + Send;
-}
-
-pub struct LearnerRuntime<'runtime, Model, Sink> {
-    pub model: &'runtime Model,
-    pub candidates: &'runtime Sink,
-    pub budget: LearnerBudget,
-    pub extractor_version: &'runtime str,
-    pub prompt_version: &'runtime str,
-}
-
-impl<Model: LearnerModel + Sync, Sink: MemoryCandidateSink + Sync> LearnerRuntime<'_, Model, Sink> {
-    pub async fn review(
-        &self,
-        input: LearnerReviewInput,
-        cancellation: Cancellation,
-    ) -> Result<Option<KnowledgeCandidate>, AgentFailure> {
-        self.validate_input(&input)?;
-        if self.model.placement() != ModelPlacement::DeviceLocal {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        let deadline = Instant::now() + Duration::from_millis(self.budget.deadline_ms);
-        let output = tokio::select! {
-            _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => return Err(AgentFailure::DeadlineExceeded),
-            output = self.model.review(LearnerModelRequest {
-                input: input.clone(),
-                remaining_tokens: self.budget.max_model_tokens,
-                remaining_cost_micros: self.budget.max_model_cost_micros,
-                max_output_bytes: self.budget.max_output_bytes,
-                deadline,
-                cancellation: cancellation.clone(),
-            }) => output?,
-        };
-        self.validate_output(&output)?;
-        let Some(mut proposal) = output.proposal else {
-            return Ok(None);
-        };
-        if cancellation.is_cancelled() {
-            return Err(AgentFailure::Cancelled);
-        }
-        proposal.value.observed_at = input.observed_at;
-        self.candidates
-            .stage_memory_candidate(StageMemoryCandidate {
-                session_id: input.session_id,
-                expected_session_revision: input.session_revision,
-                turn_ids: input.turn_ids,
-                observation_kind: proposal.observation_kind,
-                digest: input.digest,
-                value: proposal.value,
-                target_id: proposal.target_id,
-                base_revision: proposal.base_revision,
-                extractor_version: self.extractor_version.to_owned(),
-                prompt_version: self.prompt_version.to_owned(),
-                actor: KnowledgeActor::Learner {
-                    run_id: input.run_id,
-                },
-                created_at: input.observed_at,
-            })
-            .await
-            .map(Some)
-    }
-
-    fn validate_input(&self, input: &LearnerReviewInput) -> Result<(), AgentFailure> {
-        let unique_turns = input.turn_ids.iter().copied().collect::<HashSet<_>>();
-        if input.schema_version != KNOWLEDGE_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if input.person_id != self.candidates.person_id()
-            || input.outcome != AgentOutcome::Completed
-            || input.session_revision == 0
-            || input.turn_ids.is_empty()
-            || unique_turns.len() != input.turn_ids.len()
-            || input.digest.trim().is_empty()
-            || self.extractor_version.trim().is_empty()
-            || self.extractor_version.len() > MAX_LEARNER_VERSION_BYTES
-            || self.prompt_version.trim().is_empty()
-            || self.prompt_version.len() > MAX_LEARNER_VERSION_BYTES
-            || self.budget.deadline_ms == 0
-            || self.budget.deadline_ms > 30_000
-            || self.budget.max_model_tokens == 0
-            || self.budget.max_model_cost_micros == 0
-            || serde_json::to_vec(input)
-                .map_err(|_| AgentFailure::InvalidInput)?
-                .len()
-                > self.budget.max_input_bytes
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-    fn validate_output(&self, output: &LearnerReviewOutput) -> Result<(), AgentFailure> {
-        if output.schema_version != KNOWLEDGE_VERSION
-            || output.used_tokens > self.budget.max_model_tokens
-            || output.cost_micros > self.budget.max_model_cost_micros
-            || serde_json::to_vec(output)
-                .map_err(|_| AgentFailure::InvalidModelOutput)?
-                .len()
-                > self.budget.max_output_bytes
-        {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::{
+        Cancellation, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
+        LearningObservationKind, StageMemoryCandidate,
+    };
+    use chrono::{DateTime, Utc};
+    use floe_domain::PersonId;
     use floe_knowledge::PersonalMemoryValue;
+    use tokio::time::{Duration, Instant};
+    use uuid::Uuid;
 
     use std::sync::{
         Arc, Mutex,
@@ -464,7 +254,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             session_revision: 1,
             turn_ids: vec![Uuid::new_v4()],
-            outcome: AgentOutcome::Completed,
+            outcome: floe_knowledge::LearningOutcome::Completed,
             digest: "The user explicitly asked Floe to remember a preference.".into(),
             current_memories: vec![],
             observed_at: Utc::now(),
@@ -707,7 +497,7 @@ mod tests {
     #[tokio::test]
     async fn learner_rejects_over_budget_or_halted_reviews() {
         let mut halted = input();
-        halted.outcome = AgentOutcome::Halted {
+        halted.outcome = floe_knowledge::LearningOutcome::Halted {
             reason: AgentFailure::Stalled,
         };
         let calls = Arc::new(AtomicUsize::new(0));

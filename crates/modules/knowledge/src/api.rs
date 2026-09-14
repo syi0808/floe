@@ -1,9 +1,35 @@
 use chrono::{DateTime, Utc};
-use floe_kernel::PersonId;
+use floe_kernel::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const KNOWLEDGE_VERSION: u32 = 1;
+pub const MAX_CONTEXT_MEMORIES: usize = 32;
+pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LearningOutcome {
+    Completed,
+    Halted { reason: AgentFailure },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextMemory {
+    pub target_id: Uuid,
+    pub revision: u64,
+    pub kind: PersonalMemoryKind,
+    pub statement: String,
+    pub epistemic_status: EpistemicStatus,
+    pub confidence_millis: u16,
+    pub observed_at_unix_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from_unix_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until_unix_ms: Option<i64>,
+    pub source_refs: Vec<LearningEvidenceRef>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -222,4 +248,19 @@ pub struct LearningEvidenceSnapshot {
     pub active_turn: bool,
     pub pending_output: bool,
     pub turn_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearningObservation {
+    pub schema_version: u32,
+    pub id: Uuid,
+    pub person_id: PersonId,
+    pub session_id: Uuid,
+    pub evidence: Vec<LearningEvidenceRef>,
+    pub outcome: LearningOutcome,
+    pub kind: LearningObservationKind,
+    pub digest: String,
+    pub observed_at: DateTime<Utc>,
+    pub content_hash: String,
 }

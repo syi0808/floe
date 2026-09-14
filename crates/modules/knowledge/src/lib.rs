@@ -1,4 +1,6 @@
 pub mod api;
+pub mod prompts;
+pub use application::learner::validate_learner_input;
 pub mod application {
     pub mod learner;
     pub mod memory;
@@ -7,18 +9,20 @@ pub mod application {
 }
 
 pub use api::{
-    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
+    ContextMemory, EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
     KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
     KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
-    KnowledgeRevisionState, LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservationKind,
+    KnowledgeRevisionState, LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservation,
+    LearningObservationKind, LearningOutcome, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
     PersonalMemoryKind, PersonalMemoryValue, StageMemoryCandidate,
 };
 pub use application::learner::{
     LEARNER_JOB_LEASE_SECONDS, LEARNER_JOB_RETRY_DELAY_SECONDS, LearnerBudget, LearnerJobClaim,
     LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal,
-    LearnerReviewOutput, MAX_LEARNER_JOB_ATTEMPTS, claim_learner_job, reject_learner_claim,
-    retryable_learner_failure, settle_learner_job, settlement_for_learner_result,
-    validate_learner_job_lifecycle,
+    LearnerModel, LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput,
+    LearnerRuntime, MAX_LEARNER_JOB_ATTEMPTS, MemoryCandidateSink, claim_learner_job,
+    explicit_learning_signal, reject_learner_claim, retryable_learner_failure, settle_learner_job,
+    settlement_for_learner_result, validate_learner_job_lifecycle,
 };
 pub use application::memory::{validate_learning_evidence, validate_stage_request};
 pub use application::playbooks::{

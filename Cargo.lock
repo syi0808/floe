@@ -1003,9 +1003,12 @@ name = "floe-knowledge"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-context-contract",
+ "floe-execution",
  "floe-kernel",
  "serde",
  "serde_json",
+ "tokio",
  "uuid",
 ]
 

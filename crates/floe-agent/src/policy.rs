@@ -1,15 +1,11 @@
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::{
-    AgentFailure, DataClass, EpistemicStatus, LearningEvidenceRef, ModelPlacement,
-    PersonalMemoryKind, SessionProtection, TransferConsent,
-};
+use crate::{AgentFailure, DataClass, ModelPlacement, SessionProtection, TransferConsent};
 
-pub const MAX_CONTEXT_MEMORIES: usize = 32;
-pub const MAX_CONTEXT_MEMORY_BYTES: usize = 16 * 1024;
 pub const MAX_CONTEXT_EVIDENCE: usize = 64;
 pub const MAX_CONTEXT_EVIDENCE_BYTES: usize = 32 * 1024;
+
+pub use floe_knowledge::{ContextMemory, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -30,23 +26,6 @@ pub struct ContextEvidence {
     pub data_class: DataClass,
     pub untrusted_text: String,
     pub expires_at_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContextMemory {
-    pub target_id: Uuid,
-    pub revision: u64,
-    pub kind: PersonalMemoryKind,
-    pub statement: String,
-    pub epistemic_status: EpistemicStatus,
-    pub confidence_millis: u16,
-    pub observed_at_unix_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_from_unix_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_until_unix_ms: Option<i64>,
-    pub source_refs: Vec<LearningEvidenceRef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

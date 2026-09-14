@@ -1,18 +1,17 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use floe_agent::{
-    AgentFailure, AgentOutcome, ContextMemory, DataClass, LearnerReviewInput, LearnerReviewJob,
-    LearningObservation, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
-};
+use floe_agent::{AgentFailure, AgentOutcome, DataClass};
 use floe_knowledge::{
-    KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
+    ContextMemory, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
     KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
     LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState,
-    LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservationKind, StageMemoryCandidate,
-    claim_learner_job, reject_learner_claim, settle_learner_job, validate_learner_job_lifecycle,
-    validate_learning_evidence, validate_stage_request,
+    LearnerReviewInput, LearnerReviewJob, LearningEvidenceRef, LearningEvidenceSnapshot,
+    LearningObservation, LearningObservationKind, LearningOutcome, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, StageMemoryCandidate, claim_learner_job, reject_learner_claim,
+    settle_learner_job, validate_learner_job_lifecycle, validate_learning_evidence,
+    validate_stage_request, validate_learner_input,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -21,8 +20,6 @@ use uuid::Uuid;
 
 use super::*;
 
-const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
-const MAX_EVIDENCE_REFS: usize = 32;
 const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
 const MAX_LEARNER_DISCOVERY_SESSIONS: i64 = 64;
 const MAX_LEARNER_DIGEST_TEXT_BYTES: usize = 1536;
@@ -147,7 +144,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     person_id: self.person_id,
                     session_id: request.session_id,
                     evidence: source_refs.clone(),
-                    outcome: AgentOutcome::Completed,
+                    outcome: LearningOutcome::Completed,
                     kind: request.observation_kind,
                     digest: request.digest.trim().to_owned(),
                     observed_at: request.created_at,
@@ -654,7 +651,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 session_id: session.id,
                 session_revision: session.revision,
                 turn_ids: vec![turn_id],
-                outcome: AgentOutcome::Completed,
+                outcome: LearningOutcome::Completed,
                 digest,
                 current_memories: memories.clone(),
                 observed_at: now,
@@ -877,7 +874,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-impl<Keys: VaultKeyProvider> floe_agent::MemoryCandidateSink for EncryptedAgentVault<Keys> {
+impl<Keys: VaultKeyProvider> floe_knowledge::MemoryCandidateSink for EncryptedAgentVault<Keys> {
     fn person_id(&self) -> floe_domain::PersonId {
         self.person_id
     }
@@ -947,42 +944,6 @@ fn learning_signal_name(signal: LearningObservationKind) -> &'static str {
     }
 }
 
-fn validate_learner_input(
-    input: &LearnerReviewInput,
-    person_id: floe_domain::PersonId,
-) -> Result<(), AgentFailure> {
-    let unique_turns = input.turn_ids.iter().collect::<HashSet<_>>();
-    let unique_memories = input
-        .current_memories
-        .iter()
-        .map(|memory| memory.target_id)
-        .collect::<HashSet<_>>();
-    if input.schema_version != KNOWLEDGE_VERSION
-        || input.person_id != person_id
-        || input.outcome != AgentOutcome::Completed
-        || input.session_revision == 0
-        || input.turn_ids.is_empty()
-        || input.turn_ids.len() > MAX_EVIDENCE_REFS
-        || unique_turns.len() != input.turn_ids.len()
-        || input.digest.trim().is_empty()
-        || input.digest.len() > MAX_OBSERVATION_DIGEST_BYTES
-        || input.current_memories.len() > MAX_CONTEXT_MEMORIES
-        || unique_memories.len() != input.current_memories.len()
-        || input.current_memories.iter().any(|memory| {
-            memory.revision == 0
-                || memory.statement.trim().is_empty()
-                || memory.confidence_millis > 1000
-                || memory.source_refs.is_empty()
-        })
-        || serde_json::to_vec(input)
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .len()
-            > 16 * 1024
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    Ok(())
-}
 
 async fn evidence_is_independent(
     transaction: &turso::transaction::Transaction<'_>,
@@ -1041,7 +1002,7 @@ async fn validate_learner_source(
         || session.data_classes != [DataClass::Personal]
         || session.active_turn.is_some()
         || session.pending_output.is_some()
-        || session.last_outcome != Some(input.outcome)
+        || session.last_outcome.map(Into::into) != Some(input.outcome)
     {
         return Err(AgentFailure::PolicyDenied);
     }

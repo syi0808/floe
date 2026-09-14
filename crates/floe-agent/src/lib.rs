@@ -89,13 +89,13 @@ pub use experts::{
 };
 pub use floe_execution::{CancelReason, Cancellation};
 pub use learner::{
-    LearnerBudget, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
+    LearnerBudget, LearnerJobClaim, LearnerJobLifecycle, LearnerJobSettlement, LearnerJobState, LearnerMemoryProposal, LearnerModel,
     LearnerModelRequest, LearnerReviewInput, LearnerReviewJob, LearnerReviewOutput, LearnerRuntime,
     MemoryCandidateSink, StructuredLearnerModel, explicit_learning_signal,
     retryable_learner_failure, settlement_for_learner_result,
 };
 pub use learning::{
-    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
+    ContextMemory, EpistemicStatus, LearningOutcome, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgeCandidate,
     KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
     KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
     KnowledgeRevisionState, LearningEvidenceRef, LearningObservation, LearningObservationKind,
@@ -122,8 +122,8 @@ pub use playbook::{
     PlaybookIndexEntry, PlaybookRef, PlaybookRegistry, PlaybookSession,
 };
 pub use policy::{
-    AgentContext, ContextEvidence, ContextMemory, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
-    MAX_CONTEXT_EVIDENCE_BYTES, MAX_CONTEXT_MEMORIES, MAX_CONTEXT_MEMORY_BYTES,
+    AgentContext, ContextEvidence, InferencePolicyDecision, MAX_CONTEXT_EVIDENCE,
+    MAX_CONTEXT_EVIDENCE_BYTES,
 };
 pub use portfolio_context::{
     LOGISTICS_VIEW_ID, LogisticsItem, LogisticsItemKind, LogisticsView, MAX_PORTFOLIO_VIEW_BYTES,
