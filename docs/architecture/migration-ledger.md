@@ -1065,3 +1065,12 @@ Code checkpoint `295def5` moves the existing runtime `bounded`/`CallCancellation
 - Actual legacy runtime flow: `cargo test -p floe-agent --test runtime`, all 44 pass after extraction.
 - Added and ran four focused execution regressions: expired scope dispatch count zero; inherited deadline reason; dropped polled future cancels only child; timed-out join retains handle until actual settlement. `cargo test -p floe-execution tasks::tests`, all 4 pass.
 - No native/LLM acceptance is implied. Shared lease partitions, `ExecutionScope`, diagnostics and owner journal work remain in progress.
+
+## P20 authority transport slice — 2026-09-14
+
+Code checkpoints `b0c26cd` and review correction `82ae6fa` extract the existing authority client/admin handlers and strict JSON decoding from `server/internal/console/authority_handlers.go` to `server/internal/transport/http/authority.go:1`. `AuthorityHandler` depends on an `EnrollmentService` port and narrow producer metadata/signing callbacks. Existing `authorization` remains the sole enrollment/signature/trust owner; no authority state or signing policy was copied into transport. Console currently composes this handler under its existing client/admin/CSRF middleware.
+
+- Direct existing HTTP/authorization regressions plus new transport tests: `cd server && go test ./...`, pass; `go vet ./...`, pass at b0c26cd.
+- Integration review found an interface typed-nil regression and a missing unknown-route response. Corrected concrete nil assignment and restored 404/503 fallback behavior in 82ae6fa. Added Console-level HTTP assertions for unknown paths, unavailable enrollment and unavailable admin authority; `go test ./internal/console ./internal/transport/http`, pass after correction.
+- New focused transport tests preserve principal propagation and signed enrollment response fields, reject duplicate/case-aliased JSON keys, and retain valid bounded nested JSON. Existing signature/TTL/ownership tests remain unchanged. No external account or credential mutation was performed.
+- Temporary bridge: Console owns composition, calendar-source preview and remaining business state; remove by P20/P24. Application bootstrap, connection/pairing/inference ownership, optional-module failure handling and final transport/web cutover are not complete. These commits are a transport slice, not full T35/T36 or P20 acceptance.
