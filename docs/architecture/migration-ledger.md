@@ -51,7 +51,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
-| P16 | Partial: app-wire v2 conversation DTO/golden foundation defined; AppHost and ABI cutover pending |
+| P16 | Partial: app-wire v2 foundation and AppHost lifecycle shell wired; verified caller/service and ABI cutover pending |
 | P17 | Pending |
 | P18 | Pending |
 | P19 | Pending |
@@ -3375,3 +3375,40 @@ executable P16 slice is the AppHost ownership shell and its native identity /
 provider handles, after which FFI can convert these DTOs to typed service calls
 and reject version mismatch before side effects. P16 and Apple acceptance
 remain partial.
+
+### P16 AppHost ownership-shell checkpoint (2026-09-15)
+
+Code checkpoint `aed6e3b` adds the target `floe-app` workspace crate and moves
+the native handle's product-bundle lifetime under `AppHost`. AppHost owns the
+runtime epoch, an identity-provider-derived caller context, request admission,
+draining and idempotent shutdown. Once shutdown begins, new admissions fail;
+existing request guards drain before the service bundle receives shutdown; and
+all concurrent shutdown callers observe the same terminal shutdown failure.
+The crate has no disallowed internal dependency and contains no user-text,
+Calendar or provider routing decision.
+
+The current FFI handle is now an explicit temporary `LegacyComposition` inside
+AppHost rather than being the lifetime owner itself. Handle close first removes
+the Vault worker and cancels its owned jobs, then closes fixture runs. The
+legacy constructor deliberately has no caller context, so it cannot admit a v2
+request by accidentally trusting legacy Person/device fields. Existing blocked
+native-key callbacks remain non-blocking on handle close; joining those callbacks
+requires the later native ownership cutover rather than waiting indefinitely in
+`floe_core_free`.
+
+Direct validation passed all three AppHost lifecycle tests, all 97 FFI library
+tests, the focused native-handle close C-ABI test, workspace all-target checks,
+and the migration boundary gate (21 nodes / 70 edges / no errors). The broader
+C-ABI file remains red in the pre-existing `action_authority_defaults_to_ask_and_persists`
+case because its test expects the legacy SetAuthority mutation while the
+production boundary already returns PolicyDenied; this checkpoint does not
+weaken that authorization boundary to satisfy the stale assertion.
+
+Blocker/remove-by: provider/native adapters still need to supply the verified
+local identity and host-selected inference handles, and the service bundle is
+still assembled in FFI. The next executable P16 slice is to inject those narrow
+bootstrap handles into AppHost, replace `AppHost::legacy` at production open,
+then expose v2 command/query/event conversion without adding principal, device
+or credentials to app-wire requests. `LegacyComposition` and
+`legacy_services()` are removed after that service cutover. P16 and Apple
+acceptance remain partial.
