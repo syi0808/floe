@@ -836,6 +836,8 @@ dependencies = [
 name = "floe-app"
 version = "0.1.0"
 dependencies = [
+ "floe-provider-adapters",
+ "tempfile",
  "uuid",
 ]
 
@@ -1076,6 +1078,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-native"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "floe-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1084,6 +1095,14 @@ dependencies = [
  "floe-context-contract",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "floe-provider-adapters"
+version = "0.1.0"
+dependencies = [
+ "floe-native",
  "uuid",
 ]
 

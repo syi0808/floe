@@ -71,6 +71,35 @@ impl Core {
 }
 
 #[test]
+fn product_open_binds_native_identity_before_database_side_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = Uuid::new_v4();
+    let person_directory = directory.path().join("people").join(person.to_string());
+    std::fs::create_dir_all(&person_directory).unwrap();
+    std::fs::write(directory.path().join("local_device_id"), "local-device-1").unwrap();
+    let database = person_directory.join("floe.db");
+    drop(Core::open(database.to_str().unwrap()));
+    assert!(database.exists());
+
+    let missing_directory = tempfile::tempdir().unwrap();
+    let missing_person_directory = missing_directory
+        .path()
+        .join("people")
+        .join(Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&missing_person_directory).unwrap();
+    let missing_database = missing_person_directory.join("floe.db");
+    let path = CString::new(missing_database.to_str().unwrap()).unwrap();
+    let mut error = std::ptr::null_mut();
+    let handle = unsafe { floe_core_open(path.as_ptr(), &mut error) };
+    assert!(handle.is_null());
+    assert!(!error.is_null());
+    let error = take_json(error);
+    assert_eq!(error["status"], "error");
+    assert_eq!(error["error"]["code"], "internal");
+    assert!(!missing_database.exists());
+}
+
+#[test]
 fn local_context_abi_is_ephemeral_person_and_device_bound() {
     let directory = tempfile::tempdir().unwrap();
     let core = Core::open(directory.path().join("floe.db").to_str().unwrap());
@@ -548,7 +577,10 @@ fn action_authority_defaults_to_ask_and_rejects_legacy_mutation() {
         json!({"kind": "set_authority", "calendar_create": "allow"}),
     );
     assert_eq!(denied["status"], "error");
-    assert_eq!(denied["error"]["metadata"]["agent_failure"], "policy_denied");
+    assert_eq!(
+        denied["error"]["metadata"]["agent_failure"],
+        "policy_denied"
+    );
     drop(core);
 
     let reopened = Core::open(path.to_str().unwrap());

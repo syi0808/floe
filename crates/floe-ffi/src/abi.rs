@@ -30,6 +30,8 @@ pub unsafe extern "C" fn floe_core_open(
     }
     let operation = || -> BridgeResult<*mut FloeHandle> {
         let path = c_input(path, "path")?;
+        let identity = floe_app::local_identity_for_database(std::path::Path::new(path))
+            .map_err(host_error)?;
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()
@@ -44,9 +46,11 @@ pub unsafe extern "C" fn floe_core_open(
             #[cfg(unix)]
             agent_vault: vault_host::VaultBridge::new(path, core, local_context),
         };
-        Ok(Box::into_raw(Box::new(FloeHandle {
-            app: AppHost::legacy(services),
-        })))
+        let app = match identity {
+            Some(identity) => AppHost::bootstrap_claim(services, identity).map_err(host_error)?,
+            None => AppHost::legacy(services),
+        };
+        Ok(Box::into_raw(Box::new(FloeHandle { app })))
     };
     match catch_unwind(AssertUnwindSafe(operation)) {
         Ok(Ok(value)) => value,

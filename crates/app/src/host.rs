@@ -236,4 +236,31 @@ mod tests {
         shutdown.join().unwrap().unwrap();
         assert_eq!(shutdowns.load(Ordering::Acquire), 1);
     }
+
+    #[test]
+    fn product_path_bootstrap_uses_native_identity_while_test_paths_stay_legacy() {
+        let root = tempfile::tempdir().unwrap();
+        let person_id = Uuid::new_v4();
+        let person_directory = root.path().join("people").join(person_id.to_string());
+        std::fs::create_dir_all(&person_directory).unwrap();
+        std::fs::write(root.path().join("local_device_id"), "local-device-1").unwrap();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let host = AppHost::bootstrap_local_or_legacy(
+            Services(Arc::clone(&shutdowns)),
+            &person_directory.join("floe.db"),
+        )
+        .unwrap();
+        let request = host.request(Uuid::new_v4()).unwrap();
+        assert_eq!(request.caller().person_id(), person_id);
+        assert_eq!(request.caller().device_id(), "local-device-1");
+        drop(request);
+
+        let legacy =
+            AppHost::bootstrap_local_or_legacy(Services(shutdowns), &root.path().join("test.db"))
+                .unwrap();
+        assert_eq!(
+            legacy.request(Uuid::new_v4()).err(),
+            Some(HostError::UnsupportedCaller)
+        );
+    }
 }

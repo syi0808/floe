@@ -1,13 +1,15 @@
 [package]
-name = "floe-app"
+name = "floe-native"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-floe-provider-adapters = { path = "../adapters/providers" }
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
 
 [dev-dependencies]
 tempfile = "3.23.0"

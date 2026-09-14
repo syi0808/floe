@@ -96,6 +96,20 @@ fn error(code: ErrorCodeDto, message: impl Into<String>) -> ErrorDto {
     }
 }
 
+fn host_error(value: floe_app::HostError) -> ErrorDto {
+    match value {
+        floe_app::HostError::InvalidIdentity | floe_app::HostError::InvalidRequest => {
+            invalid("host", "invalid local host identity")
+        }
+        floe_app::HostError::IdentityUnavailable => {
+            error(ErrorCodeDto::Internal, "local host identity is unavailable")
+        }
+        floe_app::HostError::Closing
+        | floe_app::HostError::UnsupportedCaller
+        | floe_app::HostError::Shutdown => error(ErrorCodeDto::Internal, "host is unavailable"),
+    }
+}
+
 fn invalid(field: &'static str, message: impl Into<String>) -> ErrorDto {
     ErrorDto {
         code: ErrorCodeDto::Validation,

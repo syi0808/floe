@@ -3,6 +3,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostError {
     InvalidIdentity,
+    IdentityUnavailable,
     InvalidRequest,
     Closing,
     UnsupportedCaller,
