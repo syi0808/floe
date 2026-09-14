@@ -596,10 +596,22 @@ impl Worker {
         let mut active = self.active.lock().map_err(|_| AgentFailure::Interrupted)?;
         if let AgentVaultOperationDto::Submit { ref action } = operation {
             if let Some(job) = active.as_ref() {
-                if job.person != person || job.id != id || &job.action != action {
+                if job.person == person && job.id == id {
+                    if &job.action != action {
+                        return Err(AgentFailure::Conflict);
+                    }
+                } else if job
+                    .progress
+                    .lock()
+                    .map_err(|_| AgentFailure::Interrupted)?
+                    .done
+                {
+                    *active = None;
+                } else {
                     return Err(AgentFailure::Conflict);
                 }
-            } else {
+            }
+            if active.is_none() {
                 let job = Arc::new(Job {
                     person,
                     id,

@@ -568,6 +568,93 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
 }
 
 #[test]
+fn terminal_conversation_accepts_the_next_run_without_ui_release() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Create {});
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![
+        floe_agent::ModelStep::Answer {
+            text: "First durable answer".into(),
+        },
+        floe_agent::ModelStep::Answer {
+            text: "Second durable answer".into(),
+        },
+    ]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-release-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let first_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            first_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::ConversationTurn {
+                    request: floe_protocol::AgentConversationTurnRequestDto {
+                        session_id: session.id.to_string(),
+                        expected_revision: session.revision,
+                        text: "Answer first".into(),
+                        device_id: "mac-local".into(),
+                        continuation: false,
+                        remote_route: Some(route.clone()),
+                    },
+                },
+            },
+        )
+        .unwrap();
+    let first = wait(&worker, person, first_id);
+    assert_eq!(first.failure, None, "first: {first:?}");
+    let first_session = first.session.unwrap();
+
+    let second_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            second_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::ConversationTurn {
+                    request: floe_protocol::AgentConversationTurnRequestDto {
+                        session_id: session.id.to_string(),
+                        expected_revision: first_session.revision,
+                        text: "Answer second".into(),
+                        device_id: "mac-local".into(),
+                        continuation: false,
+                        remote_route: Some(route),
+                    },
+                },
+            },
+        )
+        .unwrap();
+    let second = wait(&worker, person, second_id);
+    assert_eq!(second.failure, None, "second: {second:?}");
+    assert!(second.session.unwrap().revision > first_session.revision);
+    assert_eq!(
+        worker.request(
+            person,
+            first_id,
+            AgentVaultOperationDto::Poll { after_sequence: 0 },
+        ),
+        Err(AgentFailure::NotFound)
+    );
+    worker
+        .request(person, second_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[test]
 fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
