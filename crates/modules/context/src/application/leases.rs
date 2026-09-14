@@ -45,21 +45,17 @@ impl SourceLeaseReservation {
         &self,
         person_id: PersonId,
         process_incarnation_id: Uuid,
-        payload_bytes: usize,
     ) -> Result<(), AgentFailure> {
         if self._drop.person_id != person_id
             || self._drop.registry.process_incarnation() != process_incarnation_id
         {
             return Err(AgentFailure::StaleContext);
         }
-        if self._drop.bytes == 0
-            || self._drop.bytes > MAX_LEASE_BYTES
-            || payload_bytes == 0
-            || payload_bytes > self._drop.bytes
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
         Ok(())
+    }
+
+    pub(crate) fn byte_allowance(&self) -> usize {
+        self._drop.bytes
     }
 }
 

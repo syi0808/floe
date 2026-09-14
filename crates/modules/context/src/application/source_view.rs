@@ -1,9 +1,63 @@
+use std::io::{self, Write};
+
 use floe_agent_contract::AgentFailure;
 use floe_context_contract::{ContextDependency, GrantScope, validate_stored_dependency};
 use serde::Serialize;
 use tokio::time::Instant;
 
 use super::leases::{MAX_LEASE_BYTES, SourceLeaseReservation};
+
+struct BoundedByteCounter {
+    allowance: usize,
+    bytes_written: usize,
+    exceeded: bool,
+}
+
+impl BoundedByteCounter {
+    fn new(allowance: usize) -> Self {
+        Self {
+            allowance,
+            bytes_written: 0,
+            exceeded: false,
+        }
+    }
+
+    fn bytes_written(&self) -> usize {
+        self.bytes_written
+    }
+
+    fn exceeded(&self) -> bool {
+        self.exceeded
+    }
+}
+
+impl Write for BoundedByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let Some(next) = self.bytes_written.checked_add(bytes.len()) else {
+            self.exceeded = true;
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "source view byte budget exceeded",
+            ));
+        };
+        if next > self.allowance {
+            self.exceeded = true;
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "source view byte budget exceeded",
+            ));
+        }
+        self.bytes_written = next;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 pub struct SourceView<Payload: Serialize> {
     dependency: ContextDependency,
@@ -41,16 +95,23 @@ impl<Payload: Serialize> SourceView<Payload> {
         if deadline <= Instant::now() {
             return Err(AgentFailure::StaleContext);
         }
-        let payload_bytes = serde_json::to_vec(&payload).map_err(|_| AgentFailure::InvalidInput)?;
-        let payload_size = payload_bytes.len();
-        if payload_size == 0 || payload_size > MAX_LEASE_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
-        }
         reservation.validate_binding(
             dependency.person_id(),
             dependency.process_incarnation_id(),
-            payload_size,
         )?;
+        let mut payload_writer = BoundedByteCounter::new(reservation.byte_allowance());
+        let serialization_result = serde_json::to_writer(&mut payload_writer, &payload);
+        if payload_writer.exceeded() {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        serialization_result.map_err(|_| AgentFailure::InvalidInput)?;
+        let payload_size = payload_writer.bytes_written();
+        if payload_size == 0 || payload_size > MAX_LEASE_BYTES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        if deadline <= Instant::now() {
+            return Err(AgentFailure::StaleContext);
+        }
         Ok(Self {
             dependency,
             scope,
@@ -86,8 +147,55 @@ mod tests {
         GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
         GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
     };
-    use std::sync::Arc;
+    use serde::ser::{Error as _, SerializeSeq, Serializer};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use uuid::Uuid;
+
+    struct RepeatingPayload {
+        attempts: Arc<AtomicUsize>,
+        count: usize,
+    }
+
+    impl Serialize for RepeatingPayload {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut sequence = serializer.serialize_seq(Some(self.count))?;
+            for _ in 0..self.count {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                sequence.serialize_element(&"x")?;
+            }
+            sequence.end()
+        }
+    }
+
+    struct FailingPayload;
+
+    impl Serialize for FailingPayload {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("serialization failed"))
+        }
+    }
+
+    struct SlowPayload(Arc<AtomicUsize>);
+
+    impl Serialize for SlowPayload {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            serializer.serialize_str("payload")
+        }
+    }
 
     fn fixture() -> (
         Arc<super::super::leases::SourceLeaseRegistry>,
@@ -260,5 +368,64 @@ mod tests {
             ),
             Err(AgentFailure::BudgetExceeded)
         ));
+    }
+
+    #[test]
+    fn quota_stops_counting_serializer_without_output_buffer() {
+        let (registry, dependency, scope) = fixture();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let reservation = registry.reserve(dependency.person_id(), 1).unwrap();
+        assert!(matches!(
+            SourceView::try_new(
+                dependency,
+                scope,
+                RepeatingPayload {
+                    attempts: Arc::clone(&attempts),
+                    count: 1_000_000,
+                },
+                Instant::now() + std::time::Duration::from_secs(5),
+                reservation,
+            ),
+            Err(AgentFailure::BudgetExceeded)
+        ));
+        assert!(attempts.load(Ordering::Relaxed) < 1_000_000);
+    }
+
+    #[test]
+    fn malformed_serialization_releases_reservation() {
+        let (registry, dependency, scope) = fixture();
+        let person = dependency.person_id();
+        let reservation = registry.reserve(person, 32).unwrap();
+        assert!(matches!(
+            SourceView::try_new(
+                dependency,
+                scope,
+                FailingPayload,
+                Instant::now() + std::time::Duration::from_secs(5),
+                reservation,
+            ),
+            Err(AgentFailure::InvalidInput)
+        ));
+        assert!(registry.reserve(person, MAX_LEASE_BYTES).is_ok());
+    }
+
+    #[test]
+    fn serialization_crossing_deadline_is_stale_and_releases_reservation() {
+        let (registry, dependency, scope) = fixture();
+        let person = dependency.person_id();
+        let reservation = registry.reserve(person, 32).unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        assert!(matches!(
+            SourceView::try_new(
+                dependency,
+                scope,
+                SlowPayload(Arc::clone(&attempts)),
+                Instant::now() + std::time::Duration::from_millis(100),
+                reservation,
+            ),
+            Err(AgentFailure::StaleContext)
+        ));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert!(registry.reserve(person, MAX_LEASE_BYTES).is_ok());
     }
 }

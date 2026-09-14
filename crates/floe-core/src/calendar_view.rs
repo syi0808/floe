@@ -795,6 +795,9 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
                 return Err(AgentFailure::StaleContext);
             };
             if admission_matches(admission, &lease) {
+                if !lease.is_fresh() || lease.dependency().expires_at() <= (self.clock)() {
+                    return Err(AgentFailure::StaleContext);
+                }
                 return Ok(lease.payload().clone());
             }
             self.leases

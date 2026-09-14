@@ -2145,6 +2145,84 @@ async fn native_lease_reuses_exact_query_payload_after_observation_generation_ch
 }
 
 #[tokio::test]
+async fn cached_native_view_expiring_during_authorization_is_not_returned() {
+    struct AdvancingAccess {
+        inner: NativeObserveAccess,
+        clock: Arc<AtomicI64>,
+        advance_to: AtomicI64,
+    }
+
+    impl CalendarReadAccess for AdvancingAccess {
+        async fn check(
+            &self,
+            request: CalendarReadAccessRequest,
+        ) -> Result<CalendarReadAccessStamp, AgentFailure> {
+            let stamp = self.inner.check(request).await?;
+            let advance_to = self.advance_to.load(Ordering::Acquire);
+            if advance_to != 0 {
+                self.clock.store(advance_to, Ordering::Release);
+            }
+            Ok(stamp)
+        }
+
+        async fn observe(
+            &self,
+            request: CalendarObserveRequest,
+        ) -> Result<Option<CalendarObservation>, AgentFailure> {
+            self.inner.observe(request).await
+        }
+    }
+
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let clock = Arc::new(AtomicI64::new(now().timestamp_millis()));
+    let access = AdvancingAccess {
+        inner: NativeObserveAccess {
+            fail_first: AtomicBool::new(false),
+            generation: AtomicUsize::new(1),
+            rollback_clock: None,
+        },
+        clock: Arc::clone(&clock),
+        advance_to: AtomicI64::new(0),
+    };
+    let guarded_access = GrantBoundCalendarAccess {
+        core: &fixture.core,
+        vault: &fixture.vault,
+        access: &access,
+        grant: fixture.grant.clone(),
+        grant_pin: Mutex::new(None),
+        remote_processing: false,
+    };
+    let views = CalendarTimelineViews::new(
+        &fixture.core,
+        &guarded_access,
+        fixture.grant.clone(),
+        || DateTime::from_timestamp_millis(clock.load(Ordering::Acquire)).unwrap(),
+    )
+    .unwrap();
+    let request = || TimelineViewRead {
+        person_id: fixture.grant.person_id,
+        handle: fixture.grant.handle,
+        range_start_unix_ms: None,
+        range_end_unix_ms: None,
+        cursor: None,
+        max_items: 32,
+        max_bytes: 16_384,
+        deadline: Instant::now() + Duration::from_secs(5),
+        cancellation: Cancellation::default(),
+    };
+    let first = views.timeline(request()).await.unwrap();
+    access.advance_to.store(
+        i64::try_from(first.expires_at_unix_ms).unwrap(),
+        Ordering::Release,
+    );
+    assert_eq!(
+        views.timeline(request()).await,
+        Err(AgentFailure::StaleContext)
+    );
+    assert_eq!(views.consumed_context_dependencies().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn native_lease_rejects_wall_clock_rollback_during_acquisition() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let clock_millis = Arc::new(AtomicI64::new(now().timestamp_millis()));

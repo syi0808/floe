@@ -2297,3 +2297,32 @@ Validation passed: Context tests (34, including five new SourceView tests), Core
 Calendar lease tests (2), Core Calendar runtime tests (37), workspace all-target
 check, Context all-target Clippy with `-D warnings`, diff check and migration
 gate (18 nodes / 57 edges / no errors). Apple UI/iOS validation remains open.
+
+### P09 bounded source encoding and freshness checkpoint (2026-09-14)
+
+SourceView now measures serialized payload through a bounded Write sink instead
+of allocating the complete JSON result before rejecting oversized data. Person
+and process binding are checked before serialization; the sink stops at the
+reservation allowance and maps overflow to BudgetExceeded. Other serialization
+errors remain InvalidInput. This avoids the full encoded-result buffer, not all
+allocations a custom serializer might perform. Failed construction still drops
+the reservation. Monotonic expiry is checked again after serialization.
+
+Review also found that Calendar checked cache freshness before an asynchronous
+authorization call but returned the cached payload without checking expiry after
+that call. Cache reuse now rechecks both monotonic freshness and injected wall
+expiry immediately before returning the payload. The focused encrypted/native
+adapter fixture advances wall time inside authorization and verifies StaleContext
+instead of a stale payload, while preserving the consumed lineage. Existing
+generation-change cache reuse behavior remains intact.
+
+New SourceView regressions instrument early serializer termination, malformed
+serialization with reservation release, and an actually-entered serializer that
+crosses the monotonic deadline. These are controlled fixtures, not Apple UI or
+live external-provider validation. Generic source acquisition ports, archive
+reader integration and the remaining P09/P00–P25 ownership work are still open.
+
+Validation passed: Context tests (37), Core Calendar runtime tests (38), workspace
+all-target check, Context all-target Clippy with `-D warnings`, diff check and
+migration gate (18 nodes / 57 edges / no errors). Four focused regressions were
+added: three SourceView construction cases and one cached-read expiry case.
