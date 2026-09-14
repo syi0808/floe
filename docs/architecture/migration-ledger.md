@@ -1290,3 +1290,39 @@ This is a production-wired storage boundary, not completion of N07/P04: source
 Acquire and model Dispatch permits, UI/search/remote release gates, durable
 vault-epoch ownership, and final AppHost wiring remain pending. No actual remote
 provider, Apple permission dialog or UI release was exercised in this turn.
+
+## P06 pairing application boundary — 2026-09-14
+
+Code checkpoint `1e4b4b8`: Connections now owns `PairingService`, typed confirm/poll requests
+and results, and an injected generic `RemoteControl` port. Existing
+`RemotePairingClient` callers (including FFI) delegate to this service through
+the legacy infra HTTP adapter. JSON serialization/deserialization, explicit
+wire/value conversions, loopback URL restriction, no proxy/redirects, HTTP
+status mapping and streamed 64 KiB response cap remain in infra. Producer,
+issuer and proof verification in the Vault/FFI hosts remains unchanged; receiving
+an approved transport response is not a substitute for that cryptographic gate.
+
+Parent review preserved the original exact response status/schema/pairing-ID
+and credential-presence checks rather than introducing undocumented policy
+assumptions. Service dispatch now uses execution's bounded async call helper
+with a child token and Tokio monotonic deadline. Pre-cancelled/expired calls do
+not invoke the port; a stalled adapter is bounded, and dropping/timing out a
+call cancels its child without cancelling its parent. This is per-call control,
+not an application-owned durable pairing operation yet.
+
+Parent verification: `cargo test -p floe-connections` (4 passed), Connections
+all-target Clippy with `-D warnings` (passed), `cargo test -p floe-infra --lib
+pairing_` (2 passed), and new `cargo test -p floe-infra --test pairing_transport`
+(2 passed). New loopback tests parse the complete HTTP request and assert exact
+proof-body authentication without an Authorization header, cancel a stalled
+response body, and verify a pre-cancelled call opens no socket. The existing
+encrypted Vault single-use pairing proof/activation test also passed (1 test).
+`cargo check --workspace` passed. Migration checker reports 15 nodes / 40 edges /
+0 errors; final 22-crate acceptance is not claimed.
+
+P06 remains incomplete: durable command/operation IDs and receipts, restart/
+indeterminate recovery, remote cancel outcomes, OAuth operation ownership,
+read-only catalog separation/reconciliation, and replacement of Widget polling
+and legacy gateway drain-stop are still pending. No external account pairing,
+credential reset, actual OAuth flow, Apple UI validation or T09/T10/T22–T25
+end-to-end completion is claimed by these loopback tests.
