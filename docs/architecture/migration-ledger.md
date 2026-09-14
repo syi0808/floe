@@ -1835,3 +1835,65 @@ pending. Tasks/Notes optional-context cutover and full T11 also remain pending.
 The previously recorded client fixture and Apple secure-storage UI failures were
 not resolved by this checkpoint. No app data, keys or external account/provider
 data was reset; only disposable encrypted test Vaults were exercised.
+
+## P08 profile-routed learner and native output evidence — 2026-09-14
+
+Code checkpoint `2be6783`: Knowledge now owns InferenceLearnerModel and routes
+the governed-memory-review purpose, knowledge.learner consumer and structured
+review capability through InferenceRouter. Both execution and recipient must be
+Device; unavailable, gateway and external profiles fail before generation. The
+Infra transport advertises actual Foundation availability and verifies the
+selected fixed native profile before invoking the encrypted local adapter.
+The production FFI worker uses this path. Cancellation, deadlines, usage limits,
+restricted context, no-tools/no-experts policy and existing recovery accounting
+remain enforced. Strict JSON parsing retains missing/unknown/duplicate-field
+rejection; a preliminary presence check does not replace original-text decoding.
+
+The duplicate legacy Agent learner adapter was removed. Its seven existing
+runtime/adapter tests moved to Infra without dropping their assertions, alongside
+one profile-binding regression. Knowledge adds three route/output regression
+tests. Protocol/extractor metadata moves to owner constants at version 2.
+
+The shared Apple native source now selects a typed learner output schema only
+from trusted scoped purpose metadata with empty capability/expert lists. Invalid
+learner-purpose action metadata is denied, not sent through the generic branch.
+Native serialization fixes schema version and the observation-time placeholder;
+the runtime still owns actual provenance/time. Native tests cover null/create
+output, trusted selection, denied actions, invalid/equal validity dates and
+fractional RFC3339 dates. The native validation script now runs the actual Infra
+local-model tests rather than an obsolete FFI filter that could run zero tests.
+
+Direct live evidence is mixed, not acceptance. The signed isolated Apple helper
+reports Available. Its unchanged general-answer exercise passes with the real
+model. The learner exercise uses a private disposable encrypted Vault and
+in-memory keys, commits a governed source, then uses actual discovery, claim,
+profile routing, runtime and candidate staging. Earlier native prose output and
+invalid enum/target output were rejected. Guided output exposed unsupported
+validity dates and loss of the fictional subject Alex. One intermediate schema
+variant reached a pending candidate, but its fabricated dates mean that this was
+only structural staging evidence, not a correct learner result. That variant
+was not retained. The final live run still fails InvalidModelOutput (including a
+fabricated February 31 date), as it should; no candidate is auto-approved.
+
+The smoke now explicitly rejects dates unsupported by this fixed fixture and
+statements that lose Alex or the afternoon preference. These are fixture checks,
+not a general production semantic verifier. Temporary native diagnostic printing
+was removed; only the fixed synthetic smoke wrapper captures model text. Prompt
+guidance alone did not solve this real-model quality problem. Correct positive
+learner output and user-facing review remain open, not silently counted as done.
+
+Validation passed: full Infra library tests (37), Knowledge tests (19), FFI
+learner tests (3), Core encrypted-Vault tests (20), Swift native host tests,
+actual Infra local-model tests (8), workspace all-target check, Knowledge Clippy
+with `-D warnings`, diff checks and migration gate (17 nodes / 52 edges / no
+errors). The targeted Infra learner tests (8), Knowledge tests and native tests
+were repeated after integration. No normal app rebuild/UI or iOS device exercise
+was performed; the signed helper is not the normal Floe application.
+
+P08 and the full goal remain incomplete. Remaining seams include FFI scheduler
+and foreground-priority execution ownership, the Infra legacy ModelRequest and
+recovery bridge, final generic native structured-output contracts in P14,
+Conversation/repository SQL ownership in P12/P13, Playbook delivery, T28/T31 and
+full T11 Tasks/Notes acquisition. The earlier Flutter fixture discrepancy and
+normal Apple app secure-storage failure remain unresolved. No normal app data,
+keys or external provider/account data was reset.
