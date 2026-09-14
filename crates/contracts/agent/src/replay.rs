@@ -59,6 +59,7 @@ pub struct ReplayReceipt {
     pub task_result: Option<String>,
     pub task_state: Option<TaskState>,
     pub task_artifacts: Vec<Artifact>,
+    pub task_coverage: DependencyCoverage,
     pub task_issue: Option<crate::AgentFailure>,
     pub tool_artifacts: Vec<Artifact>,
     pub tool_coverage: DependencyCoverage,

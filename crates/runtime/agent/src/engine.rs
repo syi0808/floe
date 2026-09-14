@@ -459,7 +459,10 @@ impl Engine {
                             .result
                             .clone()
                             .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state));
-                        messages.push(observation_text(&text));
+                        messages.push(observation_text_with_coverage(
+                            text,
+                            receipt.snapshot.coverage.clone(),
+                        ));
                         steps.push(EngineStep::Delegation(Box::new(receipt)));
                     }
                 }
@@ -521,6 +524,18 @@ fn observation(result: &ToolResult) -> AgentMessage {
 fn observation_text(text: &str) -> AgentMessage {
     observation_text_with_call(text.to_owned(), None)
 }
+fn observation_text_with_coverage(
+    text: String,
+    coverage: floe_agent_contract::DependencyCoverage,
+) -> AgentMessage {
+    AgentMessage {
+        message_id: Uuid::new_v4(),
+        role: MessageRole::Tool,
+        text,
+        call_id: None,
+        coverage,
+    }
+}
 fn observation_text_with_call(text: String, call_id: Option<Uuid>) -> AgentMessage {
     AgentMessage {
         message_id: Uuid::new_v4(),
@@ -558,6 +573,7 @@ fn tool_replay(request: &EngineRequest, call: &ToolCall, result: &ToolResult) ->
         task_result: None,
         task_state: None,
         task_artifacts: vec![],
+        task_coverage: floe_agent_contract::DependencyCoverage::Unknown,
         task_issue: None,
         tool_artifacts: result.artifacts.clone(),
         tool_coverage: result.coverage.clone(),
@@ -597,6 +613,7 @@ fn replay_task(
             state: receipt.task_state.ok_or(AgentFailure::InvalidInput)?,
             result: receipt.task_result.clone(),
             artifacts: receipt.task_artifacts.clone(),
+            coverage: receipt.task_coverage.clone(),
             issue: receipt.task_issue,
         },
         replay: Some(receipt.clone()),
@@ -615,6 +632,12 @@ fn verify_receipt(
     receipt: &TaskReceipt,
     maximum_bytes: usize,
 ) -> Result<(), AgentFailure> {
+    if matches!(
+        receipt.snapshot.state,
+        floe_agent_contract::TaskState::Submitted | floe_agent_contract::TaskState::Working
+    ) {
+        return Err(AgentFailure::Conflict);
+    }
     receipt.snapshot.validate(maximum_bytes)?;
     if serde_json::to_vec(receipt)
         .map(|encoded| encoded.len() > maximum_bytes)
@@ -647,6 +670,7 @@ fn verify_tool_replay(
         && receipt.task_state.is_none()
         && receipt.task_result.is_none()
         && receipt.task_artifacts.is_empty()
+        && receipt.task_coverage == floe_agent_contract::DependencyCoverage::Unknown
         && receipt.task_issue.is_none()
         && receipt.input_digest == input_digest(&call.input))
     .then_some(())
@@ -674,6 +698,7 @@ fn verify_task_replay(
             .task_artifacts
             .iter()
             .all(|artifact| artifact.coverage.validate().is_ok())
+        && receipt.task_coverage.validate().is_ok()
         && receipt.input_digest == input_digest(&request.message))
     .then_some(())
     .ok_or(AgentFailure::InvalidInput)

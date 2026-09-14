@@ -947,6 +947,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-experts"
+version = "0.1.0"
+dependencies = [
+ "floe-agent-contract",
+ "floe-agent-runtime",
+ "floe-execution",
+ "floe-kernel",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "floe-ffi"
 version = "0.1.0"
 dependencies = [

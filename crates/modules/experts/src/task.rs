@@ -1,0 +1,583 @@
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+};
+
+use floe_agent_contract::{
+    AgentFailure, BoxFuture, DelegationPort, DelegationRequest, DependencyCoverage,
+    EndpointInvocation, TaskId, TaskReceipt, TaskSnapshot, TaskState, input_digest,
+};
+
+use crate::{Directory, DirectoryQuery};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskRecord {
+    pub snapshot: TaskSnapshot,
+    pub invocation_key: floe_agent_contract::InvocationKey,
+    pub request_digest: [u8; 32],
+    pub aggregate_revision: u64,
+    pub executor_generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskAdmission {
+    Created(TaskRecord),
+    Existing(TaskRecord),
+}
+
+pub trait TaskRepository: Send + Sync {
+    fn admit<'a>(
+        &'a self,
+        proposed: TaskRecord,
+    ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>>;
+
+    fn compare_and_swap<'a>(
+        &'a self,
+        task_id: TaskId,
+        expected_aggregate_revision: u64,
+        executor_generation: u64,
+        snapshot: TaskSnapshot,
+    ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>>;
+
+    fn get<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> BoxFuture<'a, Result<Option<TaskRecord>, AgentFailure>>;
+}
+
+pub struct TaskCoordinator<Repository> {
+    directory: Directory,
+    repository: Arc<Repository>,
+    purpose: String,
+    maximum_output_bytes: usize,
+    executor_generation: u64,
+    active: Mutex<HashMap<TaskId, floe_agent_contract::Cancellation>>,
+}
+
+impl<Repository> TaskCoordinator<Repository> {
+    pub fn new(
+        directory: Directory,
+        repository: Arc<Repository>,
+        purpose: impl Into<String>,
+        maximum_output_bytes: usize,
+        executor_generation: u64,
+    ) -> Result<Self, AgentFailure> {
+        let purpose = purpose.into();
+        if purpose.trim().is_empty()
+            || maximum_output_bytes == 0
+            || maximum_output_bytes > floe_agent_contract::MAX_OUTPUT_BYTES
+            || executor_generation == 0
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(Self {
+            directory,
+            repository,
+            purpose,
+            maximum_output_bytes,
+            executor_generation,
+            active: Mutex::new(HashMap::new()),
+        })
+    }
+}
+
+impl<Repository: TaskRepository> TaskCoordinator<Repository> {
+    pub async fn get_task(
+        &self,
+        principal: &str,
+        parent_run_id: Option<uuid::Uuid>,
+        task_id: TaskId,
+        scope: &floe_agent_contract::ExecutionScope,
+    ) -> Result<Option<TaskReceipt>, AgentFailure> {
+        if principal.trim().is_empty()
+            || scope.root_run_id().map(|run_id| run_id.as_uuid()) != parent_run_id
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let record = scope.run(self.repository.get(task_id)).await?;
+        record
+            .map(|record| {
+                authorize_task(&record, principal, parent_run_id)?;
+                validate_owned_record(&record, self.maximum_output_bytes)?;
+                Ok(TaskReceipt {
+                    task_id,
+                    snapshot: record.snapshot,
+                    replay: None,
+                })
+            })
+            .transpose()
+    }
+
+    pub async fn cancel_task(
+        &self,
+        principal: &str,
+        parent_run_id: Option<uuid::Uuid>,
+        task_id: TaskId,
+        scope: &floe_agent_contract::ExecutionScope,
+    ) -> Result<TaskReceipt, AgentFailure> {
+        if principal.trim().is_empty()
+            || scope.root_run_id().map(|run_id| run_id.as_uuid()) != parent_run_id
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let record = scope
+            .run(async {
+                self.repository
+                    .get(task_id)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)
+            })
+            .await?;
+        authorize_task(&record, principal, parent_run_id)?;
+        validate_owned_record(&record, self.maximum_output_bytes)?;
+        if terminal(record.snapshot.state) {
+            return Ok(receipt(record));
+        }
+        if let Some(cancellation) = self
+            .active
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .get(&task_id)
+            .cloned()
+        {
+            cancellation.cancel();
+        }
+        let cancelled =
+            snapshot_from_record(&record, TaskState::Cancelled, Some(AgentFailure::Cancelled));
+        let saved = match scope
+            .run(self.repository.compare_and_swap(
+                task_id,
+                record.aggregate_revision,
+                record.executor_generation,
+                cancelled.clone(),
+            ))
+            .await
+        {
+            Ok(saved) => saved,
+            Err(AgentFailure::Conflict) => {
+                let current = scope
+                    .run(self.repository.get(task_id))
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                authorize_task(&current, principal, parent_run_id)?;
+                validate_owned_record(&current, self.maximum_output_bytes)?;
+                if !terminal(current.snapshot.state) {
+                    return Err(AgentFailure::Conflict);
+                }
+                return Ok(receipt(current));
+            }
+            Err(failure) => return Err(failure),
+        };
+        validate_saved_transition(&record, &saved, &cancelled, self.maximum_output_bytes)?;
+        Ok(receipt(saved))
+    }
+
+    async fn execute(
+        &self,
+        request: DelegationRequest,
+        scope: &floe_agent_contract::ExecutionScope,
+    ) -> Result<TaskReceipt, AgentFailure> {
+        validate_request(&request, scope)?;
+        let encoded = serde_json::to_string(&request).map_err(|_| AgentFailure::InvalidInput)?;
+        let request_digest = input_digest(&encoded);
+        if let Some(record) = scope.run(self.repository.get(request.task_id)).await? {
+            validate_replay(&request, request_digest, &record)?;
+            validate_owned_record(&record, self.maximum_output_bytes)?;
+            return Ok(TaskReceipt {
+                task_id: request.task_id,
+                snapshot: record.snapshot,
+                replay: None,
+            });
+        }
+        let query = DirectoryQuery {
+            principal: &request.principal,
+            purpose: &self.purpose,
+        };
+        let endpoint = self.directory.resolve(
+            &request.selected_agent_id,
+            request.selected_definition_revision,
+            query.clone(),
+        );
+        let proposed = TaskRecord {
+            snapshot: snapshot(
+                &request,
+                TaskState::Submitted,
+                None,
+                vec![],
+                DependencyCoverage::Unknown,
+                None,
+            ),
+            invocation_key: request.invocation_key,
+            request_digest,
+            aggregate_revision: 1,
+            executor_generation: self.executor_generation,
+        };
+        let admitted = scope.run(self.repository.admit(proposed)).await?;
+        let admitted = match admitted {
+            TaskAdmission::Created(record) => {
+                validate_replay(&request, request_digest, &record)?;
+                validate_owned_record(&record, self.maximum_output_bytes)?;
+                record
+            }
+            TaskAdmission::Existing(record) => {
+                validate_replay(&request, request_digest, &record)?;
+                validate_owned_record(&record, self.maximum_output_bytes)?;
+                return Ok(TaskReceipt {
+                    task_id: request.task_id,
+                    snapshot: record.snapshot,
+                    replay: None,
+                });
+            }
+        };
+        let _admitted_endpoint = match endpoint {
+            Ok(endpoint) => endpoint,
+            Err(failure) => {
+                let rejected = snapshot(
+                    &request,
+                    failure_state(failure),
+                    None,
+                    vec![],
+                    DependencyCoverage::Unknown,
+                    Some(failure),
+                );
+                let saved = scope
+                    .run(self.repository.compare_and_swap(
+                        request.task_id,
+                        admitted.aggregate_revision,
+                        admitted.executor_generation,
+                        rejected.clone(),
+                    ))
+                    .await?;
+                validate_saved_transition(&admitted, &saved, &rejected, self.maximum_output_bytes)?;
+                return Ok(receipt(saved));
+            }
+        };
+        let working_snapshot = snapshot(
+            &request,
+            TaskState::Working,
+            None,
+            vec![],
+            DependencyCoverage::Unknown,
+            None,
+        );
+        let working = scope
+            .run(self.repository.compare_and_swap(
+                request.task_id,
+                admitted.aggregate_revision,
+                admitted.executor_generation,
+                working_snapshot.clone(),
+            ))
+            .await?;
+        validate_saved_transition(
+            &admitted,
+            &working,
+            &working_snapshot,
+            self.maximum_output_bytes,
+        )?;
+        let invocation = EndpointInvocation {
+            request: request.clone(),
+            request_digest,
+        };
+        self.active
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .insert(request.task_id, scope.cancellation().clone());
+        let current = match before_deadline(scope, self.repository.get(request.task_id)).await {
+            Ok(current) => current,
+            Err(failure) => {
+                self.active
+                    .lock()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                    .remove(&request.task_id);
+                return Err(failure);
+            }
+        };
+        if current
+            .as_ref()
+            .is_some_and(|record| terminal(record.snapshot.state))
+        {
+            self.active
+                .lock()
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .remove(&request.task_id);
+            return current.map(receipt).ok_or(AgentFailure::StorageUnavailable);
+        }
+        let outcome = match self.directory.resolve(
+            &request.selected_agent_id,
+            request.selected_definition_revision,
+            query,
+        ) {
+            Ok(endpoint) => scope.run(endpoint.execute(invocation.clone(), scope)).await,
+            Err(failure) => Err(failure),
+        };
+        self.active
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .remove(&request.task_id);
+        let outcome = outcome.and_then(|report| {
+            report.validate(&invocation, self.maximum_output_bytes)?;
+            Ok(report)
+        });
+        let outcome = running_failure(scope).map_or(outcome, Err);
+        let terminal_snapshot = match outcome {
+            Ok(report) => snapshot(
+                &request,
+                TaskState::Completed,
+                Some(report.result),
+                report.artifacts,
+                report.coverage,
+                None,
+            ),
+            Err(failure) => snapshot(
+                &request,
+                failure_state(failure),
+                None,
+                vec![],
+                DependencyCoverage::Unknown,
+                Some(failure),
+            ),
+        };
+        terminal_snapshot.validate(self.maximum_output_bytes)?;
+        let completed = match before_deadline(
+            scope,
+            self.repository.compare_and_swap(
+                request.task_id,
+                working.aggregate_revision,
+                working.executor_generation,
+                terminal_snapshot.clone(),
+            ),
+        )
+        .await
+        {
+            Ok(completed) => completed,
+            Err(AgentFailure::Conflict) => {
+                let current = before_deadline(scope, self.repository.get(request.task_id))
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                validate_replay(&request, request_digest, &current)?;
+                validate_owned_record(&current, self.maximum_output_bytes)?;
+                if !terminal(current.snapshot.state) {
+                    return Err(AgentFailure::Conflict);
+                }
+                return Ok(receipt(current));
+            }
+            Err(failure) => return Err(failure),
+        };
+        validate_saved_transition(
+            &working,
+            &completed,
+            &terminal_snapshot,
+            self.maximum_output_bytes,
+        )?;
+        Ok(TaskReceipt {
+            task_id: request.task_id,
+            snapshot: completed.snapshot,
+            replay: None,
+        })
+    }
+}
+
+fn authorize_task(
+    record: &TaskRecord,
+    principal: &str,
+    parent_run_id: Option<uuid::Uuid>,
+) -> Result<(), AgentFailure> {
+    (record.snapshot.principal == principal && record.snapshot.parent_run_id == parent_run_id)
+        .then_some(())
+        .ok_or(AgentFailure::CapabilityDenied)
+}
+
+fn receipt(record: TaskRecord) -> TaskReceipt {
+    TaskReceipt {
+        task_id: record.snapshot.task_id,
+        snapshot: record.snapshot,
+        replay: None,
+    }
+}
+
+fn terminal(state: TaskState) -> bool {
+    !matches!(state, TaskState::Submitted | TaskState::Working)
+}
+
+fn snapshot_from_record(
+    record: &TaskRecord,
+    state: TaskState,
+    issue: Option<AgentFailure>,
+) -> TaskSnapshot {
+    TaskSnapshot {
+        state,
+        result: None,
+        artifacts: vec![],
+        coverage: DependencyCoverage::Unknown,
+        issue,
+        ..record.snapshot.clone()
+    }
+}
+
+fn running_failure(scope: &floe_agent_contract::ExecutionScope) -> Option<AgentFailure> {
+    if scope.deadline() <= tokio::time::Instant::now() {
+        return Some(AgentFailure::DeadlineExceeded);
+    }
+    scope
+        .cancellation()
+        .is_cancelled()
+        .then(|| match scope.cancellation().reason() {
+            Some(floe_agent_contract::CancelReason::Deadline) => AgentFailure::DeadlineExceeded,
+            Some(floe_agent_contract::CancelReason::OwnerDropped) => AgentFailure::Interrupted,
+            Some(floe_agent_contract::CancelReason::User) | None => AgentFailure::Cancelled,
+        })
+}
+
+async fn before_deadline<Value>(
+    scope: &floe_agent_contract::ExecutionScope,
+    future: impl Future<Output = Result<Value, AgentFailure>>,
+) -> Result<Value, AgentFailure> {
+    if scope.deadline() <= tokio::time::Instant::now() {
+        return Err(AgentFailure::DeadlineExceeded);
+    }
+    tokio::time::timeout_at(scope.deadline(), future)
+        .await
+        .unwrap_or(Err(AgentFailure::DeadlineExceeded))
+}
+
+impl<Repository: TaskRepository> DelegationPort for TaskCoordinator<Repository> {
+    fn delegate<'a>(
+        &'a self,
+        request: DelegationRequest,
+        scope: &'a floe_agent_contract::ExecutionScope,
+    ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+        Box::pin(self.execute(request, scope))
+    }
+}
+
+fn validate_request(
+    request: &DelegationRequest,
+    scope: &floe_agent_contract::ExecutionScope,
+) -> Result<(), AgentFailure> {
+    if !request.task_id.is_valid()
+        || request.principal.trim().is_empty()
+        || request.selected_agent_id.trim().is_empty()
+        || request.selected_definition_revision == 0
+        || request.message.trim().is_empty()
+        || request.message.len() > floe_agent_contract::MAX_OUTPUT_BYTES
+        || request.context_refs.len() > 32
+        || request
+            .context_refs
+            .iter()
+            .any(|reference| reference.trim().is_empty() || reference.len() > 512)
+        || scope.task_id() != Some(request.task_id)
+        || scope.root_run_id().map(|run_id| run_id.as_uuid()) != request.parent_run_id
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
+fn validate_replay(
+    request: &DelegationRequest,
+    request_digest: [u8; 32],
+    record: &TaskRecord,
+) -> Result<(), AgentFailure> {
+    if record.snapshot.task_id != request.task_id
+        || record.snapshot.parent_run_id != request.parent_run_id
+        || record.snapshot.principal != request.principal
+        || record.snapshot.agent_id != request.selected_agent_id
+        || record.snapshot.definition_revision != request.selected_definition_revision
+        || record.invocation_key != request.invocation_key
+        || record.request_digest != request_digest
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(())
+}
+
+fn validate_owned_record(record: &TaskRecord, maximum_bytes: usize) -> Result<(), AgentFailure> {
+    record.snapshot.validate(maximum_bytes)?;
+    if record.aggregate_revision == 0 || record.executor_generation == 0 {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let valid = match record.snapshot.state {
+        TaskState::Submitted | TaskState::Working => {
+            record.snapshot.result.is_none()
+                && record.snapshot.artifacts.is_empty()
+                && record.snapshot.issue.is_none()
+                && record.snapshot.coverage == DependencyCoverage::Unknown
+        }
+        TaskState::Completed => {
+            record
+                .snapshot
+                .result
+                .as_deref()
+                .is_some_and(|result| !result.trim().is_empty())
+                && record.snapshot.issue.is_none()
+        }
+        TaskState::Failed
+        | TaskState::Rejected
+        | TaskState::Cancelled
+        | TaskState::TimedOut
+        | TaskState::Interrupted => {
+            record.snapshot.result.is_none()
+                && record.snapshot.artifacts.is_empty()
+                && record.snapshot.issue.is_some()
+                && record.snapshot.coverage == DependencyCoverage::Unknown
+        }
+    };
+    valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
+}
+
+fn validate_saved_transition(
+    previous: &TaskRecord,
+    saved: &TaskRecord,
+    expected_snapshot: &TaskSnapshot,
+    maximum_bytes: usize,
+) -> Result<(), AgentFailure> {
+    validate_owned_record(saved, maximum_bytes)?;
+    if saved.snapshot != *expected_snapshot
+        || saved.invocation_key != previous.invocation_key
+        || saved.request_digest != previous.request_digest
+        || saved.executor_generation != previous.executor_generation
+        || saved.aggregate_revision
+            != previous
+                .aggregate_revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(())
+}
+
+fn snapshot(
+    request: &DelegationRequest,
+    state: TaskState,
+    result: Option<String>,
+    artifacts: Vec<floe_agent_contract::Artifact>,
+    coverage: DependencyCoverage,
+    issue: Option<AgentFailure>,
+) -> TaskSnapshot {
+    TaskSnapshot {
+        task_id: request.task_id,
+        parent_run_id: request.parent_run_id,
+        principal: request.principal.clone(),
+        agent_id: request.selected_agent_id.clone(),
+        definition_revision: request.selected_definition_revision,
+        state,
+        result,
+        artifacts,
+        coverage,
+        issue,
+    }
+}
+
+fn failure_state(failure: AgentFailure) -> TaskState {
+    match failure {
+        AgentFailure::CapabilityDenied
+        | AgentFailure::PolicyDenied
+        | AgentFailure::ConsentRequired => TaskState::Rejected,
+        AgentFailure::Cancelled => TaskState::Cancelled,
+        AgentFailure::DeadlineExceeded => TaskState::TimedOut,
+        AgentFailure::Interrupted => TaskState::Interrupted,
+        _ => TaskState::Failed,
+    }
+}

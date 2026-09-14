@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AgentFailure, Artifact, TaskId};
+use crate::{AgentFailure, Artifact, DependencyCoverage, TaskId};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +27,7 @@ pub struct TaskSnapshot {
     pub state: TaskState,
     pub result: Option<String>,
     pub artifacts: Vec<Artifact>,
+    pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
 }
 
@@ -44,6 +45,7 @@ impl TaskSnapshot {
                 .artifacts
                 .iter()
                 .any(|artifact| artifact.validate(maximum_bytes).is_err())
+            || self.coverage.validate().is_err()
             || serde_json::to_vec(self)
                 .map(|encoded| encoded.len() > maximum_bytes)
                 .unwrap_or(true)
