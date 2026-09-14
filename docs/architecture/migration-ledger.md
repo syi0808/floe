@@ -37,7 +37,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 |---|---|
 | P00 | Baseline/tooling implemented; T37 pending |
 | P01 | Partial: canonical values extracted; protocol conversion separation pending |
-| P02 | Pending |
+| P02 | Partial: cancellation and accounting extracted; unified scopes, finalization budget, journal and diagnostics pending |
 | P03 | Pending |
 | P04 | Pending |
 | P05 | Pending |
@@ -1007,3 +1007,28 @@ Code commit: `4c7598c30abb381389fe7afe2a372515d624943f`, based on `dba3b9c`. Pub
 | P01 step 7: Day/Access conversion separation | Protocol/FFI conversion work; final free-function cutover P16 | **Pending**: legacy protocol conversion.rs still imports floe-domain. Do not call P01 or final wire boundary fully complete. |
 
 Next integration work must finish the outstanding P01 conversion separation with preserved wire semantics, then continue P02 execution scopes/budgets/diagnostics and dependent packages. P00/P01 changes are not a substitute for the full P00–P25 objective, the 22-crate final DAG, real Flutter/Go cutover, or Apple/LLM acceptance.
+
+## P02 execution primitives — 2026-09-14
+
+Code checkpoint `488e059` extracts the actual existing runtime cancellation/accounting path. This is not completion of all P02 contracts. The preceding goal turn was **progress** (committed P00/P01 code/evidence); this turn adds implemented runtime behavior and validation rather than restating status.
+
+| old_path | symbol | source_sha | target_path | owner | package_id | temporary_bridge | remove_by | invariant | evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| crates/floe-agent/src/runtime.rs | Cancellation, child_scope, CancelReason | 57422e0 | crates/runtime/execution/src/cancellation.rs:1–123 | floe-execution | P02 | agent re-exports canonical cancellation for old callers | P24 | I11 | 488e059; clone retains scope; child observes ancestors but never cancels parent/sibling; subscribe-before-check prevents lost wake |
+| crates/floe-agent/src/runtime.rs | model/tool/delegation request cancellation; CallCancellationGuard | 57422e0 | crates/floe-agent/src/runtime.rs:570,766,883,1134–1171 | floe-agent-runtime | P02 | legacy runtime invokes extracted mechanism until P03 | P03/P24 | I11 | 488e059; actual dispatched request receives child token; owner-drop and deadline reason no longer mutate root token |
+| crates/floe-core/src/agent_calendar.rs | CalendarTurn parent propagation and CancelTurn | 57422e0 | crates/floe-core/src/agent_calendar.rs:62,281,361 | floe-experts-builtin | P02 | old Calendar root remains until generic endpoint cutover | P15/P24 | I11 | 488e059; hierarchical token replaces manual propagation; parent is still awaited for cleanup |
+| crates/floe-agent/src/model_usage.rs | ModelUsage, UsageLedger, UsageAttempt | 57422e0 | crates/runtime/execution/src/budget.rs:1–128 | floe-execution | P02 | old UsageLedger contains only projection/journal adapter around shared budget | P03/P07/P24 | I09, I15 | 488e059; no AgentUsage or model journal dependency in target crate; one live dispatch slot retained |
+| crates/floe-agent/src/model_attempt.rs and runtime.rs | undispatched rollback and acknowledged model dispatch | 57422e0 | crates/floe-agent/src/model_attempt.rs:31–74 | floe-inference | P02 | legacy attempt owner until P07 | P07 | I09, I15 | 488e059; reservation owns rollback until dispatch; consuming settlement once; external call still waits for durable journal acknowledgement |
+
+### Direct validation and focused regressions
+
+- `cargo test -p floe-execution`: pass, 6 tests (4 cancellation, 2 budget). Parent/grandchild waiters, child/sibling isolation, first/inherited reason and undispatched reservation cleanup are exercised with real execution primitives.
+- `cargo test -p floe-agent --test model_usage --test runtime`: pass, 3 accounting + 44 real-runtime tests with controlled model/tool/store ports. Includes existing durable acknowledgement, uncertain recovery, CAS, source privacy, continuation and usage cap assertions. External model/provider ports are doubles; this is not native/LLM acceptance.
+- New runtime `model_call_guard_cancels_only_its_child_scope` and `tool_request_uses_a_child_scope_when_tool_cancels_itself` inspect the token delivered to the actual request. Their protection is child/root/sibling isolation, not a requirement to retain the old root-halt policy.
+- `cargo clippy -p floe-execution -p floe-agent --all-targets -- -D warnings`: pass.
+- `python3 tools/architecture/check_boundaries.py --mode migration`: pass, 10 nodes / 22 production edges; final mode is still not satisfied. No new external package or target → legacy edge.
+- Review corrected the intermediate cancellation subscribe race, recursive future boxing, and inherited user/deadline reason masking by owner cleanup. Budget rollback was moved from an out-of-band arbitrary amount operation to its owning reservation guard. Existing accounting tests explicitly mark dispatch before settlement/drop while retaining all charge/cap assertions; two new target tests verify un-dispatched cleanup and invalid settlement rejection.
+
+### Still incomplete
+
+`ExecutionScope` (deadline/trace/lease assembly), generic `ExecutionJournal`, provider concurrency/pending bounds, root work/finalization reserve, typed task handles with bounded join/settlement, `floe-diagnostics`, asynchronous FFI correlation and scoped panic-hook stdout/stderr smoke remain pending P02. The extracted budget conservatively retains the existing single active attempt and bounded unknown-usage estimate; it is not yet the full N05 root/child/finalization lease design. The role-neutral engine and owner finalization must still stop treating every child failure as a root halt (P03/P11/P12). T07/T08/T22/T29/T38 product acceptance is not established by these primitive tests. No post-change macOS/iPhone/iPad/LLM run has been performed in this checkpoint.

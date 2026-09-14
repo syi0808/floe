@@ -2236,7 +2236,7 @@ async fn model_call_guard_cancels_only_its_child_scope() {
         .await
         .unwrap();
 
-    halted(&session, AgentFailure::Cancelled);
+    assert!(session.active_turn.is_none());
     assert!(!root.is_cancelled());
     assert!(!sibling.is_cancelled());
     assert_eq!(
