@@ -871,6 +871,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-conversation"
+version = "0.1.0"
+dependencies = [
+ "floe-agent-contract",
+ "floe-agent-runtime",
+ "floe-execution",
+ "floe-kernel",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "floe-core"
 version = "0.1.0"
 dependencies = [

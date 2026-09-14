@@ -68,7 +68,7 @@ pub trait DelegationPort: Sync {
     ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>>;
 }
 
-pub trait ExecutionJournal: Sync {
+pub trait ExecutionJournal: Send + Sync {
     fn record_intent<'a>(
         &'a self,
         event: JournalEvent,
