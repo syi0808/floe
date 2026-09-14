@@ -50,7 +50,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P12 | Pending |
 | P13 | Pending |
 | P14 | Pending |
-| P15 | Pending |
+| P15 | Partial: protected direct Schedule endpoint; production Task/FFI wiring pending |
 | P16 | Pending |
 | P17 | Pending |
 | P18 | Pending |
@@ -2409,3 +2409,43 @@ Working Task after the runtime fence stops polling it. P15 must next expose the
 protected Schedule implementation as a direct endpoint, register it in this
 Directory and only then remove `schedule::try_run`; until that cutover, an active
 Calendar setup can still select the legacy Calendar root before the Manager.
+
+### P15 protected Schedule endpoint checkpoint (2026-09-15)
+
+Code checkpoint `deceb13` exposes the existing protected Schedule implementation
+as `FloeCore::run_calendar_expert_endpoint` without entering or mutating a
+Conversation Session. The request is bound to the Vault Person, Calendar grant,
+assignment and invocation. Resolution requires the exact built-in Schedule
+implementation rather than trusting only its package ID. Full inference-policy
+authorization runs before optional source acquisition and again after context
+enrichment. Calendar reads retain the existing grant-bound view, authority,
+scope, expiry and post-model liveness checks; Personal Task and Note context is
+still acquired lazily inside the selected endpoint.
+
+Successful execution advances only the selected assignment's private completion
+state through an exact registry CAS. The Vault rejects a stale revision, a
+different assignment, or any unrelated snapshot mutation. Cancellation,
+deadline, access and dependency liveness are rechecked inside the transaction;
+after its final check the commit is allowed to finish so a durable completion is
+not reported as a cancellation race. The endpoint returns the Expert result and
+the consumed Calendar dependencies to its future Task adapter. The legacy
+Calendar root continues to use its previous general package resolution, so this
+checkpoint does not silently disable its synthetic development path.
+
+Implemented: protected direct Schedule execution and durable assignment-state
+completion. Wired: Core callers only; the production FFI still enters
+`schedule::try_run` before the common Manager root. Direct controlled validation
+passed the complete Core Calendar module (43 tests), Core Vault registry module
+(31 tests), Agent Expert integration suite (17 tests), focused Agent/Core Clippy,
+workspace all-target check, diff check and migration gate (19 nodes / 58 edges /
+no errors). The broad Agent all-target Clippy command remains blocked by the
+pre-existing `clone_on_copy` warning in `crates/floe-agent/tests/runtime.rs:582`.
+No Apple UI, live EventKit/provider account or actual model was exercised.
+
+Blocker/remove-by: no production `AgentEndpoint` adapter registers Schedule in
+the P11 Directory, no Vault-backed Task repository atomically retains the Task
+result with expert completion, and returned coverage currently represents only
+Calendar dependencies rather than the optional Task/Note evidence. P11/P15 must
+next add the FFI Schedule adapter and durable Task/result provenance recording,
+then validate the common Manager-selected flow before P24 removes
+`schedule::try_run`. P15 and T01 remain incomplete until that cutover.
