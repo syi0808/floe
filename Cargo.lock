@@ -831,6 +831,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-connections"
+version = "0.1.0"
+dependencies = [
+ "floe-execution",
+ "floe-kernel",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "floe-context-contract"
 version = "0.1.0"
 dependencies = [
@@ -949,6 +959,7 @@ dependencies = [
  "base64",
  "chrono",
  "floe-agent",
+ "floe-connections",
  "floe-core",
  "floe-domain",
  "floe-execution",

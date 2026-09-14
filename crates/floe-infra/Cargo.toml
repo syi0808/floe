@@ -12,6 +12,7 @@ floe-agent = { path = "../floe-agent" }
 floe-core = { path = "../floe-core" }
 floe-domain = { path = "../floe-domain" }
 floe-execution = { path = "../runtime/execution" }
+floe-connections = { path = "../modules/connections" }
 floe-protocol = { path = "../floe-protocol" }
 reqwest.workspace = true
 serde.workspace = true

@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use floe_agent::AgentFailure;
+use floe_connections::{
+    PairingConfirmation, PairingConfirmationRequest, PairingIssuer, PairingStatus,
+    PairingStatusRequest, ProducerIdentity, RemoteControl,
+};
 use floe_core::{
     EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, RemoteEnrollmentSignature,
     RemoteOwnerPublicKey, RemoteProducerIdentity, VaultKeyProvider,
@@ -9,7 +13,6 @@ use floe_core::{
 use floe_protocol::AgentRemoteRouteDto;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -962,108 +965,15 @@ impl RemoteAuthorizationClient {
 }
 
 #[derive(Clone)]
-pub struct RemotePairingClient {
+struct HttpRemoteControl {
     base_url: String,
 }
 
-impl RemotePairingClient {
-    pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
-        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
-        if address.scheme() != "http"
-            || address.host_str() != Some("127.0.0.1")
-            || address.path() != "/"
-            || address.query().is_some()
-            || address.fragment().is_some()
-            || address.port().is_none()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-        })
-    }
-
-    pub async fn confirm(
-        &self,
-        pairing_id: &str,
-        polling_proof: &str,
-        signature: &RemoteEnrollmentSignature,
-        challenge_id: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_agent::Cancellation,
-    ) -> Result<PairingConfirmationResponse, AgentFailure> {
-        if !valid_uuid_text(pairing_id)
-            || !valid_uuid_text(challenge_id)
-            || !valid_token_text(polling_proof)
-            || signature.key_id.is_empty()
-            || signature.signature.is_empty()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let body = serde_json::json!({
-            "schema_version": 1,
-            "pairing_id": pairing_id,
-            "proof": polling_proof,
-            "challenge_id": challenge_id,
-            "key_id": signature.key_id,
-            "signature": signature.signature,
-        });
-        let response: PairingConfirmationResponse = self
-            .request("POST", "/pair/confirm", Some(body), deadline, cancellation)
-            .await?;
-        if response.schema_version != 1
-            || response.pairing_id != pairing_id
-            || !matches!(response.status.as_str(), "local_confirmed" | "approved")
-        {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        Ok(response)
-    }
-
-    pub async fn status(
-        &self,
-        pairing_id: &str,
-        polling_proof: &str,
-        deadline: tokio::time::Instant,
-        cancellation: &floe_agent::Cancellation,
-    ) -> Result<PairingStatusResponse, AgentFailure> {
-        if !valid_uuid_text(pairing_id) || !valid_token_text(polling_proof) {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let body = serde_json::json!({
-            "schema_version": 1,
-            "pairing_id": pairing_id,
-            "proof": polling_proof,
-        });
-        let response: PairingStatusResponse = self
-            .request("POST", "/pair/poll", Some(body), deadline, cancellation)
-            .await?;
-        if response.schema_version != 1
-            || response.pairing_id != pairing_id
-            || !matches!(
-                response.status.as_str(),
-                "pending"
-                    | "local_confirmed"
-                    | "approved"
-                    | "rejected"
-                    | "expired"
-                    | "repair_required"
-            )
-            || (response.status == "approved"
-                && (response.client_id.is_none() || response.token.is_none()))
-            || (response.status != "approved"
-                && (response.client_id.is_some() || response.token.is_some()))
-        {
-            return Err(AgentFailure::CapabilityUnavailable);
-        }
-        Ok(response)
-    }
-
+impl HttpRemoteControl {
     async fn request<T: for<'de> Deserialize<'de>>(
         &self,
-        method: &str,
         path: &str,
-        body: Option<serde_json::Value>,
+        body: serde_json::Value,
         deadline: tokio::time::Instant,
         cancellation: &floe_agent::Cancellation,
     ) -> Result<T, AgentFailure> {
@@ -1080,13 +990,7 @@ impl RemotePairingClient {
             .no_proxy()
             .build()
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let mut request = match method {
-            "POST" => client.post(format!("{}{path}", self.base_url)),
-            _ => return Err(AgentFailure::InvalidInput),
-        };
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
+        let request = client.post(format!("{}{path}", self.base_url)).json(&body);
         let mut response = tokio::select! {
             _ = cancellation.cancelled() => return Err(AgentFailure::Cancelled),
             response = request.send() => response.map_err(|_| AgentFailure::CapabilityUnavailable)?,
@@ -1118,16 +1022,194 @@ impl RemotePairingClient {
     }
 }
 
-fn valid_uuid_text(value: &str) -> bool {
-    Uuid::parse_str(value).is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == value)
+impl RemoteControl for HttpRemoteControl {
+    async fn confirm(
+        &self,
+        request: PairingConfirmationRequest,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<PairingConfirmation, AgentFailure> {
+        let response: PairingConfirmationResponse = self
+            .request(
+                "/pair/confirm",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "pairing_id": request.pairing_id,
+                    "proof": request.polling_proof,
+                    "challenge_id": request.challenge_id,
+                    "key_id": request.key_id,
+                    "signature": request.signature,
+                }),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        Ok(PairingConfirmation {
+            schema_version: response.schema_version,
+            pairing_id: response.pairing_id,
+            status: response.status,
+        })
+    }
+
+    async fn status(
+        &self,
+        request: PairingStatusRequest,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_execution::Cancellation,
+    ) -> Result<PairingStatus, AgentFailure> {
+        let response: PairingStatusResponse = self
+            .request(
+                "/pair/poll",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "pairing_id": request.pairing_id,
+                    "proof": request.polling_proof,
+                }),
+                deadline,
+                cancellation,
+            )
+            .await?;
+        Ok(PairingStatus {
+            schema_version: response.schema_version,
+            pairing_id: response.pairing_id,
+            status: response.status,
+            person_id: response.person_id,
+            device_id: response.device_id,
+            producer: response.producer.map(producer_identity),
+            issuer: response.issuer.map(pairing_issuer),
+            issuer_fingerprint: response.issuer_fingerprint,
+            client_id: response.client_id,
+            token: response.token,
+        })
+    }
 }
 
-fn valid_token_text(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 256
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+fn producer_identity(value: ProducerIdentityResponse) -> ProducerIdentity {
+    ProducerIdentity {
+        schema_version: value.schema_version,
+        instance_id: value.instance_id,
+        execution_owner: value.execution_owner,
+        audience: value.audience,
+        key_id: value.key_id,
+        public_key: value.public_key,
+        fingerprint: value.fingerprint,
+    }
+}
+
+fn pairing_issuer(value: PairingIssuerResponse) -> PairingIssuer {
+    PairingIssuer {
+        key_id: value.key_id,
+        public_key: value.public_key,
+        fingerprint: value.fingerprint,
+    }
+}
+
+#[derive(Clone)]
+pub struct RemotePairingClient {
+    service: floe_connections::PairingService<HttpRemoteControl>,
+}
+
+impl RemotePairingClient {
+    pub fn new(base_url: &str) -> Result<Self, AgentFailure> {
+        let address = Url::parse(base_url).map_err(|_| AgentFailure::InvalidInput)?;
+        if address.scheme() != "http"
+            || address.host_str() != Some("127.0.0.1")
+            || address.path() != "/"
+            || address.query().is_some()
+            || address.fragment().is_some()
+            || address.port().is_none()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let remote = HttpRemoteControl {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+        };
+        Ok(Self {
+            service: floe_connections::PairingService::new(remote),
+        })
+    }
+
+    pub async fn confirm(
+        &self,
+        pairing_id: &str,
+        polling_proof: &str,
+        signature: &RemoteEnrollmentSignature,
+        challenge_id: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PairingConfirmationResponse, AgentFailure> {
+        let response = self
+            .service
+            .confirm(
+                PairingConfirmationRequest {
+                    pairing_id: pairing_id.to_owned(),
+                    polling_proof: polling_proof.to_owned(),
+                    challenge_id: challenge_id.to_owned(),
+                    key_id: signature.key_id.clone(),
+                    signature: signature.signature.clone(),
+                },
+                deadline,
+                cancellation,
+            )
+            .await?;
+        Ok(PairingConfirmationResponse {
+            schema_version: response.schema_version,
+            pairing_id: response.pairing_id,
+            status: response.status,
+        })
+    }
+
+    pub async fn status(
+        &self,
+        pairing_id: &str,
+        polling_proof: &str,
+        deadline: tokio::time::Instant,
+        cancellation: &floe_agent::Cancellation,
+    ) -> Result<PairingStatusResponse, AgentFailure> {
+        let response = self
+            .service
+            .status(
+                PairingStatusRequest {
+                    pairing_id: pairing_id.to_owned(),
+                    polling_proof: polling_proof.to_owned(),
+                },
+                deadline,
+                cancellation,
+            )
+            .await?;
+        Ok(PairingStatusResponse {
+            schema_version: response.schema_version,
+            pairing_id: response.pairing_id,
+            status: response.status,
+            person_id: response.person_id,
+            device_id: response.device_id,
+            producer: response.producer.map(wire_producer_identity),
+            issuer: response.issuer.map(wire_pairing_issuer),
+            issuer_fingerprint: response.issuer_fingerprint,
+            client_id: response.client_id,
+            token: response.token,
+        })
+    }
+}
+
+fn wire_producer_identity(value: ProducerIdentity) -> ProducerIdentityResponse {
+    ProducerIdentityResponse {
+        schema_version: value.schema_version,
+        instance_id: value.instance_id,
+        execution_owner: value.execution_owner,
+        audience: value.audience,
+        key_id: value.key_id,
+        public_key: value.public_key,
+        fingerprint: value.fingerprint,
+    }
+}
+
+fn wire_pairing_issuer(value: PairingIssuer) -> PairingIssuerResponse {
+    PairingIssuerResponse {
+        key_id: value.key_id,
+        public_key: value.public_key,
+        fingerprint: value.fingerprint,
+    }
 }
 
 #[cfg(test)]
