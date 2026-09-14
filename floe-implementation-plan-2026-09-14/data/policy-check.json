@@ -1,0 +1,8 @@
+{
+  "mode": "policy-only",
+  "nodes": 22,
+  "edges": 105,
+  "errors": [],
+  "warnings": [],
+  "scope": "internal normal + build dependencies, including all declared target tables; excludes dev dependencies and source-level semantic checks"
+}

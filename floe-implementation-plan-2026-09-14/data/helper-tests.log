@@ -1,0 +1,19 @@
+test_blob_drift (test_plan_tools.AnchorTests.test_blob_drift) ... ok
+test_eof_window (test_plan_tools.AnchorTests.test_eof_window) ... ok
+test_match (test_plan_tools.AnchorTests.test_match) ... ok
+test_missing_needle (test_plan_tools.AnchorTests.test_missing_needle) ... ok
+test_range_drift (test_plan_tools.AnchorTests.test_range_drift) ... ok
+test_cycle (test_plan_tools.GraphTests.test_cycle) ... ok
+test_dag (test_plan_tools.GraphTests.test_dag) ... ok
+test_dev_excluded (test_plan_tools.GraphTests.test_dev_excluded) ... ok
+test_target_build (test_plan_tools.GraphTests.test_target_build) ... ok
+test_transitive (test_plan_tools.GraphTests.test_transitive) ... ok
+test_workspace_alias (test_plan_tools.GraphTests.test_workspace_alias) ... ok
+test_final_rejects_legacy_name_paths (test_plan_tools.MigrationCliTests.test_final_rejects_legacy_name_paths) ... ok
+test_migration_allows_pinned_legacy_name_paths (test_plan_tools.MigrationCliTests.test_migration_allows_pinned_legacy_name_paths) ... ok
+test_target_must_not_depend_on_unmigrated_same_name (test_plan_tools.MigrationCliTests.test_target_must_not_depend_on_unmigrated_same_name) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 2.509s
+
+OK
