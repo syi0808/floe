@@ -4,6 +4,7 @@
 //! only provides scope-local cancellation and the execution budget helpers.
 
 pub mod budget;
+pub mod limits;
 mod cancellation;
 mod scope;
 pub mod tasks;

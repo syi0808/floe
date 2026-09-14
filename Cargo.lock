@@ -903,6 +903,7 @@ dependencies = [
  "floe-agent",
  "floe-core",
  "floe-domain",
+ "floe-execution",
  "floe-protocol",
  "reqwest",
  "serde",

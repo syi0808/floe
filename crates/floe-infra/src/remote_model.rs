@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    sync::OnceLock,
+    time::{Duration, SystemTime},
+};
 
 use crate::remote_authorization::{
     RemoteAuthorizationClient, RemoteViewAuthorizationRequest, parse_calendar_challenge,
@@ -13,6 +16,7 @@ use floe_agent::{
     validate_people_view, validate_wellbeing_view, validate_work_context_view,
 };
 use floe_core::{EncryptedAgentVault, RemoteCalendarAuthorizationExpectation, VaultKeyProvider};
+use floe_execution::limits::{CallLimiter, CallLimits};
 use floe_protocol::{AgentRemoteCalendarConnectionDto, AgentRemoteRouteDto};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -21,6 +25,28 @@ use serde_json::json;
 pub struct ServerModelRunner {
     route: AgentRemoteRouteDto,
     placement: ModelPlacement,
+    model_calls: CallLimiter,
+    source_calls: CallLimiter,
+}
+
+fn model_calls() -> &'static CallLimiter {
+    static LIMIT: OnceLock<CallLimiter> = OnceLock::new();
+    LIMIT.get_or_init(provider_call_limit)
+}
+
+fn source_calls() -> &'static CallLimiter {
+    static LIMIT: OnceLock<CallLimiter> = OnceLock::new();
+    LIMIT.get_or_init(provider_call_limit)
+}
+
+fn provider_call_limit() -> CallLimiter {
+    CallLimiter::new(CallLimits {
+        max_running: 4,
+        max_pending: 8,
+        max_context_bytes: 65_536,
+        max_total_context_bytes: 12 * 65_536,
+    })
+    .expect("valid static provider limits")
 }
 
 pub struct CalendarContextRequest<'input> {
@@ -92,7 +118,12 @@ impl ServerModelRunner {
         } else {
             ModelPlacement::DeviceLocal
         };
-        Ok(Self { route, placement })
+        Ok(Self {
+            route,
+            placement,
+            model_calls: model_calls().clone(),
+            source_calls: source_calls().clone(),
+        })
     }
 
     pub fn calendar_connections(&self) -> &[AgentRemoteCalendarConnectionDto] {
@@ -114,6 +145,10 @@ impl ServerModelRunner {
         if !request.path.ends_with("/admit") {
             return Err(AgentFailure::InvalidInput);
         }
+        let _permit = self
+            .source_calls
+            .acquire(request.query.to_string().len(), deadline, cancellation)
+            .await?;
         let consumer = request.consumer;
         let read_path = format!("{}/read", request.path.trim_end_matches("/admit"));
         let release_path = format!("{}/release", request.path.trim_end_matches("/admit"));
@@ -370,6 +405,10 @@ impl ServerModelRunner {
         cancellation: &floe_agent::Cancellation,
         validate: impl FnOnce(&View, i64) -> Result<(), AgentFailure>,
     ) -> Result<View, AgentFailure> {
+        let _permit = self
+            .source_calls
+            .acquire(input.to_string().len(), deadline, cancellation)
+            .await?;
         if cancellation.is_cancelled() {
             return Err(AgentFailure::Cancelled);
         }
@@ -701,12 +740,6 @@ impl ModelRunner for ServerModelRunner {
         if timeout.is_zero() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        let client = Client::builder()
-            .timeout(timeout.min(Duration::from_secs(30)))
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let mut input = model_input(&request)?;
         restore_replay(&request.replay, &self.route, &mut input)?;
         let body = json!({
@@ -720,13 +753,40 @@ impl ModelRunner for ServerModelRunner {
         if body["input"].to_string().len() > 32768 {
             return Err(AgentFailure::BudgetExceeded);
         }
+        let body = serde_json::to_vec(&body).map_err(|_| AgentFailure::InvalidInput)?;
+        let _permit = self
+            .model_calls
+            .acquire(body.len(), request.deadline, &request.cancellation)
+            .await?;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|_| AgentFailure::StaleContext)?;
+        request.policy.authorize(
+            self.placement,
+            SessionProtection::Encrypted,
+            &request.context,
+            u64::try_from(now.as_millis()).map_err(|_| AgentFailure::StaleContext)?,
+        )?;
+        let timeout = request
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now());
+        if timeout.is_zero() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        let client = Client::builder()
+            .timeout(timeout.min(Duration::from_secs(30)))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .map_err(|_| AgentFailure::ServerModelUnavailable)?;
         let send = client
             .post(format!(
                 "{}/v1/agent",
                 self.route.base_url.trim_end_matches('/')
             ))
             .bearer_auth(&self.route.bearer_token)
-            .json(&body)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
             .send();
         let response = tokio::select! {
             _ = request.cancellation.cancelled() => return Err(AgentFailure::Cancelled),
@@ -947,6 +1007,59 @@ mod tests {
             calendar_connections: vec![],
             pairing: None,
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_queued_source_read_never_opens_a_provider_connection() {
+        use std::{future::Future, task::Poll};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut route = route();
+        route.base_url = format!("http://{}", listener.local_addr().unwrap());
+        let mut runner = ServerModelRunner::new(route).unwrap();
+        runner.source_calls = CallLimiter::new(CallLimits {
+            max_running: 1,
+            max_pending: 1,
+            max_context_bytes: 65_536,
+            max_total_context_bytes: 131_072,
+        })
+        .unwrap();
+        let parent = floe_agent::Cancellation::new();
+        let child = parent.child_scope();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let active = runner
+            .source_calls
+            .acquire(0, deadline, &parent)
+            .await
+            .unwrap();
+        let mut waiting = Box::pin(runner.read_communication_view("", 0, 1, deadline, &child));
+        assert!(
+            std::future::poll_fn(|context| Poll::Ready(waiting.as_mut().poll(context)))
+                .await
+                .is_pending()
+        );
+        child.cancel();
+        assert!(matches!(waiting.await, Err(AgentFailure::Cancelled)));
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        assert!(!parent.is_cancelled());
+        assert!(
+            runner
+                .model_calls
+                .acquire(0, deadline, &parent)
+                .await
+                .is_ok()
+        );
+        drop(active);
+        assert!(
+            runner
+                .source_calls
+                .acquire(65_536, deadline, &parent)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
