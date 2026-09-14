@@ -885,6 +885,69 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
 }
 
 #[test]
+fn t08_stop_cancels_the_admitted_production_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Create {});
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, entered, release, server) = blocking_answer_server();
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-cancel-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit {
+                action: AgentVaultActionDto::ConversationTurn {
+                    request: floe_protocol::AgentConversationTurnRequestDto {
+                        session_id: session.id.to_string(),
+                        expected_revision: session.revision,
+                        text: "Cancel this run".into(),
+                        device_id: "mac-local".into(),
+                        continuation: false,
+                        remote_route: Some(route),
+                    },
+                },
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !entered.load(Ordering::Acquire) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Stop {})
+        .unwrap();
+    let cancelled = wait(&worker, person, request_id);
+    assert_eq!(
+        cancelled.session.unwrap().last_outcome,
+        Some(floe_agent::AgentOutcome::Halted {
+            reason: AgentFailure::Cancelled,
+        })
+    );
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    release.store(true, Ordering::Release);
+    server.join().unwrap();
+}
+
+#[test]
 fn production_general_turn_does_not_require_or_install_builtin_setup() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
@@ -1450,15 +1513,13 @@ fn blocking_answer_server() -> (
             "output": output.to_string(),
         })
         .to_string();
-        socket
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
-                    response.len()
-                )
-                .as_bytes(),
+        let _ = socket.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                response.len()
             )
-            .unwrap();
+            .as_bytes(),
+        );
     });
     (
         floe_protocol::AgentRemoteRouteDto {
