@@ -9,7 +9,7 @@ pub struct LearnerScheduling(Arc<Mutex<SchedulingState>>);
 
 #[derive(Default)]
 struct SchedulingState {
-    foreground_pending: bool,
+    foreground_pending: usize,
     closed: bool,
     active: Option<(Uuid, Cancellation)>,
 }
@@ -26,7 +26,10 @@ impl LearnerScheduling {
         if state.closed {
             return Err(AgentFailure::Interrupted);
         }
-        state.foreground_pending = true;
+        state.foreground_pending = state
+            .foreground_pending
+            .checked_add(1)
+            .ok_or(AgentFailure::BudgetExceeded)?;
         if let Some((_, cancellation)) = &state.active {
             cancellation.cancel();
         }
@@ -34,21 +37,22 @@ impl LearnerScheduling {
     }
 
     pub fn foreground_finished(&self) -> Result<(), AgentFailure> {
-        self.0
-            .lock()
-            .map_err(|_| AgentFailure::Interrupted)?
-            .foreground_pending = false;
+        let mut state = self.0.lock().map_err(|_| AgentFailure::Interrupted)?;
+        state.foreground_pending = state
+            .foreground_pending
+            .checked_sub(1)
+            .ok_or(AgentFailure::Interrupted)?;
         Ok(())
     }
 
     pub fn foreground_pending(&self) -> Result<bool, AgentFailure> {
         let state = self.0.lock().map_err(|_| AgentFailure::Interrupted)?;
-        Ok(state.foreground_pending || state.closed)
+        Ok(state.foreground_pending > 0 || state.closed)
     }
 
     pub fn try_start(&self) -> Result<Option<LearnerLease>, AgentFailure> {
         let mut state = self.0.lock().map_err(|_| AgentFailure::Interrupted)?;
-        if state.closed || state.foreground_pending || state.active.is_some() {
+        if state.closed || state.foreground_pending > 0 || state.active.is_some() {
             return Ok(None);
         }
         let id = Uuid::new_v4();
@@ -103,10 +107,13 @@ mod tests {
         let learner = scheduling.try_start().unwrap().unwrap();
         assert!(scheduling.try_start().unwrap().is_none());
         scheduling.foreground_submitted().unwrap();
+        scheduling.foreground_submitted().unwrap();
         assert!(learner.cancellation().is_cancelled());
         assert!(!foreground.is_cancelled());
         assert!(!expert.is_cancelled());
         drop(learner);
+        assert!(scheduling.try_start().unwrap().is_none());
+        scheduling.foreground_finished().unwrap();
         assert!(scheduling.try_start().unwrap().is_none());
         scheduling.foreground_finished().unwrap();
         let next = scheduling.try_start().unwrap().unwrap();
