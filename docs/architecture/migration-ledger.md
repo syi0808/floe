@@ -1253,3 +1253,40 @@ claim of T05/T12/T13/T14/T15/T21/T27/T33 end-to-end completion, real provider
 acceptance, or new macOS UI validation is made. Previous goal turn and this turn
 both made committed implementation progress; the complete P00–P25 objective
 remains active.
+
+## P04 transaction-bound storage release — 2026-09-14
+
+Code checkpoint `d78d4ef` introduces an Access-owned, private-field,
+non-Deserialize/non-Clone `ReleasePermit` for the storage recipient only.
+It borrows the same `CurrentAuthority` implementation through admission and
+consumption, so consumption cannot substitute a different authority object.
+The actual governed session CAS constructs its adapter inside the existing
+immediate Vault transaction and binds person, vault, session ID and candidate
+revision. Admission and consumption check actual Vault key health and current
+grant/source/consumer policy; the existing final live-evidence check, SQL CAS,
+transaction rollback and precommit key-health check remain in place.
+
+Grant/dependency scope matching now resides in Access, including explicit grant
+ID equality. The legacy adapter still resolves provider-specific current policy;
+calendar and remote branches retain grant-state/epoch checks before policy
+comparison. Existing coverage-validation callers share that same dispatch
+helper rather than a second provider-policy implementation.
+
+`Unknown` coverage can still be stored as Unknown for subsequent conservative
+projection filtering. This storage permit does not authorize Unknown data for
+model dispatch, UI, search or remote export. No new permissive fallback replaces
+the existing model replay checks.
+
+Parent validation: Access tests 8 passed, context-dependency Vault tests 18
+passed, grant Vault tests 8 passed, Access all-target Clippy with `-D warnings`
+passed, and `cargo check --workspace` passed. New real encrypted-store regressions
+prove that a grant revoked after dependency recording prevents answer storage
+without blocking an independent input, and that wrong person/vault/session/
+revision is rejected while actual key removal after admission rejects consume.
+Three new Access tests cover consume-time authority/health rejection. Existing
+Unknown, rollback, live-evidence and reopen regressions remain intact.
+
+This is a production-wired storage boundary, not completion of N07/P04: source
+Acquire and model Dispatch permits, UI/search/remote release gates, durable
+vault-epoch ownership, and final AppHost wiring remain pending. No actual remote
+provider, Apple permission dialog or UI release was exercised in this turn.
