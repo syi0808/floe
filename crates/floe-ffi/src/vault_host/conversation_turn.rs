@@ -36,6 +36,9 @@ use super::session_uuid;
 
 pub(in crate::vault_host) mod engine_ports;
 
+const FINALIZATION_TOKENS: u64 = 1_024;
+const FINALIZATION_COST_MICROS: u64 = 10_000;
+
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     core: &'a FloeCore,
     vault: &'a EncryptedAgentVault<Keys>,
@@ -315,6 +318,10 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 budget: floe_execution::budget::BudgetConfig::new(
                     budget.max_tokens,
                     budget.max_cost_micros,
+                )
+                .with_finalization_reserve(
+                    FINALIZATION_TOKENS,
+                    FINALIZATION_COST_MICROS.min(budget.max_cost_micros),
                 ),
             },
         )?;

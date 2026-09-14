@@ -8,7 +8,7 @@ use std::{
 use floe_agent::{ModelPlacement, SessionStore};
 use floe_agent_contract::{
     AllowedCatalog, BoundedContext, DelegationPort, DelegationRequest, ModelPort, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolPort, ToolResult,
+    ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor, ToolPort, ToolResult,
 };
 use floe_conversation::{
     ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnMode,
@@ -76,6 +76,69 @@ impl ModelPort for Model {
     }
 }
 
+#[derive(Default)]
+struct FinalizingModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModelPort for FinalizingModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ModelResponse {
+                attempt_id: request.attempt_id,
+                steps: if call == 0 {
+                    vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }]
+                } else {
+                    assert_eq!(call, 1);
+                    assert!(request.catalog.tools.is_empty());
+                    assert!(request.catalog.cards.is_empty());
+                    vec![ModelStep::Answer {
+                        text: "The lookup finished, but the full request did not complete.".into(),
+                        artifacts: vec![],
+                    }]
+                },
+                usage: ModelUsage {
+                    tokens: 2,
+                    cost_micros: 1,
+                },
+            })
+        })
+    }
+}
+
+#[derive(Default)]
+struct ReadTool {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ToolPort for ReadTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "encrypted lookup result".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            })
+        })
+    }
+}
+
 struct NoTools;
 impl ToolPort for NoTools {
     fn invoke<'a>(
@@ -124,6 +187,27 @@ fn build_service(
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
             budget: floe_execution::budget::BudgetConfig::new(16_384, 1_000_000),
+        },
+    )
+    .unwrap()
+}
+
+fn build_finalization_service(
+    repository: Arc<VaultConversationRepository<Keys>>,
+) -> ConversationService<VaultConversationRepository<Keys>> {
+    ConversationService::new(
+        repository,
+        ManagerConfig {
+            role_spec: RoleSpec {
+                role_id: "manager".into(),
+                prompt: "Answer safely.".into(),
+                output_contract: "User-facing text.".into(),
+            },
+            max_iterations: 1,
+            max_output_bytes: 16 * 1024,
+            max_run_duration: std::time::Duration::from_secs(10),
+            budget: floe_execution::budget::BudgetConfig::new(8_192, 100)
+                .with_finalization_reserve(1_024, 10),
         },
     )
     .unwrap()
@@ -236,6 +320,81 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(replay, receipt);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn finalization_commits_reply_while_encrypted_run_remains_failed() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = Arc::new(
+        EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+            .await
+            .unwrap(),
+    );
+    let session = vault.create_session().await.unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let service = build_finalization_service(Arc::clone(&repository));
+    let model = FinalizingModel::default();
+    let tools = ReadTool::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    turn.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "Read an independent value.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "public".into(),
+        }],
+        revision: 1,
+    };
+
+    let receipt = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &tools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::Stalled));
+    assert_eq!(
+        receipt.output.as_deref(),
+        Some("The lookup finished, but the full request did not complete.")
+    );
+    assert!(receipt.continuation().is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let stored_session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(stored_session.continuation, None);
+    assert_eq!(
+        stored_session.last_outcome,
+        Some(floe_agent::AgentOutcome::Halted {
+            reason: AgentFailure::Stalled
+        })
+    );
+    assert!(matches!(
+        stored_session.messages.as_slice(),
+        [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }]
+            if text == "The lookup finished, but the full request did not complete."
+    ));
+    assert_eq!(
+        repository.load_journal(receipt.run_id).await.unwrap().len(),
+        8
+    );
 }
 
 #[tokio::test]
@@ -419,13 +578,10 @@ async fn encrypted_journal_projects_cumulative_settled_continuation_work() {
         )
         .await
         .unwrap();
-    let continuation = floe_conversation::continuation(
-        repository.as_ref(),
-        second_run_id,
-        &person_id.to_string(),
-    )
-    .await
-    .unwrap();
+    let continuation =
+        floe_conversation::continuation(repository.as_ref(), second_run_id, &person_id.to_string())
+            .await
+            .unwrap();
     assert_eq!(continuation.completed_iterations, 2);
     assert_eq!(continuation.usage.attempts, 2);
     assert_eq!(continuation.usage.tokens, 3);

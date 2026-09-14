@@ -48,31 +48,83 @@ where
             if request.role.role_id != "manager" || request.attempt_id.is_nil() {
                 return Err(AgentFailure::InvalidInput);
             }
+            let finalization = request.role.prompt == floe_conversation::FINALIZATION_ROLE_PROMPT
+                && request.role.output_contract == floe_conversation::FINALIZATION_OUTPUT_CONTRACT;
             let run_id = scope
                 .root_run_id()
                 .ok_or(AgentFailure::InvalidInput)?
                 .as_uuid();
-            let usage = UsageLedger::new(
-                MAX_ATTEMPT_TOKENS,
-                MAX_ATTEMPT_COST_MICROS,
-                Default::default(),
-            );
+            let remaining_tokens = scope.budget().max_tokens().min(MAX_ATTEMPT_TOKENS);
+            let remaining_cost_micros = scope
+                .budget()
+                .max_cost_micros()
+                .min(MAX_ATTEMPT_COST_MICROS);
+            let usage =
+                UsageLedger::new(remaining_tokens, remaining_cost_micros, Default::default());
+            let mut prompt = floe_agent::manager_prompt(self.context.persona.as_ref())?;
+            if finalization {
+                let role = prompt
+                    .components
+                    .iter_mut()
+                    .find(|component| component.kind == floe_agent::PromptComponentKind::Role)
+                    .ok_or(AgentFailure::InvalidInput)?;
+                role.content = format!("{}\n{}", request.role.prompt, request.role.output_contract);
+            }
+            let context = if finalization {
+                AgentContext {
+                    projection_version: self.context.projection_version,
+                    persona: None,
+                    memories: vec![],
+                    optional_context_issues: vec![],
+                    evidence: vec![],
+                }
+            } else {
+                self.context.clone()
+            };
+            let capabilities = self
+                .capabilities
+                .iter()
+                .filter(|capability| {
+                    request
+                        .catalog
+                        .tools
+                        .iter()
+                        .any(|tool| tool.id == capability.id)
+                })
+                .cloned()
+                .collect();
+            let active_agents = self
+                .active_agents
+                .iter()
+                .filter(|card| {
+                    request
+                        .catalog
+                        .cards
+                        .iter()
+                        .any(|definition| definition.card.id == card.id)
+                })
+                .cloned()
+                .collect();
             let legacy_request = LegacyModelRequest {
                 usage,
                 replay: vec![],
                 schema_version: floe_agent::AGENT_VERSION,
-                prompt: floe_agent::manager_prompt(self.context.persona.as_ref())?,
+                prompt,
                 person_id: self.person_id,
                 session_id: self.session_id,
                 turn_id: run_id,
                 policy: self.policy.clone(),
-                context: self.context.clone(),
+                context,
                 messages: legacy_messages(&request, run_id)?,
-                capabilities: self.capabilities.clone(),
-                active_agents: self.active_agents.clone(),
-                remaining_tokens: MAX_ATTEMPT_TOKENS,
-                remaining_cost_micros: MAX_ATTEMPT_COST_MICROS,
-                max_output_bytes: self.max_output_bytes,
+                capabilities,
+                active_agents,
+                remaining_tokens,
+                remaining_cost_micros,
+                max_output_bytes: if finalization {
+                    self.max_output_bytes.min(4_096)
+                } else {
+                    self.max_output_bytes
+                },
                 deadline: scope.deadline(),
                 cancellation: scope.cancellation().clone(),
             };
@@ -492,5 +544,38 @@ mod tests {
             }] if tool_id == "lookup"
         ));
         assert_eq!(converted.usage.tokens, 5);
+    }
+
+    #[test]
+    fn answer_only_catalog_rejects_tool_and_delegation_steps() {
+        for output in [
+            LegacyModelStep::Call {
+                capability_id: "lookup".into(),
+                input: "{}".into(),
+            },
+            LegacyModelStep::Delegate {
+                agent_id: "expert".into(),
+                message: "finish".into(),
+            },
+        ] {
+            assert_eq!(
+                contract_response(
+                    Uuid::new_v4(),
+                    LegacyModelResponse {
+                        replay: None,
+                        schema_version: floe_agent::AGENT_VERSION,
+                        output: vec![output],
+                        used_tokens: 1,
+                        cost_micros: 1,
+                    },
+                    &AllowedCatalog {
+                        cards: vec![],
+                        tools: vec![],
+                        revision: 1,
+                    },
+                ),
+                Err(AgentFailure::CapabilityDenied)
+            );
+        }
     }
 }

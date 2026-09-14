@@ -6,7 +6,8 @@ use std::{
 use floe_agent_contract::{
     AgentMessage, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, ExecutionJournal, JournalAck, JournalEvent, ModelPort, ModelRequest,
-    ModelResponse, ModelStep, ModelUsage, RoleSpec, TaskReceipt, ToolCall, ToolPort, ToolResult,
+    ModelResponse, ModelStep, ModelUsage, RoleSpec, TaskReceipt, ToolCall, ToolDescriptor,
+    ToolPort, ToolResult,
 };
 use floe_agent_runtime::FinalPayloadValidator;
 use floe_execution::{ExecutionScope, budget::BudgetConfig};
@@ -371,6 +372,112 @@ impl ModelPort for AnswerModel {
     }
 }
 
+#[derive(Default)]
+struct FinalizationModel {
+    calls: std::sync::atomic::AtomicUsize,
+    finalization_scope: Mutex<Option<ExecutionScope>>,
+}
+
+impl ModelPort for FinalizationModel {
+    fn generate<'a>(
+        &'a self,
+        request: ModelRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            if call == 0 {
+                assert_eq!(request.catalog.tools.len(), 1);
+                assert_eq!(scope.budget().max_tokens(), 4_096);
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::CallTool {
+                        tool_id: "lookup".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    }],
+                    usage: ModelUsage {
+                        tokens: 11,
+                        cost_micros: 2,
+                    },
+                })
+            } else {
+                assert_eq!(call, 1);
+                *self.finalization_scope.lock().unwrap() = Some(scope.clone());
+                assert!(request.catalog.tools.is_empty());
+                assert!(request.catalog.cards.is_empty());
+                assert_eq!(request.role.prompt, crate::FINALIZATION_ROLE_PROMPT);
+                assert_eq!(
+                    request.role.output_contract,
+                    crate::FINALIZATION_OUTPUT_CONTRACT
+                );
+                assert_eq!(request.bounded_context.text, "");
+                assert_eq!(
+                    request.bounded_context.coverage,
+                    DependencyCoverage::Independent
+                );
+                assert_eq!(request.replay.len(), 1);
+                assert_eq!(scope.budget().max_tokens(), 1_024);
+                Ok(ModelResponse {
+                    attempt_id: request.attempt_id,
+                    steps: vec![ModelStep::Answer {
+                        text: "The lookup succeeded, but the full request did not complete.".into(),
+                        artifacts: vec![],
+                    }],
+                    usage: ModelUsage {
+                        tokens: 7,
+                        cost_micros: 1,
+                    },
+                })
+            }
+        })
+    }
+}
+
+struct CountingTool {
+    calls: std::sync::atomic::AtomicUsize,
+    failure: Option<AgentFailure>,
+}
+
+#[derive(Default)]
+struct CountingDelegation {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl DelegationPort for CountingDelegation {
+    fn delegate<'a>(
+        &'a self,
+        _: DelegationRequest,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+}
+
+impl ToolPort for CountingTool {
+    fn invoke<'a>(
+        &'a self,
+        call: ToolCall,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ToolResult, AgentFailure>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let failure = self.failure;
+        Box::pin(async move {
+            if let Some(failure) = failure {
+                return Err(failure);
+            }
+            Ok(ToolResult {
+                call_id: call.call_id,
+                text: "lookup result".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+            })
+        })
+    }
+}
+
 struct BlockingModel {
     calls: std::sync::atomic::AtomicUsize,
     entered: Semaphore,
@@ -453,6 +560,26 @@ fn service(repository: Arc<MemoryRepository>) -> ConversationService<MemoryRepos
             max_output_bytes: 16 * 1024,
             max_run_duration: std::time::Duration::from_secs(10),
             budget: BudgetConfig::new(16_384, 1_000_000),
+        },
+    )
+    .unwrap()
+}
+
+fn finalization_service(
+    repository: Arc<MemoryRepository>,
+) -> ConversationService<MemoryRepository> {
+    ConversationService::new(
+        repository,
+        ManagerConfig {
+            role_spec: RoleSpec {
+                role_id: "manager".into(),
+                prompt: "Answer or delegate.".into(),
+                output_contract: "User-facing text.".into(),
+            },
+            max_iterations: 1,
+            max_output_bytes: 16 * 1024,
+            max_run_duration: std::time::Duration::from_secs(10),
+            budget: BudgetConfig::new(8_192, 100).with_finalization_reserve(1_024, 10),
         },
     )
     .unwrap()
@@ -772,4 +899,137 @@ async fn recovery_is_revision_bound_and_never_interrupts_a_live_root() {
             .session_revision,
         completed.session_revision
     );
+}
+
+#[tokio::test]
+async fn t29_finalization_is_bounded_and_accounted() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = finalization_service(Arc::clone(&repository));
+    let model = FinalizationModel::default();
+    let tools = CountingTool {
+        calls: Default::default(),
+        failure: None,
+    };
+    let delegation = CountingDelegation::default();
+    let mut turn = request(CommandId::new(), session_id, 0, "look this up");
+    turn.allowed_catalog = AllowedCatalog {
+        cards: vec![],
+        tools: vec![ToolDescriptor {
+            id: "lookup".into(),
+            definition_revision: 1,
+            description: "Read a stable value.".into(),
+            input_schema: "{\"type\":\"object\"}".into(),
+            output_data_class: "public".into(),
+        }],
+        revision: 1,
+    };
+
+    let receipt = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &tools,
+                delegation: &delegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::Stalled));
+    assert_eq!(
+        receipt.output.as_deref(),
+        Some("The lookup succeeded, but the full request did not complete.")
+    );
+    assert_eq!(receipt.coverage, DependencyCoverage::Independent);
+    assert!(receipt.continuation().is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        delegation.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    let budget = model
+        .finalization_scope
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .budget()
+        .snapshot();
+    assert_eq!(budget.settled.attempts, 2);
+    assert_eq!(budget.settled.tokens, 18);
+    assert_eq!(budget.settled.cost_micros, 3);
+    assert_eq!(budget.unknown_tokens, 0);
+    assert_eq!(budget.reserved_tokens, 0);
+
+    let events = repository.journal.events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, JournalEvent::ModelIntent { .. }))
+            .count(),
+        2
+    );
+    let usage = events
+        .iter()
+        .filter_map(|event| match event {
+            JournalEvent::ModelResult { usage, .. } => Some(*usage),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(usage.len(), 2);
+    assert_eq!(usage.iter().map(|usage| usage.tokens).sum::<u64>(), 18);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, JournalEvent::Output { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn consent_exhaustion_does_not_start_finalization() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = finalization_service(repository);
+    let model = FinalizationModel::default();
+    let tools = CountingTool {
+        calls: Default::default(),
+        failure: Some(AgentFailure::ConsentRequired),
+    };
+    let mut turn = request(CommandId::new(), session_id, 0, "look this up");
+    turn.allowed_catalog.tools.push(ToolDescriptor {
+        id: "lookup".into(),
+        definition_revision: 1,
+        description: "Read a stable value.".into(),
+        input_schema: "{\"type\":\"object\"}".into(),
+        output_data_class: "personal".into(),
+    });
+    turn.allowed_catalog.revision = 1;
+
+    let receipt = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &tools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::ConsentRequired));
+    assert!(receipt.output.is_none());
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(tools.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

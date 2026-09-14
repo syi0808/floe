@@ -111,7 +111,18 @@ impl RunReceipt {
                     .is_some_and(|output| !output.trim().is_empty())
                     && self.issue.is_none()
             }
-            RunState::Failed | RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
+            RunState::Failed => match self.output.as_deref() {
+                Some(output) => {
+                    !output.trim().is_empty()
+                        && self.coverage != DependencyCoverage::Unknown
+                        && matches!(
+                            self.issue,
+                            Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
+                        )
+                }
+                None => self.issue.is_some() && self.coverage == DependencyCoverage::Unknown,
+            },
+            RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
                 self.output.is_none()
                     && self.issue.is_some()
                     && self.coverage == DependencyCoverage::Unknown
@@ -121,11 +132,12 @@ impl RunReceipt {
     }
 
     pub fn continuation(&self) -> Option<ContinuationRef> {
-        matches!(
-            (self.state, self.issue),
-            (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
-                | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
-        )
+        (self.output.is_none()
+            && matches!(
+                (self.state, self.issue),
+                (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
+                    | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
+            ))
         .then(|| self.continuation_level.checked_add(1))
         .flatten()
         .filter(|level| *level <= 3)
@@ -306,7 +318,25 @@ impl RunTerminal {
                         matches!(step, EngineStep::Answer { text, .. } if Some(text) == self.output.as_ref())
                     })
             }
-            RunState::Failed | RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
+            RunState::Failed => match self.output.as_deref() {
+                Some(output) => {
+                    !output.trim().is_empty()
+                        && self.coverage != DependencyCoverage::Unknown
+                        && matches!(
+                            self.issue,
+                            Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
+                        )
+                        && self.steps.last().is_some_and(|step| {
+                            matches!(step, EngineStep::Answer { text, .. } if text == output)
+                        })
+                }
+                None => {
+                    self.steps.is_empty()
+                        && self.issue.is_some()
+                        && self.coverage == DependencyCoverage::Unknown
+                }
+            },
+            RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
                 self.output.is_none()
                     && self.steps.is_empty()
                     && self.issue.is_some()

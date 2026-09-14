@@ -1,4 +1,5 @@
 mod coordinator;
+mod finalization;
 mod recovery;
 
 pub use coordinator::{ConversationService, continuation, recover_session};

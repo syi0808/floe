@@ -13,6 +13,7 @@ use crate::{
     TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
+use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
 use super::recovery::project_journal;
 
 pub struct ConversationService<Repository> {
@@ -199,7 +200,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         let result = self
             .engine
             .drive(
-                engine_request,
+                engine_request.clone(),
                 EnginePorts {
                     model: ports.model,
                     tools: ports.tools,
@@ -221,13 +222,60 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     },
                     Err(failure) => RunTerminal::from_failure(failure),
                 },
-                None => RunTerminal::from_failure(AgentFailure::Stalled),
+                None => {
+                    self.finalize_exhaustion(
+                        run_id,
+                        &engine_request.scope,
+                        &engine_request,
+                        ports,
+                        AgentFailure::Stalled,
+                    )
+                    .await
+                }
             },
+            Err(failure @ (AgentFailure::BudgetExceeded | AgentFailure::Stalled)) => {
+                self.finalize_exhaustion(
+                    run_id,
+                    &engine_request.scope,
+                    &engine_request,
+                    ports,
+                    failure,
+                )
+                .await
+            }
             Err(failure) => RunTerminal::from_failure(failure),
         };
         self.repository
             .finish_run(run_id, expected_aggregate_revision, terminal)
             .await
+    }
+
+    async fn finalize_exhaustion(
+        &self,
+        run_id: RunId,
+        scope: &ExecutionScope,
+        request: &EngineRequest,
+        ports: ConversationPorts<'_>,
+        issue: AgentFailure,
+    ) -> RunTerminal {
+        match finalize_exhausted_run(
+            &self.engine,
+            self.repository.as_ref(),
+            run_id,
+            scope,
+            request,
+            ports,
+            issue,
+        )
+        .await
+        {
+            Ok(FinalizationOutcome::Replied(terminal)) => terminal,
+            Ok(FinalizationOutcome::NotAttempted(failure)) => RunTerminal::from_failure(failure),
+            Ok(FinalizationOutcome::AttemptedWithoutReply) => {
+                RunTerminal::from_failure(AgentFailure::Stalled)
+            }
+            Err(failure) => RunTerminal::from_failure(failure),
+        }
     }
 
     pub async fn recover_session(
@@ -333,13 +381,10 @@ pub async fn continuation<Repository: ConversationRepository>(
             .messages
             .iter()
             .any(|message| !message_ids.insert(message.message_id))
-            || projected
-                .replay
-                .iter()
-                .any(|receipt| {
-                    !replay_invocations.insert(receipt.invocation_key)
-                        || !replay_calls.insert(receipt.call_id)
-                })
+            || projected.replay.iter().any(|receipt| {
+                !replay_invocations.insert(receipt.invocation_key)
+                    || !replay_calls.insert(receipt.call_id)
+            })
         {
             return Err(AgentFailure::StorageUnavailable);
         }

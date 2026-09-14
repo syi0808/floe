@@ -5,7 +5,10 @@ mod application;
 mod domain;
 mod ports;
 
-pub use api::{ConversationPorts, ManagerConfig, TurnRequest};
+pub use api::{
+    ConversationPorts, FINALIZATION_OUTPUT_CONTRACT, FINALIZATION_ROLE_PROMPT, ManagerConfig,
+    TurnRequest,
+};
 pub use application::{ConversationService, continuation, project_continuation, recover_session};
 pub use domain::{
     AdmittedTurn, ContinuationRef, ContinuationSnapshot, JournalEntry, RecoveryReceipt,

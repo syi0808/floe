@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 use crate::TurnMode;
 
+pub const FINALIZATION_ROLE_PROMPT: &str = "Produce one final answer using only the supplied settled observations. Do not call tools or delegate.";
+pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing answer. State that the requested execution did not complete; do not claim that a failed action succeeded.";
+
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {
     pub role_spec: RoleSpec,
@@ -94,6 +97,7 @@ impl TurnRequest {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ConversationPorts<'a> {
     pub model: &'a dyn ModelPort,
     pub tools: &'a dyn ToolPort,

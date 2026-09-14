@@ -484,6 +484,14 @@ impl BudgetLease {
         self.partition
     }
 
+    pub fn max_tokens(&self) -> u64 {
+        self.max_tokens
+    }
+
+    pub fn max_cost_micros(&self) -> u64 {
+        self.max_cost_micros
+    }
+
     pub fn finalization_lease(&self) -> Result<Self, AgentFailure> {
         if self.quota.parent.is_some() {
             return Err(AgentFailure::PolicyDenied);

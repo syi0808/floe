@@ -7,7 +7,7 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -104,8 +104,25 @@ impl VaultConversationRunRecord {
                         .is_some_and(|output| !output.trim().is_empty())
                     && self.issue.is_none()
             }
-            VaultConversationRunState::Failed
-            | VaultConversationRunState::Cancelled
+            VaultConversationRunState::Failed => match self.output.as_deref() {
+                Some(output) => {
+                    self.session_revision == terminal_revision
+                        && self.aggregate_revision == 2
+                        && !output.trim().is_empty()
+                        && self.coverage != DependencyCoverage::Unknown
+                        && matches!(
+                            self.issue,
+                            Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
+                        )
+                }
+                None => {
+                    self.session_revision == terminal_revision
+                        && self.aggregate_revision == 2
+                        && self.coverage == DependencyCoverage::Unknown
+                        && self.issue.is_some()
+                }
+            },
+            VaultConversationRunState::Cancelled
             | VaultConversationRunState::TimedOut
             | VaultConversationRunState::Interrupted => {
                 self.session_revision == terminal_revision
@@ -238,6 +255,17 @@ impl VaultConversationTerminal {
                         .output
                         .as_deref()
                         .is_some_and(|output| !output.trim().is_empty())
+                    && self.appended_messages.last().is_some_and(|message| {
+                        matches!(message, AgentMessage::Assistant { text, .. } if Some(text) == self.output.as_ref())
+                    })
+            }
+            VaultConversationRunState::Failed if self.output.is_some() => {
+                self.issue.is_some()
+                    && self.coverage != DependencyCoverage::Unknown
+                    && matches!(
+                        self.issue,
+                        Some(AgentFailure::BudgetExceeded | AgentFailure::Stalled)
+                    )
                     && self.appended_messages.last().is_some_and(|message| {
                         matches!(message, AgentMessage::Assistant { text, .. } if Some(text) == self.output.as_ref())
                     })
@@ -667,16 +695,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             session.messages.extend(terminal.appended_messages);
             session.active_turn = None;
-            session.continuation = matches!(
-                (terminal.state, terminal.issue),
-                (
-                    VaultConversationRunState::TimedOut,
-                    Some(AgentFailure::DeadlineExceeded)
-                ) | (
-                    VaultConversationRunState::Failed,
-                    Some(AgentFailure::BudgetExceeded)
-                )
-            )
+            session.continuation = (terminal.output.is_none()
+                && matches!(
+                    (terminal.state, terminal.issue),
+                    (
+                        VaultConversationRunState::TimedOut,
+                        Some(AgentFailure::DeadlineExceeded)
+                    ) | (
+                        VaultConversationRunState::Failed,
+                        Some(AgentFailure::BudgetExceeded)
+                    )
+                ))
             .then(|| current.continuation_level.checked_add(1))
             .flatten()
             .filter(|level| *level <= 3)
@@ -948,7 +977,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 4))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 5))",
                 (),
             )
             .await
@@ -983,7 +1012,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 4)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 5)",
                 (),
             )
             .await

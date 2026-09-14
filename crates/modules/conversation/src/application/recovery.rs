@@ -55,6 +55,28 @@ pub(super) fn project_journal(
     {
         return Err(AgentFailure::Conflict);
     }
+    project_entries(source, entries)
+}
+
+pub(super) fn project_active_journal(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> Result<JournalProjection, AgentFailure> {
+    source.validate()?;
+    if source.state != RunState::Working
+        || source.output.is_some()
+        || source.issue.is_some()
+        || entries.len() > 512
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    project_entries(source, entries)
+}
+
+fn project_entries(
+    source: &RunReceipt,
+    entries: &[JournalEntry],
+) -> Result<JournalProjection, AgentFailure> {
     let mut messages = Vec::new();
     let mut replay = Vec::new();
     let mut attempts = HashSet::new();

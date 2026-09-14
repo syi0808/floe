@@ -171,6 +171,57 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
 }
 
 #[tokio::test]
+async fn failed_execution_can_commit_a_distinct_final_reply_without_continuation() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    vault
+        .admit_conversation_turn(request(person_id, session.id, run_id, CommandId::new()))
+        .await
+        .unwrap();
+
+    let failed = vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            VaultConversationTerminal {
+                state: VaultConversationRunState::Failed,
+                output: Some("The lookup succeeded, but the request did not complete.".into()),
+                coverage: DependencyCoverage::Independent,
+                issue: Some(AgentFailure::Stalled),
+                appended_messages: vec![AgentMessage::Assistant {
+                    turn_id: run_id.as_uuid(),
+                    text: "The lookup succeeded, but the request did not complete.".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(failed.state, VaultConversationRunState::Failed);
+    assert!(failed.output.is_some());
+    let session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(session.continuation, None);
+    assert_eq!(
+        session.last_outcome,
+        Some(AgentOutcome::Halted {
+            reason: AgentFailure::Stalled
+        })
+    );
+    assert!(matches!(
+        session.messages.as_slice(),
+        [AgentMessage::User { .. }, AgentMessage::Assistant { text, .. }]
+            if text == "The lookup succeeded, but the request did not complete."
+    ));
+}
+
+#[tokio::test]
 async fn continuation_admission_is_generation_bound_and_preserves_one_user_message() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
