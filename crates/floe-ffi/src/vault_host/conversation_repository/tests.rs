@@ -448,6 +448,41 @@ async fn service_commits_encrypted_run_and_replays_after_vault_reopen() {
         .unwrap();
     assert_eq!(receipt.state, RunState::Completed);
     assert_eq!(receipt.session_revision, 2);
+    assert_eq!(
+        floe_conversation::get_command(
+            repository.as_ref(),
+            floe_conversation::CommandQuery {
+                principal: person_id.to_string(),
+                command_id,
+            },
+        )
+        .await
+        .unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        floe_conversation::get_run(
+            repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: person_id.to_string(),
+                run_id: receipt.run_id,
+            },
+        )
+        .await
+        .unwrap(),
+        Some(receipt.clone())
+    );
+    assert_eq!(
+        floe_conversation::get_run(
+            repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: PersonId::new().to_string(),
+                run_id: receipt.run_id,
+            },
+        )
+        .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
     let stored = vault
         .conversation_run(receipt.run_id)
         .await

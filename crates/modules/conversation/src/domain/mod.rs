@@ -61,6 +61,38 @@ fn validate_principal(principal: &str) -> Result<(), AgentFailure> {
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandQuery {
+    pub principal: String,
+    pub command_id: CommandId,
+}
+
+impl CommandQuery {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)?;
+        if !self.command_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunQuery {
+    pub principal: String,
+    pub run_id: RunId,
+}
+
+impl RunQuery {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        validate_principal(&self.principal)?;
+        if !self.run_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunState {
     Working,

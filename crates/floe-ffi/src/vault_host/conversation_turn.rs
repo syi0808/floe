@@ -84,7 +84,14 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     let session_id = session_uuid(&request.session_id)?;
     let session = vault.load(person_id, session_id).await?;
     let existing_continuation = if request.continuation {
-        vault.conversation_run_by_command(command_id).await?
+        floe_conversation::get_command(
+            conversation_repository.as_ref(),
+            floe_conversation::CommandQuery {
+                principal: person_id.to_string(),
+                command_id,
+            },
+        )
+        .await?
     } else {
         None
     };
@@ -358,12 +365,17 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let execution_profile =
             crate::vault_host::conversation_repository::execution_profile(model.placement());
         let mode = if request.continuation {
-            if let Some(existing) = vault
-                .conversation_run_by_command(inputs.command_id)
-                .await?
+            if let Some(existing) = floe_conversation::get_command(
+                inputs.conversation_repository.as_ref(),
+                floe_conversation::CommandQuery {
+                    principal: person_id.to_string(),
+                    command_id: inputs.command_id,
+                },
+            )
+            .await?
             {
                 let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
-                if existing.model_placement != model.placement() {
+                if existing.execution_profile != execution_profile {
                     return Err(AgentFailure::Conflict);
                 }
                 floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {

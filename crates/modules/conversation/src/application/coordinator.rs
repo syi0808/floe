@@ -8,9 +8,9 @@ use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
-    ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
+    CommandQuery, CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
+    ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunQuery, RunReceipt,
+    RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
@@ -291,6 +291,17 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         principal: &str,
     ) -> Result<ContinuationSnapshot, AgentFailure> {
         continuation(self.repository.as_ref(), run_id, principal).await
+    }
+
+    pub async fn get_command(
+        &self,
+        query: CommandQuery,
+    ) -> Result<Option<RunReceipt>, AgentFailure> {
+        super::query::get_command(self.repository.as_ref(), query).await
+    }
+
+    pub async fn get_run(&self, query: RunQuery) -> Result<Option<RunReceipt>, AgentFailure> {
+        super::query::get_run(self.repository.as_ref(), query).await
     }
 
     pub async fn compact_session(
