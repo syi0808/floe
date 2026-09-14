@@ -170,6 +170,7 @@ impl VaultBridge {
 struct Worker {
     sender: mpsc::SyncSender<Arc<Job>>,
     active: Mutex<Option<Arc<Job>>>,
+    run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     closing: Arc<AtomicBool>,
     learner_scheduling: floe_knowledge::LearnerScheduling,
 }
@@ -283,6 +284,7 @@ struct Job {
     id: Uuid,
     action: AgentVaultActionDto,
     cancellation: Cancellation,
+    run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     progress: Mutex<Progress>,
 }
 
@@ -397,6 +399,7 @@ impl Worker {
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(1);
         let closing = Arc::new(AtomicBool::new(false));
+        let run_cancellations = Arc::new(floe_conversation::RunCancellationRegistry::default());
         let worker_closing = closing.clone();
         let learner_scheduling = floe_knowledge::LearnerScheduling::default();
         let worker_learner_scheduling = learner_scheduling.clone();
@@ -578,6 +581,7 @@ impl Worker {
         Ok(Self {
             sender,
             active: Mutex::new(None),
+            run_cancellations,
             closing,
             learner_scheduling,
         })
@@ -601,6 +605,7 @@ impl Worker {
                     id,
                     action: action.clone(),
                     cancellation: Cancellation::default(),
+                    run_cancellations: Arc::clone(&self.run_cancellations),
                     progress: Mutex::new(Progress::default()),
                 });
                 self.learner_scheduling.foreground_submitted()?;
@@ -616,7 +621,28 @@ impl Worker {
             return Err(AgentFailure::NotFound);
         }
         if matches!(operation, AgentVaultOperationDto::Stop {}) {
-            job.cancellation.cancel();
+            if matches!(job.action, AgentVaultActionDto::ConversationTurn { .. }) {
+                let command_id = floe_agent_contract::CommandId::from_uuid(job.id)
+                    .ok_or(AgentFailure::InvalidInput)?;
+                if matches!(
+                    job.run_cancellations.cancel_command(
+                        floe_conversation::CancelCommandRequest {
+                            command_id,
+                            principal: person.to_string(),
+                        },
+                    )?,
+                    floe_conversation::CancelRunStatus::Unknown
+                ) && !job
+                    .progress
+                    .lock()
+                    .map_err(|_| AgentFailure::Interrupted)?
+                    .done
+                {
+                    job.cancellation.cancel();
+                }
+            } else {
+                job.cancellation.cancel();
+            }
         }
         let after_sequence = match operation {
             AgentVaultOperationDto::Poll { after_sequence } => after_sequence,
@@ -1475,6 +1501,7 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 &vault.schedule_endpoint,
                 &vault.legacy_expert_endpoint,
                 &vault._conversation_repository,
+                &job.run_cancellations,
                 job.person,
                 floe_agent_contract::CommandId::from_uuid(job.id)
                     .ok_or(AgentFailure::InvalidInput)?,

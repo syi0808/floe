@@ -16,8 +16,9 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{
-    AdmittedTurn, ConversationPorts, ConversationRepository, JournalEntry, ManagerConfig,
-    RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    AdmittedTurn, CancelCommandRequest, CancelRunRequest, CancelRunStatus, ConversationPorts,
+    ConversationRepository, JournalEntry, ManagerConfig, RecoveryReceipt, RecoveryRequest,
+    RunCancellationRegistry, RunReceipt, RunState, RunTerminal, TurnAdmission,
     TurnAdmissionRequest, TurnRequest,
 };
 
@@ -704,6 +705,98 @@ async fn one_session_rejects_a_second_root_while_first_model_is_waiting() {
 
     model.release.add_permits(1);
     assert_eq!(running.await.unwrap().unwrap().state, RunState::Completed);
+}
+
+#[tokio::test]
+async fn admitted_root_is_cancelled_by_owner_identity_and_then_becomes_inactive() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let run_cancellations = Arc::new(RunCancellationRegistry::default());
+    let service = Arc::new(
+        ConversationService::with_run_cancellations(
+            Arc::clone(&repository),
+            ManagerConfig {
+                role_spec: RoleSpec {
+                    role_id: "manager".into(),
+                    prompt: "Answer or delegate.".into(),
+                    output_contract: "User-facing text.".into(),
+                },
+                max_iterations: 4,
+                max_output_bytes: 16 * 1024,
+                max_run_duration: std::time::Duration::from_secs(10),
+                budget: BudgetConfig::new(16_384, 1_000_000),
+            },
+            Arc::clone(&run_cancellations),
+        )
+        .unwrap(),
+    );
+    let model = Arc::new(BlockingModel {
+        calls: Default::default(),
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+    });
+    let command_id = CommandId::new();
+    assert_eq!(
+        run_cancellations
+            .cancel_command(CancelCommandRequest {
+                command_id,
+                principal: "person-a".into(),
+            })
+            .unwrap(),
+        CancelRunStatus::Unknown
+    );
+    let running_service = Arc::clone(&service);
+    let running_model = Arc::clone(&model);
+    let running = tokio::spawn(async move {
+        running_service
+            .run_turn(
+                request(command_id, session_id, 0, "cancel after admission"),
+                ports(running_model.as_ref()),
+            )
+            .await
+    });
+    model.entered.acquire().await.unwrap().forget();
+    let run_id = repository
+        .state
+        .lock()
+        .unwrap()
+        .commands
+        .get(&command_id)
+        .copied()
+        .unwrap();
+
+    assert_eq!(
+        service
+            .cancel_run(CancelRunRequest {
+                run_id,
+                principal: "person-b".into(),
+            })
+            .await,
+        Err(AgentFailure::CapabilityDenied)
+    );
+    assert_eq!(
+        run_cancellations
+            .cancel_command(CancelCommandRequest {
+                command_id,
+                principal: "person-a".into(),
+            })
+            .unwrap(),
+        CancelRunStatus::Cancelled
+    );
+    let receipt = running.await.unwrap().unwrap();
+    assert_eq!(receipt.state, RunState::Cancelled);
+    assert_eq!(receipt.issue, Some(AgentFailure::Cancelled));
+    assert_eq!(
+        service
+            .cancel_run(CancelRunRequest {
+                run_id,
+                principal: "person-a".into(),
+            })
+            .await
+            .unwrap(),
+        CancelRunStatus::Inactive
+    );
 }
 
 #[tokio::test]

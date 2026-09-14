@@ -8,9 +8,10 @@ use floe_execution::{ExecutionScope, budget::BudgetLedger};
 use floe_kernel::{AgentFailure, RunId, TraceContext};
 
 use crate::{
-    CommandQuery, CompactionReceipt, CompactionRequest, ContinuationSnapshot, ConversationPorts,
-    ConversationRepository, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunQuery, RunReceipt,
-    RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
+    CancelRunRequest, CancelRunStatus, CommandQuery, CompactionReceipt, CompactionRequest,
+    ContinuationSnapshot, ConversationPorts, ConversationRepository, ManagerConfig,
+    RecoveryReceipt, RecoveryRequest, RunCancellationRegistry, RunQuery, RunReceipt, RunState,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
@@ -18,15 +19,29 @@ use super::recovery::project_journal;
 
 pub struct ConversationService<Repository> {
     repository: Arc<Repository>,
+    run_cancellations: Arc<RunCancellationRegistry>,
     engine: Engine,
     config: ManagerConfig,
 }
 
 impl<Repository: ConversationRepository> ConversationService<Repository> {
     pub fn new(repository: Arc<Repository>, config: ManagerConfig) -> Result<Self, AgentFailure> {
+        Self::with_run_cancellations(
+            repository,
+            config,
+            Arc::new(RunCancellationRegistry::default()),
+        )
+    }
+
+    pub fn with_run_cancellations(
+        repository: Arc<Repository>,
+        config: ManagerConfig,
+        run_cancellations: Arc<RunCancellationRegistry>,
+    ) -> Result<Self, AgentFailure> {
         config.validate()?;
         Ok(Self {
             repository,
+            run_cancellations,
             engine: Engine::default(),
             config,
         })
@@ -123,6 +138,24 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             return Err(AgentFailure::StorageUnavailable);
         }
         let expected_aggregate_revision = admitted.receipt.aggregate_revision;
+        let _cancellation_guard = match self.run_cancellations.register(
+            run_id,
+            request.command_id,
+            &request.principal,
+            request.cancellation.clone(),
+        ) {
+            Ok(guard) => guard,
+            Err(failure) => {
+                return self
+                    .repository
+                    .finish_run(
+                        run_id,
+                        expected_aggregate_revision,
+                        RunTerminal::from_failure(failure),
+                    )
+                    .await;
+            }
+        };
         let now = tokio::time::Instant::now();
         if request.deadline <= now {
             return self
@@ -302,6 +335,25 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
 
     pub async fn get_run(&self, query: RunQuery) -> Result<Option<RunReceipt>, AgentFailure> {
         super::query::get_run(self.repository.as_ref(), query).await
+    }
+
+    pub async fn cancel_run(
+        &self,
+        request: CancelRunRequest,
+    ) -> Result<CancelRunStatus, AgentFailure> {
+        let receipt = self
+            .get_run(RunQuery {
+                run_id: request.run_id,
+                principal: request.principal.clone(),
+            })
+            .await?;
+        match receipt {
+            Some(receipt) if receipt.state == RunState::Working => {
+                self.run_cancellations.cancel_run(request)
+            }
+            Some(_) => Ok(CancelRunStatus::Inactive),
+            None => Ok(CancelRunStatus::Unknown),
+        }
     }
 
     pub async fn compact_session(

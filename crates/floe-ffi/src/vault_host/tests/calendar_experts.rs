@@ -513,6 +513,19 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         )
         .unwrap();
     let first = wait(&worker, person, request_id);
+    let completed_job_cancellation = worker
+        .active
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .cancellation
+        .clone();
+    assert!(!completed_job_cancellation.is_cancelled());
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Stop {})
+        .unwrap();
+    assert!(!completed_job_cancellation.is_cancelled());
     worker
         .request(person, request_id, AgentVaultOperationDto::Release {})
         .unwrap();

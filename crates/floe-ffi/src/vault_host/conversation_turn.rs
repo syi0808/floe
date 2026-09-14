@@ -48,6 +48,7 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     command_id: floe_agent_contract::CommandId,
     conversation_repository:
         &'a std::sync::Arc<crate::vault_host::conversation_repository::VaultConversationRepository<Keys>>,
+    run_cancellations: &'a std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     task_coordinator: &'a floe_experts::TaskCoordinator<
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
@@ -67,6 +68,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     conversation_repository: &std::sync::Arc<
         crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
     >,
+    run_cancellations: &std::sync::Arc<floe_conversation::RunCancellationRegistry>,
     person_id: PersonId,
     command_id: floe_agent_contract::CommandId,
     request: &AgentConversationTurnRequestDto,
@@ -121,6 +123,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         request,
         command_id,
         conversation_repository,
+        run_cancellations,
         task_coordinator,
         schedule_endpoint,
         legacy_expert_endpoint,
@@ -310,7 +313,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);
         let deadline = tokio::time::Instant::now() + duration;
-        let service = floe_conversation::ConversationService::new(
+        let service = floe_conversation::ConversationService::with_run_cancellations(
             std::sync::Arc::clone(inputs.conversation_repository),
             floe_conversation::ManagerConfig {
                 role_spec: floe_agent_contract::RoleSpec {
@@ -331,6 +334,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     FINALIZATION_COST_MICROS.min(budget.max_cost_micros),
                 ),
             },
+            std::sync::Arc::clone(inputs.run_cancellations),
         )?;
         let model_port = engine_ports::LegacyModelPort {
             model: &model,
