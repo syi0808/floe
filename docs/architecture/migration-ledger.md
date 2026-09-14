@@ -44,10 +44,10 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P06 | Pending |
 | P07 | Pending |
 | P08 | Pending |
-| P09 | Pending |
+| P09 | Partial: current/history policy plus authorized bounded archive projection wired; generic acquisition and remaining cutover pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: new-turn/recovery/continuation/finalization callers and built-in Tasks use extracted services; archive ownership pending |
+| P12 | Partial: new-turn/recovery/continuation/finalization and archive/compaction use extracted owner services; Session bootstrap pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3111,3 +3111,55 @@ Session bootstrap; global worker-job lifetime and Calendar-root removal remain
 pending later cutovers. The next executable P12 task is to make archive and
 compaction an explicit Conversation owner operation with bounded history and
 provenance preserved across recovery. P12 remains partial.
+
+### P09/P12 Conversation-owned archive checkpoint (2026-09-15)
+
+Code checkpoint `27471a0` adds a distinct `SessionArchiveRepository` owned by
+Conversation and routes compaction through `ConversationService` instead of
+giving Context a Session mutation path. Compaction is principal- and
+Session-revision-bound, rejects active legacy turns through the existing Vault
+transaction, rejects a boundary that would split an interleaved turn, and
+atomically replaces only the archived prefix with a summary. The durable
+Conversation Run journal is not part of that deletion path.
+
+Context now owns an object-safe `ArchiveReader` and a separate raw snapshot to
+authorized-projection transition. Raw archive identity, source revision,
+boundary and message count are checked before any text is returned. Coverage
+is folded per whole turn, `Unknown` or currently unauthorized derived turns are
+excluded, fatal authorization failures remain fatal, and the newest authorized
+whole turns are bounded to 128 messages and 128 KiB using exact serialized UTF-8
+bytes. Vault implements only the Conversation persistence contract; the thin
+Conversation adapter implements the Context reader, so no Vault-to-Context
+trait dependency was added.
+
+The encrypted Vault archive read now returns the archived prefix and its
+coverage from one transaction. The existing compaction transaction returns the
+actual aggregate summary coverage, so dependent and unknown lineage is not
+upgraded. No schema migration was required.
+
+Implemented and wired: explicit Conversation compaction, encrypted archive
+snapshot adapter, current-authority projection and bounded whole-turn recovery.
+Direct T28 validation completed a source-dependent tool call containing a
+durable action-receipt artifact, completed a later turn, compacted only the
+first turn, denied then allowed recovery through the authorization callback,
+reopened the encrypted Vault, recovered the same two archived messages, proved
+the durable tool/receipt journal was unchanged, and completed a third turn
+against the compacted Session. The split-boundary regression also proved the
+original Session remains unchanged on rejection.
+
+All 44 Context, 9 Conversation, 194 Core library, 21 Core encrypted-Vault
+integration and 93 FFI library tests passed on the integrated code revision.
+Focused Context/Conversation Clippy passed with warnings denied. Workspace
+all-target check, diff check and the migration boundary gate passed (20 nodes /
+69 edges / no errors). A broader Core/FFI Clippy invocation remains blocked by
+the pre-existing Protocol `large_enum_variant` warning. No Apple UI, public
+protocol archive action, device-local model or live provider was exercised.
+
+Blocker/remove-by: archive/compaction is wired through the production encrypted
+repository but is not yet exposed as a public FFI/Flutter management action;
+that wire shape belongs with the P16-P19 typed application cutover rather than
+another legacy Session command. Conversation still does not own Session
+Start/Resume/Get, and the legacy Start path still bootstraps built-ins. The next
+executable P12 task is to move Session bootstrap/read admission under
+Conversation while preserving explicit built-in setup behavior and the
+existing production Expert path. P09 and P12 remain partial.
