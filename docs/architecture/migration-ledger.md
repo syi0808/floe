@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
-| P12 | Partial: Conversation-owned root admission/Engine/finalization contract implemented; production repository wiring pending |
+| P12 | Partial: encrypted Run repository and Engine lifecycle wired in FFI; production conversation caller pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2679,3 +2679,46 @@ without a new-to-legacy root fallback. Continuation, recovery generation,
 bounded finalization reserve and archive/compaction ownership also remain in
 the legacy runtime. P12 remains partial until those production and recovery
 paths are transferred and directly exercised.
+
+### P12 encrypted Conversation repository checkpoint (2026-09-15)
+
+Code checkpoint `42e036b` adds the temporary encrypted-Vault persistence bridge
+for Conversation-owned Runs. Admission now commits the command identity, user
+entry, root Run and Session claim in one immediate encrypted transaction. An
+exact command replay returns the original Run record; a different payload or a
+second command for the active Session conflicts without dispatch. Run-scoped
+journal entries advance a bounded durable revision, and terminalization commits
+the Run outcome, final answer, conservative coverage, Session transcript and
+claim release together under the admitted Run and Session revisions.
+
+The FFI `VaultConversationRepository` converts only at the composition edge and
+is retained for the unlocked Vault lifetime. It supplies an encrypted
+`ExecutionJournal` to `ConversationService`, reconstructs the bounded contract
+transcript, and converts terminal answer and permitted delegated Task artifacts
+back into the current legacy Session projection. `JournalEvent` is now a strict
+serializable contract value. Initial Session revision zero is accepted, matching
+the real Vault lifecycle rather than the earlier non-production memory fixture.
+
+Implemented and wired: encrypted Run/admission/journal/terminal storage plus the
+FFI repository adapter to `ConversationService`. Direct validation passed 2
+Core transaction tests covering exact replay, active-claim exclusion, invalid
+terminal rollback, terminal release and reopen persistence; the FFI adapter test
+ran a Manager Engine answer through an encrypted Vault, reopened it, retried the
+expired original command and observed the same receipt with one total model
+dispatch. Conversation passed 3 tests, Agent contract passed 1 test and Agent
+runtime passed 7 tests. Focused Conversation Clippy passed with warnings denied;
+focused Core/FFI Clippy passed with only the repository's existing lint classes
+allowed; workspace all-target check, diff check and the migration boundary gate
+passed (20 nodes / 68 edges / no errors). No Apple UI, live provider/model, or
+production conversation turn entry was exercised.
+
+Blocker/remove-by: the production conversation caller still invokes the legacy
+`floe-agent::AgentRuntime`; governed model, tool and Directory/Task ports have
+not yet been translated to the extracted Engine ports. Unlock also does not yet
+fence an unfinished Conversation Run or expose durable journal replay, so this
+repository must not become the production caller until activation recovery is
+implemented. The Core DTO and tables are a P13 bridge: P13 moves them behind
+`floe-vault`, and P24 removes the legacy Session projection conversion. The next
+executable task is Conversation executor activation that atomically interrupts
+or recovers unfinished Runs before admission, followed by the actual FFI caller
+cutover. P12 remains partial.
