@@ -1642,3 +1642,53 @@ evidence coverage/purpose/current-state ports, optional memory context and
 owner repository storage remain pending. The new test injects failure variants;
 it does not simulate an actual Apple secure-storage incident or exercise the
 Apple UI/model. No local Floe app data or external account/provider data changed.
+
+## P08 bounded learner runtime, inputs and prompts — 2026-09-14
+
+Code checkpoint `3ec2c71`: Knowledge now owns LearnerReviewInput/Job, the model
+request and model/sink ports, bounded LearnerRuntime, explicit learning signals,
+LearningObservation, and the memory context projection and its limits. A
+Knowledge-specific LearningOutcome replaces the input's dependency on the
+generic AgentOutcome; an explicit legacy conversion preserves completed/halted
+meaning without moving generic Agent state into Knowledge. Generic source
+context evidence limits remain outside Knowledge.
+
+The runtime uses the existing context-contract ModelPlacement and execution
+Cancellation, with no dependency on legacy Agent or generic Agent runtime.
+DeviceLocal-only admission, output/token/cost limits, deadline/cancellation,
+runtime-owned observation time and learner provenance remain. Core implements
+the canonical MemoryCandidateSink and delegates input shape/size validation to
+the same owner validator. Existing storage limits (including the 16 KiB input
+cap, digest/evidence bounds and memory validation) now also reject inadmissible
+input before model work; narrower configured runtime budgets still apply.
+Core source revision, person, settled outcome and transactional independence
+checks remain authoritative.
+
+Learner role/protocol text and revisions moved to Knowledge; both text files
+have identical SHA-256 hashes before and after the move. The legacy prompt
+assembly adapter consumes those owned assets. StructuredLearnerModel remains
+a temporary generic-model adapter; it still builds a restricted local request
+without persona, tools, experts or transfer consent. The complete original
+seven mixed learner/adapter regression tests were retained through canonical
+re-exports, rather than replacing their budget, cancellation, provenance and
+output assertions with a smaller smoke test. Parent also retained assertions
+that prompt content and revisions come from the owner.
+
+Validation passed: Knowledge tests (13), legacy Agent library tests (23), Core
+encrypted-Vault tests (18), FFI learner worker tests (2), workspace check,
+Knowledge all-target Clippy with `-D warnings`, and migration checker (17 nodes /
+49 edges / 0 errors). After sharing the input validator, Knowledge tests/Clippy,
+the seven original learner tests and two Core queue tests passed again.
+`flutter build macos --debug --no-pub` passed with the final code. Through
+computer use, the rebuilt app loaded its empty Day view and opened the Agent
+panel. The panel still displayed the secure-storage access failure and said
+saved conversations had not been replaced. No UI conversation, model call,
+candidate creation or memory review was exercised; Vault and keys were not reset.
+
+P08 remains incomplete: Inference profile-backed model dispatch, independent
+foreground-priority scheduler/scope ownership, richer evidence coverage/purpose
+and current-state ports, memory UI snapshots/optional-context semantics, and
+owner repository storage remain pending. Generic model adaptation and mixed
+legacy regression placement are removal seams, not the final runtime boundary.
+No complete T11/T28/T31, Apple learner flow or full-plan acceptance is claimed.
+No external account/provider data or local application data was reset.
