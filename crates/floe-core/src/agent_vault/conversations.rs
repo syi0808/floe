@@ -1,0 +1,717 @@
+use floe_agent::{AgentMessage, AgentOutcome, AgentUsage, DataClass};
+use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
+use serde::{Deserialize, Serialize};
+use turso::transaction::{Transaction, TransactionBehavior};
+
+use super::*;
+
+const SCHEMA_VERSION: i64 = 1;
+const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
+const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
+const MAX_RUN_ROWS: i64 = 4_096;
+const MAX_JOURNAL_ENTRIES: u64 = 512;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultConversationRunState {
+    Working,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+
+impl VaultConversationRunState {
+    fn terminal(self) -> bool {
+        self != Self::Working
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultConversationRunRecord {
+    pub run_id: RunId,
+    pub command_id: CommandId,
+    pub session_id: Uuid,
+    pub person_id: PersonId,
+    pub initial_session_revision: u64,
+    pub request_digest: [u8; 32],
+    pub state: VaultConversationRunState,
+    pub output: Option<String>,
+    pub coverage: DependencyCoverage,
+    pub issue: Option<AgentFailure>,
+    pub session_revision: u64,
+    pub aggregate_revision: u64,
+    pub journal_revision: u64,
+}
+
+impl VaultConversationRunRecord {
+    fn validate(&self, person_id: PersonId) -> Result<(), AgentFailure> {
+        let admitted_revision = self
+            .initial_session_revision
+            .checked_add(1)
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        let terminal_revision = self
+            .initial_session_revision
+            .checked_add(2)
+            .ok_or(AgentFailure::VaultUnavailable)?;
+        if self.person_id != person_id
+            || !self.run_id.is_valid()
+            || !self.command_id.is_valid()
+            || self.session_id.is_nil()
+            || self.request_digest == [0; 32]
+            || self.session_revision <= self.initial_session_revision
+            || self.aggregate_revision == 0
+            || self.journal_revision > MAX_JOURNAL_ENTRIES
+            || self.coverage.validate().is_err()
+            || self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
+        {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let valid = match self.state {
+            VaultConversationRunState::Working => {
+                self.session_revision == admitted_revision
+                    && self.aggregate_revision == 1
+                    && self.output.is_none()
+                    && self.coverage == DependencyCoverage::Unknown
+                    && self.issue.is_none()
+            }
+            VaultConversationRunState::Completed => {
+                self.session_revision == terminal_revision
+                    && self.aggregate_revision == 2
+                    && self
+                        .output
+                        .as_deref()
+                        .is_some_and(|output| !output.trim().is_empty())
+                    && self.issue.is_none()
+            }
+            VaultConversationRunState::Failed
+            | VaultConversationRunState::Cancelled
+            | VaultConversationRunState::TimedOut
+            | VaultConversationRunState::Interrupted => {
+                self.session_revision == terminal_revision
+                    && self.aggregate_revision == 2
+                    && self.output.is_none()
+                    && self.coverage == DependencyCoverage::Unknown
+                    && self.issue.is_some()
+            }
+        };
+        valid.then_some(()).ok_or(AgentFailure::VaultUnavailable)
+    }
+
+    fn exact_admission(&self, request: &VaultConversationAdmissionRequest) -> bool {
+        self.command_id == request.command_id
+            && self.session_id == request.session_id
+            && self.person_id == request.person_id
+            && self.initial_session_revision == request.expected_session_revision
+            && self.request_digest == request.request_digest
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VaultConversationAdmissionRequest {
+    pub run_id: RunId,
+    pub command_id: CommandId,
+    pub session_id: Uuid,
+    pub person_id: PersonId,
+    pub expected_session_revision: u64,
+    pub request_digest: [u8; 32],
+    pub text: String,
+}
+
+impl VaultConversationAdmissionRequest {
+    fn validate(&self) -> Result<(), AgentFailure> {
+        if !self.run_id.is_valid()
+            || !self.command_id.is_valid()
+            || self.session_id.is_nil()
+            || self.person_id.0.is_nil()
+            || self.request_digest == [0; 32]
+            || self.text.trim().is_empty()
+            || self.text.len() > floe_agent_contract::MAX_OUTPUT_BYTES
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VaultConversationAdmission {
+    Created {
+        record: VaultConversationRunRecord,
+        session: AgentSession,
+    },
+    Existing(VaultConversationRunRecord),
+}
+
+#[derive(Clone, Debug)]
+pub struct VaultConversationTerminal {
+    pub state: VaultConversationRunState,
+    pub output: Option<String>,
+    pub coverage: DependencyCoverage,
+    pub issue: Option<AgentFailure>,
+    pub appended_messages: Vec<AgentMessage>,
+}
+
+impl VaultConversationTerminal {
+    fn validate(&self, run_id: RunId) -> Result<(), AgentFailure> {
+        if !self.state.terminal()
+            || self.coverage.validate().is_err()
+            || self.appended_messages.len() > floe_agent_contract::MAX_AGENT_MESSAGES
+            || self
+                .appended_messages
+                .iter()
+                .any(|message| message.turn_id() != run_id.as_uuid())
+            || self.appended_messages.iter().any(|message| {
+                matches!(
+                    message,
+                    AgentMessage::User { .. } | AgentMessage::Compaction { .. }
+                )
+            })
+            || self
+                .output
+                .as_ref()
+                .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let valid = match self.state {
+            VaultConversationRunState::Completed => {
+                self.issue.is_none()
+                    && self
+                        .output
+                        .as_deref()
+                        .is_some_and(|output| !output.trim().is_empty())
+                    && self.appended_messages.last().is_some_and(|message| {
+                        matches!(message, AgentMessage::Assistant { text, .. } if Some(text) == self.output.as_ref())
+                    })
+            }
+            VaultConversationRunState::Failed
+            | VaultConversationRunState::Cancelled
+            | VaultConversationRunState::TimedOut
+            | VaultConversationRunState::Interrupted => {
+                self.output.is_none()
+                    && self.coverage == DependencyCoverage::Unknown
+                    && self.issue.is_some()
+                    && self.appended_messages.is_empty()
+            }
+            VaultConversationRunState::Working => false,
+        };
+        valid.then_some(()).ok_or(AgentFailure::InvalidInput)
+    }
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(super) async fn initialize_conversation_store(&self) -> Result<(), AgentFailure> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = initialize(&transaction).await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    pub async fn admit_conversation_turn(
+        &self,
+        request: VaultConversationAdmissionRequest,
+    ) -> Result<VaultConversationAdmission, AgentFailure> {
+        request.validate()?;
+        if request.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            initialize(&transaction).await?;
+            if let Some(existing) = self
+                .conversation_run_by_command_on(&transaction, request.command_id)
+                .await?
+            {
+                return if existing.exact_admission(&request) {
+                    Ok(VaultConversationAdmission::Existing(existing))
+                } else {
+                    Err(AgentFailure::Conflict)
+                };
+            }
+            let mut session = self.session_on(&transaction, request.session_id).await?;
+            if session.person_id != request.person_id
+                || session.scope.is_some()
+                || session.data_classes != [DataClass::Personal]
+                || session.revision != request.expected_session_revision
+                || session.active_turn.is_some()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut count = transaction
+                .query("SELECT count(*) FROM agent_conversation_runs", ())
+                .await
+                .map_err(storage)?;
+            let rows = count
+                .next()
+                .await
+                .map_err(storage)?
+                .ok_or(AgentFailure::VaultUnavailable)?
+                .get::<i64>(0)
+                .map_err(storage)?;
+            if rows >= MAX_RUN_ROWS {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            let previous_revision = session.revision;
+            session.revision = session
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            session.messages.push(AgentMessage::User {
+                turn_id: request.run_id.as_uuid(),
+                text: request.text,
+            });
+            session.usage = AgentUsage::default();
+            session.active_turn = Some(request.run_id.as_uuid());
+            session.last_outcome = None;
+            session.continuation = None;
+            let payload = self.payload(&session)?;
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                    (
+                        integer(session.revision)?,
+                        payload,
+                        session.id.to_string(),
+                        integer(previous_revision)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            context_dependencies::merge_context_dependency_coverage(
+                &transaction,
+                self.person_id,
+                session.id,
+                request.run_id.as_uuid(),
+                DependencyCoverage::Independent,
+            )
+            .await?;
+            let record = VaultConversationRunRecord {
+                run_id: request.run_id,
+                command_id: request.command_id,
+                session_id: request.session_id,
+                person_id: request.person_id,
+                initial_session_revision: request.expected_session_revision,
+                request_digest: request.request_digest,
+                state: VaultConversationRunState::Working,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: None,
+                session_revision: session.revision,
+                aggregate_revision: 1,
+                journal_revision: 0,
+            };
+            record.validate(self.person_id)?;
+            transaction
+                .execute(
+                    "INSERT INTO agent_conversation_runs (run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload) VALUES (?, ?, ?, ?, ?, 1, 0, ?)",
+                    (
+                        record.run_id.as_uuid().to_string(),
+                        record.command_id.as_uuid().to_string(),
+                        record.session_id.to_string(),
+                        record.person_id.to_string(),
+                        state_name(record.state),
+                        encode_record(&record)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            self.check_access()?;
+            Ok(VaultConversationAdmission::Created { record, session })
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    pub async fn append_conversation_journal(
+        &self,
+        run_id: RunId,
+        kind: &str,
+        payload: &str,
+    ) -> Result<u64, AgentFailure> {
+        if !run_id.is_valid()
+            || kind.is_empty()
+            || kind.len() > 64
+            || !kind
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            || payload.is_empty()
+            || payload.len() > MAX_JOURNAL_ENTRY_BYTES
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            let mut record = self
+                .conversation_run_on(&transaction, run_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if record.state != VaultConversationRunState::Working
+                || record.journal_revision >= MAX_JOURNAL_ENTRIES
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let previous = record.journal_revision;
+            record.journal_revision += 1;
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_conversation_runs SET journal_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND journal_revision = ?",
+                    (
+                        integer(record.journal_revision)?,
+                        encode_record(&record)?,
+                        run_id.as_uuid().to_string(),
+                        integer(previous)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            transaction
+                .execute(
+                    "INSERT INTO agent_conversation_journal (run_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
+                    (
+                        run_id.as_uuid().to_string(),
+                        integer(record.journal_revision)?,
+                        kind,
+                        payload,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            self.check_access()?;
+            Ok(record.journal_revision)
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    pub async fn finish_conversation_run(
+        &self,
+        run_id: RunId,
+        expected_aggregate_revision: u64,
+        terminal: VaultConversationTerminal,
+    ) -> Result<VaultConversationRunRecord, AgentFailure> {
+        terminal.validate(run_id)?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| self.registry_transaction_start_error(error))?;
+        let result = async {
+            let current = self
+                .conversation_run_on(&transaction, run_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if current.state != VaultConversationRunState::Working
+                || current.aggregate_revision != expected_aggregate_revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut session = self.session_on(&transaction, current.session_id).await?;
+            if session.person_id != self.person_id
+                || session.revision != current.session_revision
+                || session.active_turn != Some(run_id.as_uuid())
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            session.messages.extend(terminal.appended_messages);
+            session.active_turn = None;
+            session.continuation = None;
+            session.last_outcome = Some(match terminal.state {
+                VaultConversationRunState::Completed => AgentOutcome::Completed,
+                _ => AgentOutcome::Halted {
+                    reason: terminal.issue.ok_or(AgentFailure::InvalidInput)?,
+                },
+            });
+            let previous_session_revision = session.revision;
+            session.revision = session
+                .revision
+                .checked_add(1)
+                .ok_or(AgentFailure::Conflict)?;
+            let payload = self.payload(&session)?;
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                    (
+                        integer(session.revision)?,
+                        payload,
+                        session.id.to_string(),
+                        integer(previous_session_revision)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            context_dependencies::merge_context_dependency_coverage(
+                &transaction,
+                self.person_id,
+                session.id,
+                run_id.as_uuid(),
+                terminal.coverage.clone(),
+            )
+            .await?;
+            let next = VaultConversationRunRecord {
+                state: terminal.state,
+                output: terminal.output,
+                coverage: terminal.coverage,
+                issue: terminal.issue,
+                session_revision: session.revision,
+                aggregate_revision: current
+                    .aggregate_revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::Conflict)?,
+                ..current.clone()
+            };
+            next.validate(self.person_id)?;
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_conversation_runs SET state = ?, aggregate_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND aggregate_revision = ?",
+                    (
+                        state_name(next.state),
+                        integer(next.aggregate_revision)?,
+                        encode_record(&next)?,
+                        run_id.as_uuid().to_string(),
+                        integer(expected_aggregate_revision)?,
+                    ),
+                )
+                .await
+                .map_err(storage)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            self.check_access()?;
+            Ok(next)
+        }
+        .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    pub async fn conversation_run(
+        &self,
+        run_id: RunId,
+    ) -> Result<Option<VaultConversationRunRecord>, AgentFailure> {
+        if !run_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let result = self
+            .conversation_run_on(&self.connection()?, run_id)
+            .await?;
+        self.check_access()?;
+        Ok(result)
+    }
+
+    async fn conversation_run_by_command_on(
+        &self,
+        connection: &turso::Connection,
+        command_id: CommandId,
+    ) -> Result<Option<VaultConversationRunRecord>, AgentFailure> {
+        read_record(
+            self.person_id,
+            connection,
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs WHERE command_id = ?",
+            command_id.as_uuid().to_string(),
+        )
+        .await
+    }
+
+    async fn conversation_run_on(
+        &self,
+        connection: &turso::Connection,
+        run_id: RunId,
+    ) -> Result<Option<VaultConversationRunRecord>, AgentFailure> {
+        read_record(
+            self.person_id,
+            connection,
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs WHERE run_id = ?",
+            run_id.as_uuid().to_string(),
+        )
+        .await
+    }
+}
+
+async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
+    let mut tables = transaction
+        .query(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('agent_conversation_schema', 'agent_conversation_runs', 'agent_conversation_journal')",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    let mut found = Vec::new();
+    while let Some(row) = tables.next().await.map_err(storage)? {
+        found.push(row.get::<String>(0).map_err(storage)?);
+    }
+    found.sort();
+    if found.is_empty() {
+        transaction
+            .execute(
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "CREATE TABLE agent_conversation_runs (run_id TEXT PRIMARY KEY, command_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('working', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted')), aggregate_revision INTEGER NOT NULL CHECK (aggregate_revision > 0), journal_revision INTEGER NOT NULL CHECK (journal_revision >= 0), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "CREATE TABLE agent_conversation_journal (run_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), kind TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 131072), PRIMARY KEY (run_id, revision), FOREIGN KEY (run_id) REFERENCES agent_conversation_runs(run_id))",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "CREATE INDEX agent_conversation_active_session ON agent_conversation_runs (session_id, state, run_id)",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 1)",
+                (),
+            )
+            .await
+            .map_err(storage)?;
+        return Ok(());
+    }
+    if found
+        != [
+            "agent_conversation_journal".to_owned(),
+            "agent_conversation_runs".to_owned(),
+            "agent_conversation_schema".to_owned(),
+        ]
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    let mut marker = transaction
+        .query("SELECT id, version FROM agent_conversation_schema", ())
+        .await
+        .map_err(storage)?;
+    let row = marker
+        .next()
+        .await
+        .map_err(storage)?
+        .ok_or(AgentFailure::VaultUnavailable)?;
+    if row.get::<i64>(0).map_err(storage)? != 1
+        || row.get::<i64>(1).map_err(storage)? != SCHEMA_VERSION
+        || marker.next().await.map_err(storage)?.is_some()
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    transaction
+        .query(
+            "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, payload FROM agent_conversation_runs LIMIT 0",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    transaction
+        .query(
+            "SELECT run_id, revision, kind, payload FROM agent_conversation_journal LIMIT 0",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    let mut index = transaction
+        .query(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'agent_conversation_active_session' AND tbl_name = 'agent_conversation_runs'",
+            (),
+        )
+        .await
+        .map_err(storage)?;
+    if index.next().await.map_err(storage)?.is_none()
+        || index.next().await.map_err(storage)?.is_some()
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(())
+}
+
+async fn read_record(
+    person_id: PersonId,
+    connection: &turso::Connection,
+    query: &str,
+    identifier: String,
+) -> Result<Option<VaultConversationRunRecord>, AgentFailure> {
+    let mut rows = connection
+        .query(query, [identifier])
+        .await
+        .map_err(storage)?;
+    let Some(row) = rows.next().await.map_err(storage)? else {
+        return Ok(None);
+    };
+    let record: VaultConversationRunRecord =
+        serde_json::from_str(&row.get::<String>(7).map_err(storage)?).map_err(unavailable)?;
+    record.validate(person_id)?;
+    if row.get::<String>(0).map_err(storage)? != record.run_id.as_uuid().to_string()
+        || row.get::<String>(1).map_err(storage)? != record.command_id.as_uuid().to_string()
+        || row.get::<String>(2).map_err(storage)? != record.session_id.to_string()
+        || row.get::<String>(3).map_err(storage)? != record.person_id.to_string()
+        || row.get::<String>(4).map_err(storage)? != state_name(record.state)
+        || row.get::<i64>(5).map_err(storage)? != integer(record.aggregate_revision)?
+        || row.get::<i64>(6).map_err(storage)? != integer(record.journal_revision)?
+        || rows.next().await.map_err(storage)?.is_some()
+    {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(Some(record))
+}
+
+fn encode_record(record: &VaultConversationRunRecord) -> Result<String, AgentFailure> {
+    let payload = serde_json::to_string(record).map_err(storage)?;
+    if payload.len() > MAX_RUN_RECORD_BYTES {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(payload)
+}
+
+fn integer(value: u64) -> Result<i64, AgentFailure> {
+    i64::try_from(value).map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn state_name(state: VaultConversationRunState) -> &'static str {
+    match state {
+        VaultConversationRunState::Working => "working",
+        VaultConversationRunState::Completed => "completed",
+        VaultConversationRunState::Failed => "failed",
+        VaultConversationRunState::Cancelled => "cancelled",
+        VaultConversationRunState::TimedOut => "timed_out",
+        VaultConversationRunState::Interrupted => "interrupted",
+    }
+}
+
+#[cfg(test)]
+mod tests;

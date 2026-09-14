@@ -5,6 +5,7 @@ use crate::{
     ToolResult,
 };
 use floe_kernel::AgentFailure;
+use serde::{Deserialize, Serialize};
 
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -14,7 +15,8 @@ pub enum JournalAck {
     Replayed(Box<ReplayReceipt>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum JournalEvent {
     ModelIntent {
         attempt_id: uuid::Uuid,

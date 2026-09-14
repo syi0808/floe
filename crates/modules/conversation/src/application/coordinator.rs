@@ -149,6 +149,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     Ok(coverage) => RunTerminal {
                         state: RunState::Completed,
                         output: Some(output),
+                        steps: report.steps,
                         coverage,
                         issue: None,
                     },

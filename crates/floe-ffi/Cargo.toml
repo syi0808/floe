@@ -19,6 +19,7 @@ floe-domain = { path = "../floe-domain" }
 floe-infra = { path = "../floe-infra" }
 floe-knowledge = { path = "../modules/knowledge" }
 floe-context = { path = "../modules/context" }
+floe-conversation = { path = "../modules/conversation" }
 floe-experts = { path = "../modules/experts" }
 floe-execution = { path = "../runtime/execution" }
 floe-kernel = { path = "../contracts/kernel" }

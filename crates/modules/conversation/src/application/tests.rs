@@ -51,7 +51,7 @@ impl MemoryRepository {
             session_id,
             Session {
                 principal: principal.into(),
-                revision: 1,
+                revision: 0,
                 active_run: None,
                 transcript: vec![],
             },
@@ -389,14 +389,14 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
     let service = service(Arc::clone(&repository));
     let model = AnswerModel::default();
     let command_id = CommandId::new();
-    let first_request = request(command_id, session_id, 1, "hello");
+    let first_request = request(command_id, session_id, 0, "hello");
     let first = service
         .run_turn(first_request.clone(), ports(&model))
         .await
         .unwrap();
     assert_eq!(first.state, RunState::Completed);
     assert_eq!(first.coverage, DependencyCoverage::Independent);
-    assert_eq!(first.session_revision, 3);
+    assert_eq!(first.session_revision, 2);
 
     let mut replay_request = first_request;
     replay_request.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -409,7 +409,7 @@ async fn exact_command_replay_does_not_dispatch_again_and_release_is_not_require
 
     let conflicting = service
         .run_turn(
-            request(command_id, session_id, 1, "different"),
+            request(command_id, session_id, 0, "different"),
             ports(&model),
         )
         .await;
@@ -447,7 +447,7 @@ async fn one_session_rejects_a_second_root_while_first_model_is_waiting() {
     let running = tokio::spawn(async move {
         running_service
             .run_turn(
-                request(CommandId::new(), session_id, 1, "first"),
+                request(CommandId::new(), session_id, 0, "first"),
                 ports(running_model.as_ref()),
             )
             .await
@@ -456,7 +456,7 @@ async fn one_session_rejects_a_second_root_while_first_model_is_waiting() {
 
     let second = service
         .run_turn(
-            request(CommandId::new(), session_id, 2, "second"),
+            request(CommandId::new(), session_id, 1, "second"),
             ports(model.as_ref()),
         )
         .await;
@@ -474,7 +474,7 @@ async fn cancelled_root_is_terminalized_without_model_dispatch_and_releases_the_
     repository.add_session(session_id, "person-a");
     let service = service(repository);
     let model = AnswerModel::default();
-    let cancelled = request(CommandId::new(), session_id, 1, "cancel this");
+    let cancelled = request(CommandId::new(), session_id, 0, "cancel this");
     cancelled.cancellation.cancel();
 
     let receipt = service.run_turn(cancelled, ports(&model)).await.unwrap();

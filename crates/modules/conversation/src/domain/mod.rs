@@ -1,4 +1,4 @@
-use floe_agent_contract::{AgentMessage, DependencyCoverage};
+use floe_agent_contract::{AgentMessage, DependencyCoverage, EngineStep};
 use floe_kernel::{AgentFailure, CommandId, RunId};
 use uuid::Uuid;
 
@@ -92,7 +92,6 @@ impl TurnAdmissionRequest {
         if !self.run_id.is_valid()
             || !self.command_id.is_valid()
             || self.session_id.is_nil()
-            || self.expected_session_revision == 0
             || self.principal.trim() != self.principal
             || self.principal.is_empty()
             || self.principal.len() > 256
@@ -145,6 +144,7 @@ pub enum TurnAdmission {
 pub struct RunTerminal {
     pub state: RunState,
     pub output: Option<String>,
+    pub steps: Vec<EngineStep>,
     pub coverage: DependencyCoverage,
     pub issue: Option<AgentFailure>,
 }
@@ -157,6 +157,7 @@ impl RunTerminal {
                 .output
                 .as_ref()
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
+            || self.steps.len() > floe_agent_contract::MAX_AGENT_MESSAGES
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -166,9 +167,13 @@ impl RunTerminal {
                     .as_deref()
                     .is_some_and(|output| !output.trim().is_empty())
                     && self.issue.is_none()
+                    && self.steps.last().is_some_and(|step| {
+                        matches!(step, EngineStep::Answer { text, .. } if Some(text) == self.output.as_ref())
+                    })
             }
             RunState::Failed | RunState::Cancelled | RunState::TimedOut | RunState::Interrupted => {
                 self.output.is_none()
+                    && self.steps.is_empty()
                     && self.issue.is_some()
                     && self.coverage == DependencyCoverage::Unknown
             }
@@ -187,6 +192,7 @@ impl RunTerminal {
         Self {
             state,
             output: None,
+            steps: vec![],
             coverage: DependencyCoverage::Unknown,
             issue: Some(failure),
         }

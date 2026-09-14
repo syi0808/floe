@@ -56,7 +56,6 @@ impl TurnRequest {
     pub(crate) fn validate(&self) -> Result<(), AgentFailure> {
         if !self.command_id.is_valid()
             || self.session_id.is_nil()
-            || self.expected_session_revision == 0
             || self.principal.trim() != self.principal
             || self.principal.is_empty()
             || self.principal.len() > 256

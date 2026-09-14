@@ -24,6 +24,7 @@ mod agent_actions;
 mod calendar_grants;
 mod context_cleanup;
 mod context_dependencies;
+mod conversations;
 mod expert_actions;
 mod keyring;
 mod learning;
@@ -37,6 +38,10 @@ mod tasks;
 pub use access_grants::AccessGrantCleanup;
 pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
+pub use conversations::{
+    VaultConversationAdmission, VaultConversationAdmissionRequest, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal,
+};
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
 pub use remote_authority::{
@@ -470,6 +475,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_remote_calendar_grant_store(true).await?;
         vault.initialize_remote_view_grant_store(true).await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
         vault.initialize_context_cleanup(true).await?;
         vault.initialize_remote_authority_store(true).await?;
@@ -554,6 +560,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         vault.initialize_remote_calendar_grant_store(false).await?;
         vault.initialize_remote_view_grant_store(false).await?;
         vault.initialize_context_dependencies().await?;
+        vault.initialize_conversation_store().await?;
         vault.initialize_task_store().await?;
         vault.initialize_context_cleanup(false).await?;
         vault.initialize_remote_authority_store(false).await?;

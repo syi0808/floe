@@ -44,12 +44,14 @@ use uuid::Uuid;
 use super::{BridgeResult, agent_failure, check_version, parse_id, parse_person};
 use crate::{diagnostics, local_context::LocalContextStore};
 
+mod conversation_repository;
 mod conversation_turn;
 mod learner_worker;
 mod personal_grants;
 mod remote_views;
 mod task_repository;
 
+use conversation_repository::VaultConversationRepository;
 use task_repository::VaultTaskRepository;
 
 const LEARNER_IDLE_DELAY: Duration = Duration::from_millis(750);
@@ -174,6 +176,7 @@ struct Worker {
 
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+    _conversation_repository: Arc<VaultConversationRepository<Keys>>,
     task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
     schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
@@ -186,6 +189,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         local_context: Arc<LocalContextStore>,
     ) -> Result<Self, AgentFailure> {
         let vault = Arc::new(vault);
+        let conversation_repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
         let directory = Directory::default();
         let schedule_endpoint = Arc::new(
             conversation_turn::expert_dispatch::schedule::ScheduleEndpoint::new(
@@ -215,6 +219,7 @@ impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
         .await?;
         Ok(Self {
             vault,
+            _conversation_repository: conversation_repository,
             task_coordinator,
             schedule_endpoint,
             _recovered_tasks: recovered_tasks,

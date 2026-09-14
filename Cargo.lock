@@ -982,6 +982,7 @@ dependencies = [
  "floe-agent",
  "floe-agent-contract",
  "floe-context",
+ "floe-conversation",
  "floe-core",
  "floe-diagnostics",
  "floe-domain",

@@ -10,4 +10,5 @@ pub use application::ConversationService;
 pub use domain::{
     AdmittedTurn, RunReceipt, RunState, RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
+pub use floe_agent_runtime::FinalPayloadValidator;
 pub use ports::ConversationRepository;

@@ -41,8 +41,10 @@ pub use agent_vault::{
     RemoteCalendarAuthorizationExpectation, RemoteCalendarGrantBinding,
     RemoteCalendarSourceReference, RemoteEnrollmentSignature, RemoteOwnerPublicKey,
     RemotePairingChallenge, RemoteProducerIdentity, RemoteViewGrantBinding,
-    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit, VaultKey,
-    VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
+    RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit,
+    VaultConversationAdmission, VaultConversationAdmissionRequest, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal, VaultKey, VaultKeyProvider,
+    VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,
