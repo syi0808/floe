@@ -52,7 +52,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P14 | Partial: verified native local identity adapter wired; model/source/control adapter split pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
 | P16 | Partial: AppHost, verified native identity and durable v2 StartTurn/query ABI wired; cancel/events, remote route and Flutter cutover pending |
-| P17 | Partial: Apple Dart isolate binds correlated v2 command/query calls with bounded timeout; typed façade, close/error settlement and product cutover pending |
+| P17 | Partial: typed correlated v2 command/query client and bounded Apple transport wired; read-model/product cutover, events and full worker-exit settlement pending |
 | P18 | Pending |
 | P19 | Pending |
 | P20 | Pending |
@@ -3560,3 +3560,42 @@ Keychain-backed Vault/device model. The next executable P16/P17 task is the
 principal-bound v2 CancelRun result plus a typed Dart command/query façade that
 retains CommandId across timeout and restores Run/message state. P17 and V1
 remain partial.
+
+### P17 typed runtime client checkpoint (2026-09-15)
+
+Code checkpoint `4409d69` adds the target `runtime_client` façade over the
+low-level app-wire transport. A prepared StartTurn owns its CommandId independently
+of transport request IDs, so retry after a lost or timed-out acknowledgement
+uses a fresh request correlation while preserving the durable command identity.
+Typed decoders restore command receipts, Run snapshots, terminal reports and
+final assistant messages; they reject mismatched identities, result kinds and
+Run states rather than passing unvalidated maps to feature code.
+
+The client owns a per-request completer map and settles each entry once on
+success, typed transport failure, malformed response or explicit client close.
+Closing rejects new work, completes pending callers before closing the native
+transport, and ignores late transport completion without cancelling backend
+work. The native transport now implements the narrow app-wire interface rather
+than being imported by the client. AppHost runtime epochs are restricted to the
+positive signed 64-bit range so every generated value round-trips as a Dart
+integer.
+
+Implemented and wired: prepared StartTurn identity, typed command/query models,
+per-request settlement and close lifecycle, plus the real macOS integration
+test through this façade. Regression coverage proves two submissions retain one
+CommandId with distinct request IDs and no Person/device/route fields, restores
+a terminal Run and final message, and completes a pending request exactly once
+on close. All three client tests and the macOS Dart/C-ABI integration test
+passed; the runtime client and its tests analyze and format cleanly. All five
+AppHost tests, workspace all-target check, diff check and the migration boundary
+gate also passed (23 nodes / 72 edges / no errors).
+
+Blocker/remove-by: `FloeClient` is not yet installed in the product conversation
+controller or shared AppReadModel, and backend CancelRun/events are not wired.
+The existing gateway therefore still owns `_pending`/`_run`, resolves remote
+credentials in Dart and uses Submit/Poll/Release for visible chat. A native
+worker crash still relies on the bounded transport timeout rather than an
+immediate isolate-exit settlement signal. The next executable P16/P17 task is a
+principal-bound v2 CancelRun result and bounded Run observation contract; after
+that, the conversation controller can consume this client without losing stop,
+progress or recovery behavior. P17 and V1 remain partial.
