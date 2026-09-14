@@ -1452,3 +1452,54 @@ awaits catalog retrieval and collapses some purpose failures to absent routes;
 the general host still constructs source bindings before a turn. No actual
 Apple UI flow, external model/account operation, complete Rust-to-Go-to-provider
 stack, T10 or full-plan acceptance is claimed by these separate loopback tests.
+
+## P07 attempt lifecycle and configured-route failure preservation — 2026-09-14
+
+Code checkpoints `7db9e49` and `7708fc6`: Inference now owns model attempt
+record/state definitions, identity creation, and acknowledged Started-to-terminal
+transitions through `AttemptJournal`. The live legacy recovery engine delegates
+those transitions to `AttemptLifecycle`; its existing UsageLedger journal
+channel remains the persistence adapter. A lifecycle is returned only after
+the start acknowledgement, borrows that exact journal, and is consumed by its
+terminal write. Terminal storage failure propagates instead of reporting
+completion. Budget reservation/settlement, correction validation and correction
+message decisions remain unchanged in their current owners.
+
+This does not yet make the legacy journal an authoritative restartable Inference
+attempt repository. Default fixture ledgers can still omit a journal; actual
+dispatch-intent marking still precedes the adapter's internal provider queue.
+Dropped-lifecycle recovery, profile/credential repositories and finalization
+ownership remain pending. The legacy Agent re-export of the moved record type
+is a live migration seam; no storage migration or compatibility data shim was
+added, and the persisted record shape is unchanged.
+
+Flutter now observes NotConfigured, Available, Unavailable, Denied and
+ConsentRequired separately. Only absence of a saved connection returns a null
+model route. A configured missing/unavailable purpose or connection/purpose
+lookup failure becomes a typed error through `FfiDayGateway`, rather than an
+implicit device-model fallback. Consent-required observations retain their
+recipient-bound route so backend consent enforcement remains authoritative;
+optional catalog failures still preserve the model route. Catalog retrieval
+is still awaited and is not yet an independent asynchronous observation.
+
+Conversation route preflight now runs before allocating or draining native
+jobs, with a conflict recheck after its await. Parent review rejected clearing
+all pending state on route errors: that could discard an already-submitted
+turn's recovery pointer. The regression now proves initial failure makes no
+native call, and failure while retrying a pending turn preserves the same job
+ID for subsequent polling, with no extra submit, drain or stop.
+
+Parent verification: Inference tests (8), complete legacy Agent runtime tests
+(44), encrypted Vault record/WAL/checkpoint reopen test (1), workspace check,
+Inference all-target Clippy with `-D warnings`, focused Flutter tests (15),
+targeted Flutter analysis and macOS debug build passed. Three new lifecycle
+tests cover stable identity/usage and failed start/terminal acknowledgement;
+existing intent, interrupted recovery, correction and double-charge assertions
+remain intact. Independent Luna Rust review found no concrete regression.
+Migration checker reports 16 nodes / 44 edges / 0 errors, not final acceptance.
+
+Computer-use inventory now succeeds and reports Floe running, but selecting
+the Floe app by path and bundle ID both timed out while retrieving accessibility
+state. No actual UI conversation was exercised or claimed. Flutter tests include
+HTTP and fake gateway flows plus a status-only ABI guard, not a complete model
+attempt through the Apple UI. No external account/provider data was modified.
