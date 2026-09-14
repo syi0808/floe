@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Partial: current/history policy plus authorized bounded archive projection wired; generic acquisition and remaining cutover pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: new-turn/recovery/continuation/finalization and archive/compaction use extracted owner services; Session bootstrap pending |
+| P12 | Partial: root turns, recovery, continuation, finalization, Session management and archive use extracted owner services; Run query/cancel and host lifetime pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3163,3 +3163,44 @@ Start/Resume/Get, and the legacy Start path still bootstraps built-ins. The next
 executable P12 task is to move Session bootstrap/read admission under
 Conversation while preserving explicit built-in setup behavior and the
 existing production Expert path. P09 and P12 remain partial.
+
+### P12 Conversation-owned Session management checkpoint (2026-09-15)
+
+Code checkpoint `5b14013` adds a distinct Conversation `SessionRepository`
+with principal-bound Start, Resume and Get requests plus a validated receipt.
+The production FFI `ConversationSession` action now invokes those owner
+operations for every general personal Session creation/resume/read instead of
+calling the encrypted Vault mutation API directly. FFI then loads only the app
+read model and checks its Person, SessionId, revision, personal class and
+general scope against the owner receipt before release.
+
+Expert setup is no longer a side effect of Session Get or Resume. Start retains
+the existing app-composition bootstrap before owner admission so current
+production Expert behavior is not silently disabled; a setup-free Session can
+still be fetched, resumed and used for a general turn without installing a
+registry. Synthetic sample Sessions remain outside this owner API and are
+rejected by the encrypted adapter, as are foreign principals.
+
+Implemented and wired: Conversation-owned general Session Start/Resume/Get,
+validated encrypted adapter receipts, and read-only FFI projection. Direct
+validation created a setup-free encrypted personal Session, reopened it through
+the actual worker, performed Get and Resume, completed a remote-server-local
+general turn, then reopened the Vault and proved no built-in setup had been
+installed. A focused adapter flow also created, fetched and resumed the same
+revision-zero Session while rejecting a foreign principal and a synthetic
+sample.
+
+All 9 Conversation and 94 FFI library tests passed on the integrated code
+revision. Focused Conversation Clippy passed with warnings denied. Workspace
+all-target check, diff check and the migration boundary gate passed (20 nodes /
+69 edges / no errors). No Apple UI, device-local model or live provider was
+exercised.
+
+Blocker/remove-by: Start still invokes the legacy built-in bootstrap from app
+composition to preserve the existing Expert product path; replacing it requires
+an explicit P16-P19 setup lifecycle rather than silently removing Experts.
+Conversation does not yet expose owner-level GetCommand/GetRun/CancelRun, and
+the worker still owns the global active-job cancellation handle. The next
+executable P12 task is to add non-mutating command/Run query projection through
+Conversation and then use that contract to separate owner cancellation from UI
+Release during the P16/P19 lifetime cutover. P12 remains partial.
