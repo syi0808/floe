@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000001",
+  "command_id": "00000000-0000-0000-0000-000000000002",
+  "command": {
+    "kind": "conversation.start_turn",
+    "session_id": "00000000-0000-0000-0000-000000000003",
+    "expected_revision": 12,
+    "text": "오늘 할 일의 우선순위를 같이 정리해줘",
+    "mode": {
+      "kind": "new_turn"
+    }
+  }
+}

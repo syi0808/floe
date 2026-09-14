@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000006",
+  "status": "ok",
+  "result": {
+    "kind": "resync_required",
+    "snapshot_cursor": 41
+  }
+}

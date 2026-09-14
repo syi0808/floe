@@ -1,10 +1,15 @@
 mod agent;
 mod calendar;
+mod commands;
 mod day;
 mod envelope;
+mod errors;
+mod events;
 mod local_context;
+mod queries;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+pub const APP_WIRE_VERSION: u32 = 2;
 
 pub use agent::{
     ActionAuthorityModeDto, AgentConversationSessionOperationDto, AgentConversationTurnRequestDto,
@@ -34,6 +39,10 @@ pub use calendar::{
     CalendarConnectionDto, CalendarFailureDto, CalendarProviderDto, CalendarRangeDto,
     CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto,
 };
+pub use commands::{
+    AppCancelRunReasonDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
+    AppCommandResultDto, AppCommandStatusDto, AppContinuationRefDto, AppTurnModeDto,
+};
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,
     ClassificationDto, CommandDto, CommandRequestDto, DayQueryDto, DaySnapshotDto, DomainRefDto,
@@ -41,6 +50,8 @@ pub use day::{
     SourceRefDto, TaskDto, TimelineItemDto,
 };
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
+pub use errors::{AppResponseDto, AppResponseOutcomeDto, AppWireErrorCodeDto, AppWireErrorDto};
+pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsResultDto};
 pub use local_context::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAcquisitionResultDto, LocalContextAttentionAcquisitionModeDto,
@@ -48,4 +59,8 @@ pub use local_context::{
     LocalContextOperationDto, LocalContextPersonalAcquisitionRequestDto,
     LocalContextPersonalAcquisitionResultDto, LocalContextPersonalDomainDto,
     LocalContextRequestDto, LocalContextResultDto,
+};
+pub use queries::{
+    AppQueryDto, AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto,
+    AppRunStateDto, AppTurnExecutionDto, AppTurnReportDto,
 };

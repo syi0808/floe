@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000001",
+  "status": "ok",
+  "result": {
+    "kind": "command_receipt",
+    "command_id": "00000000-0000-0000-0000-000000000002",
+    "admission": "accepted",
+    "run_id": "00000000-0000-0000-0000-000000000004",
+    "session_revision": 13
+  }
+}
