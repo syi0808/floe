@@ -2,13 +2,16 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use floe_agent::{
-    AgentFailure, AgentOutcome, ContextMemory, DataClass, EpistemicStatus, KNOWLEDGE_VERSION,
-    KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecision,
-    KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeMutation,
-    KnowledgeOperation, KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState,
-    LearnerJobSettlement, LearnerJobState, LearnerReviewInput, LearnerReviewJob,
-    LearningEvidenceRef, LearningObservation, LearningObservationKind, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, PersonalMemoryKind, StageMemoryCandidate, retryable_learner_failure,
+    AgentFailure, AgentOutcome, ContextMemory, DataClass, KNOWLEDGE_VERSION, KnowledgeCandidate,
+    KnowledgeCandidateState, KnowledgeDecision, KnowledgeDecisionKind, KnowledgeDecisionResult,
+    KnowledgeKind, KnowledgeMutation, KnowledgeOperation, KnowledgePayload, KnowledgeRevision,
+    KnowledgeRevisionState, LearnerJobSettlement, LearnerJobState, LearnerReviewInput,
+    LearnerReviewJob, LearningEvidenceRef, LearningObservation, MAX_CONTEXT_MEMORIES,
+    MAX_CONTEXT_MEMORY_BYTES, retryable_learner_failure,
+};
+use floe_knowledge::{
+    KnowledgeActor, LearningEvidenceSnapshot, LearningObservationKind, StageMemoryCandidate,
+    validate_learning_evidence, validate_stage_request,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,9 +21,7 @@ use uuid::Uuid;
 use super::*;
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
-const MAX_MEMORY_STATEMENT_BYTES: usize = 2 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
-const MAX_VERSION_BYTES: usize = 128;
 const LEARNER_JOB_LEASE_SECONDS: i64 = 30;
 const MAX_LEARNER_JOB_ATTEMPTS: u8 = 3;
 const MAX_LEARNER_DISCOVERY_JOBS: usize = 8;
@@ -82,28 +83,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(storage)?;
         let result = async {
             let session = self.session_on(&transaction, request.session_id).await?;
-            if session.revision != request.expected_session_revision {
-                return Err(AgentFailure::Conflict);
-            }
-            if session.active_turn.is_some()
-                || session.pending_output.is_some()
-                || session.last_outcome != Some(AgentOutcome::Completed)
-                || session.data_classes != [DataClass::Personal]
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
             let message_turns: HashSet<_> = session
                 .messages
                 .iter()
                 .map(floe_agent::AgentMessage::turn_id)
                 .collect();
-            if request
-                .turn_ids
-                .iter()
-                .any(|turn_id| !message_turns.contains(turn_id))
-            {
-                return Err(AgentFailure::NotFound);
-            }
+            let snapshot = LearningEvidenceSnapshot {
+                person_id: session.person_id,
+                session_id: session.id,
+                revision: session.revision,
+                completed: session.last_outcome == Some(AgentOutcome::Completed),
+                personal: session.data_classes == [DataClass::Personal],
+                active_turn: session.active_turn.is_some(),
+                pending_output: session.pending_output.is_some(),
+                turn_ids: message_turns.into_iter().collect(),
+            };
+            validate_learning_evidence(
+                &snapshot,
+                self.person_id,
+                request.session_id,
+                request.expected_session_revision,
+                &request.turn_ids,
+            )?;
             let evidence = request
                 .turn_ids
                 .iter()
@@ -964,41 +965,6 @@ fn learning_signal_name(signal: LearningObservationKind) -> &'static str {
     }
 }
 
-fn validate_stage_request(request: &StageMemoryCandidate) -> Result<(), AgentFailure> {
-    let digest = request.digest.trim();
-    let statement = request.value.statement.trim();
-    if digest.is_empty()
-        || digest.len() > MAX_OBSERVATION_DIGEST_BYTES
-        || statement.is_empty()
-        || statement.len() > MAX_MEMORY_STATEMENT_BYTES
-        || request.turn_ids.is_empty()
-        || request.turn_ids.len() > MAX_EVIDENCE_REFS
-        || request.turn_ids.iter().collect::<HashSet<_>>().len() != request.turn_ids.len()
-        || !valid_version(&request.extractor_version)
-        || !valid_version(&request.prompt_version)
-        || request.value.confidence_millis > 1000
-        || request
-            .value
-            .valid_until
-            .zip(request.value.valid_from)
-            .is_some_and(|(until, from)| until <= from)
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    if matches!(
-        request.actor,
-        KnowledgeActor::Curator | KnowledgeActor::System
-    ) {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    if matches!(request.value.kind, PersonalMemoryKind::Inference)
-        != matches!(request.value.epistemic_status, EpistemicStatus::Inference)
-    {
-        return Err(AgentFailure::InvalidInput);
-    }
-    Ok(())
-}
-
 fn validate_learner_input(
     input: &LearnerReviewInput,
     person_id: floe_domain::PersonId,
@@ -1228,10 +1194,6 @@ async fn learner_job_by_id(
             Ok(job)
         })
         .transpose()
-}
-
-fn valid_version(value: &str) -> bool {
-    !value.trim().is_empty() && value.len() <= MAX_VERSION_BYTES
 }
 
 async fn observation_by_hash(

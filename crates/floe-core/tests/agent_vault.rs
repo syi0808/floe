@@ -159,6 +159,23 @@ async fn reviewed_memory_candidate_is_idempotent_ledgered_and_persistent() {
         Err(AgentFailure::Conflict)
     );
 
+    let mut other_session = vault.create_session().await.unwrap();
+    let other_turn = Uuid::new_v4();
+    other_session.messages = vec![AgentMessage::User {
+        turn_id: other_turn,
+        text: "Evidence belongs to a different session".into(),
+    }];
+    other_session.revision = 1;
+    other_session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &other_session, 0).await;
+    let mut foreign_turn_request = request.clone();
+    foreign_turn_request.turn_ids = vec![other_turn];
+    assert_eq!(
+        vault.stage_memory_candidate(foreign_turn_request).await,
+        Err(AgentFailure::NotFound)
+    );
+    assert_eq!(vault.pending_memory_candidate_count().await.unwrap(), 0);
+
     let candidate = vault.stage_memory_candidate(request.clone()).await.unwrap();
     assert_eq!(candidate.state, KnowledgeCandidateState::Pending);
     assert_eq!(
