@@ -167,12 +167,13 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {
     input_digest(&format!(
-        "{}\0{}\0{}\0{}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{:?}",
         request.command_id,
         request.session_id,
         request.expected_session_revision,
         request.principal,
-        request.prompt
+        request.prompt,
+        request.request_context_digest
     ))
 }
 

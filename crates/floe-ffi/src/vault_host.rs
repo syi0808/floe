@@ -1402,7 +1402,10 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
                 local_context,
                 &vault.task_coordinator,
                 &vault.schedule_endpoint,
+                &vault._conversation_repository,
                 job.person,
+                floe_agent_contract::CommandId::from_uuid(job.id)
+                    .ok_or(AgentFailure::InvalidInput)?,
                 request,
                 job.cancellation.clone(),
                 |event| {

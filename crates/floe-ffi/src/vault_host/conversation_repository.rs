@@ -232,17 +232,13 @@ fn transcript(
 ) -> Result<Vec<ContractMessage>, AgentFailure> {
     messages
         .iter()
-        .enumerate()
-        .map(|(index, message)| {
+        .map(|message| {
             let turn_id = message.turn_id();
             let message_id = match message {
                 AgentMessage::User { .. } if turn_id == receipt.run_id.as_uuid() => {
                     receipt.command_id.as_uuid()
                 }
-                _ => Uuid::new_v5(
-                    &turn_id,
-                    format!("legacy-conversation-message:{index}").as_bytes(),
-                ),
+                _ => turn_id,
             };
             let (role, text, call_id) = match message {
                 AgentMessage::Compaction { summary, .. } => {

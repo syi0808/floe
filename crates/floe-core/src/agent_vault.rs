@@ -216,6 +216,17 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         self.coverage.record_result_independent(turn_id, result_id)
     }
 
+    pub fn result_coverage(
+        &self,
+        turn_id: Uuid,
+        result_id: Uuid,
+    ) -> Result<Option<DependencyCoverage>, AgentFailure> {
+        if turn_id.is_nil() || result_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.coverage.result_coverage(turn_id, result_id)
+    }
+
     pub async fn project_model_request(
         &self,
         request: &mut floe_agent::ModelRequest,

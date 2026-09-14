@@ -45,6 +45,7 @@ pub struct TurnRequest {
     pub expected_session_revision: u64,
     pub principal: String,
     pub prompt: String,
+    pub request_context_digest: [u8; 32],
     pub bounded_context: BoundedContext,
     pub allowed_catalog: AllowedCatalog,
     pub replay: Vec<ReplayReceipt>,
@@ -61,6 +62,7 @@ impl TurnRequest {
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
             || self.prompt.trim().is_empty()
+            || self.request_context_digest == [0; 32]
             || self.prompt.len() > floe_agent_contract::MAX_OUTPUT_BYTES
             || self.replay.len() > 128
         {

@@ -468,6 +468,91 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
     assert!(task.snapshot.result.is_some());
 }
 
+#[test]
+fn production_conversation_replays_the_same_request_without_model_redispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let person = PersonId::new();
+    let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Create {});
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let (mut route, server) = answer_server(vec![floe_agent::ModelStep::Answer {
+        text: "One durable answer".into(),
+    }]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-replay-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let action = AgentVaultActionDto::ConversationTurn {
+        request: floe_protocol::AgentConversationTurnRequestDto {
+            session_id: session.id.to_string(),
+            expected_revision: session.revision,
+            text: "Answer once".into(),
+            device_id: "mac-local".into(),
+            continuation: false,
+            remote_route: Some(route),
+        },
+    };
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit {
+                action: action.clone(),
+            },
+        )
+        .unwrap();
+    let first = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(first.failure, None, "first: {first:?}");
+
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit {
+                action: action.clone(),
+            },
+        )
+        .unwrap();
+    let replay = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(replay.failure, None, "replay: {replay:?}");
+    assert_eq!(replay.session, first.session);
+
+    let mut changed = action;
+    let AgentVaultActionDto::ConversationTurn { request } = &mut changed else {
+        unreachable!()
+    };
+    request.text = "Changed payload".into();
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit { action: changed },
+        )
+        .unwrap();
+    let conflict = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(conflict.failure, Some(AgentFailure::Conflict));
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
 fn answer_server(
     steps: Vec<floe_agent::ModelStep>,
 ) -> (

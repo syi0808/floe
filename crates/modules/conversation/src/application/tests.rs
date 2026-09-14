@@ -362,6 +362,7 @@ fn request(
         expected_session_revision,
         principal: "person-a".into(),
         prompt: prompt.into(),
+        request_context_digest: [1; 32],
         bounded_context: BoundedContext {
             text: String::new(),
             coverage: DependencyCoverage::Independent,

@@ -32,12 +32,17 @@ use super::personal_grants;
 use super::remote_views;
 use super::session_uuid;
 
+mod engine_ports;
+
 struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     core: &'a FloeCore,
     vault: &'a EncryptedAgentVault<Keys>,
     local_context: &'a LocalContextStore,
     person_id: PersonId,
     request: &'a AgentConversationTurnRequestDto,
+    command_id: floe_agent_contract::CommandId,
+    conversation_repository:
+        &'a std::sync::Arc<crate::vault_host::conversation_repository::VaultConversationRepository<Keys>>,
     task_coordinator: &'a floe_experts::TaskCoordinator<
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
@@ -52,7 +57,11 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         crate::vault_host::task_repository::VaultTaskRepository<Keys>,
     >,
     schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
+    conversation_repository: &std::sync::Arc<
+        crate::vault_host::conversation_repository::VaultConversationRepository<Keys>,
+    >,
     person_id: PersonId,
+    command_id: floe_agent_contract::CommandId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
     emit: impl FnMut(AgentEvent) + Send,
@@ -69,7 +78,7 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     let session = vault.load(person_id, session_id).await?;
     if session.scope.is_some()
         || session.data_classes != [DataClass::Personal]
-        || session.revision != request.expected_revision
+        || (request.continuation && session.revision != request.expected_revision)
     {
         return Err(AgentFailure::Conflict);
     }
@@ -89,6 +98,8 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
         local_context,
         person_id,
         request,
+        command_id,
+        conversation_repository,
         task_coordinator,
         schedule_endpoint,
     };
@@ -120,7 +131,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_agent::Cancellation,
-    emit: impl FnMut(AgentEvent) + Send,
+    mut emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
     let core = inputs.core;
     let vault = inputs.vault;
@@ -263,10 +274,114 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             .map(|reader| reader as &dyn floe_context::SourceReader),
         context_reader: Some(&context_reader),
         task_views: &[],
-        cards: expert_cards,
-        builtin_setup: Some(builtin_setup),
+        cards: expert_cards.clone(),
+        builtin_setup: Some(builtin_setup.clone()),
         schedule_runner: Some(&schedule_runner),
     };
+    if !request.continuation {
+        let legacy_capabilities = capabilities.descriptors(person_id);
+        let catalog = floe_agent_contract::AllowedCatalog {
+            cards: expert_cards
+                .iter()
+                .map(engine_ports::contract_definition)
+                .collect(),
+            tools: engine_ports::contract_tools(&legacy_capabilities),
+            revision: builtin_setup.expected_revision.max(1),
+        };
+        let budget = AgentBudget::default();
+        let duration = std::time::Duration::from_millis(budget.deadline_ms);
+        let deadline = tokio::time::Instant::now() + duration;
+        let service = floe_conversation::ConversationService::new(
+            std::sync::Arc::clone(inputs.conversation_repository),
+            floe_conversation::ManagerConfig {
+                role_spec: floe_agent_contract::RoleSpec {
+                    role_id: "manager".into(),
+                    prompt: floe_agent::manager_prompt(context.persona.as_ref())?.render(),
+                    output_contract: "Return one user-facing answer or one registered delegation."
+                        .into(),
+                },
+                max_iterations: budget.max_iterations.min(64),
+                max_output_bytes: budget.max_output_bytes,
+                max_run_duration: duration,
+                budget: floe_execution::budget::BudgetConfig::new(
+                    budget.max_tokens,
+                    budget.max_cost_micros,
+                ),
+            },
+        )?;
+        let model_port = engine_ports::LegacyModelPort {
+            model: &model,
+            store: &governed_store,
+            resolver: &resolver,
+            policy: &policy,
+            context: &context,
+            person_id,
+            session_id,
+            capabilities: legacy_capabilities,
+            active_agents: expert_cards,
+            max_output_bytes: budget.max_output_bytes,
+        };
+        let tool_port = engine_ports::LegacyToolPort {
+            host: &capabilities,
+            store: &governed_store,
+            person_id,
+            session_id,
+            max_output_bytes: budget.max_output_bytes,
+        };
+        let delegation_port = engine_ports::LegacyDelegationPort {
+            experts: &experts,
+            task_coordinator: inputs.task_coordinator,
+            schedule_endpoint: inputs.schedule_endpoint,
+            turn_request: request,
+            context: &context,
+            store: &governed_store,
+            person_id,
+            session_id,
+            max_output_bytes: budget.max_output_bytes,
+        };
+        let request_context =
+            serde_json::to_string(request).map_err(|_| AgentFailure::InvalidInput)?;
+        let receipt = service
+            .run_turn(
+                floe_conversation::TurnRequest {
+                    command_id: inputs.command_id,
+                    session_id,
+                    expected_session_revision: request.expected_revision,
+                    principal: person_id.to_string(),
+                    prompt: request.text.trim().into(),
+                    request_context_digest: floe_agent_contract::input_digest(&request_context),
+                    bounded_context: floe_agent_contract::BoundedContext {
+                        text: String::new(),
+                        coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    },
+                    allowed_catalog: catalog,
+                    replay: vec![],
+                    deadline,
+                    cancellation,
+                },
+                floe_conversation::ConversationPorts {
+                    model: &model_port,
+                    tools: &tool_port,
+                    delegation: &delegation_port,
+                    validator: &engine_ports::ManagerPayloadValidator,
+                },
+            )
+            .await?;
+        let session = vault.load(person_id, session_id).await?;
+        emit(floe_agent::AgentEvent {
+            schema_version: AGENT_VERSION,
+            session_id,
+            turn_id: receipt.run_id.as_uuid(),
+            event: floe_agent::AgentEventKind::Finished {
+                outcome: session
+                    .last_outcome
+                    .clone()
+                    .ok_or(AgentFailure::StorageUnavailable)?,
+                revision: session.revision,
+            },
+        });
+        return Ok(session);
+    }
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
         store: &governed_store,

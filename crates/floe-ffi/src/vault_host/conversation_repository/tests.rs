@@ -139,6 +139,7 @@ fn request(
         expected_session_revision: 0,
         principal: String::new(),
         prompt: "hello".into(),
+        request_context_digest: [1; 32],
         bounded_context: BoundedContext {
             text: String::new(),
             coverage: DependencyCoverage::Independent,
