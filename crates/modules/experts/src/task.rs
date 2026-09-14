@@ -6,7 +6,8 @@ use std::{
 
 use floe_agent_contract::{
     AgentFailure, BoxFuture, DelegationPort, DelegationRequest, DependencyCoverage,
-    EndpointInvocation, TaskId, TaskReceipt, TaskSnapshot, TaskState, input_digest,
+    EndpointInvocation, EndpointSettlement, TaskId, TaskReceipt, TaskSnapshot, TaskState,
+    input_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -164,6 +165,17 @@ pub trait TaskRepository: Send + Sync {
         expected_aggregate_revision: u64,
         executor_generation: u64,
         snapshot: TaskSnapshot,
+    ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>>;
+
+    fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure>;
+
+    fn settle<'a>(
+        &'a self,
+        task_id: TaskId,
+        expected_aggregate_revision: u64,
+        executor_generation: u64,
+        snapshot: TaskSnapshot,
+        settlement: Option<EndpointSettlement>,
     ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>>;
 
     fn get<'a>(
@@ -467,35 +479,45 @@ impl<Repository: TaskRepository> TaskCoordinator<Repository> {
             .remove(&request.task_id);
         let outcome = outcome.and_then(|report| {
             report.validate(&invocation, self.maximum_output_bytes)?;
+            if let Some(settlement) = &report.settlement {
+                self.repository.validate_settlement(settlement)?;
+            }
             Ok(report)
         });
         let outcome = running_failure(scope).map_or(outcome, Err);
-        let terminal_snapshot = match outcome {
-            Ok(report) => snapshot(
-                &request,
-                TaskState::Completed,
-                Some(report.result),
-                report.artifacts,
-                report.coverage,
-                None,
+        let (terminal_snapshot, settlement) = match outcome {
+            Ok(report) => (
+                snapshot(
+                    &request,
+                    TaskState::Completed,
+                    Some(report.result),
+                    report.artifacts,
+                    report.coverage,
+                    None,
+                ),
+                report.settlement,
             ),
-            Err(failure) => snapshot(
-                &request,
-                failure_state(failure),
+            Err(failure) => (
+                snapshot(
+                    &request,
+                    failure_state(failure),
+                    None,
+                    vec![],
+                    DependencyCoverage::Unknown,
+                    Some(failure),
+                ),
                 None,
-                vec![],
-                DependencyCoverage::Unknown,
-                Some(failure),
             ),
         };
         terminal_snapshot.validate(self.maximum_output_bytes)?;
         let completed = match before_deadline(
             scope,
-            self.repository.compare_and_swap(
+            self.repository.settle(
                 request.task_id,
                 working.aggregate_revision,
                 working.executor_generation,
                 terminal_snapshot.clone(),
+                settlement,
             ),
         )
         .await

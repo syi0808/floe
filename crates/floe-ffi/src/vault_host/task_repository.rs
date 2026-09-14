@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use floe_agent_contract::{AgentFailure, BoxFuture, TaskId, TaskSnapshot};
+use floe_agent_contract::{AgentFailure, BoxFuture, EndpointSettlement, TaskId, TaskSnapshot};
 use floe_core::{
-    EncryptedAgentVault, VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
+    CalendarExpertSettlement, CalendarExpertTaskCompletion, EncryptedAgentVault, VaultKeyProvider,
+    VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
 };
 use floe_experts::{TaskActivation, TaskAdmission, TaskRecord, TaskRepository};
 
@@ -54,6 +55,46 @@ impl<Keys: VaultKeyProvider> TaskRepository for VaultTaskRepository<Keys> {
                     expected_aggregate_revision,
                     executor_generation,
                     snapshot,
+                )
+                .await
+                .map(from_vault_record)
+        })
+    }
+
+    fn validate_settlement(&self, settlement: &EndpointSettlement) -> Result<(), AgentFailure> {
+        CalendarExpertSettlement::from_endpoint_settlement(settlement).map(|_| ())
+    }
+
+    fn settle<'a>(
+        &'a self,
+        task_id: TaskId,
+        expected_aggregate_revision: u64,
+        executor_generation: u64,
+        snapshot: TaskSnapshot,
+        settlement: Option<EndpointSettlement>,
+    ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
+        Box::pin(async move {
+            let Some(settlement) = settlement else {
+                return self
+                    .compare_and_swap(
+                        task_id,
+                        expected_aggregate_revision,
+                        executor_generation,
+                        snapshot,
+                    )
+                    .await;
+            };
+            let settlement = CalendarExpertSettlement::from_endpoint_settlement(&settlement)?;
+            self.vault
+                .settle_calendar_expert_task_checked(
+                    CalendarExpertTaskCompletion {
+                        settlement,
+                        task_id,
+                        expected_task_revision: expected_aggregate_revision,
+                        executor_generation,
+                        task_snapshot: snapshot,
+                    },
+                    || Ok(()),
                 )
                 .await
                 .map(from_vault_record)

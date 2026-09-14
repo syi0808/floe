@@ -11,7 +11,10 @@ mod ports;
 mod replay;
 
 pub use delegation::{DelegationRequest, TaskReceipt, TaskSnapshot, TaskState};
-pub use endpoint::{AgentEndpoint, EndpointInvocation, ExpertReport};
+pub use endpoint::{
+    AgentEndpoint, EndpointInvocation, EndpointSettlement, ExpertReport,
+    MAX_ENDPOINT_SETTLEMENT_BYTES,
+};
 pub use floe_context_contract::{
     ContextIssue, ContextIssueReason, ContextSource, DataClass, DependencyCoverage, ModelPlacement,
     TransferConsent,

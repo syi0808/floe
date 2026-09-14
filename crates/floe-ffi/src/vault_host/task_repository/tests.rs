@@ -74,6 +74,12 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
             .unwrap(),
     );
     let repository = VaultTaskRepository::new(Arc::clone(&vault));
+    assert_eq!(
+        repository.validate_settlement(
+            &floe_agent_contract::EndpointSettlement::try_new("unknown", "{}").unwrap()
+        ),
+        Err(AgentFailure::CapabilityUnavailable)
+    );
     let activation = repository.activate().await.unwrap();
     let task_id = TaskId::new();
     let proposed = submitted(person_id, task_id, activation.executor_generation);

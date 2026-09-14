@@ -5,6 +5,47 @@ use crate::{
     TaskId,
 };
 
+pub const MAX_ENDPOINT_SETTLEMENT_BYTES: usize = 384 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EndpointSettlement {
+    owner: String,
+    payload: String,
+}
+
+impl EndpointSettlement {
+    pub fn try_new(
+        owner: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> Result<Self, AgentFailure> {
+        let settlement = Self {
+            owner: owner.into(),
+            payload: payload.into(),
+        };
+        settlement.validate()?;
+        Ok(settlement)
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn payload(&self) -> &str {
+        &self.payload
+    }
+
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.owner.trim().is_empty()
+            || self.owner.len() > 128
+            || self.payload.is_empty()
+            || self.payload.len() > MAX_ENDPOINT_SETTLEMENT_BYTES
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EndpointInvocation {
     pub request: DelegationRequest,
@@ -21,6 +62,8 @@ pub struct ExpertReport {
     pub result: String,
     pub artifacts: Vec<Artifact>,
     pub coverage: DependencyCoverage,
+    #[serde(skip)]
+    pub settlement: Option<EndpointSettlement>,
 }
 
 impl ExpertReport {
@@ -37,6 +80,10 @@ impl ExpertReport {
             || self.result.len() > maximum_bytes
             || self.coverage == DependencyCoverage::Unknown
             || self.coverage.validate().is_err()
+            || self
+                .settlement
+                .as_ref()
+                .is_some_and(|settlement| settlement.validate().is_err())
             || self
                 .artifacts
                 .iter()
@@ -57,4 +104,29 @@ pub trait AgentEndpoint: Send + Sync {
         invocation: EndpointInvocation,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settlement_is_bounded_and_omitted_from_the_public_report_shape() {
+        assert_eq!(
+            EndpointSettlement::try_new("schedule", "x".repeat(MAX_ENDPOINT_SETTLEMENT_BYTES + 1)),
+            Err(AgentFailure::InvalidModelOutput)
+        );
+        let report = ExpertReport {
+            task_id: TaskId::new(),
+            principal: "person-a".into(),
+            agent_id: "floe.builtin.schedule".into(),
+            definition_revision: 1,
+            result: "result".into(),
+            artifacts: vec![],
+            coverage: DependencyCoverage::Independent,
+            settlement: Some(EndpointSettlement::try_new("schedule", "{}").unwrap()),
+        };
+        let encoded = serde_json::to_value(report).unwrap();
+        assert!(encoded.get("settlement").is_none());
+    }
 }

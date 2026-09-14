@@ -14,6 +14,7 @@ use floe_domain::{
     CalendarProvider, ContextDependency, DependencyCoverage, GrantConsumer, GrantOperation,
     GrantPurpose, PersonId, ProcessingRestriction,
 };
+use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -66,14 +67,48 @@ pub struct CalendarExpertEndpointResult {
     pub settlement: CalendarExpertSettlement,
 }
 
-#[derive(Clone)]
+pub const CALENDAR_EXPERT_SETTLEMENT_OWNER: &str = "floe.builtin.schedule/v1";
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalendarExpertSettlement {
+    schema_version: u32,
     pub(crate) expected_registry_revision: u64,
     pub(crate) staged_registry: RegistrySnapshot,
     pub(crate) assignment_id: Uuid,
     pub(crate) invocation_id: Uuid,
     pub(crate) dependencies: Vec<ContextDependency>,
     pub(crate) task_result: String,
+}
+
+impl CalendarExpertSettlement {
+    pub fn into_endpoint_settlement(
+        self,
+    ) -> Result<floe_agent_contract::EndpointSettlement, AgentFailure> {
+        let payload = serde_json::to_string(&self).map_err(|_| AgentFailure::StorageUnavailable)?;
+        floe_agent_contract::EndpointSettlement::try_new(
+            CALENDAR_EXPERT_SETTLEMENT_OWNER,
+            payload,
+        )
+    }
+
+    pub fn from_endpoint_settlement(
+        settlement: &floe_agent_contract::EndpointSettlement,
+    ) -> Result<Self, AgentFailure> {
+        settlement.validate()?;
+        if settlement.owner() != CALENDAR_EXPERT_SETTLEMENT_OWNER {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+        let decoded: Self = serde_json::from_str(settlement.payload())
+            .map_err(|_| AgentFailure::InvalidModelOutput)?;
+        if decoded.schema_version != 1
+            || serde_json::to_string(&decoded).map_err(|_| AgentFailure::InvalidModelOutput)?
+                != settlement.payload()
+        {
+            return Err(AgentFailure::InvalidModelOutput);
+        }
+        Ok(decoded)
+    }
 }
 
 pub struct CalendarExpertTaskCompletion {
@@ -293,6 +328,7 @@ impl FloeCore {
             report,
             dependencies: dependencies.clone(),
             settlement: CalendarExpertSettlement {
+                schema_version: 1,
                 expected_registry_revision: revision,
                 staged_registry: staged,
                 assignment_id: request.assignment_id,

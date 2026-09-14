@@ -28,7 +28,7 @@ pub use agent_action::{
 pub use agent_calendar::{
     CalendarAgentProposal, CalendarAgentTurnRequest, CalendarAgentTurnResult,
     CalendarExpertEndpointRequest, CalendarExpertEndpointResult, CalendarExpertSettlement,
-    CalendarExpertTaskCompletion,
+    CalendarExpertTaskCompletion, CALENDAR_EXPERT_SETTLEMENT_OWNER,
 };
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,

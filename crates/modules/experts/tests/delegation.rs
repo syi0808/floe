@@ -9,10 +9,10 @@ use std::{
 
 use floe_agent_contract::{
     A2A_PROTOCOL_VERSION, AGENT_SCHEMA_VERSION, AgentCard, AgentDefinition, AgentEndpoint,
-    AgentFailure, AllowedCatalog, BoundedContext, BoxFuture, DelegationRequest, DependencyCoverage,
-    EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport, JournalAck, JournalEvent,
-    ModelPort, ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, TaskId, TaskSnapshot,
-    TaskState, ToolCall, ToolPort, ToolResult,
+    AgentFailure, AllowedCatalog, BoundedContext, BoxFuture, DelegationPort, DelegationRequest,
+    DependencyCoverage, EndpointInvocation, EngineRequest, ExecutionJournal, ExpertReport,
+    JournalAck, JournalEvent, ModelPort, ModelRequest, ModelResponse, ModelStep, ModelUsage,
+    RoleSpec, TaskId, TaskSnapshot, TaskState, ToolCall, ToolPort, ToolResult,
 };
 use floe_agent_runtime::Engine;
 use floe_execution::{
@@ -34,6 +34,7 @@ struct MemoryTasks(Mutex<MemoryTaskState>);
 struct MemoryTaskState {
     executor_generation: u64,
     records: HashMap<TaskId, TaskRecord>,
+    settlements: usize,
 }
 
 impl TaskRepository for MemoryTasks {
@@ -123,6 +124,41 @@ impl TaskRepository for MemoryTasks {
         })
     }
 
+    fn validate_settlement(
+        &self,
+        settlement: &floe_agent_contract::EndpointSettlement,
+    ) -> Result<(), AgentFailure> {
+        (settlement.owner() == "memory" && settlement.payload() == "{}")
+            .then_some(())
+            .ok_or(AgentFailure::CapabilityUnavailable)
+    }
+
+    fn settle<'a>(
+        &'a self,
+        task_id: TaskId,
+        expected_aggregate_revision: u64,
+        executor_generation: u64,
+        snapshot: TaskSnapshot,
+        settlement: Option<floe_agent_contract::EndpointSettlement>,
+    ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
+        Box::pin(async move {
+            if let Some(settlement) = settlement {
+                self.validate_settlement(&settlement)?;
+                self.0
+                    .lock()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                    .settlements += 1;
+            }
+            self.compare_and_swap(
+                task_id,
+                expected_aggregate_revision,
+                executor_generation,
+                snapshot,
+            )
+            .await
+        })
+    }
+
     fn get<'a>(
         &'a self,
         task_id: TaskId,
@@ -135,6 +171,32 @@ impl TaskRepository for MemoryTasks {
                 .records
                 .get(&task_id)
                 .cloned())
+        })
+    }
+}
+
+struct SettlementEndpoint(&'static str);
+
+impl AgentEndpoint for SettlementEndpoint {
+    fn execute<'a>(
+        &'a self,
+        invocation: EndpointInvocation,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
+        let owner = self.0;
+        Box::pin(async move {
+            Ok(ExpertReport {
+                task_id: invocation.request.task_id,
+                principal: invocation.request.principal,
+                agent_id: invocation.request.selected_agent_id,
+                definition_revision: invocation.request.selected_definition_revision,
+                result: "settled result".into(),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                settlement: Some(
+                    floe_agent_contract::EndpointSettlement::try_new(owner, "{}").unwrap(),
+                ),
+            })
         })
     }
 }
@@ -161,6 +223,7 @@ impl AgentEndpoint for Endpoint {
                 result: result?.into(),
                 artifacts: vec![],
                 coverage: DependencyCoverage::Independent,
+                settlement: None,
             })
         })
     }
@@ -310,6 +373,94 @@ async fn registered_ninth_endpoint_executes_without_dispatch_changes_and_replays
             .snapshot,
         first.snapshot
     );
+}
+
+#[tokio::test]
+async fn trusted_endpoint_settlement_reaches_the_repository_once() {
+    let directory = Directory::default();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.settlement", 1),
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(SettlementEndpoint("memory")),
+        )
+        .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        floe_agent_contract::MAX_OUTPUT_BYTES,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let request = delegation(run_id, task_id, "floe.test.settlement");
+    let receipt = coordinator
+        .delegate(request.clone(), &scope(run_id, Some(task_id)))
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.snapshot.state, TaskState::Completed);
+    assert_eq!(receipt.snapshot.result.as_deref(), Some("settled result"));
+    assert_eq!(repository.0.lock().unwrap().settlements, 1);
+    assert_eq!(
+        coordinator
+            .delegate(request, &scope(run_id, Some(task_id)))
+            .await
+            .unwrap()
+            .snapshot,
+        receipt.snapshot
+    );
+    assert_eq!(repository.0.lock().unwrap().settlements, 1);
+}
+
+#[tokio::test]
+async fn unsupported_endpoint_settlement_becomes_a_failed_task_before_commit() {
+    let directory = Directory::default();
+    directory
+        .register(
+            DirectoryEntry {
+                definition: definition("floe.test.unsupported-settlement", 1),
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec!["person-a".into()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            Arc::new(SettlementEndpoint("unknown")),
+        )
+        .unwrap();
+    let repository = Arc::new(MemoryTasks::default());
+    let (coordinator, _) = TaskCoordinator::activate(
+        directory,
+        Arc::clone(&repository),
+        "everyday-assistance",
+        floe_agent_contract::MAX_OUTPUT_BYTES,
+    )
+    .await
+    .unwrap();
+    let run_id = RunId::new();
+    let task_id = TaskId::new();
+    let receipt = coordinator
+        .delegate(
+            delegation(run_id, task_id, "floe.test.unsupported-settlement"),
+            &scope(run_id, Some(task_id)),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.snapshot.state, TaskState::Failed);
+    assert_eq!(
+        receipt.snapshot.issue,
+        Some(AgentFailure::CapabilityUnavailable)
+    );
+    assert_eq!(repository.0.lock().unwrap().settlements, 0);
 }
 
 struct BlockingEndpoint {

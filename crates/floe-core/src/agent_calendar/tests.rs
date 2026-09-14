@@ -826,6 +826,13 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
         issue: None,
         ..working.snapshot.clone()
     };
+    let endpoint_settlement = result
+        .settlement
+        .clone()
+        .into_endpoint_settlement()
+        .unwrap();
+    let settlement =
+        CalendarExpertSettlement::from_endpoint_settlement(&endpoint_settlement).unwrap();
     let mut forged_snapshot = completed_snapshot.clone();
     forged_snapshot.result = Some("forged result".into());
     assert_eq!(
@@ -833,7 +840,7 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
             .vault
             .settle_calendar_expert_task_checked(
                 CalendarExpertTaskCompletion {
-                    settlement: result.settlement.clone(),
+                    settlement: settlement.clone(),
                     task_id: working.snapshot.task_id,
                     expected_task_revision: working.aggregate_revision,
                     executor_generation: working.executor_generation,
@@ -849,7 +856,7 @@ async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_m
         .vault
         .settle_calendar_expert_task_checked(
             CalendarExpertTaskCompletion {
-                settlement: result.settlement,
+                settlement,
                 task_id: working.snapshot.task_id,
                 expected_task_revision: working.aggregate_revision,
                 executor_generation: working.executor_generation,
