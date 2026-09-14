@@ -37,7 +37,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 |---|---|
 | P00 | Baseline/tooling implemented; T37 pending |
 | P01 | Partial: canonical values extracted; protocol conversion separation pending |
-| P02 | Partial: cancellation and accounting extracted; unified scopes, finalization budget, journal and diagnostics pending |
+| P02 | Partial: cancellation, accounting, durable journal and bounded finalization wired; remaining owner scopes and diagnostics pending |
 | P03 | Pending |
 | P04 | Pending |
 | P05 | Pending |
@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
-| P12 | Partial: new-turn/recovery/continuation callers and built-in Tasks use extracted services; archive/finalization ownership pending |
+| P12 | Partial: new-turn/recovery/continuation/finalization callers and built-in Tasks use extracted services; archive ownership pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -3055,3 +3055,59 @@ remain pending later cutovers. The next executable P02/P12 task is to use the
 existing finalization budget partition for one bounded answer-only attempt after
 a recoverable root exhaustion, without allowing cancel, consent or Vault
 failures to trigger another model call. P12 remains partial.
+
+### P02/P12 bounded finalization checkpoint (2026-09-15)
+
+Code checkpoint `ff0aa85` wires the existing root finalization partition into
+`ConversationService`. A recoverable `Stalled` or `BudgetExceeded` root may make
+one additional Manager model attempt only when its active durable journal has a
+fully settled, explicitly independent, issue-free observation. The request
+retains only the current user entry and the newest bounded safe observations,
+uses an empty bounded context and an empty tool/agent catalog, and receives at
+most ten seconds within the original hard deadline. Consent, policy, capability,
+cancel, deadline, Vault/storage and unsettled-journal failures do not trigger the
+extra attempt; their typed cause is preserved for the deterministic halted
+result.
+
+Production now reserves 1,024 tokens and 10,000 cost micros from the existing
+total root budget rather than increasing it. The legacy model adapter receives
+the exact scope allowance, strips persona/memory/evidence from finalization,
+caps its output byte contract, and exposes no capability or Expert that is not
+in the request catalog. The budget ledger still owns the single reservation and
+settlement, and its finalization lease remains one-shot. A model tool or
+delegation step against the empty catalog is rejected before either execution
+port can run.
+
+Execution failure and reply outcome are now durably distinct: an exhausted Run
+can remain `Failed` with `Stalled`/`BudgetExceeded` while also committing a
+known-provenance Assistant reply. The Session remains `Halted`, and a Run with a
+fallback reply cannot mint a continuation. The disposable local Conversation
+Vault schema is version 5; prior development Vaults must be reset rather than
+migrated.
+
+Implemented and wired: active-journal safety projection, one-shot finalization,
+production budget/catalog/context projection, failed-Run reply persistence and
+continuation suppression. The bounded ledger test observed exactly two model
+calls, one tool call, zero delegations and two settlements totaling 18 tokens/3
+cost micros with no reserved or unknown usage. A separate encrypted flow
+exhausted a one-iteration Manager after one independent tool result and
+committed an eight-event journal. The returned Run stayed failed, the encrypted
+Session stored the reply while its outcome stayed halted, and no continuation
+was exposed. A consent-required variant made only the original model call and
+preserved `ConsentRequired`.
+
+All 9 Conversation, 24 Execution, 194 Core library and 92 FFI library tests
+passed on the integrated revision. One unrelated monotonic-expiry FFI test
+failed once during the first parallel suite run, passed in isolation, and the
+complete 92-test rerun passed. Focused Conversation/Execution Clippy passed with
+warnings denied; workspace all-target check, diff check and the migration
+boundary gate passed (20 nodes / 68 edges / no errors). Repository-wide Clippy
+remains blocked by pre-existing lint findings in Protocol/Core/FFI. No Apple UI,
+device-local finalization, live provider or production legacy-adapter
+finalization request was exercised.
+
+Blocker/remove-by: P12 still lacks Conversation-owned archive/compaction and
+Session bootstrap; global worker-job lifetime and Calendar-root removal remain
+pending later cutovers. The next executable P12 task is to make archive and
+compaction an explicit Conversation owner operation with bounded history and
+provenance preserved across recovery. P12 remains partial.
