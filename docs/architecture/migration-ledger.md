@@ -51,7 +51,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P13 | Pending |
 | P14 | Partial: verified native local identity adapter wired; model/source/control adapter split pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
-| P16 | Partial: app-wire v2 foundation, AppHost lifecycle, verified native identity and durable v2 query ABI wired; command/events and Flutter cutover pending |
+| P16 | Partial: AppHost, verified native identity and durable v2 StartTurn/query ABI wired; cancel/events, remote route and Flutter cutover pending |
 | P17 | Pending |
 | P18 | Pending |
 | P19 | Pending |
@@ -3481,3 +3481,51 @@ inference route and credential handle behind AppHost, then wire
 reviving Submit/Poll/Release. The direct legacy service/query bridge is removed
 when that owner service and Flutter transport cut over. P16 and Apple acceptance
 remain partial.
+
+### P16 app-wire StartTurn admission checkpoint (2026-09-15)
+
+Code checkpoint `880e1c8` exports `floe_core_command_v2` and wires the
+schema-2 `conversation.start_turn` new-turn subset through an AppHost
+`ConversationCommands` service contract. The public command contains only the
+CommandId, SessionId, expected revision, text and turn mode. Person and device
+come from the verified host request, and the current implementation selects the
+device-local route with no caller-supplied route or credential. Unknown route
+or bearer fields are rejected during DTO decoding.
+
+Conversation now exposes a durable-admission observer that receives either the
+validated existing receipt or a newly committed Working receipt before model
+execution. The production worker uses a separate direct StartTurn method and a
+bounded admission wait rather than routing the v2 entry through legacy
+Submit/Poll. A timeout does not cancel the admitted work; the caller can retry
+the same CommandId or use GetCommand. The existing job correlation remains a
+temporary execution adapter, while exact in-flight replay returns the same
+receipt and a same-id/different-payload request conflicts without another model
+dispatch.
+
+Implemented and wired: typed AppHost StartTurn service, host-derived identity
+and device-local route, durable pre-model admission callback, direct worker
+admission correlation and C ABI command envelope. Direct validation held the
+production model behind an HTTP barrier, received the durable Working receipt,
+replayed the exact command, rejected a changed payload, then cancelled and
+queried the same terminal Run. A service-boundary regression confirmed that the
+wire request is combined with the verified AppHost Person/device rather than
+caller identity. The product-shaped C-ABI regression preserved request
+correlation, returned unavailable for a locked Vault and rejected an injected
+remote route before host execution.
+
+All 11 Conversation tests, five AppHost/service tests, 98 FFI library tests, 13
+C-ABI tests and the protocol suites passed. App and Conversation all-target
+Clippy passed with warnings denied. Workspace all-target check, diff check and
+the migration boundary gate passed (23 nodes / 72 edges / no errors). No
+successful Keychain-backed command, Apple device model, Flutter transport or
+live provider was exercised.
+
+Blocker/remove-by: this is a device-local new-turn subset. Continue, retry and
+CancelRun are not yet admitted by the v2 service, event streaming is absent,
+and a verified remote inference credential/route handle is not yet owned by
+AppHost. The direct worker still executes through the temporary
+`LegacyComposition` and FFI-owned repository adapters. The next executable P16
+task is to give CancelRun a principal-bound v2 result and add bounded Run event
+observation, after which P17 can switch the Apple Flutter turn path to
+command/query without Submit/Poll/Release. Remote route ownership and removal
+of the legacy bridge remain required before full P16/V1 acceptance.
