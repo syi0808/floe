@@ -3326,8 +3326,10 @@ foreground accounting. Direct T09/T22 validation held a production Manager
 model response behind a real HTTP barrier, completed Calendar grant preview,
 disabled the active Calendar grant and queried Connections without opening the
 barrier, then proved the original root remained Working and its cancellation
-scope was untouched before allowing it to complete. The blocked key/setup
-ownership regression also still rejects incompatible work.
+scope was untouched before allowing it to complete. A second production root
+against the same Session was rejected by durable admission without model I/O,
+while the original remained live. The blocked key/setup ownership regression
+also still rejects incompatible work.
 
 All 96 FFI library tests and both focused learner-scheduling tests passed on the
 integrated revision. Workspace all-target check, diff check and the migration
