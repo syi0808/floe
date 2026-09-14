@@ -1406,3 +1406,49 @@ canonical Inference attempt ownership, async catalog independence, final crate
 placement and AppHost cutover remain pending. The loopback answer is not an
 external-provider result, and a successful macOS build/ABI fixture does not
 prove an actual Apple UI conversation or full T10/P07/P14 completion.
+
+## P07 typed route admission and recipient dispatch fence — 2026-09-14
+
+Code checkpoints `ac8188a` and `4e4600c`: `floe-inference` now owns typed model
+profiles, purpose/consumer constraints, execution location, data recipient,
+capability matching and route failures (`NotConfigured`, `ConsentRequired`,
+`Unavailable`, `Denied`). Explicit missing profile IDs never fall back;
+duplicate IDs, ambiguous implicit selection, invalid deserialized identities,
+wrong consumers, unsupported capabilities and remote execution claiming a
+device-only recipient are rejected. No Connections/catalog dependency is added.
+
+The live `ServerModelRunner` invokes this admission owner before transport and
+again after acquiring its model limiter. Existing context/data-class policy,
+loopback URL, token, purpose, cancellation and replay checks remain in place.
+The adapter currently constructs one legacy profile with the `agent_steps`
+protocol capability and `legacy.inference` consumer. This is not an authoritative
+profile repository, per-child selection, or a provider capability discovery
+implementation. Input classification remains enforced by the existing policy;
+no unused classification contract or blanket recipient-consent API was added.
+
+Flutter now carries the actual disclosed recipient through `AgentRemoteRouteDto`
+to the model request's `expected_recipient`. A changed disclosed recipient does
+not inherit saved consent for the previous one. Go's Agent gateway compares
+that expectation against the selected provider's actual disclosed recipient
+before provider dispatch, in addition to `allow_external`. Missing/mismatched
+external recipients and inappropriate external expectations on a server-local
+route fail closed. This closes the stale-purpose-observation recipient gap for
+Agent dispatch; the separate non-Agent generation endpoint is unchanged.
+
+Parent verification: Inference tests (5), infra library tests (29), serial FFI
+conversation tests (27), targeted Flutter server/route tests (5, including seven
+route scenarios), workspace check, Inference all-target Clippy with `-D warnings`,
+and Go inference tests with and without `-race` passed. Model HTTP fixtures
+assert the expected-recipient field, deny missing recipient/consent before the
+successful fixture answer, and retain malformed-source isolation. Go fixtures
+prove missing/stale/mismatched recipient rejection with zero provider calls and
+retain the authenticated matching-recipient success flow. Migration checker:
+16 nodes / 41 edges / 0 errors; this is not the final 22-crate gate.
+
+P07 remains incomplete: authoritative profile/credential/attempt repositories,
+per-scope root and Expert plans, actual dispatch-intent accounting, bounded
+retry/fallback ownership and finalization leases are still pending. Dart still
+awaits catalog retrieval and collapses some purpose failures to absent routes;
+the general host still constructs source bindings before a turn. No actual
+Apple UI flow, external model/account operation, complete Rust-to-Go-to-provider
+stack, T10 or full-plan acceptance is claimed by these separate loopback tests.
