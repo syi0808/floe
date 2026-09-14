@@ -147,7 +147,6 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
-        on_admitted(&admitted.receipt);
         let expected_aggregate_revision = admitted.receipt.aggregate_revision;
         let _cancellation_guard = match self.run_cancellations.register(
             run_id,
@@ -167,6 +166,7 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     .await;
             }
         };
+        on_admitted(&admitted.receipt);
         let now = tokio::time::Instant::now();
         if request.deadline <= now {
             return self

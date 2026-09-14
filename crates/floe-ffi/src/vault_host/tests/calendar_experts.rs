@@ -885,7 +885,7 @@ fn t09_preview_does_not_stop_chat_and_t22_network_wait_does_not_hold_vault() {
 }
 
 #[test]
-fn t08_stop_cancels_the_admitted_production_root() {
+fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() {
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
@@ -948,9 +948,14 @@ fn t08_stop_cancels_the_admitted_production_root() {
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    worker
-        .request(person, request_id, AgentVaultOperationDto::Stop {})
-        .unwrap();
+    assert_eq!(
+        worker.cancel_conversation(PersonId::new(), admitted.run_id),
+        Err(AgentFailure::NotFound)
+    );
+    assert_eq!(
+        worker.cancel_conversation(person, admitted.run_id),
+        Ok(floe_conversation::CancelRunStatus::Cancelled)
+    );
     let cancelled = wait(&worker, person, request_id);
     assert_eq!(
         cancelled.session.unwrap().last_outcome,
@@ -966,6 +971,10 @@ fn t08_stop_cancels_the_admitted_production_root() {
         .unwrap()
         .unwrap();
     assert_eq!(command.state, floe_conversation::RunState::Cancelled);
+    assert_eq!(
+        worker.cancel_conversation(person, admitted.run_id),
+        Ok(floe_conversation::CancelRunStatus::Inactive)
+    );
     assert_eq!(
         worker
             .conversation_query(person, ConversationQuery::Run(command.run_id))

@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 fn fixture(name: &str) -> Value {
     let source = match name {
         "start_turn" => include_str!("fixtures/app_wire_v2/start_turn.json"),
+        "cancel_run" => include_str!("fixtures/app_wire_v2/cancel_run.json"),
+        "cancel_run_receipt" => include_str!("fixtures/app_wire_v2/cancel_run_receipt.json"),
         "command_receipt" => include_str!("fixtures/app_wire_v2/command_receipt.json"),
         "get_run" => include_str!("fixtures/app_wire_v2/get_run.json"),
         "get_message" => include_str!("fixtures/app_wire_v2/get_message.json"),
@@ -30,7 +32,9 @@ where
 #[test]
 fn app_wire_v2_golden_fixtures_are_stable() {
     assert_round_trip::<AppCommandRequestDto>("start_turn");
+    assert_round_trip::<AppCommandRequestDto>("cancel_run");
     assert_round_trip::<AppResponseDto<AppCommandResultDto>>("command_receipt");
+    assert_round_trip::<AppResponseDto<AppCommandResultDto>>("cancel_run_receipt");
     assert_round_trip::<AppQueryRequestDto>("get_run");
     assert_round_trip::<AppQueryRequestDto>("get_message");
     assert_round_trip::<AppResponseDto<AppQueryResultDto>>("message");

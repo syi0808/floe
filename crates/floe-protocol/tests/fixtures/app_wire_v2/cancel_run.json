@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-4000-8000-000000000007",
+  "command_id": "00000000-0000-4000-8000-000000000008",
+  "command": {
+    "kind": "conversation.cancel_run",
+    "run_id": "00000000-0000-4000-8000-000000000009",
+    "reason": "user_requested"
+  }
+}

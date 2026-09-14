@@ -89,6 +89,32 @@ impl floe_app::ConversationCommands for LegacyComposition {
             session_revision: receipt.session_revision,
         })
     }
+
+    fn cancel_run(
+        &self,
+        caller: &floe_app::CallerContext,
+        request: floe_app::CancelRun,
+    ) -> Result<floe_app::CancelRunReceipt, floe_app::ServiceError> {
+        request.validate()?;
+        let run_id = floe_kernel::RunId::from_uuid(request.run_id)
+            .ok_or(floe_app::ServiceError::InvalidInput)?;
+        match self
+            .agent_vault
+            .cancel_conversation(floe_kernel::PersonId(caller.person_id()), run_id)
+            .map_err(service_failure)?
+        {
+            floe_conversation::CancelRunStatus::Cancelled
+            | floe_conversation::CancelRunStatus::Inactive => {}
+            floe_conversation::CancelRunStatus::Unknown => {
+                return Err(floe_app::ServiceError::NotFound);
+            }
+        }
+        Ok(floe_app::CancelRunReceipt {
+            command_id: request.command_id,
+            run_id: request.run_id,
+            outcome: floe_app::CancelRunOutcome::Accepted,
+        })
+    }
 }
 
 #[cfg(unix)]

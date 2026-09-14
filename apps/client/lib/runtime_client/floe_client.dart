@@ -29,6 +29,27 @@ final class AppCommandReceipt {
   final int sessionRevision;
 }
 
+final class PreparedCancelRun {
+  const PreparedCancelRun({required this.commandId, required this.runId});
+
+  final String commandId;
+  final String runId;
+}
+
+enum AppCancelRunOutcome { accepted }
+
+final class AppCancelRunReceipt {
+  const AppCancelRunReceipt({
+    required this.commandId,
+    required this.runId,
+    required this.outcome,
+  });
+
+  final String commandId;
+  final String runId;
+  final AppCancelRunOutcome outcome;
+}
+
 enum AppRunState { accepted, executing, finalizing, cancelling, finished }
 
 final class AppWireIssue {
@@ -132,6 +153,50 @@ final class FloeClient {
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);
+    });
+  }
+
+  PreparedCancelRun prepareCancelRun(String runId) {
+    if (_closed) throw StateError('FloeClient is already closed.');
+    if (runId.isEmpty) throw const FormatException('Invalid Run ID.');
+    return PreparedCancelRun(commandId: _newId(), runId: runId);
+  }
+
+  Future<AppCancelRunReceipt> submitCancelRun(
+    PreparedCancelRun command, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.cancel_run',
+          'run_id': command.runId,
+          'reason': 'user_requested',
+        },
+      }, timeout: timeout);
+      if (result
+          case {
+            'kind': 'cancel_run_receipt',
+            'command_id': final String commandId,
+            'run_id': final String runId,
+            'outcome': final String outcome,
+          }
+          when commandId == command.commandId && runId == command.runId) {
+        return AppCancelRunReceipt(
+          commandId: commandId,
+          runId: runId,
+          outcome: switch (outcome) {
+            'accepted' => AppCancelRunOutcome.accepted,
+            _ => throw const FormatException('Invalid cancel Run outcome.'),
+          },
+        );
+      }
+      throw const FormatException('Invalid cancel Run receipt.');
     });
   }
 

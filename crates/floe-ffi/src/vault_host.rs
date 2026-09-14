@@ -216,6 +216,14 @@ impl VaultBridge {
             .start_conversation(person, command_id, request)
     }
 
+    pub(crate) fn cancel_conversation(
+        &self,
+        person: PersonId,
+        run_id: floe_kernel::RunId,
+    ) -> Result<floe_conversation::CancelRunStatus, AgentFailure> {
+        self.worker()?.cancel_conversation(person, run_id)
+    }
+
     fn worker(&self) -> Result<RefMut<'_, Worker>, AgentFailure> {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
@@ -408,6 +416,7 @@ impl Job {
 enum WorkerMessage {
     Job(Arc<Job>),
     ConversationQuery(ConversationQueryJob),
+    ConversationCancel(ConversationCancelJob),
 }
 
 pub(crate) enum ConversationQuery {
@@ -420,6 +429,12 @@ struct ConversationQueryJob {
     person: PersonId,
     query: ConversationQuery,
     reply: mpsc::SyncSender<Result<Option<floe_conversation::RunReceipt>, AgentFailure>>,
+}
+
+struct ConversationCancelJob {
+    person: PersonId,
+    run_id: floe_kernel::RunId,
+    reply: mpsc::SyncSender<Result<floe_conversation::CancelRunStatus, AgentFailure>>,
 }
 
 #[derive(Default)]
@@ -534,6 +549,7 @@ impl Worker {
         let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
         let run_cancellations = Arc::new(floe_conversation::RunCancellationRegistry::default());
+        let worker_run_cancellations = Arc::clone(&run_cancellations);
         let worker_closing = closing.clone();
         let learner_scheduling = floe_knowledge::LearnerScheduling::default();
         let worker_learner_scheduling = learner_scheduling.clone();
@@ -607,6 +623,49 @@ impl Worker {
                                         }
                                     };
                                     let _ = query.reply.send(result);
+                                    let _ = worker_learner_scheduling.foreground_finished();
+                                    continue;
+                                }
+                                WorkerMessage::ConversationCancel(cancel) => {
+                                    let result = match (&runtime, vault.as_ref()) {
+                                        (Ok(runtime), Some((person, open_vault)))
+                                            if *person == cancel.person =>
+                                        {
+                                            runtime.block_on(async {
+                                                let request = floe_conversation::CancelRunRequest {
+                                                    run_id: cancel.run_id,
+                                                    principal: cancel.person.to_string(),
+                                                };
+                                                let receipt = floe_conversation::get_run(
+                                                    open_vault.conversation_repository.as_ref(),
+                                                    floe_conversation::RunQuery {
+                                                        principal: request.principal.clone(),
+                                                        run_id: request.run_id,
+                                                    },
+                                                )
+                                                .await?;
+                                                match receipt {
+                                                    Some(receipt)
+                                                        if receipt.state
+                                                            == floe_conversation::RunState::Working =>
+                                                    {
+                                                        worker_run_cancellations.cancel_run(request)
+                                                    }
+                                                    Some(_) => Ok(
+                                                        floe_conversation::CancelRunStatus::Inactive,
+                                                    ),
+                                                    None => Ok(
+                                                        floe_conversation::CancelRunStatus::Unknown,
+                                                    ),
+                                                }
+                                            })
+                                        }
+                                        (Ok(_), Some(_)) => Err(AgentFailure::NotFound),
+                                        (Ok(_), None) | (Err(_), _) => {
+                                            Err(AgentFailure::VaultUnavailable)
+                                        }
+                                    };
+                                    let _ = cancel.reply.send(result);
                                     let _ = worker_learner_scheduling.foreground_finished();
                                     continue;
                                 }
@@ -1002,6 +1061,30 @@ impl Worker {
             .try_send(WorkerMessage::ConversationQuery(ConversationQueryJob {
                 person,
                 query,
+                reply,
+            }))
+            .is_err()
+        {
+            let _ = self.learner_scheduling.foreground_finished();
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        response
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or(Err(AgentFailure::VaultUnavailable))
+    }
+
+    fn cancel_conversation(
+        &self,
+        person: PersonId,
+        run_id: floe_kernel::RunId,
+    ) -> Result<floe_conversation::CancelRunStatus, AgentFailure> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.learner_scheduling.foreground_submitted()?;
+        if self
+            .sender
+            .try_send(WorkerMessage::ConversationCancel(ConversationCancelJob {
+                person,
+                run_id,
                 reply,
             }))
             .is_err()

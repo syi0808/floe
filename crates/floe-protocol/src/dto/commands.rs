@@ -142,11 +142,22 @@ pub enum AppCommandStatusDto {
     Rejected,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppCancelRunOutcomeDto {
+    Accepted,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommandResultDto {
     CommandReceipt {
         #[serde(flatten)]
         receipt: AppCommandReceiptDto,
+    },
+    CancelRunReceipt {
+        command_id: Uuid,
+        run_id: Uuid,
+        outcome: AppCancelRunOutcomeDto,
     },
 }

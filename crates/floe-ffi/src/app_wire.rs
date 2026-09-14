@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use floe_conversation::{RunReceipt, RunState};
 use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 use floe_protocol::{
-    AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto, AppCommandResultDto,
-    AppCommandStatusDto, AppMessageDto, AppMessageRoleDto, AppQueryDto, AppQueryRequestDto,
-    AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto,
-    AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
+    AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
+    AppCommandResultDto, AppCommandStatusDto, AppMessageDto, AppMessageRoleDto, AppQueryDto,
+    AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
+    AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
 };
 
 use crate::{FloeHandle, vault_host::ConversationQuery};
@@ -29,53 +29,68 @@ where
 {
     request.validate().map_err(request_validation)?;
     let host_request = host.request(request.request_id).map_err(host_failure)?;
-    let AppCommandDto::ConversationStartTurn {
-        session_id,
-        expected_revision,
-        text,
-        mode,
-        retry_of,
-    } = request.command
-    else {
-        return Err(wire_error(
-            AppWireErrorCodeDto::Unavailable,
-            "app command is not available",
-            None,
-        ));
-    };
-    let mode = match mode {
-        AppTurnModeDto::NewTurn {} => floe_app::TurnMode::New,
-        AppTurnModeDto::Continue { continuation_ref } => {
-            floe_app::TurnMode::Continue(floe_app::ContinuationRef {
-                run_id: continuation_ref.run_id,
-                executor_generation: continuation_ref.executor_generation,
-                level: continuation_ref.level,
+    match request.command {
+        AppCommandDto::ConversationStartTurn {
+            session_id,
+            expected_revision,
+            text,
+            mode,
+            retry_of,
+        } => {
+            let mode = match mode {
+                AppTurnModeDto::NewTurn {} => floe_app::TurnMode::New,
+                AppTurnModeDto::Continue { continuation_ref } => {
+                    floe_app::TurnMode::Continue(floe_app::ContinuationRef {
+                        run_id: continuation_ref.run_id,
+                        executor_generation: continuation_ref.executor_generation,
+                        level: continuation_ref.level,
+                    })
+                }
+            };
+            let receipt = host_request
+                .services()
+                .start_turn(
+                    host_request.caller(),
+                    floe_app::StartTurn {
+                        command_id: request.command_id,
+                        session_id,
+                        expected_revision,
+                        text,
+                        mode,
+                        retry_of,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::CommandReceipt {
+                receipt: AppCommandReceiptDto {
+                    command_id: receipt.command_id,
+                    admission: AppCommandStatusDto::Accepted,
+                    run_id: Some(receipt.run_id),
+                    session_revision: Some(receipt.session_revision),
+                    issue: None,
+                },
             })
         }
-    };
-    let receipt = host_request
-        .services()
-        .start_turn(
-            host_request.caller(),
-            floe_app::StartTurn {
-                command_id: request.command_id,
-                session_id,
-                expected_revision,
-                text,
-                mode,
-                retry_of,
-            },
-        )
-        .map_err(service_error)?;
-    Ok(AppCommandResultDto::CommandReceipt {
-        receipt: AppCommandReceiptDto {
-            command_id: receipt.command_id,
-            admission: AppCommandStatusDto::Accepted,
-            run_id: Some(receipt.run_id),
-            session_revision: Some(receipt.session_revision),
-            issue: None,
-        },
-    })
+        AppCommandDto::ConversationCancelRun { run_id, .. } => {
+            let receipt = host_request
+                .services()
+                .cancel_run(
+                    host_request.caller(),
+                    floe_app::CancelRun {
+                        command_id: request.command_id,
+                        run_id,
+                    },
+                )
+                .map_err(service_error)?;
+            Ok(AppCommandResultDto::CancelRunReceipt {
+                command_id: receipt.command_id,
+                run_id: receipt.run_id,
+                outcome: match receipt.outcome {
+                    floe_app::CancelRunOutcome::Accepted => AppCancelRunOutcomeDto::Accepted,
+                },
+            })
+        }
+    }
 }
 
 pub(crate) fn query(
@@ -339,6 +354,7 @@ mod tests {
 
     struct Services {
         captured: Mutex<Option<(Uuid, String, floe_app::StartTurn)>>,
+        cancelled: Mutex<Option<(Uuid, String, floe_app::CancelRun)>>,
     }
 
     impl floe_app::HostServices for Services {
@@ -364,6 +380,23 @@ mod tests {
                 session_revision: request.expected_revision + 1,
             })
         }
+
+        fn cancel_run(
+            &self,
+            caller: &floe_app::CallerContext,
+            request: floe_app::CancelRun,
+        ) -> Result<floe_app::CancelRunReceipt, floe_app::ServiceError> {
+            *self.cancelled.lock().unwrap() = Some((
+                caller.person_id(),
+                caller.device_id().to_owned(),
+                request.clone(),
+            ));
+            Ok(floe_app::CancelRunReceipt {
+                command_id: request.command_id,
+                run_id: request.run_id,
+                outcome: floe_app::CancelRunOutcome::Accepted,
+            })
+        }
     }
 
     #[test]
@@ -372,6 +405,7 @@ mod tests {
         let host = floe_app::AppHost::bootstrap_claim(
             Services {
                 captured: Mutex::new(None),
+                cancelled: Mutex::new(None),
             },
             floe_app::LocalIdentityClaim {
                 person_id,
@@ -398,7 +432,9 @@ mod tests {
         )
         .unwrap();
 
-        let AppCommandResultDto::CommandReceipt { receipt } = result;
+        let AppCommandResultDto::CommandReceipt { receipt } = result else {
+            panic!("expected command receipt");
+        };
         assert_eq!(receipt.command_id, command_id);
         assert_eq!(receipt.session_revision, Some(8));
         let (captured_person, captured_device, captured) = host
@@ -411,5 +447,55 @@ mod tests {
         assert_eq!(captured_person, person_id);
         assert_eq!(captured_device, "mac-local");
         assert_eq!(captured.session_id, session_id);
+    }
+
+    #[test]
+    fn cancel_run_uses_verified_host_identity() {
+        let person_id = Uuid::new_v4();
+        let host = floe_app::AppHost::bootstrap_claim(
+            Services {
+                captured: Mutex::new(None),
+                cancelled: Mutex::new(None),
+            },
+            floe_app::LocalIdentityClaim {
+                person_id,
+                device_id: "mac-local".into(),
+            },
+        )
+        .unwrap();
+        let command_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let result = command_with_host(
+            &host,
+            AppCommandRequestDto {
+                schema_version: floe_protocol::APP_WIRE_VERSION,
+                request_id: Uuid::new_v4(),
+                command_id,
+                command: AppCommandDto::ConversationCancelRun {
+                    run_id,
+                    reason: floe_protocol::AppCancelRunReasonDto::UserRequested,
+                },
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            AppCommandResultDto::CancelRunReceipt {
+                command_id,
+                run_id,
+                outcome: AppCancelRunOutcomeDto::Accepted,
+            }
+        );
+        let (captured_person, captured_device, captured) = host
+            .legacy_services()
+            .cancelled
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured_person, person_id);
+        assert_eq!(captured_device, "mac-local");
+        assert_eq!(captured.run_id, run_id);
     }
 }

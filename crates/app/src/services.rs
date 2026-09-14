@@ -61,6 +61,34 @@ pub struct CommandReceipt {
     pub session_revision: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelRun {
+    pub command_id: Uuid,
+    pub run_id: Uuid,
+}
+
+impl CancelRun {
+    pub fn validate(&self) -> Result<(), ServiceError> {
+        if self.command_id.is_nil() || self.run_id.is_nil() {
+            Err(ServiceError::InvalidInput)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CancelRunOutcome {
+    Accepted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancelRunReceipt {
+    pub command_id: Uuid,
+    pub run_id: Uuid,
+    pub outcome: CancelRunOutcome,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceError {
     InvalidInput,
@@ -77,6 +105,12 @@ pub trait ConversationCommands {
         caller: &CallerContext,
         request: StartTurn,
     ) -> Result<CommandReceipt, ServiceError>;
+
+    fn cancel_run(
+        &self,
+        caller: &CallerContext,
+        request: CancelRun,
+    ) -> Result<CancelRunReceipt, ServiceError>;
 }
 
 #[cfg(test)]
@@ -110,5 +144,22 @@ mod tests {
             level: 1,
         });
         assert_eq!(invalid.validate(), Err(ServiceError::InvalidInput));
+    }
+
+    #[test]
+    fn cancel_run_rejects_invalid_ids() {
+        let request = CancelRun {
+            command_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+        };
+        assert_eq!(request.validate(), Ok(()));
+        assert_eq!(
+            CancelRun {
+                command_id: Uuid::nil(),
+                ..request
+            }
+            .validate(),
+            Err(ServiceError::InvalidInput)
+        );
     }
 }

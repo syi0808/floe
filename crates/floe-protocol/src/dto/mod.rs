@@ -40,8 +40,9 @@ pub use calendar::{
     CalendarScopeDto, CalendarSelectionDto, CalendarSourceDto, CalendarSyncStatusDto,
 };
 pub use commands::{
-    AppCancelRunReasonDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
-    AppCommandResultDto, AppCommandStatusDto, AppContinuationRefDto, AppTurnModeDto,
+    AppCancelRunOutcomeDto, AppCancelRunReasonDto, AppCommandDto, AppCommandReceiptDto,
+    AppCommandRequestDto, AppCommandResultDto, AppCommandStatusDto, AppContinuationRefDto,
+    AppTurnModeDto,
 };
 pub use day::{
     CalendarBatchDto, CalendarRecordDto, CaptureDto, CaptureProcessingDto, CaptureSourceDto,

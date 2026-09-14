@@ -112,6 +112,34 @@ void main() {
     },
   );
 
+  test('CancelRun keeps command identity across transport retries', () async {
+    final identifiers = Queue.of([
+      '00000000-0000-4000-8000-000000000231',
+      '00000000-0000-4000-8000-000000000232',
+      '00000000-0000-4000-8000-000000000233',
+    ]);
+    final transport = FakeTransport();
+    final client = FloeClient(transport, newId: identifiers.removeFirst);
+    final command = client.prepareCancelRun(
+      '00000000-0000-4000-8000-000000000234',
+    );
+    transport.command = (request) async => {
+      'kind': 'cancel_run_receipt',
+      'command_id': request['command_id'],
+      'run_id': (request['command'] as Map)['run_id'],
+      'outcome': 'accepted',
+    };
+
+    final first = await client.submitCancelRun(command);
+    final second = await client.submitCancelRun(command);
+    expect(first.outcome, AppCancelRunOutcome.accepted);
+    expect(second.commandId, command.commandId);
+    for (final request in transport.commandRequests) {
+      expect(request['command_id'], command.commandId);
+      expect((request['command'] as Map)['reason'], 'user_requested');
+    }
+  });
+
   test('close settles a pending request once and rejects new work', () async {
     final transport = FakeTransport();
     final response = Completer<Map<String, dynamic>>();

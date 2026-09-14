@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "schema_version": 2,
+  "request_id": "00000000-0000-4000-8000-000000000007",
+  "result": {
+    "kind": "cancel_run_receipt",
+    "command_id": "00000000-0000-4000-8000-000000000008",
+    "run_id": "00000000-0000-4000-8000-000000000009",
+    "outcome": "accepted"
+  }
+}
