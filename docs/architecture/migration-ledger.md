@@ -1112,6 +1112,43 @@ Review found that the old Console constructor quarantined corrupt producer/trust
 - New tests exercise an actual local HTTP response after an optional initialization failure, safe error projection, rejected credential binding, invalid required configuration, and restart with corrupt producer/trust data in disposable temporary directories. No real account/credential reset or OAuth operation ran; the healthy response is local HTTP, not an actual inference completion.
 - P20 remains partial: main still contains provider-specific assembly; broad Console state ownership, application service composition, HTTP/web relocation and final credential-health/LLM product acceptance remain pending. Optional status is not evidence that a remote provider is healthy.
 
+## P03 target contracts and role-neutral engine — 2026-09-14
+
+Code checkpoint `901aee4`: the agent contract package now lives at `crates/contracts/agent` and
+`crates/runtime/agent` provides an owner-admitted, headless role-neutral loop.
+`EngineRequest` carries an injected role, bounded context coverage, catalog and
+`ExecutionScope`; no session or authoritative task map is created in runtime.
+Object-safe model, tool, delegation and journal ports fence every external
+dispatch with an awaited intent. Replay keys are deterministic per request
+scope/iteration/ordinal and journal replay additionally verifies principal,
+run/task, descriptor revision, invocation key and input digest. Tool results
+retain typed issue, artifacts and dependency coverage. Registered JSON schemas
+are compiled before invocation; malformed batches are rejected before the first
+tool call and schema-invalid calls produce bounded observations. Model usage is
+reserved and settled exactly once through the shared scope budget.
+
+Focused tests in `crates/runtime/agent/src/engine.rs` cover model→tool→model
+completion, journal rejection with zero tool dispatch, malformed batch fencing,
+required-field schema correction with zero provider calls, post-intent deadline
+classification, complete-batch byte fencing, and provider result identity/size
+rejection. Parent independently ran `cargo test -p floe-agent-runtime -p
+floe-agent-contract` (7 runtime tests, no contract unit tests) and targeted
+all-target Clippy with `-D warnings`; both passed. Legacy A2A now re-exports the
+canonical `AgentCard`; its three tests passed, including the added exact card
+schema/8-entry/control-character regression. The legacy live loop remains
+unchanged. Owner terminalization/finalization, external journal
+implementations, provider transport replay and Apple/real-LLM acceptance are
+not complete; no T01/T06/T12/T19/T29/T37 acceptance is claimed.
+
+The target driver's journal checkpoint currently records only iteration, not a
+durable pending-batch cursor, and attempt IDs are freshly allocated. Deterministic
+invocation keys are not proof of crash recovery or provider idempotency. Model
+usage intent/result ports have no production durable adapter yet; journal failure
+handling, root terminal receipts, complete transitive output provenance, child
+failure continuation, and request/catalog aggregate byte admission still require
+owner integration before live cutover. The target driver is deliberately not
+connected to FFI or real providers at this checkpoint.
+
 ## P02 provider admission bounds — 2026-09-14
 
 Code checkpoint `5c5945b` adds `crates/runtime/execution/src/limits.rs:1` (`CallLimiter`, `CallLimits`, owned `CallPermit`) and integrates it into actual remote model/view dispatch in `crates/floe-infra/src/remote_model.rs`. The preceding goal turn made authoritative code/test progress; this turn continues implementation rather than redefining the full objective.
