@@ -3275,3 +3275,29 @@ executable P12/P16 task is to replace that slot with bounded request
 correlations while keeping Run lifetime in Conversation and making UI Release
 pure correlation cleanup. T09/T18 and Apple acceptance remain pending. P12
 remains partial.
+
+### P12/P16 terminal UI lifetime checkpoint (2026-09-15)
+
+Code checkpoint `e98d09c` removes `Release` as a prerequisite for subsequent
+work after the current FFI job reaches terminal state. A submission with a new
+request identity now replaces the completed UI correlation automatically,
+while an exact same-id/same-payload submission still replays its result and a
+same-id/different-payload submission remains a conflict. A live job continues
+to reject replacement, preserving the existing single-worker safety boundary.
+
+Implemented and wired: terminal correlation replacement without UI release.
+Direct encrypted-host validation completed two distinct production
+Conversation Runs on the same Session without releasing the first request,
+observed the second durable Session revision and confirmed that the superseded
+poll correlation is gone. The focused production replay/terminal Stop test and
+all three existing worker lifecycle tests also passed. Workspace all-target
+check, diff check and the migration boundary gate passed (20 nodes / 69 edges /
+no errors). No Apple UI, device-local model or live provider was exercised.
+
+Blocker/remove-by: one live FFI job still occupies the global worker slot and
+the worker thread still blocks on that job, so a management query or revocation
+cannot complete concurrently with a model-blocked root. The next executable
+P12/P16 task is to split bounded UI request correlations from the live
+Conversation executor and directly exercise T09/T22 without weakening Vault
+authorization or settlement. T18 is covered at the host boundary, but full
+P12/P16 and Apple acceptance remain pending.
