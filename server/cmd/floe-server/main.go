@@ -251,6 +251,9 @@ func main() {
 				log.Printf("Optional module %s unavailable: %s", teamsStatus.Name, teamsStatus.Diagnostic)
 			}
 		}
+		if management.RequiredSecurityError() != nil {
+			log.Fatal("Cannot start local server: required security is unavailable")
+		}
 		handler = local
 		log.Printf("Local dashboard: http://%s/manage/", address)
 		log.Printf("Administrator token file (keep private): %s", filepath.Join(directory, "admin-token"))
