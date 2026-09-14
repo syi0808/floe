@@ -1784,3 +1784,54 @@ foreground-priority scope ownership, repository SQL ownership and T28/T31 remain
 pending. The earlier Flutter decision:null fixture discrepancy and Apple app
 secure-storage UI failure remain unresolved. No normal Floe app data, Vault keys
 or external provider/account data was reset. The full goal remains active.
+
+## P08 current learning evidence and compaction safety — 2026-09-14
+
+Code checkpoint `343dc1d`: Knowledge LearningEvidenceSnapshot now contains the
+settled LearningOutcome, canonical DependencyCoverage and an explicit learning
+versus context projection purpose, replacing the lossy completed boolean. The
+narrow EvidenceReader port and admit_learning_evidence bind person, session,
+revision and requested turns, and re-read current state on every admission.
+Only personal, completed, inactive/no-pending, learning-purpose, independently
+covered original evidence is admitted. Unknown/dependent coverage is not newly
+eligible for learning; malformed coverage remains a Vault integrity failure.
+
+Core supplies that port through a reader borrowing the same immediate transaction
+as candidate creation or learner enqueue/claim. It uses the validated session
+loader, checks requested-turn coverage and key health, and excludes Compaction
+placeholders from actual message membership. Scoped sessions are not personal
+learning evidence. The duplicate raw learner-source SQL/admission path was
+removed. Queue revision mismatches remain StaleContext; candidate CAS mismatches
+remain Conflict. Existing observation hash inputs, idempotency, target revision
+CAS, review/settlement independence and final key checks remain.
+
+Direct encrypted-Vault regression first reproduced a real bug: after compaction,
+the summary placeholder's turn ID incorrectly admitted a new memory candidate.
+The final flow stages an original candidate, compacts and recovers its source,
+rejects new candidate/job admission from the summary, then approves the original
+candidate and verifies its saved Memory source references and archive recovery.
+This distinguishes retaining verified original references from treating a summary
+as fresh independent evidence. It does not add archive-derived learning admission.
+
+During integration, existing regressions caught changed error precedence for a
+foreign turn and expected revision zero. The owner logic was corrected to retain
+NotFound and Conflict respectively; the original Core assertions were not weakened.
+New Knowledge regressions cover current-state re-reading, source request identity,
+stale revision/coverage, malformed requests before reading, absent/halted outcomes,
+wrong projection purpose and malformed coverage.
+
+Final validation passed: Knowledge tests (16), full Core encrypted-Vault tests
+(20), FFI learner tests (3), FFI Memory review tests (4), workspace all-target
+check, Knowledge all-target Clippy with `-D warnings`, and migration checker
+(17 nodes / 50 edges / 0 errors). This checkpoint did not rebuild the Apple app,
+exercise its UI or call a real learner model; the live Apple answer evidence in
+the preceding checkpoint applies only to optional Memory context.
+
+P08 and the full plan remain incomplete. Core is still the temporary governed
+Conversation/storage adapter; final Conversation ownership and repository SQL
+placement await P12/P13. Inference-backed learner dispatch, foreground-priority
+scope ownership, full Playbook delivery and complete T28/T31 acceptance remain
+pending. Tasks/Notes optional-context cutover and full T11 also remain pending.
+The previously recorded client fixture and Apple secure-storage UI failures were
+not resolved by this checkpoint. No app data, keys or external account/provider
+data was reset; only disposable encrypted test Vaults were exercised.
