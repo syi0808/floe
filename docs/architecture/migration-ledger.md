@@ -1158,3 +1158,52 @@ Code checkpoint `5c5945b` adds `crates/runtime/execution/src/limits.rs:1` (`Call
 - Direct existing remote adapter flow: `cargo test -p floe-infra --lib remote_model::tests`, all 9 pass, including authenticated bounded loopback view responses and replay protections. New queued-source regression directly polls the actual read future, cancels it, and verifies a real listening socket receives zero connections; root cancellation and independent model admission remain unaffected.
 - `cargo test -p floe-execution limits::tests`: all 4 pass. Regression coverage includes full queue rejection, active+pending byte limits, drop cleanup, no-queue mode, inherited deadline cause and queue timeout cleanup. `cargo clippy -p floe-execution --all-targets -- -D warnings`: pass.
 - Temporary bridge/remove-by P07/P14/P24: limits currently live in the legacy remote adapter, not the final provider/model registry. Provider-specific policies, foreground/learner priority allocation, all native/other source adapters, and queue admission before Inference marks its transport attempt dispatched remain pending owner cutover. Current outer legacy model attempts conservatively mark the ModelRunner invocation before its internal queue; no network dispatch is claimed by the socket-zero regression. No external account or actual LLM run occurred.
+
+## P05 canonical Day service and storage fences — 2026-09-14
+
+Code checkpoint `e53893a` moves capture/entity/calendar/projection values into
+`crates/modules/day`, keeping explicit legacy domain re-exports. `FloeCore`
+timeline commands, day snapshots, and calendar methods now delegate to the
+generic repository-injected `DayService`; calendar mirror rules are no longer
+duplicated in the legacy facade. The service preserves original value validation,
+source-authority transitions, revision comparisons, selected/all scope behavior,
+read-only external events, and DST projection. `CalendarObservation` rejects
+connection/provider/authority/revision mismatch on the persistence read; Turso
+retains its previous-mirror CAS.
+
+Review found read-then-write timeline updates lacked an atomic repository fence.
+The Day port now requires event/task/note CAS methods without unsafe default
+implementations. The Turso adapter validates the current revision inside an
+immediate transaction before writing. Capture classification checks revision and
+Pending state in the same transaction as entity creation; conflicts cannot leave
+a second classified entity. Structured error messages and metadata survive both
+Day/Core adapter directions without parsing human-readable strings.
+
+Parent validation after the calendar facade cutover:
+- `cargo test -p floe-core --lib core::tests`: 5 passed, including 3 new regressions
+  for actual repository stale task CAS, mismatched observation identity, and
+  competing capture classification with no orphan entity. Existing reopen and
+  stale-classification assertions remain intact.
+- `cargo test -p floe-core --test calendar --test calendar_sources --test
+  calendar_dst --test connected_calendar`: 21 passed, covering durable cache,
+  stale observations, disconnect/reconnect, permission authority, partial source
+  failures, and exact 23/25-hour day projection.
+- `cargo test -p floe-day`: 3 moved domain regressions passed; target all-target
+  Clippy with `-D warnings` passed; `cargo build -p floe-ffi` passed.
+- Rebuilt native dylib plus `flutter test
+  test/features/day_canvas/calendar_gateway_test.dart
+  test/features/day_canvas/calendar_action_gateway_test.dart --reporter expanded`:
+  all 9 passed with no skips. These directly exercise Flutter/native ABI fixtures,
+  source provenance, restart, partial failure, cached drag capability, and locked
+  vault rejection. No live external account was called or reset.
+- `flutter build macos --debug` passed and produced the macOS application bundle.
+
+P05 remains an integrated migration slice, not final composition acceptance:
+the concrete Turso adapter and legacy facade still reside in `floe-core`,
+calendar lease/context ownership remains there pending P09/P13/P16, and legacy
+ID-only mutation APIs have not gained owner-admitted caller identity. Target
+observation admission is not yet the sole connection observation entry point.
+Apple UI, iPhone/iPad, real providers, and T23/T25/T28 end-to-end acceptance remain
+unverified. Direct macOS UI automation could not initialize: the earlier native
+pipe startup failed, and a reset/retry reported missing
+`CUA_REPL_ENABLED_SURFACES`. No Floe application data was reset for these checks.
