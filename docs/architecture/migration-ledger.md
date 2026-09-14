@@ -46,8 +46,8 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P08 | Pending |
 | P09 | Pending |
 | P10 | Pending |
-| P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
-| P12 | Partial: production new-turn caller uses ConversationService; continuation and legacy Expert bridges pending |
+| P11 | Partial: all production built-in delegation uses durable Task coordinator; target ownership move pending |
+| P12 | Partial: production new-turn caller and built-in Task delegation use extracted services; continuation pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2811,3 +2811,48 @@ also remain pending. The next executable task is to register staged endpoints
 for every enabled built-in Expert in the shared Directory and route all
 delegations through `TaskCoordinator`, removing the non-Schedule leaf bridge.
 P12 remains partial.
+
+### P11/P12 built-in Expert Task cutover checkpoint (2026-09-15)
+
+Code checkpoint `9e0d796` removes the production non-Schedule direct Expert
+leaf dispatch from the Conversation Engine adapter. `OpenVault` now retains the
+shared Directory, synchronizes every currently enabled non-Schedule built-in
+card into that Directory after registry setup, and registers one staged FFI
+endpoint for the legacy built-in implementations. Both Schedule and every other
+built-in delegation consequently enter the same `TaskCoordinator`, which owns
+definition lookup, durable Task intent, endpoint execution, terminal state and
+exact Task replay. The Manager catalog is derived from the same placement-
+filtered active cards used by the endpoint rather than the unfiltered registry
+list.
+
+The staged endpoint reconstructs the existing governed source readers and
+model boundary from an owned, Run-bound request context. It rechecks Vault
+person/device/session binding, refuses Schedule dispatch, re-reads current
+enabled cards and source assignments, and returns exact dependency coverage to
+the coordinator. Directory synchronization uses explicit unregister/register
+operations; no second root or direct Task receipt construction remains in the
+Conversation delegation port. This endpoint remains a P11 migration bridge
+until the seven built-in implementations and their scoped tool ports move to
+`floe-experts-builtin`.
+
+Implemented and wired: production Directory registration and durable Task
+dispatch for every enabled built-in Expert. Direct validation exercised the
+actual Vault worker with a Commitments delegation lacking reviewed Mail access:
+the endpoint failed closed as `AccessReviewRequired`, the Manager recovered,
+and the failed Task and exact issue remained encrypted and readable after Vault
+lock/reopen. This distinguishes the new durable coordinator path from the
+removed in-memory leaf receipt. All 87 FFI library tests passed, including the
+production Schedule Task and exact Conversation command replay flows. Workspace
+all-target check and diff check passed. FFI Clippy completed with only existing
+repository lint classes, and the migration boundary gate passed (20 nodes / 68
+edges / no errors). No Apple UI, live provider/model, or successful reviewed
+non-Schedule production Expert flow was exercised.
+
+Blocker/remove-by: continuation and explicit recovery still use legacy
+`AgentRuntime`; built-in installation remains a turn prerequisite; Engine
+progress is projected only as terminal Finished; and durable journal replay
+reads plus complete tool/delegation transcript projection remain pending. The
+staged FFI Expert endpoint is removed by P11 when scoped ports and built-in
+implementations move to `floe-experts-builtin`. The next executable P12 task is
+to move continuation/recovery generation onto `ConversationService` without a
+new-to-legacy root fallback. P11 and P12 remain partial.
