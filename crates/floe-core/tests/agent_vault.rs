@@ -65,6 +65,105 @@ impl VaultKeyProvider for Keys {
 }
 
 #[tokio::test]
+async fn compacted_summary_is_not_new_learning_evidence_but_original_refs_survive() {
+    let root = private_root();
+    let person = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person, Keys::default())
+        .await
+        .unwrap();
+    let mut session = vault.create_session().await.unwrap();
+    let turn_id = Uuid::new_v4();
+    session.messages = vec![
+        AgentMessage::User {
+            turn_id,
+            text: "Remember that I prefer afternoon meetings.".into(),
+        },
+        AgentMessage::Assistant {
+            turn_id,
+            text: "Prepared for review.".into(),
+        },
+    ];
+    session.revision = 1;
+    session.last_outcome = Some(AgentOutcome::Completed);
+    governed_commit(&vault, &session, 0).await;
+    let now = Utc::now();
+    let mut request = StageMemoryCandidate {
+        session_id: session.id,
+        expected_session_revision: session.revision,
+        turn_ids: vec![turn_id],
+        observation_kind: LearningObservationKind::ExplicitRemember,
+        digest: "Explicit meeting preference".into(),
+        value: memory_value("Prefers afternoon meetings"),
+        target_id: None,
+        base_revision: None,
+        extractor_version: "memory.fixture.v1".into(),
+        prompt_version: "explicit-memory.v1".into(),
+        actor: KnowledgeActor::User,
+        created_at: now,
+    };
+    let candidate = vault.stage_memory_candidate(request.clone()).await.unwrap();
+    let compacted = vault
+        .compact_session(
+            session.id,
+            session.revision,
+            turn_id,
+            "Meeting preference discussed".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.recover_session(&compacted.recovery).await.unwrap(),
+        session
+    );
+    request.expected_session_revision = compacted.session.revision;
+    request.digest = "Attempt to relearn from the summary".into();
+    assert_eq!(
+        vault.stage_memory_candidate(request).await,
+        Err(AgentFailure::NotFound)
+    );
+    assert_eq!(
+        vault
+            .enqueue_learner_review(
+                LearnerReviewInput {
+                    schema_version: KNOWLEDGE_VERSION,
+                    run_id: Uuid::new_v4(),
+                    person_id: person,
+                    session_id: session.id,
+                    session_revision: compacted.session.revision,
+                    turn_ids: vec![turn_id],
+                    outcome: LearningOutcome::Completed,
+                    digest: "Attempt to learn from summary".into(),
+                    current_memories: vec![],
+                    observed_at: now,
+                },
+                now
+            )
+            .await,
+        Err(AgentFailure::NotFound)
+    );
+    let approved = vault
+        .decide_knowledge_candidate(
+            candidate.id,
+            KnowledgeDecisionKind::Approve,
+            KnowledgeActor::User,
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        approved.revision.unwrap().source_refs,
+        candidate.source_refs
+    );
+    let memories = vault.personal_memory_context(now).await.unwrap();
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0].source_refs, candidate.source_refs);
+    assert_eq!(
+        vault.recover_session(&compacted.recovery).await.unwrap(),
+        session
+    );
+}
+
+#[tokio::test]
 async fn memory_context_budget_is_optional_but_key_failure_remains_fatal() {
     let root = private_root();
     let keys = Keys::default();

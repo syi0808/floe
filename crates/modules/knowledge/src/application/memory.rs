@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use floe_kernel::{AgentFailure, PersonId};
 
 use crate::{
-    EpistemicStatus, KNOWLEDGE_VERSION, KnowledgeActor, KnowledgePayload, KnowledgeRevision,
-    KnowledgeRevisionState, LearningEvidenceSnapshot, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin,
-    MemorySummary, PersonalMemoryKind, StageMemoryCandidate,
+    EpistemicStatus, EvidenceProjectionPurpose, EvidenceReader, KNOWLEDGE_VERSION, KnowledgeActor,
+    KnowledgePayload, KnowledgeRevision, KnowledgeRevisionState, LearningEvidenceSnapshot,
+    LearningOutcome, MAX_MEMORY_OVERVIEW_ITEMS, MemoryOrigin, MemorySummary, PersonalMemoryKind,
+    StageMemoryCandidate,
 };
 
 const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
@@ -140,13 +141,27 @@ pub fn validate_learning_evidence(
     expected_revision: u64,
     turn_ids: &[uuid::Uuid],
 ) -> Result<(), AgentFailure> {
+    validate_evidence_request(
+        expected_person_id,
+        expected_session_id,
+        expected_revision,
+        turn_ids,
+    )?;
     if snapshot.person_id != expected_person_id
         || snapshot.session_id != expected_session_id
         || snapshot.revision != expected_revision
     {
         return Err(AgentFailure::Conflict);
     }
-    if snapshot.active_turn || snapshot.pending_output || !snapshot.completed || !snapshot.personal
+    snapshot
+        .coverage
+        .validate()
+        .map_err(|_| AgentFailure::VaultUnavailable)?;
+    if snapshot.active_turn
+        || snapshot.pending_output
+        || snapshot.outcome != Some(LearningOutcome::Completed)
+        || !snapshot.personal
+        || snapshot.purpose != EvidenceProjectionPurpose::Learning
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -155,6 +170,56 @@ pub fn validate_learning_evidence(
         .any(|turn_id| !snapshot.turn_ids.contains(turn_id))
     {
         return Err(AgentFailure::NotFound);
+    }
+    if snapshot.coverage != floe_context_contract::DependencyCoverage::Independent {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
+}
+
+pub async fn admit_learning_evidence(
+    reader: &impl EvidenceReader,
+    expected_person_id: floe_kernel::PersonId,
+    expected_session_id: uuid::Uuid,
+    expected_revision: u64,
+    turn_ids: &[uuid::Uuid],
+) -> Result<LearningEvidenceSnapshot, AgentFailure> {
+    validate_evidence_request(
+        expected_person_id,
+        expected_session_id,
+        expected_revision,
+        turn_ids,
+    )?;
+    let snapshot = reader
+        .read_learning_evidence(expected_person_id, expected_session_id, turn_ids)
+        .await?;
+    validate_learning_evidence(
+        &snapshot,
+        expected_person_id,
+        expected_session_id,
+        expected_revision,
+        turn_ids,
+    )?;
+    Ok(snapshot)
+}
+
+fn validate_evidence_request(
+    person_id: floe_kernel::PersonId,
+    session_id: uuid::Uuid,
+    revision: u64,
+    turn_ids: &[uuid::Uuid],
+) -> Result<(), AgentFailure> {
+    if !person_id.is_valid()
+        || session_id.is_nil()
+        || turn_ids.is_empty()
+        || turn_ids.len() > MAX_EVIDENCE_REFS
+        || turn_ids.iter().any(uuid::Uuid::is_nil)
+        || turn_ids.iter().collect::<HashSet<_>>().len() != turn_ids.len()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    if revision == 0 {
+        return Err(AgentFailure::Conflict);
     }
     Ok(())
 }
@@ -165,6 +230,8 @@ fn valid_version(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
     use chrono::Utc;
     use floe_kernel::PersonId;
     use uuid::Uuid;
@@ -232,11 +299,13 @@ mod tests {
             person_id,
             session_id: request.session_id,
             revision: request.expected_session_revision,
-            completed: true,
+            outcome: Some(LearningOutcome::Completed),
             personal: true,
             active_turn: false,
             pending_output: false,
             turn_ids: request.turn_ids.clone(),
+            coverage: floe_context_contract::DependencyCoverage::Independent,
+            purpose: EvidenceProjectionPurpose::Learning,
         };
         let validate = |snapshot: &LearningEvidenceSnapshot| {
             validate_learning_evidence(
@@ -257,9 +326,23 @@ mod tests {
         snapshot.personal = false;
         assert_eq!(validate(&snapshot), Err(AgentFailure::PolicyDenied));
         snapshot.personal = true;
-        snapshot.completed = false;
+        snapshot.outcome = None;
         assert_eq!(validate(&snapshot), Err(AgentFailure::PolicyDenied));
-        snapshot.completed = true;
+        snapshot.outcome = Some(LearningOutcome::Halted {
+            reason: AgentFailure::Cancelled,
+        });
+        assert_eq!(validate(&snapshot), Err(AgentFailure::PolicyDenied));
+        snapshot.outcome = Some(LearningOutcome::Completed);
+        snapshot.coverage = floe_context_contract::DependencyCoverage::Unknown;
+        assert_eq!(validate(&snapshot), Err(AgentFailure::PolicyDenied));
+        snapshot.coverage = floe_context_contract::DependencyCoverage::Dependent {
+            dependencies: Vec::new(),
+        };
+        assert_eq!(validate(&snapshot), Err(AgentFailure::VaultUnavailable));
+        snapshot.coverage = floe_context_contract::DependencyCoverage::Independent;
+        snapshot.purpose = EvidenceProjectionPurpose::Context;
+        assert_eq!(validate(&snapshot), Err(AgentFailure::PolicyDenied));
+        snapshot.purpose = EvidenceProjectionPurpose::Learning;
         snapshot.turn_ids.clear();
         assert_eq!(validate(&snapshot), Err(AgentFailure::NotFound));
     }
@@ -300,5 +383,119 @@ mod tests {
             project_memory_summary(&revision, PersonId::new()),
             Err(AgentFailure::VaultUnavailable)
         );
+    }
+
+    struct SequenceEvidenceReader {
+        snapshots: Mutex<VecDeque<LearningEvidenceSnapshot>>,
+        requests: Mutex<Vec<(PersonId, Uuid, Vec<Uuid>)>>,
+    }
+
+    impl crate::EvidenceReader for SequenceEvidenceReader {
+        fn read_learning_evidence(
+            &self,
+            person_id: PersonId,
+            session_id: Uuid,
+            turn_ids: &[Uuid],
+        ) -> impl std::future::Future<Output = Result<LearningEvidenceSnapshot, AgentFailure>> + Send
+        {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((person_id, session_id, turn_ids.to_vec()));
+            let snapshot = self.snapshots.lock().unwrap().pop_front();
+            async move { snapshot.ok_or(AgentFailure::VaultUnavailable) }
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_reads_current_snapshot_and_preserves_request_identity() {
+        let person_id = PersonId::new();
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let request_turns = vec![turn_id];
+        let snapshot = LearningEvidenceSnapshot {
+            person_id,
+            session_id,
+            revision: 4,
+            outcome: Some(LearningOutcome::Completed),
+            personal: true,
+            active_turn: false,
+            pending_output: false,
+            turn_ids: request_turns.clone(),
+            coverage: floe_context_contract::DependencyCoverage::Independent,
+            purpose: EvidenceProjectionPurpose::Learning,
+        };
+        let mut changed_revision = snapshot.clone();
+        changed_revision.revision += 1;
+        let mut changed_coverage = snapshot.clone();
+        changed_coverage.coverage = floe_context_contract::DependencyCoverage::Unknown;
+        let reader = SequenceEvidenceReader {
+            snapshots: Mutex::new(VecDeque::from([
+                snapshot,
+                changed_revision,
+                changed_coverage,
+            ])),
+            requests: Mutex::new(Vec::new()),
+        };
+
+        assert!(admit_learning_evidence(
+            &reader,
+            person_id,
+            session_id,
+            4,
+            &request_turns,
+        )
+        .await
+        .is_ok());
+        assert_eq!(
+            admit_learning_evidence(&reader, person_id, session_id, 4, &request_turns).await,
+            Err(AgentFailure::Conflict)
+        );
+        assert_eq!(
+            admit_learning_evidence(&reader, person_id, session_id, 4, &request_turns).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(
+            *reader.requests.lock().unwrap(),
+            vec![
+                (person_id, session_id, request_turns.clone()),
+                (person_id, session_id, request_turns.clone()),
+                (person_id, session_id, request_turns),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn admission_rejects_malformed_owner_request_before_read() {
+        let person_id = PersonId::new();
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let reader = SequenceEvidenceReader {
+            snapshots: Mutex::new(VecDeque::new()),
+            requests: Mutex::new(Vec::new()),
+        };
+        for (person_id, session_id, revision, turn_ids) in [
+            (PersonId(Uuid::nil()), session_id, 1, vec![turn_id]),
+            (person_id, Uuid::nil(), 1, vec![turn_id]),
+            (person_id, session_id, 1, Vec::new()),
+            (person_id, session_id, 1, vec![Uuid::nil()]),
+            (person_id, session_id, 1, vec![turn_id, turn_id]),
+        ] {
+            assert_eq!(
+                admit_learning_evidence(&reader, person_id, session_id, revision, &turn_ids)
+                    .await,
+                Err(AgentFailure::InvalidInput)
+            );
+        }
+        let too_many_turns = (0..33).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+        assert_eq!(
+            admit_learning_evidence(&reader, person_id, session_id, 1, &too_many_turns).await,
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            admit_learning_evidence(&reader, person_id, session_id, 0, &[turn_id]).await,
+            Err(AgentFailure::Conflict)
+        );
+        assert!(reader.requests.lock().unwrap().is_empty());
     }
 }

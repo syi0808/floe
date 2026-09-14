@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use floe_context_contract::DependencyCoverage;
 use floe_kernel::{AgentFailure, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -291,11 +292,19 @@ pub struct LearningEvidenceSnapshot {
     pub person_id: PersonId,
     pub session_id: Uuid,
     pub revision: u64,
-    pub completed: bool,
+    pub outcome: Option<LearningOutcome>,
     pub personal: bool,
     pub active_turn: bool,
     pub pending_output: bool,
     pub turn_ids: Vec<Uuid>,
+    pub coverage: DependencyCoverage,
+    pub purpose: EvidenceProjectionPurpose,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvidenceProjectionPurpose {
+    Learning,
+    Context,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

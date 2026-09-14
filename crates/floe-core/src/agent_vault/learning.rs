@@ -10,8 +10,8 @@ use floe_knowledge::{
     LearnerReviewInput, LearnerReviewJob, LearningEvidenceRef, LearningEvidenceSnapshot,
     LearningObservation, LearningObservationKind, LearningOutcome, MAX_CONTEXT_MEMORIES,
     MAX_CONTEXT_MEMORY_BYTES, MemoryOverviewSnapshot, MemoryReviewSnapshot, StageMemoryCandidate,
-    claim_learner_job, project_memory_summary, reject_learner_claim, settle_learner_job,
-    validate_learner_input, validate_learner_job_lifecycle, validate_learning_evidence,
+    admit_learning_evidence, claim_learner_job, project_memory_summary, reject_learner_claim,
+    settle_learner_job, validate_learner_input, validate_learner_job_lifecycle,
     validate_memory_overview_limit, validate_memory_review_candidate, validate_stage_request,
 };
 use serde::Serialize;
@@ -78,40 +78,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(storage)?;
         let result = async {
-            let session = self.session_on(&transaction, request.session_id).await?;
-            let message_turns: HashSet<_> = session
-                .messages
-                .iter()
-                .map(floe_agent::AgentMessage::turn_id)
-                .collect();
-            let snapshot = LearningEvidenceSnapshot {
-                person_id: session.person_id,
-                session_id: session.id,
-                revision: session.revision,
-                completed: session.last_outcome == Some(AgentOutcome::Completed),
-                personal: session.data_classes == [DataClass::Personal],
-                active_turn: session.active_turn.is_some(),
-                pending_output: session.pending_output.is_some(),
-                turn_ids: message_turns.into_iter().collect(),
+            let evidence_reader = TransactionLearningEvidence {
+                vault: self,
+                transaction: &transaction,
             };
-            validate_learning_evidence(
-                &snapshot,
+            let snapshot = admit_learning_evidence(
+                &evidence_reader,
                 self.person_id,
                 request.session_id,
                 request.expected_session_revision,
                 &request.turn_ids,
-            )?;
-            let evidence = request
-                .turn_ids
-                .iter()
-                .map(|turn_id| floe_agent::LearningEvidenceRef {
-                    session_id: request.session_id,
-                    turn_id: *turn_id,
-                })
-                .collect::<Vec<_>>();
-            if !evidence_is_independent(&transaction, self.person_id, &evidence).await? {
-                return Err(AgentFailure::PolicyDenied);
-            }
+            )
+            .await?;
 
             let source_refs = request
                 .turn_ids
@@ -127,7 +105,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &source_refs,
                 request.observation_kind,
                 request.digest.trim(),
-                session.last_outcome,
+                snapshot.outcome,
             ))?;
             let observation = if let Some(existing) = observation_by_hash(
                 &transaction,
@@ -625,7 +603,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if let Some(job) = learner_job_by_key(&transaction, self.person_id, &idempotency_key).await? {
                 return Ok(job);
             }
-            validate_learner_source(&transaction, &input).await?;
+            validate_learner_source(self, &transaction, &input).await?;
             let job_id = Uuid::new_v4();
             input.run_id = job_id;
             let job = LearnerReviewJob {
@@ -804,7 +782,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 LearnerJobClaim::Claimed(claimed) => claimed,
             };
-            if let Err(failure) = validate_learner_source(&transaction, &job.input).await {
+            if let Err(failure) = validate_learner_source(self, &transaction, &job.input).await {
                 let rejected = reject_learner_claim(&lifecycle, failure, now)?;
                 job.state = rejected.state;
                 job.attempts = rejected.attempts;
@@ -1049,63 +1027,80 @@ async fn evidence_is_independent(
     Ok(true)
 }
 
-async fn validate_learner_source(
+struct TransactionLearningEvidence<'reader, 'connection, Keys: VaultKeyProvider> {
+    vault: &'reader EncryptedAgentVault<Keys>,
+    transaction: &'reader turso::transaction::Transaction<'connection>,
+}
+
+impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
+    for TransactionLearningEvidence<'_, '_, Keys>
+{
+    async fn read_learning_evidence(
+        &self,
+        person_id: floe_domain::PersonId,
+        session_id: Uuid,
+        turn_ids: &[Uuid],
+    ) -> Result<LearningEvidenceSnapshot, AgentFailure> {
+        if person_id != self.vault.person_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let session = self.vault.session_on(self.transaction, session_id).await?;
+        let mut coverage = floe_domain::DependencyCoverage::Independent;
+        for turn_id in turn_ids {
+            let current = super::context_dependencies::read_context_dependency_coverage(
+                self.transaction,
+                person_id,
+                session_id,
+                *turn_id,
+            )
+            .await?;
+            coverage = coverage
+                .merge(&current)
+                .map_err(|_| AgentFailure::VaultUnavailable)?;
+        }
+        let turn_ids = session
+            .messages
+            .iter()
+            .filter(|message| !matches!(message, floe_agent::AgentMessage::Compaction { .. }))
+            .map(floe_agent::AgentMessage::turn_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        self.vault.check_access()?;
+        Ok(LearningEvidenceSnapshot {
+            person_id: session.person_id,
+            session_id: session.id,
+            revision: session.revision,
+            outcome: session.last_outcome.map(Into::into),
+            personal: session.scope.is_none() && session.data_classes == [DataClass::Personal],
+            active_turn: session.active_turn.is_some(),
+            pending_output: session.pending_output.is_some(),
+            turn_ids,
+            coverage,
+            purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
+        })
+    }
+}
+
+async fn validate_learner_source<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
     transaction: &turso::transaction::Transaction<'_>,
     input: &LearnerReviewInput,
 ) -> Result<(), AgentFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT revision, payload FROM agent_sessions WHERE id = ?",
-            [input.session_id.to_string()],
-        )
-        .await
-        .map_err(storage)?;
-    let row = rows
-        .next()
-        .await
-        .map_err(storage)?
-        .ok_or(AgentFailure::NotFound)?;
-    let expected_revision =
-        i64::try_from(input.session_revision).map_err(|_| AgentFailure::InvalidInput)?;
-    if row.get::<i64>(0).map_err(storage)? != expected_revision {
-        return Err(AgentFailure::StaleContext);
-    }
-    let session: floe_agent::AgentSession = decode(&row.get::<String>(1).map_err(storage)?)?;
-    if session.id != input.session_id
-        || session.person_id != input.person_id
-        || session.revision != input.session_revision
-        || session.scope.is_some()
-        || session.data_classes != [DataClass::Personal]
-        || session.active_turn.is_some()
-        || session.pending_output.is_some()
-        || session.last_outcome.map(Into::into) != Some(input.outcome)
-    {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let evidence = session
-        .messages
-        .iter()
-        .map(floe_agent::AgentMessage::turn_id)
-        .collect::<HashSet<_>>();
-    if input
-        .turn_ids
-        .iter()
-        .any(|turn_id| !evidence.contains(turn_id))
-    {
-        return Err(AgentFailure::NotFound);
-    }
-    let evidence = input
-        .turn_ids
-        .iter()
-        .map(|turn_id| floe_agent::LearningEvidenceRef {
-            session_id: input.session_id,
-            turn_id: *turn_id,
-        })
-        .collect::<Vec<_>>();
-    if !evidence_is_independent(transaction, input.person_id, &evidence).await? {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(())
+    let reader = TransactionLearningEvidence { vault, transaction };
+    admit_learning_evidence(
+        &reader,
+        input.person_id,
+        input.session_id,
+        input.session_revision,
+        &input.turn_ids,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|failure| match failure {
+        AgentFailure::Conflict => AgentFailure::StaleContext,
+        other => other,
+    })
 }
 
 fn validate_learner_job(
