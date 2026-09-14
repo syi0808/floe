@@ -10,9 +10,9 @@ chrono.workspace = true
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-knowledge = { path = "../knowledge" }
+serde_json.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 floe-kernel = { path = "../../contracts/kernel" }
-serde_json.workspace = true

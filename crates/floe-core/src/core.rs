@@ -1,12 +1,13 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use floe_context::SourceLeaseRegistry;
 use floe_domain::*;
 use std::sync::Arc;
 
-use crate::{CoreError, ErrorCode, TursoStore, calendar_lease::CalendarLeaseRegistry};
+use crate::{CoreError, ErrorCode, TursoStore};
 
 pub struct FloeCore {
     pub(crate) store: TursoStore,
-    pub(crate) lease_registry: Arc<CalendarLeaseRegistry>,
+    pub(crate) lease_registry: Arc<SourceLeaseRegistry>,
 }
 
 pub use floe_day::Classification;
@@ -15,7 +16,7 @@ impl FloeCore {
     pub async fn open(path: impl AsRef<std::path::Path>) -> Result<Self, CoreError> {
         Ok(Self {
             store: TursoStore::open(path).await?,
-            lease_registry: Arc::new(CalendarLeaseRegistry::new()),
+            lease_registry: Arc::new(SourceLeaseRegistry::new()),
         })
     }
 

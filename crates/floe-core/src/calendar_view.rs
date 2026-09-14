@@ -23,9 +23,11 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use floe_context::MAX_LEASE_BYTES;
+
 use crate::FloeCore;
 use crate::calendar_lease::{
-    CalendarLeaseDependencies, CalendarLeaseEntry, CalendarLeaseKey, MAX_LEASE_BYTES,
+    CalendarLeaseDependencies, CalendarLeaseEntry, CalendarLeaseKey,
 };
 
 #[derive(Clone)]
@@ -375,7 +377,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::StaleContext);
         }
         let (evidence, _) = self.core.lease_registry.observation(dependency)?;
-        if evidence.dependency != *dependency {
+        if evidence != *dependency {
             return Err(AgentFailure::StaleContext);
         }
         Ok(())
@@ -398,7 +400,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             return Err(AgentFailure::StaleContext);
         }
         let (evidence, subject) = self.core.lease_registry.observation(dependency)?;
-        if evidence.dependency != *dependency {
+        if evidence != *dependency {
             return Err(AgentFailure::StaleContext);
         }
         check_running(deadline, &cancellation)?;
@@ -503,7 +505,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         before: AuthorizedRead,
         after: AuthorizedRead,
         mut view: ExpertTimelineView,
-        reservation: Option<crate::calendar_lease::LeaseReservation>,
+        reservation: Option<floe_context::SourceLeaseReservation>,
         observed_at: DateTime<Utc>,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,
@@ -571,7 +573,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
             _reservation: reservation,
         });
         self.core.lease_registry.retain_observation(
-            dependency.clone(),
+            dependency.dependency.clone(),
             before.stamp.native_subject_fingerprint.clone(),
             expires_at_monotonic,
         )?;
@@ -1059,7 +1061,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
         key: CalendarLeaseKey,
-        reservation: Option<crate::calendar_lease::LeaseReservation>,
+        reservation: Option<floe_context::SourceLeaseReservation>,
         mut observation: CalendarObservation,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,
@@ -1194,7 +1196,7 @@ impl<'host, Access: CalendarReadAccess, Clock: Fn() -> DateTime<Utc> + Sync>
         range_end: DateTime<Utc>,
         before: AuthorizedRead,
         key: CalendarLeaseKey,
-        reservation: Option<crate::calendar_lease::LeaseReservation>,
+        reservation: Option<floe_context::SourceLeaseReservation>,
         mut observation: ProjectedCalendarObservation,
         acquisition_wall: DateTime<Utc>,
         acquisition_mono: Instant,

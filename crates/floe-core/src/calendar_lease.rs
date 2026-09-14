@@ -1,8 +1,3 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
-
 use chrono::{DateTime, Utc};
 use floe_agent::AgentFailure;
 use floe_domain::{
@@ -15,8 +10,9 @@ use uuid::Uuid;
 
 use crate::calendar_view::CalendarReadAccessAdmission;
 
-pub(crate) const MAX_LIVE_LEASES: usize = 64;
-pub(crate) const MAX_LEASE_BYTES: usize = 4 * 1024 * 1024;
+use floe_context::SourceLeaseReservation;
+#[cfg(test)]
+use floe_context::SourceLeaseRegistry;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
 pub(crate) struct CalendarLeaseKey {
@@ -117,188 +113,12 @@ impl CalendarLeaseDependencies {
     }
 }
 
-struct PersonLeaseUsage {
-    leases: usize,
-    bytes: usize,
-}
-
-struct LeaseReservationDrop {
-    registry: Arc<CalendarLeaseRegistry>,
-    person_id: PersonId,
-    bytes: usize,
-}
-
-impl Drop for LeaseReservationDrop {
-    fn drop(&mut self) {
-        if let Ok(mut usage) = self.registry.usage.lock() {
-            if let Some(person_usage) = usage.get_mut(&self.person_id) {
-                person_usage.leases = person_usage.leases.saturating_sub(1);
-                person_usage.bytes = person_usage.bytes.saturating_sub(self.bytes);
-                if person_usage.leases == 0 {
-                    usage.remove(&self.person_id);
-                }
-            }
-        }
-    }
-}
-
-pub(crate) struct LeaseReservation {
-    _drop: Arc<LeaseReservationDrop>,
-}
-
-pub(crate) struct CalendarLeaseRegistry {
-    process_incarnation: Uuid,
-    usage: Mutex<HashMap<PersonId, PersonLeaseUsage>>,
-    evidence: Mutex<HashMap<(PersonId, Uuid), LiveObservationEvidence>>,
-}
-
-struct LiveObservationEvidence {
-    dependency: CalendarLeaseDependencies,
-    native_subject_fingerprint: String,
-    expires_at: Instant,
-}
-
-impl CalendarLeaseRegistry {
-    pub(crate) fn new() -> Self {
-        Self {
-            process_incarnation: Uuid::new_v4(),
-            usage: Mutex::new(HashMap::new()),
-            evidence: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub(crate) fn process_incarnation(&self) -> Uuid {
-        self.process_incarnation
-    }
-
-    pub(crate) fn reserve(
-        self: &Arc<Self>,
-        person_id: PersonId,
-        bytes: usize,
-    ) -> Result<LeaseReservation, AgentFailure> {
-        if bytes == 0 || bytes > MAX_LEASE_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        let person_usage = usage.entry(person_id).or_insert(PersonLeaseUsage {
-            leases: 0,
-            bytes: 0,
-        });
-        let Some(next_leases) = person_usage.leases.checked_add(1) else {
-            return Err(AgentFailure::BudgetExceeded);
-        };
-        let Some(next_bytes) = person_usage.bytes.checked_add(bytes) else {
-            return Err(AgentFailure::BudgetExceeded);
-        };
-        if next_leases > MAX_LIVE_LEASES || next_bytes > MAX_LEASE_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        person_usage.leases = next_leases;
-        person_usage.bytes = next_bytes;
-        drop(usage);
-        Ok(LeaseReservation {
-            _drop: Arc::new(LeaseReservationDrop {
-                registry: Arc::clone(self),
-                person_id,
-                bytes,
-            }),
-        })
-    }
-
-    pub(crate) fn retain_observation(
-        &self,
-        dependency: CalendarLeaseDependencies,
-        native_subject_fingerprint: String,
-        expires_at: Instant,
-    ) -> Result<(), AgentFailure> {
-        if native_subject_fingerprint.len() != 64
-            || native_subject_fingerprint
-                .bytes()
-                .any(|byte| !byte.is_ascii_hexdigit())
-            || expires_at <= Instant::now()
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let key = (dependency.person_id, dependency.observation_id);
-        let bytes = serde_json::to_vec(&dependency)
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .len()
-            .checked_add(native_subject_fingerprint.len())
-            .ok_or(AgentFailure::BudgetExceeded)?;
-        let mut evidence = self
-            .evidence
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        evidence.retain(|_, item| item.expires_at > Instant::now());
-        if evidence.contains_key(&key) {
-            return Err(AgentFailure::Conflict);
-        }
-        let person_count = evidence
-            .values()
-            .filter(|item| item.dependency.person_id == dependency.person_id)
-            .count();
-        let person_bytes = evidence
-            .values()
-            .filter(|item| item.dependency.person_id == dependency.person_id)
-            .filter_map(|item| {
-                serde_json::to_vec(&item.dependency)
-                    .ok()
-                    .map(|payload| payload.len() + item_subject_bytes(item))
-            })
-            .try_fold(0usize, usize::checked_add)
-            .ok_or(AgentFailure::BudgetExceeded)?;
-        if person_count >= MAX_LIVE_LEASES
-            || person_bytes
-                .checked_add(bytes)
-                .is_none_or(|total| total > MAX_LEASE_BYTES)
-        {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        evidence.insert(
-            key,
-            LiveObservationEvidence {
-                dependency,
-                native_subject_fingerprint,
-                expires_at,
-            },
-        );
-        Ok(())
-    }
-
-    pub(crate) fn observation(
-        &self,
-        dependency: &ContextDependency,
-    ) -> Result<(CalendarLeaseDependencies, String), AgentFailure> {
-        let key = (dependency.person_id(), dependency.observation_id());
-        let mut evidence = self
-            .evidence
-            .lock()
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
-        evidence.retain(|_, item| item.expires_at > Instant::now());
-        let item = evidence.get(&key).ok_or(AgentFailure::StaleContext)?;
-        if item.dependency.dependency != *dependency {
-            return Err(AgentFailure::StaleContext);
-        }
-        Ok((
-            item.dependency.clone(),
-            item.native_subject_fingerprint.clone(),
-        ))
-    }
-}
-
-fn item_subject_bytes(item: &LiveObservationEvidence) -> usize {
-    item.native_subject_fingerprint.len()
-}
-
 pub(crate) struct CalendarLeaseEntry {
     pub(crate) _key: CalendarLeaseKey,
     pub(crate) dependencies: CalendarLeaseDependencies,
     pub(crate) view: floe_agent::ExpertTimelineView,
     pub(crate) expires_at: Instant,
-    pub(crate) _reservation: LeaseReservation,
+    pub(crate) _reservation: SourceLeaseReservation,
 }
 
 impl CalendarLeaseEntry {
@@ -312,7 +132,7 @@ mod tests {
     use super::*;
     use floe_domain::{ConnectorId, GrantDataCategory, ResourceHandle, SourceAuthority};
 
-    fn sample_dependency() -> CalendarLeaseDependencies {
+    fn sample_dependency(process_incarnation: Uuid) -> CalendarLeaseDependencies {
         let person_id = PersonId::new();
         let source = GrantSourceBinding::try_new(
             person_id,
@@ -358,7 +178,7 @@ mod tests {
         };
         CalendarLeaseDependencies::from_admission(
             Uuid::new_v4(),
-            Uuid::new_v4(),
+            process_incarnation,
             Uuid::new_v4(),
             &admission,
             &key,
@@ -370,23 +190,23 @@ mod tests {
 
     #[test]
     fn retained_observation_requires_exact_dependency_identity() {
-        let registry = CalendarLeaseRegistry::new();
-        let dependency = sample_dependency();
+        let registry = SourceLeaseRegistry::new();
+        let dependency = sample_dependency(registry.process_incarnation());
         let expiry = Instant::now() + std::time::Duration::from_secs(5);
         registry
-            .retain_observation(dependency.clone(), "a".repeat(64), expiry)
+            .retain_observation(dependency.dependency.clone(), "a".repeat(64), expiry)
             .unwrap();
         assert!(registry.observation(&dependency.dependency).is_ok());
         assert_eq!(
             registry.retain_observation(
-                dependency.clone(),
+                dependency.dependency.clone(),
                 "a".repeat(64),
                 Instant::now() + std::time::Duration::from_secs(5),
             ),
             Err(AgentFailure::Conflict)
         );
         assert_eq!(
-            CalendarLeaseRegistry::new().observation(&dependency.dependency),
+            SourceLeaseRegistry::new().observation(&dependency.dependency),
             Err(AgentFailure::StaleContext)
         );
 
@@ -418,11 +238,11 @@ mod tests {
 
     #[tokio::test]
     async fn retained_observation_expires_without_reopen_repair() {
-        let registry = CalendarLeaseRegistry::new();
-        let dependency = sample_dependency();
+        let registry = SourceLeaseRegistry::new();
+        let dependency = sample_dependency(registry.process_incarnation());
         registry
             .retain_observation(
-                dependency.clone(),
+                dependency.dependency.clone(),
                 "b".repeat(64),
                 Instant::now() + std::time::Duration::from_millis(10),
             )

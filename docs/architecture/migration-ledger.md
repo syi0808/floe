@@ -2094,3 +2094,47 @@ The provider-neutral live registry/quota extraction remains pending. Calendar
 query keys, cache payloads and historical observation retention still reside in
 the temporary Core adapter. This checkpoint does not finish SourceViews, history
 replacement, P09 acceptance or the full P00–P25 goal.
+
+### P09 live source registry ownership checkpoint (2026-09-14)
+
+The CalendarLeaseRegistry implementation is removed from Core. Context now owns
+SourceLeaseRegistry and SourceLeaseReservation, including per-Person live payload
+reservations, RAII quota release, process incarnation and bounded retained
+observation evidence. Core temporarily composes that owner directly. Calendar
+keeps its query key, range conversion, full acquired scope and view payload cache;
+retention passes the canonical ContextDependency instead of duplicating the
+Calendar adapter's complete dependency structure. Calendar query fingerprint
+serialization and native subject/generation checks are unchanged.
+
+Retained evidence uses the canonical dependency and opaque 64-hex subject
+fingerprint. Exact dependency identity, duplicate rejection, monotonic expiry and
+restart invalidation remain enforced. Retention additionally rejects evidence
+from a different registry incarnation. Byte accounting stores the measured size
+once instead of silently skipping entries when reserialization fails. Both
+reservation and retained-evidence limits remain 64 entries / 4 MiB per Person;
+the retained byte measure now covers the actual canonical payload rather than
+the removed redundant Calendar fields. This registry is not a permission grant;
+source authorization and release fences still run in their existing adapters.
+
+Context-contract exposes its existing PersonId type so Context needs no new
+production Kernel edge. JSON accounting moves serde_json from Context's test-only
+dependencies to production. Existing Calendar exact-identity, changed-query,
+restart and expiry assertions remain, with fixtures using the real registry
+incarnation. Live evidence cleanup does not erase ConsumedLineage.
+
+Validation passed: Context tests (17, including 6 registry regressions), Core
+Calendar runtime tests (37), action tests (20), the original Calendar lease tests
+(2, subagent run), workspace all-target check, Context all-target Clippy with
+`-D warnings`, diff check and migration gate (18 nodes / 57 edges / no errors).
+Quota tests verify measured stored bytes, per-Person count/byte isolation and
+RAII release. The stored-byte threshold regression injects a near-limit private
+accounting value; it is not a 4 MiB source payload exercise. Expiry-capacity tests
+set private monotonic deadlines deterministically, while the existing observation
+expiry test also exercises elapsed time. These tests do not establish complete
+SourceViews or full P09 acceptance.
+
+This is a migration checkpoint, not completion of P09's SourceViews, projection,
+history replacement, archive ports or final acceptance. Core's Context wiring
+remains temporary composition, not a final Vault-to-Context dependency. No live
+external account data or normal Apple UI was exercised by this extraction; runtime
+validation uses controlled source/model and disposable local storage fixtures.
