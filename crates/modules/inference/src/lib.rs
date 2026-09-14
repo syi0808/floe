@@ -11,4 +11,7 @@ pub use api::{
     DataRecipient, ExecutionLocation, ModelCapabilities, ModelConsumer, ModelProfile, ModelPurpose,
     PlannedRoute, RecipientConstraint, RouteRequest,
 };
-pub use application::{InferenceRouter, RoutePlanError};
+pub use application::{
+    AttemptJournal, AttemptLifecycle, InferenceRouter, ModelAttemptRecord, ModelAttemptState,
+    RoutePlanError,
+};

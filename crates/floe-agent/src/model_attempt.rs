@@ -32,22 +32,21 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             &mut request.remaining_tokens,
             &mut request.remaining_cost_micros,
         )?;
-        let mut record = crate::ModelAttemptRecord {
-            id: uuid::Uuid::new_v4(),
-            turn_id: request.turn_id,
-            scope_id: request.session_id,
-            attempt: attempt + 1,
-            placement: model.placement(),
-            state: crate::ModelAttemptState::Started,
-            failure: None,
-            usage: crate::ModelUsage {
-                attempts: 1,
-                tokens: accounting.estimated_tokens(),
-                estimated_tokens: accounting.estimated_tokens(),
-                cost_micros: 0,
-            },
+        let mut recorded_usage = crate::ModelUsage {
+            attempts: 1,
+            tokens: accounting.estimated_tokens(),
+            estimated_tokens: accounting.estimated_tokens(),
+            cost_micros: 0,
         };
-        request.usage.record(record.clone()).await?;
+        let lifecycle = floe_inference::AttemptLifecycle::start(
+            &request.usage,
+            request.turn_id,
+            request.session_id,
+            attempt + 1,
+            model.placement(),
+            recorded_usage,
+        )
+        .await?;
         let result = tokio::select! {
             biased;
             _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
@@ -62,9 +61,9 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         let result = result.and_then(|response| {
             consumed_tokens = response.used_tokens;
             consumed_cost = response.cost_micros;
-            record.usage.tokens = consumed_tokens;
-            record.usage.cost_micros = consumed_cost;
-            record.usage.estimated_tokens = 0;
+            recorded_usage.tokens = consumed_tokens;
+            recorded_usage.cost_micros = consumed_cost;
+            recorded_usage.estimated_tokens = 0;
             accounting.settle(consumed_tokens, consumed_cost)?;
             if response.used_tokens > request.remaining_tokens
                 || response.cost_micros > request.remaining_cost_micros
@@ -154,15 +153,9 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             }
             Ok(response)
         });
-        record.state = match &result {
-            Ok(_) => crate::ModelAttemptState::Accepted,
-            Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) => {
-                crate::ModelAttemptState::Interrupted
-            }
-            Err(_) => crate::ModelAttemptState::Rejected,
-        };
-        record.failure = result.as_ref().err().copied();
-        request.usage.record(record).await?;
+        lifecycle
+            .finish(result.as_ref().err().copied(), recorded_usage)
+            .await?;
         match result {
             Ok(mut response) => {
                 response.used_tokens = response

@@ -43,14 +43,6 @@ impl UsageLedger {
         self
     }
 
-    pub(crate) async fn record(
-        &self,
-        record: crate::ModelAttemptRecord,
-    ) -> Result<(), AgentFailure> {
-        self.record_entry(crate::model_journal::JournalRecord::Model(record))
-            .await
-    }
-
     pub(crate) async fn record_capability(
         &self,
         record: crate::CapabilityExecution,
@@ -90,5 +82,12 @@ impl UsageLedger {
 
     pub fn begin(&self, tokens: &mut u64, cost: &mut u64) -> Result<UsageAttempt, AgentFailure> {
         self.budget.begin(tokens, cost)
+    }
+}
+
+impl floe_inference::AttemptJournal for UsageLedger {
+    async fn record_attempt(&self, record: crate::ModelAttemptRecord) -> Result<(), AgentFailure> {
+        self.record_entry(crate::model_journal::JournalRecord::Model(record))
+            .await
     }
 }
