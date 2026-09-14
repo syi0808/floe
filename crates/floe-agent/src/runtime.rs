@@ -4,6 +4,7 @@ use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::*;
+use floe_execution::tasks::run_bounded as bounded;
 
 pub struct AgentRuntime<'runtime, Store, Model, Host> {
     pub store: &'runtime Store,
@@ -1129,43 +1130,4 @@ fn unavailable_capability_attempts(
                 })
         })
         .count()
-}
-
-async fn bounded<ResultValue>(
-    future: impl Future<Output = Result<ResultValue, AgentFailure>>,
-    deadline: Instant,
-    cancellation: &Cancellation,
-) -> Result<ResultValue, AgentFailure> {
-    check_running(deadline, cancellation)?;
-    let mut guard = CallCancellationGuard(Some(cancellation.clone()));
-    let result = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
-        result = tokio::time::timeout_at(deadline, future) => {
-            result.map_err(|_| {
-                cancellation.cancel_with_reason(CancelReason::Deadline);
-                AgentFailure::DeadlineExceeded
-            })?
-        },
-    };
-    if matches!(result, Err(AgentFailure::DeadlineExceeded)) {
-        cancellation.cancel_with_reason(CancelReason::Deadline);
-    }
-    if !matches!(
-        result,
-        Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded)
-    ) {
-        guard.0 = None;
-    }
-    result
-}
-
-struct CallCancellationGuard(Option<Cancellation>);
-
-impl Drop for CallCancellationGuard {
-    fn drop(&mut self) {
-        if let Some(cancellation) = &self.0 {
-            cancellation.cancel_with_reason(CancelReason::OwnerDropped);
-        }
-    }
 }
