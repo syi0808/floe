@@ -1004,11 +1004,13 @@ Code commit: `4c7598c30abb381389fe7afe2a372515d624943f`, based on `dba3b9c`. Pub
 | DataAccessGrant/GrantState transitions and SessionProtection | Access P04 | Remain legacy-side, never placed in context-contract |
 | Calendar/Event/Task/Note entity behavior | Day P05 | Remain floe-domain until owner extraction |
 | CoverageAccumulator and replay admission orchestration | Context P09 / Access P04 | Remain legacy-side, not shared contract policy |
-| P01 step 7: Day/Access conversion separation | Protocol/FFI conversion work; final free-function cutover P16 | **Pending**: legacy protocol conversion.rs still imports floe-domain. Do not call P01 or final wire boundary fully complete. |
+| P01 step 7: Day/Access conversion separation | Protocol/FFI conversion work; final free-function cutover P16 | Implemented in bf1b628: explicit wire calendar DTOs and private FFI conversion functions; final target-path relocation and v2 acceptance remain pending. |
 
-Next integration work must finish the outstanding P01 conversion separation with preserved wire semantics, then continue P02 execution scopes/budgets/diagnostics and dependent packages. P00/P01 changes are not a substitute for the full P00–P25 objective, the 22-crate final DAG, real Flutter/Go cutover, or Apple/LLM acceptance.
+Next integration work continues P02 execution scopes/budgets/diagnostics and dependent packages. P00/P01 changes are not a substitute for the full P00–P25 objective, the 22-crate final DAG, real Flutter/Go cutover, or Apple/LLM acceptance.
 
 ## P02 execution primitives — 2026-09-14
+
+P01 wire follow-up is recorded after this checkpoint below.
 
 Code checkpoint `488e059` extracts the actual existing runtime cancellation/accounting path. This is not completion of all P02 contracts. The preceding goal turn was **progress** (committed P00/P01 code/evidence); this turn adds implemented runtime behavior and validation rather than restating status.
 
@@ -1032,3 +1034,24 @@ Code checkpoint `488e059` extracts the actual existing runtime cancellation/acco
 ### Still incomplete
 
 `ExecutionScope` (deadline/trace/lease assembly), generic `ExecutionJournal`, provider concurrency/pending bounds, root work/finalization reserve, typed task handles with bounded join/settlement, `floe-diagnostics`, asynchronous FFI correlation and scoped panic-hook stdout/stderr smoke remain pending P02. The extracted budget conservatively retains the existing single active attempt and bounded unknown-usage estimate; it is not yet the full N05 root/child/finalization lease design. The role-neutral engine and owner finalization must still stop treating every child failure as a root halt (P03/P11/P12). T07/T08/T22/T29/T38 product acceptance is not established by these primitive tests. No post-change macOS/iPhone/iPad/LLM run has been performed in this checkpoint.
+
+## P01 wire boundary follow-up — 2026-09-14
+
+Code checkpoint `bf1b628`, based on `9ef9463`, removes the protocol crate's domain dependency and conversion implementations without changing JSON schema versions or authorization behavior.
+
+| old_path | symbol | source_sha | target_path | owner | package_id | temporary_bridge | remove_by | invariant | evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| crates/floe-protocol/src/conversion.rs | Day/Capture/Event/Task/Note conversion implementations | 9ef9463 | crates/floe-ffi/src/conversion.rs:1 | floe-ffi | P01 | private free functions at legacy FFI path | P16 | I06, I14 | bf1b628; domain constructors retained; original three conversion regressions moved intact |
+| crates/floe-protocol/src/dto/{day,agent,local_context}.rs | embedded calendar domain types and immutable authorities | 9ef9463 | crates/floe-protocol/src/dto/calendar.rs:1 and existing DTO files | floe-protocol | P01 | legacy protocol path until relocation | P16/P24 | I06, I14 | explicit wire DTOs; context values directly reference canonical context contract; no floe_domain in protocol source or manifest |
+| crates/floe-infra/src/native_calendar.rs | native observation schedule/failure conversion | 9ef9463 | crates/floe-infra/src/native_calendar.rs:24 | floe-provider-adapters | P01/P14 | native adapter still consumes app-wire DTOs pending native ABI split | P14 | I06 | private raw-boundary parsing retains validated domain constructors; no FFI dependency |
+
+### Validation and limitations
+
+- `cargo check --workspace`: pass. Migration architecture check: 10 nodes / 22 production edges / zero errors; not final DAG acceptance.
+- `cargo test -p floe-protocol`: 14 pass. The prior three domain conversion tests now execute at their owning FFI boundary, not deleted coverage.
+- `cargo test -p floe-ffi --lib conversion::tests`: 4 pass, including new nonempty calendar connection JSON equivalence (authority, providers, ranges, sync status and failure shapes).
+- `cargo test -p floe-infra --lib native_calendar::conversion_tests`: 1 pass; directly exercises timed/all-day parsing and rejects invalid intervals.
+- `cargo test -p floe-ffi --lib -- --test-threads=1`: all 73 pass. An earlier parallel run failed one signed loopback backend test with OS error 35; the serial run exercises that same test successfully. This does not establish parallel-suite reliability.
+- `cargo test -p floe-ffi --test c_abi`: 11 pass, 1 fails (`action_authority_defaults_to_ask_and_persists`, PolicyDenied). An isolated detached worktree at pre-change `9ef9463` reproduces the exact failure. The worktree was removed; policy checks and test assertions were not weakened. Resolve the pre-existing contract discrepancy in the Actions/FFI owner cutover.
+- `cargo clippy -p floe-protocol -p floe-ffi -p floe-infra --all-targets -- -D warnings`: fails at `AgentVaultOperationDto` with `large_enum_variant`; remaining crates are not certified lint-clean by this command. No lint suppression or unrelated boxing change was added.
+- No post-change native UI, iPhone/iPad, external provider account or real LLM run. P01 extraction is not v2/T37 or final product acceptance.
