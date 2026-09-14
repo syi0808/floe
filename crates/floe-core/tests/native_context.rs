@@ -8,6 +8,103 @@ use floe_domain::{PersonId, Priority};
 use uuid::Uuid;
 
 #[tokio::test]
+async fn optional_context_keeps_budget_issues_distinct_from_corrupt_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("optional-context.db");
+    let core = FloeCore::open(&path).await.unwrap();
+    let person = PersonId::new();
+    let now = Utc::now();
+    let task = core
+        .create_task(person, "one", None, Priority::Normal, now)
+        .await
+        .unwrap();
+    core.create_task(person, "two", None, Priority::Normal, now)
+        .await
+        .unwrap();
+    let note = core.create_note(person, "one", now).await.unwrap();
+    core.create_note(person, "two", now).await.unwrap();
+    let tasks = floe_context::acquire_optional_source(
+        floe_agent::ContextSource::Tasks,
+        core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
+    )
+    .await
+    .unwrap();
+    assert!(tasks.value.is_none());
+    assert_eq!(
+        tasks.issue.unwrap().reason,
+        floe_agent::ContextIssueReason::BudgetExceeded
+    );
+    let notes = floe_context::acquire_optional_source(
+        floe_agent::ContextSource::Notes,
+        core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
+    )
+    .await
+    .unwrap();
+    assert!(notes.value.is_none());
+    assert_eq!(
+        notes.issue.unwrap().reason,
+        floe_agent::ContextIssueReason::BudgetExceeded
+    );
+    let database = turso::Builder::new_local(path.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    let mut wrong_person_task = serde_json::to_value(&task).unwrap();
+    wrong_person_task["person_id"] = serde_json::json!(PersonId::new());
+    let mut wrong_person_note = serde_json::to_value(&note).unwrap();
+    wrong_person_note["person_id"] = serde_json::json!(PersonId::new());
+    connection
+        .execute(
+            "UPDATE tasks SET payload = ?",
+            [wrong_person_task.to_string()],
+        )
+        .await
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE notes SET payload = ?",
+            [wrong_person_note.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES)
+            .await,
+        Err(floe_agent::AgentFailure::StorageUnavailable)
+    );
+    assert_eq!(
+        core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES)
+            .await,
+        Err(floe_agent::AgentFailure::StorageUnavailable)
+    );
+    connection
+        .execute("UPDATE tasks SET payload = 'not-json'", ())
+        .await
+        .unwrap();
+    connection
+        .execute("UPDATE notes SET payload = 'not-json'", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        floe_context::acquire_optional_source(
+            floe_agent::ContextSource::Tasks,
+            core.task_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
+        )
+        .await,
+        Err(floe_agent::AgentFailure::StorageUnavailable)
+    );
+    assert_eq!(
+        floe_context::acquire_optional_source(
+            floe_agent::ContextSource::Notes,
+            core.note_context_view(person, Uuid::new_v4(), now, 1, MAX_NATIVE_CONTEXT_BYTES),
+        )
+        .await,
+        Err(floe_agent::AgentFailure::StorageUnavailable)
+    );
+}
+
+#[tokio::test]
 async fn projects_bounded_floe_native_task_and_note_views() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("native-context.db");

@@ -8,47 +8,6 @@ pub use context::{
     validate_dependency_freshness, validate_stored_dependency,
 };
 
-#[derive(Clone, Debug, Default)]
-pub struct CoverageAccumulator {
-    coverage: Option<DependencyCoverage>,
-}
-
-impl CoverageAccumulator {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    pub fn from_stored(coverage: DependencyCoverage) -> Result<Self, ContextDependencyError> {
-        coverage.validate()?;
-        Ok(Self {
-            coverage: Some(coverage),
-        })
-    }
-    pub fn coverage(&self) -> DependencyCoverage {
-        self.coverage.clone().unwrap_or(DependencyCoverage::Unknown)
-    }
-    pub fn record_host_dependency(
-        &mut self,
-        dependency: ContextDependency,
-    ) -> Result<(), ContextDependencyError> {
-        let incoming = DependencyCoverage::dependent(dependency)?;
-        self.coverage = Some(match self.coverage.take() {
-            Some(current) => current.merge(&incoming)?,
-            None => incoming,
-        });
-        Ok(())
-    }
-    pub fn record_host_independent(&mut self) -> Result<(), ContextDependencyError> {
-        self.coverage = Some(match self.coverage.take() {
-            Some(current) => current.merge(&DependencyCoverage::Independent)?,
-            None => DependencyCoverage::Independent,
-        });
-        Ok(())
-    }
-    pub fn mark_unknown(&mut self) {
-        self.coverage = Some(DependencyCoverage::Unknown);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,25 +145,6 @@ mod tests {
                 .unwrap(),
             DependencyCoverage::Unknown
         );
-    }
-
-    #[test]
-    fn fresh_accumulator_establishes_coverage() {
-        let mut accumulator = CoverageAccumulator::new();
-        assert_eq!(accumulator.coverage(), DependencyCoverage::Unknown);
-        accumulator.record_host_independent().unwrap();
-        assert_eq!(accumulator.coverage(), DependencyCoverage::Independent);
-        let mut dependent = CoverageAccumulator::new();
-        dependent
-            .record_host_dependency(dependency(Uuid::new_v4(), b"host"))
-            .unwrap();
-        assert!(matches!(
-            dependent.coverage(),
-            DependencyCoverage::Dependent { .. }
-        ));
-        accumulator.mark_unknown();
-        accumulator.record_host_independent().unwrap();
-        assert_eq!(accumulator.coverage(), DependencyCoverage::Unknown);
     }
 
     #[test]

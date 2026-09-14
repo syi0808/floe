@@ -215,7 +215,7 @@ async fn memory_context_budget_is_optional_but_key_failure_remains_fatal() {
             .await
             .unwrap();
         if index + 1 == MAX_CONTEXT_MEMORIES {
-            let snapshot = floe_knowledge::acquire_memory_context(&vault, now)
+            let snapshot = floe_context::acquire_memory_context(&vault, now)
                 .await
                 .unwrap();
             assert_eq!(snapshot.memories.len(), MAX_CONTEXT_MEMORIES);
@@ -226,7 +226,7 @@ async fn memory_context_budget_is_optional_but_key_failure_remains_fatal() {
         vault.personal_memory_context(now).await,
         Err(AgentFailure::BudgetExceeded)
     );
-    let snapshot = floe_knowledge::acquire_memory_context(&vault, now)
+    let snapshot = floe_context::acquire_memory_context(&vault, now)
         .await
         .unwrap();
     assert!(snapshot.memories.is_empty());
@@ -241,7 +241,7 @@ async fn memory_context_budget_is_optional_but_key_failure_remains_fatal() {
     );
     keys.0.blocked.store(true, Ordering::SeqCst);
     assert_eq!(
-        floe_knowledge::acquire_memory_context(&vault, now).await,
+        floe_context::acquire_memory_context(&vault, now).await,
         Err(AgentFailure::VaultUnavailable)
     );
 }

@@ -17,6 +17,7 @@ floe-diagnostics = { path = "../platform/diagnostics" }
 floe-domain = { path = "../floe-domain" }
 floe-infra = { path = "../floe-infra" }
 floe-knowledge = { path = "../modules/knowledge" }
+floe-context = { path = "../modules/context" }
 floe-protocol = { path = "../floe-protocol" }
 serde.workspace = true
 serde_json.workspace = true

@@ -82,7 +82,7 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
 async fn conversation_context(
     reader: &impl floe_knowledge::MemoryContextReader,
 ) -> Result<AgentContext, AgentFailure> {
-    let snapshot = floe_knowledge::acquire_memory_context(reader, chrono::Utc::now()).await?;
+    let snapshot = floe_context::acquire_memory_context(reader, chrono::Utc::now()).await?;
     Ok(AgentContext {
         projection_version: 1,
         persona: None,
@@ -101,7 +101,7 @@ async fn conversation_context(
 
 async fn run_general_turn<Keys: VaultKeyProvider>(
     inputs: &ConversationTurnInputs<'_, Keys>,
-    context: AgentContext,
+    mut context: AgentContext,
     cancellation: floe_agent::Cancellation,
     emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
@@ -193,7 +193,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         resolver: &resolver,
     };
     let policy = policy(&model, request.remote_route.as_ref());
-    let task_views = optional_task_views(core, person_id).await?;
+    let task_views = optional_task_views(core, person_id, &mut context).await?;
     let expert_cards = vault.enabled_expert_cards().await?;
     let builtin_setup = vault
         .builtin_expert_overview()
@@ -273,16 +273,19 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
 async fn optional_task_views(
     core: &FloeCore,
     person_id: PersonId,
+    context: &mut AgentContext,
 ) -> Result<Vec<NativeContextView>, AgentFailure> {
     let handle = uuid::Uuid::new_v5(&person_id.0, b"floe.tasks");
-    match core
-        .task_context_view(person_id, handle, chrono::Utc::now(), 16, 8 * 1024)
-        .await
-    {
-        Ok(view) => Ok(vec![view]),
-        Err(AgentFailure::CapabilityUnavailable) => Ok(vec![]),
-        Err(error) => Err(error),
-    }
+    let acquired = floe_context::acquire_optional_source(
+        floe_agent::ContextSource::Tasks,
+        core.task_context_view(person_id, handle, chrono::Utc::now(), 16, 8 * 1024),
+    ).await?;
+    floe_context::record_source_issue(
+        &mut context.optional_context_issues,
+        floe_agent::ContextSource::Tasks,
+        acquired.issue.map(|issue| issue.reason),
+    );
+    Ok(acquired.value.into_iter().collect())
 }
 
 pub(super) async fn recover<Keys: VaultKeyProvider>(
@@ -1518,11 +1521,12 @@ mod tests {
         }
     }
 
-    struct OptionalMemoryModel {
+    struct OptionalSourceModel {
         requests: Mutex<Vec<ModelRequest>>,
+        source: floe_agent::ContextSource,
     }
 
-    impl ModelRunner for OptionalMemoryModel {
+    impl ModelRunner for OptionalSourceModel {
         fn placement(&self) -> ModelPlacement {
             ModelPlacement::DeviceLocal
         }
@@ -1532,7 +1536,7 @@ mod tests {
             assert_eq!(request.context.optional_context_issues.len(), 1);
             assert_eq!(
                 request.context.optional_context_issues[0].source,
-                floe_agent::ContextSource::Memory
+                self.source
             );
             let asks_memory = request.messages.iter().any(|message| {
                 matches!(
@@ -1573,8 +1577,9 @@ mod tests {
             device_id: "test-device",
         };
         let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()), None);
-        let model = OptionalMemoryModel {
+        let model = OptionalSourceModel {
             requests: Mutex::new(Vec::new()),
+            source: floe_agent::ContextSource::Memory,
         };
         for failure in [
             AgentFailure::CapabilityUnavailable,
@@ -1634,6 +1639,44 @@ mod tests {
             );
         }
         assert_eq!(model.requests.lock().unwrap().len(), 6);
+    }
+
+    #[tokio::test]
+    async fn over_budget_optional_tasks_preserve_the_general_conversation() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let core = FloeCore::open(root.path().join("day.db")).await.unwrap();
+        for index in 0..17 {
+            core.create_task(person_id, format!("Task {index}"), None, floe_domain::Priority::Normal, chrono::Utc::now())
+                .await.unwrap();
+        }
+        let vault_root = root.path().join("vault");
+        fs::create_dir(&vault_root).unwrap();
+        fs::set_permissions(&vault_root, fs::Permissions::from_mode(0o700)).unwrap();
+        let vault = EncryptedAgentVault::create(&vault_root, person_id, AttentionTestKeys::default())
+            .await.unwrap();
+        let session = vault.create_session().await.unwrap();
+        let mut context = conversation_context(&vault).await.unwrap();
+        let views = optional_task_views(&core, person_id, &mut context).await.unwrap();
+        assert!(views.is_empty());
+        assert_eq!(context.optional_context_issues, vec![floe_agent::ContextIssue {
+            source: floe_agent::ContextSource::Tasks,
+            reason: floe_agent::ContextIssueReason::BudgetExceeded,
+        }]);
+        let model = OptionalSourceModel { requests: Mutex::new(vec![]), source: floe_agent::ContextSource::Tasks };
+        let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()), None);
+        let store = vault.governed_general_store(session.id);
+        let completed = AgentRuntime {
+            store: &store, model: &model, capabilities: &NoCapabilities,
+            policy: &policy, budget: AgentBudget::default(),
+        }.run_turn(AgentCommand {
+            schema_version: AGENT_VERSION, person_id, session_id: session.id,
+            expected_revision: 0, text: "Hello".into(),
+        }, context, Cancellation::default(), |_| {}).await.unwrap();
+        assert_eq!(completed.last_outcome, Some(floe_agent::AgentOutcome::Completed));
+        assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
+        assert_eq!(model.requests.lock().unwrap().len(), 1);
     }
 
     impl ModelRunner for PositiveFakeModel {

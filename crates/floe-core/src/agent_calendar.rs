@@ -9,9 +9,10 @@ use std::{
 use chrono::{DateTime, Utc};
 use floe_agent::*;
 use floe_domain::{
-    CalendarProvider, ContextDependency, CoverageAccumulator, DependencyCoverage, GrantConsumer,
+    CalendarProvider, ContextDependency, DependencyCoverage, GrantConsumer,
     GrantOperation, GrantPurpose, PersonId, ProcessingRestriction,
 };
+use floe_context::CoverageAccumulator;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -142,30 +143,44 @@ impl FloeCore {
                         && !evidence.source_handle.starts_with("floe.notes:")
                 });
                 let context_now = clock();
-                let task_view = self
-                    .task_context_view(
+                let task_view = floe_context::acquire_optional_source(
+                    floe_agent::ContextSource::Tasks,
+                    self.task_context_view(
                         request.command.person_id,
                         Uuid::new_v5(&request.command.person_id.0, b"floe.tasks"),
                         context_now,
                         16,
                         8 * 1024,
-                    )
-                    .await?;
-                let note_view = self
-                    .note_context_view(
+                    ),
+                ).await?;
+                let note_view = floe_context::acquire_optional_source(
+                    floe_agent::ContextSource::Notes,
+                    self.note_context_view(
                         request.command.person_id,
                         Uuid::new_v5(&request.command.person_id.0, b"floe.notes"),
                         context_now,
                         16,
                         8 * 1024,
-                    )
-                    .await?;
-                if !task_view.items.is_empty() {
+                    ),
+                ).await?;
+                floe_context::record_source_issue(
+                    &mut expert_context.optional_context_issues,
+                    floe_agent::ContextSource::Tasks,
+                    task_view.issue.map(|issue| issue.reason),
+                );
+                floe_context::record_source_issue(
+                    &mut expert_context.optional_context_issues,
+                    floe_agent::ContextSource::Notes,
+                    note_view.issue.map(|issue| issue.reason),
+                );
+                if let Some(task_view) = task_view.value
+                    && !task_view.items.is_empty() {
                     expert_context
                         .evidence
                         .push(native_context_evidence(&task_view)?);
                 }
-                if !note_view.items.is_empty() {
+                if let Some(note_view) = note_view.value
+                    && !note_view.items.is_empty() {
                     expert_context
                         .evidence
                         .push(native_context_evidence(&note_view)?);

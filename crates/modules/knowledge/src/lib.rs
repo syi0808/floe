@@ -42,7 +42,7 @@ pub use application::inference::{
     LEARNER_INFERENCE_CAPABILITY, LEARNER_INFERENCE_CONSUMER, LEARNER_INFERENCE_PURPOSE,
 };
 pub use application::memory::{
-    acquire_memory_context, admit_learning_evidence, project_memory_summary,
+    admit_learning_evidence, project_memory_summary,
     validate_learning_evidence, validate_memory_overview_limit, validate_stage_request,
 };
 pub use application::playbooks::{

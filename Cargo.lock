@@ -843,6 +843,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "floe-context"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-agent-contract",
+ "floe-context-contract",
+ "floe-kernel",
+ "floe-knowledge",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "floe-context-contract"
 version = "0.1.0"
 dependencies = [
@@ -863,6 +877,7 @@ dependencies = [
  "chrono",
  "floe-access",
  "floe-agent",
+ "floe-context",
  "floe-day",
  "floe-domain",
  "floe-knowledge",
@@ -936,6 +951,7 @@ dependencies = [
  "base64",
  "chrono",
  "floe-agent",
+ "floe-context",
  "floe-core",
  "floe-diagnostics",
  "floe-domain",

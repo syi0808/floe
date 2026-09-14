@@ -6,10 +6,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
     pin::Pin,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use floe_agent::{
@@ -102,8 +99,7 @@ pub struct EncryptedAgentVault<Keys> {
 pub struct GovernedAgentSessionStore<'vault, Keys> {
     vault: &'vault EncryptedAgentVault<Keys>,
     session_id: Uuid,
-    coverage: Mutex<HashMap<Uuid, floe_domain::CoverageAccumulator>>,
-    result_coverage: Mutex<HashMap<(Uuid, Uuid), floe_domain::CoverageAccumulator>>,
+    coverage: floe_context::CoverageRegistry,
     liveness: Option<&'vault dyn GovernedDependencyLiveness>,
 }
 
@@ -163,12 +159,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         if turn_id.is_nil() || dependency.observation_id().is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        let has_coverage = self
-            .coverage
-            .lock()
-            .map_err(|_| AgentFailure::VaultUnavailable)?
-            .contains_key(&turn_id);
-        let stored = if has_coverage {
+        let stored = if self.coverage.has_turn(turn_id)? {
             None
         } else {
             let session = self
@@ -189,22 +180,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
                 None
             }
         };
-        let mut coverage = self
-            .coverage
-            .lock()
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        if !coverage.contains_key(&turn_id) {
-            let accumulator = match stored {
-                Some(stored) => floe_domain::CoverageAccumulator::from_stored(stored)
-                    .map_err(|_| AgentFailure::VaultUnavailable)?,
-                None => floe_domain::CoverageAccumulator::new(),
-            };
-            coverage.insert(turn_id, accumulator);
-        }
-        let accumulator = coverage.get_mut(&turn_id).unwrap();
-        accumulator
-            .record_host_dependency(dependency)
-            .map_err(|_| AgentFailure::InvalidInput)
+        self.coverage.record_dependency(turn_id, dependency, stored)
     }
 
     pub fn record_result_dependency(
@@ -216,15 +192,8 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         if turn_id.is_nil() || result_id.is_nil() || dependency.observation_id().is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        let mut coverage = self
-            .result_coverage
-            .lock()
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        coverage
-            .entry((turn_id, result_id))
-            .or_default()
-            .record_host_dependency(dependency)
-            .map_err(|_| AgentFailure::InvalidInput)
+        self.coverage
+            .record_result_dependency(turn_id, result_id, dependency)
     }
 
     pub fn record_result_independent(
@@ -235,15 +204,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         if turn_id.is_nil() || result_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        let mut coverage = self
-            .result_coverage
-            .lock()
-            .map_err(|_| AgentFailure::VaultUnavailable)?;
-        coverage
-            .entry((turn_id, result_id))
-            .or_default()
-            .record_host_independent()
-            .map_err(|_| AgentFailure::InvalidInput)
+        self.coverage.record_result_independent(turn_id, result_id)
     }
 
     pub async fn project_model_request(
@@ -264,12 +225,7 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
         if request.session_id != self.session_id {
             return Err(AgentFailure::Conflict);
         }
-        let coverage = self
-            .coverage
-            .lock()
-            .map_err(|_| AgentFailure::VaultUnavailable)?
-            .get(&request.turn_id)
-            .map(|value| value.coverage());
+        let coverage = self.coverage.turn_coverage(request.turn_id)?;
         let coverage = match coverage {
             Some(value) => value,
             None => {
@@ -337,15 +293,13 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
             };
             if allowed {
                 if let DependencyCoverage::Dependent { dependencies } = coverage {
-                    let mut coverage = self
-                        .coverage
-                        .lock()
-                        .map_err(|_| AgentFailure::VaultUnavailable)?;
-                    let accumulator = coverage.entry(request.turn_id).or_default();
                     for dependency in dependencies {
-                        accumulator
-                            .record_host_dependency(dependency)
-                            .map_err(|_| AgentFailure::PolicyDenied)?;
+                        self.coverage
+                            .record_dependency(request.turn_id, dependency, None)
+                            .map_err(|error| match error {
+                                AgentFailure::InvalidInput => AgentFailure::PolicyDenied,
+                                error => error,
+                            })?;
                     }
                 }
                 retained.push(message);
@@ -404,76 +358,20 @@ impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys
                 );
             }
         }
-        let snapshot = {
-            let mut coverage = self
-                .coverage
-                .lock()
-                .map_err(|_| AgentFailure::VaultUnavailable)?;
-            let mut fresh_turns = HashMap::new();
-            let mut initialized = HashMap::new();
-            for message in appended {
-                let turn_id = message.turn_id();
-                if !coverage.contains_key(&turn_id) {
-                    if stored_turns.contains_key(&turn_id) {
-                        let initial = initial
-                            .remove(&turn_id)
-                            .ok_or(AgentFailure::VaultUnavailable)?;
-                        coverage.insert(
-                            turn_id,
-                            floe_domain::CoverageAccumulator::from_stored(initial)
-                                .map_err(|_| AgentFailure::VaultUnavailable)?,
-                        );
-                    } else {
-                        fresh_turns.insert(turn_id, ());
-                        coverage.insert(turn_id, floe_domain::CoverageAccumulator::new());
-                    }
-                }
-                let accumulator = coverage.get_mut(&turn_id).unwrap();
-                let first_message = initialized.insert(turn_id, ()).is_none();
-                if first_message
-                    && fresh_turns.contains_key(&turn_id)
-                    && matches!(message, floe_agent::AgentMessage::User { .. })
-                {
-                    accumulator
-                        .record_host_independent()
-                        .map_err(|_| AgentFailure::InvalidInput)?;
-                }
-                let result_id = match message {
+        let facts = appended
+            .iter()
+            .map(|message| floe_context::CoverageMessageFact {
+                turn_id: message.turn_id(),
+                existing_turn: stored_turns.contains_key(&message.turn_id()),
+                is_user: matches!(message, floe_agent::AgentMessage::User { .. }),
+                result_id: match message {
                     floe_agent::AgentMessage::Capability { call_id, .. } => Some(*call_id),
                     floe_agent::AgentMessage::Delegation { task, .. } => Some(task.id),
                     _ => None,
-                };
-                if let Some(result_id) = result_id {
-                    let result_coverage = self
-                        .result_coverage
-                        .lock()
-                        .map_err(|_| AgentFailure::VaultUnavailable)?
-                        .get(&(turn_id, result_id))
-                        .map(|result| result.coverage());
-                    match result_coverage {
-                        Some(DependencyCoverage::Dependent { dependencies }) => {
-                            for dependency in dependencies {
-                                accumulator
-                                    .record_host_dependency(dependency)
-                                    .map_err(|_| AgentFailure::InvalidInput)?;
-                            }
-                        }
-                        Some(DependencyCoverage::Independent) => {
-                            accumulator
-                                .record_host_independent()
-                                .map_err(|_| AgentFailure::InvalidInput)?;
-                        }
-                        Some(DependencyCoverage::Unknown) | None => {
-                            accumulator.mark_unknown();
-                        }
-                    }
-                }
-            }
-            coverage
-                .iter()
-                .map(|(turn_id, accumulator)| (*turn_id, accumulator.coverage()))
-                .collect::<BTreeMap<_, _>>()
-        };
+                },
+            })
+            .collect::<Vec<_>>();
+        let snapshot = self.coverage.fold_messages(&facts, &initial)?;
         self.vault
             .compare_and_swap_checked_with_liveness(
                 session,
@@ -669,8 +567,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         GovernedAgentSessionStore {
             vault: self,
             session_id,
-            coverage: Mutex::new(HashMap::new()),
-            result_coverage: Mutex::new(HashMap::new()),
+            coverage: floe_context::CoverageRegistry::new(),
             liveness: None,
         }
     }

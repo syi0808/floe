@@ -3,7 +3,7 @@ mod data_access_grant;
 
 pub use floe_context_contract::SourceAuthority;
 pub use context_dependency::{
-    ConsumerPolicyAuthority, ContextDependency, ContextDependencyError, CoverageAccumulator,
+    ConsumerPolicyAuthority, ContextDependency, ContextDependencyError,
     DependencyCoverage, MAX_CONTEXT_DEPENDENCIES, MAX_CONTEXT_DEPENDENCY_BYTES,
     MAX_QUERY_FINGERPRINT_BYTES, ReplayRequest, ReplayTrust, admit_replay,
     validate_dependency_freshness, validate_stored_dependency,

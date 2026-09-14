@@ -12,6 +12,7 @@ floe-day = { path = "../modules/day" }
 floe-domain = { path = "../floe-domain" }
 floe-agent = { path = "../floe-agent" }
 floe-knowledge = { path = "../modules/knowledge" }
+floe-context = { path = "../modules/context" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

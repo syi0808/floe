@@ -24,7 +24,12 @@ impl FloeCore {
             .store
             .list_tasks(person_id)
             .await
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if tasks.iter().any(|task| {
+            task.person_id != person_id || task.id.0.is_nil() || task.title.trim().is_empty()
+        }) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         tasks.retain(|task| task.deleted_at.is_none() && task.completed_at.is_none());
         tasks.sort_by_key(|task| {
             (
@@ -93,7 +98,12 @@ impl FloeCore {
             .store
             .list_notes(person_id)
             .await
-            .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if notes.iter().any(|note| {
+            note.person_id != person_id || note.id.0.is_nil() || note.content.trim().is_empty()
+        }) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         notes.retain(|note| note.deleted_at.is_none());
         notes.sort_by_key(|note| (std::cmp::Reverse(note.updated_at), note.id));
         if notes.len() > max_items.min(MAX_NATIVE_CONTEXT_ITEMS) {
