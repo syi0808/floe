@@ -1,11 +1,13 @@
-use floe_agent::{AgentMessage, AgentOutcome, AgentUsage, DataClass};
+use floe_agent::{
+    AgentContinuation, AgentMessage, AgentOutcome, AgentUsage, DataClass, ModelPlacement,
+};
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use serde::{Deserialize, Serialize};
 use turso::transaction::{Transaction, TransactionBehavior};
 
 use super::*;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MAX_RUN_RECORD_BYTES: usize = 128 * 1024;
 const MAX_JOURNAL_ENTRY_BYTES: usize = 128 * 1024;
 const MAX_RUN_ROWS: i64 = 4_096;
@@ -45,6 +47,9 @@ pub struct VaultConversationRunRecord {
     pub aggregate_revision: u64,
     pub journal_revision: u64,
     pub executor_generation: u64,
+    pub continuation_of: Option<RunId>,
+    pub continuation_level: u8,
+    pub model_placement: ModelPlacement,
 }
 
 impl VaultConversationRunRecord {
@@ -65,6 +70,7 @@ impl VaultConversationRunRecord {
             || self.session_revision <= self.initial_session_revision
             || self.aggregate_revision == 0
             || self.executor_generation == 0
+            || self.continuation_level > 3
             || self.journal_revision > MAX_JOURNAL_ENTRIES
             || self.coverage.validate().is_err()
             || self
@@ -72,6 +78,9 @@ impl VaultConversationRunRecord {
                 .as_ref()
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
         {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        if self.continuation_of.is_some() != (self.continuation_level > 0) {
             return Err(AgentFailure::VaultUnavailable);
         }
         let valid = match self.state {
@@ -111,7 +120,18 @@ impl VaultConversationRunRecord {
             && self.person_id == request.person_id
             && self.initial_session_revision == request.expected_session_revision
             && self.request_digest == request.request_digest
+            && self.continuation_of == request.continuation.as_ref().map(|value| value.run_id)
+            && self.continuation_level
+                == request.continuation.as_ref().map_or(0, |value| value.level)
+            && self.model_placement == request.model_placement
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultConversationContinuationRef {
+    pub run_id: RunId,
+    pub executor_generation: u64,
+    pub level: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +143,8 @@ pub struct VaultConversationAdmissionRequest {
     pub expected_session_revision: u64,
     pub request_digest: [u8; 32],
     pub text: String,
+    pub continuation: Option<VaultConversationContinuationRef>,
+    pub model_placement: ModelPlacement,
 }
 
 impl VaultConversationAdmissionRequest {
@@ -134,6 +156,12 @@ impl VaultConversationAdmissionRequest {
             || self.request_digest == [0; 32]
             || self.text.trim().is_empty()
             || self.text.len() > floe_agent_contract::MAX_OUTPUT_BYTES
+            || self.continuation.as_ref().is_some_and(|reference| {
+                !reference.run_id.is_valid()
+                    || reference.executor_generation == 0
+                    || reference.level == 0
+                    || reference.level > 3
+            })
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -390,6 +418,36 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
+            if let Some(reference) = &request.continuation {
+                let source = self
+                    .conversation_run_on(&transaction, reference.run_id)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                let resumable = matches!(
+                    (source.state, source.issue),
+                    (
+                        VaultConversationRunState::TimedOut,
+                        Some(AgentFailure::DeadlineExceeded)
+                    ) | (
+                        VaultConversationRunState::Failed,
+                        Some(AgentFailure::BudgetExceeded)
+                    )
+                );
+                if !resumable
+                    || source.session_id != request.session_id
+                    || source.person_id != request.person_id
+                    || source.session_revision != request.expected_session_revision
+                    || source.executor_generation != reference.executor_generation
+                    || source.model_placement != request.model_placement
+                    || source
+                        .continuation_level
+                        .checked_add(1)
+                        .filter(|level| *level <= 3)
+                        != Some(reference.level)
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
             let mut count = transaction
                 .query("SELECT count(*) FROM agent_conversation_runs", ())
                 .await
@@ -409,10 +467,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .revision
                 .checked_add(1)
                 .ok_or(AgentFailure::Conflict)?;
-            session.messages.push(AgentMessage::User {
-                turn_id: request.run_id.as_uuid(),
-                text: request.text,
-            });
+            if request.continuation.is_none() {
+                session.messages.push(AgentMessage::User {
+                    turn_id: request.run_id.as_uuid(),
+                    text: request.text,
+                });
+            }
             session.usage = AgentUsage::default();
             session.active_turn = Some(request.run_id.as_uuid());
             session.last_outcome = None;
@@ -456,6 +516,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 aggregate_revision: 1,
                 journal_revision: 0,
                 executor_generation,
+                continuation_of: request.continuation.as_ref().map(|value| value.run_id),
+                continuation_level: request.continuation.as_ref().map_or(0, |value| value.level),
+                model_placement: request.model_placement,
             };
             record.validate(self.person_id)?;
             transaction
@@ -591,7 +654,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             session.messages.extend(terminal.appended_messages);
             session.active_turn = None;
-            session.continuation = None;
+            session.continuation = matches!(
+                (terminal.state, terminal.issue),
+                (
+                    VaultConversationRunState::TimedOut,
+                    Some(AgentFailure::DeadlineExceeded)
+                ) | (
+                    VaultConversationRunState::Failed,
+                    Some(AgentFailure::BudgetExceeded)
+                )
+            )
+            .then(|| current.continuation_level.checked_add(1))
+            .flatten()
+            .filter(|level| *level <= 3)
+            .map(|_| AgentContinuation {
+                turn_id: run_id.as_uuid(),
+                level: current.continuation_level,
+                usage: AgentUsage::default(),
+                placement: current.model_placement,
+            });
             session.last_outcome = Some(match terminal.state {
                 VaultConversationRunState::Completed => AgentOutcome::Completed,
                 _ => AgentOutcome::Halted {
@@ -677,6 +758,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         self.check_access()?;
         Ok(result)
+    }
+
+    pub async fn conversation_run_by_command(
+        &self,
+        command_id: CommandId,
+    ) -> Result<Option<VaultConversationRunRecord>, AgentFailure> {
+        if !command_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let record = self
+            .conversation_run_by_command_on(&self.connection()?, command_id)
+            .await?;
+        if let Some(record) = &record {
+            record.validate(self.person_id)?;
+        }
+        self.check_access()?;
+        Ok(record)
     }
 
     pub async fn conversation_journal(
@@ -837,7 +935,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
     if found.is_empty() {
         transaction
             .execute(
-                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
+                "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
                 (),
             )
             .await
@@ -872,7 +970,7 @@ async fn initialize(transaction: &Transaction<'_>) -> Result<(), AgentFailure> {
             .map_err(storage)?;
         transaction
             .execute(
-                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 2)",
+                "INSERT INTO agent_conversation_schema (id, version) VALUES (1, 3)",
                 (),
             )
             .await

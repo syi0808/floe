@@ -30,6 +30,7 @@ pub fn project_continuation(
     let mut delegations = HashMap::new();
     let mut seen_tasks = HashSet::new();
     let mut completed_iterations = 0;
+    let mut usage = floe_execution::budget::ModelUsage::default();
     for (index, entry) in entries.iter().enumerate() {
         if entry.revision != (index as u64) + 1 {
             return Err(AgentFailure::StorageUnavailable);
@@ -43,10 +44,25 @@ pub fn project_continuation(
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
-            JournalEvent::ModelResult { attempt_id, .. } => {
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: result_usage,
+            } => {
                 if !attempts.remove(attempt_id) {
                     return Err(AgentFailure::StorageUnavailable);
                 }
+                usage.attempts = usage
+                    .attempts
+                    .checked_add(1)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                usage.tokens = usage
+                    .tokens
+                    .checked_add(result_usage.tokens)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                usage.cost_micros = usage
+                    .cost_micros
+                    .checked_add(result_usage.cost_micros)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
             }
             JournalEvent::ToolIntent { call } => {
                 if call.call_id.is_nil()
@@ -181,10 +197,17 @@ pub fn project_continuation(
     }
     messages.iter().try_for_each(AgentMessage::validate)?;
     Ok(ContinuationSnapshot {
-        run_id: admitted.receipt.run_id,
+        reference: admitted
+            .receipt
+            .continuation()
+            .ok_or(AgentFailure::Conflict)?,
+        session_id: admitted.receipt.session_id,
+        session_revision: admitted.receipt.session_revision,
+        execution_profile: admitted.receipt.execution_profile.clone(),
         messages,
         replay,
         completed_iterations,
+        usage,
     })
 }
 
@@ -213,6 +236,9 @@ mod tests {
                 session_revision: 2,
                 aggregate_revision: 2,
                 executor_generation: 1,
+                continuation_of: None,
+                continuation_level: 0,
+                execution_profile: "test-local".into(),
             },
             transcript: vec![AgentMessage {
                 message_id: command_id.as_uuid(),
@@ -266,8 +292,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let snapshot = project_continuation(&admitted, &entries).unwrap();
-        assert_eq!(snapshot.run_id, admitted.receipt.run_id);
+        assert_eq!(snapshot.reference.run_id, admitted.receipt.run_id);
         assert_eq!(snapshot.completed_iterations, 1);
+        assert_eq!(snapshot.usage.attempts, 1);
+        assert_eq!(snapshot.usage.tokens, 1);
+        assert_eq!(snapshot.usage.cost_micros, 1);
         assert_eq!(snapshot.messages.len(), 2);
         assert_eq!(snapshot.replay.len(), 1);
         assert_eq!(snapshot.replay[0].call_id, call.call_id);

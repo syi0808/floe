@@ -40,8 +40,8 @@ pub use agent_actions::{AgentActionAdmission, AgentActionEnvelope};
 pub use calendar_grants::CalendarGrantAdmission;
 pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
-    VaultConversationJournalEntry, VaultConversationRunRecord, VaultConversationRunState,
-    VaultConversationTerminal,
+    VaultConversationContinuationRef, VaultConversationJournalEntry, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal,
 };
 pub use keyring::KeyringVaultKeys;
 pub use personal_grants::FeasibilityGrantQuery;
@@ -276,7 +276,8 @@ impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
             return Err(AgentFailure::Conflict);
         }
         let messages = std::mem::take(&mut request.messages);
-        let reader = crate::context_evidence::ContextEvidenceReader::new(self.vault, self.session_id);
+        let reader =
+            crate::context_evidence::ContextEvidenceReader::new(self.vault, self.session_id);
         let coverage_by_turn = floe_context::read_history_coverage(
             &reader,
             self.session_id,

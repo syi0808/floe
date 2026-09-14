@@ -2,12 +2,12 @@ use std::{future::Future, pin::Pin};
 
 use floe_agent::{
     A2AArtifact, A2AMessageRole, A2APart, A2ASendMessageRequest, A2ATask, A2ATaskState,
-    AGENT_VERSION, AgentBudget, AgentCard, AgentCommand, AgentContext, AgentEvent, AgentFailure,
-    AgentRuntime, AttentionView, BuiltinContextSource, BuiltinExpertKind,
+    AGENT_VERSION, AgentBudget, AgentCard, AgentContext, AgentEvent, AgentFailure,
+    AttentionView, BuiltinContextSource, BuiltinExpertKind,
     BuiltinExpertSetupReceipt, CalendarContextView, CapabilityDescriptor, CapabilityHost,
     CapabilityInvocation, CommitmentsContextViews, CommitmentsExpertResult,
     CommunicationExpertResult, DataClass, EXPERT_RESULT_MEDIA_TYPE, FeasibilityView,
-    FocusContextViews, FocusExpertResult, InProcessA2ATransport, InProcessAgent,
+    FocusContextViews, FocusExpertResult, InProcessAgent,
     InferencePolicyDecision, LifeLogisticsExpertResult, MailExpertInvocation, ModelPlacement,
     ModelRequest, ModelResponse, ModelRunner, NativeContextView, PeopleView,
     PersonalExpertInvocation, PortfolioExpertInvocation, RelationshipsContextViews,
@@ -17,6 +17,8 @@ use floe_agent::{
     run_life_logistics_expert, run_relationships_expert_with_views,
     run_wellbeing_expert_with_views, run_work_context_expert,
 };
+#[cfg(test)]
+use floe_agent::{AgentCommand, AgentRuntime};
 use floe_core::{EncryptedAgentVault, FloeCore, GovernedAgentSessionStore, VaultKeyProvider};
 use floe_domain::PersonId;
 #[cfg(test)]
@@ -78,9 +80,16 @@ pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     }
     let session_id = session_uuid(&request.session_id)?;
     let session = vault.load(person_id, session_id).await?;
+    let existing_continuation = if request.continuation {
+        vault.conversation_run_by_command(command_id).await?
+    } else {
+        None
+    };
     if session.scope.is_some()
         || session.data_classes != [DataClass::Personal]
-        || (request.continuation && session.revision != request.expected_revision)
+        || (request.continuation
+            && session.revision != request.expected_revision
+            && existing_continuation.is_none())
     {
         return Err(AgentFailure::Conflict);
     }
@@ -218,11 +227,6 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     let result_recorder = StoreResultRecorder {
         store: &governed_store,
     };
-    let governed_model = GovernedModel {
-        model: &model,
-        store: &governed_store,
-        resolver: &resolver,
-    };
     let policy = policy(&model, request.remote_route.as_ref());
     let context_reader = ConversationContextReader {
         core,
@@ -281,7 +285,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         builtin_setup: Some(builtin_setup.clone()),
         schedule_runner: Some(&schedule_runner),
     };
-    if !request.continuation {
+    {
         let legacy_capabilities = capabilities.descriptors(person_id);
         let active_agents = experts.agent_cards(person_id);
         let catalog = floe_agent_contract::AllowedCatalog {
@@ -343,6 +347,49 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         };
         let request_context =
             serde_json::to_string(request).map_err(|_| AgentFailure::InvalidInput)?;
+        let execution_profile =
+            crate::vault_host::conversation_repository::execution_profile(model.placement());
+        let mode = if request.continuation {
+            if let Some(existing) = vault
+                .conversation_run_by_command(inputs.command_id)
+                .await?
+            {
+                let source_run_id = existing.continuation_of.ok_or(AgentFailure::Conflict)?;
+                let source = vault
+                    .conversation_run(source_run_id)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                if existing.model_placement != model.placement() {
+                    return Err(AgentFailure::Conflict);
+                }
+                floe_conversation::TurnMode::Continue(floe_conversation::ContinuationRef {
+                    run_id: source_run_id,
+                    executor_generation: source.executor_generation,
+                    level: existing.continuation_level,
+                })
+            } else {
+                let session = vault.load(person_id, session_id).await?;
+                let legacy_reference = session.continuation.ok_or(AgentFailure::Conflict)?;
+                if legacy_reference.placement != model.placement() {
+                    return Err(AgentFailure::Conflict);
+                }
+                let snapshot = floe_conversation::continuation(
+                    inputs.conversation_repository.as_ref(),
+                    floe_agent_contract::RunId::from_uuid(legacy_reference.turn_id)
+                        .ok_or(AgentFailure::Conflict)?,
+                    &person_id.to_string(),
+                )
+                .await?;
+                if legacy_reference.level.checked_add(1) != Some(snapshot.reference.level)
+                    || snapshot.execution_profile != execution_profile
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                floe_conversation::TurnMode::Continue(snapshot.reference)
+            }
+        } else {
+            floe_conversation::TurnMode::New
+        };
         let receipt = service
             .run_turn(
                 floe_conversation::TurnRequest {
@@ -352,6 +399,8 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                     principal: person_id.to_string(),
                     prompt: request.text.trim().into(),
                     request_context_digest: floe_agent_contract::input_digest(&request_context),
+                    mode,
+                    execution_profile: execution_profile.into(),
                     bounded_context: floe_agent_contract::BoundedContext {
                         text: String::new(),
                         coverage: floe_agent_contract::DependencyCoverage::Independent,
@@ -377,49 +426,11 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
             event: floe_agent::AgentEventKind::Finished {
                 outcome: session
                     .last_outcome
-                    .clone()
                     .ok_or(AgentFailure::StorageUnavailable)?,
                 revision: session.revision,
             },
         });
-        return Ok(session);
-    }
-    let agents = InProcessA2ATransport::new(&experts);
-    let runtime = AgentRuntime {
-        store: &governed_store,
-        model: &governed_model,
-        capabilities: &capabilities,
-        policy: &policy,
-        budget: AgentBudget::default(),
-    };
-    if request.continuation {
-        runtime
-            .continue_turn_with_agents(
-                person_id,
-                session_id,
-                request.expected_revision,
-                context.clone(),
-                &agents,
-                cancellation,
-                emit,
-            )
-            .await
-    } else {
-        runtime
-            .run_turn_with_agents(
-                AgentCommand {
-                    schema_version: AGENT_VERSION,
-                    person_id,
-                    session_id,
-                    expected_revision: request.expected_revision,
-                    text: request.text.trim().into(),
-                },
-                context.clone(),
-                &agents,
-                cancellation,
-                emit,
-            )
-            .await
+        Ok(session)
     }
 }
 

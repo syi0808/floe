@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use floe_agent_contract::{BoxFuture, ExecutionJournal};
-use floe_kernel::{AgentFailure, RunId};
+use floe_kernel::{AgentFailure, CommandId, RunId};
 
 use crate::{
     AdmittedTurn, JournalEntry, RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal,
@@ -9,6 +9,11 @@ use crate::{
 };
 
 pub trait ConversationRepository: Send + Sync {
+    fn find_command<'a>(
+        &'a self,
+        command_id: CommandId,
+    ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>>;
+
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,

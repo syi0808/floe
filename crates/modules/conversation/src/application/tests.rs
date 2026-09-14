@@ -61,6 +61,20 @@ impl MemoryRepository {
 }
 
 impl ConversationRepository for MemoryRepository {
+    fn find_command<'a>(
+        &'a self,
+        command_id: CommandId,
+    ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>> {
+        Box::pin(async move {
+            let state = self.state.lock().unwrap();
+            Ok(state
+                .commands
+                .get(&command_id)
+                .and_then(|run_id| state.runs.get(run_id))
+                .map(|stored| stored.admitted.receipt.clone()))
+        })
+    }
+
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,
@@ -72,6 +86,22 @@ impl ConversationRepository for MemoryRepository {
                 let receipt = state.runs.get(run_id).unwrap().admitted.receipt.clone();
                 return Ok(TurnAdmission::Existing(receipt));
             }
+            let (continuation_of, continuation_level) = match &request.mode {
+                crate::TurnMode::New => (None, 0),
+                crate::TurnMode::Continue(reference) => {
+                    let source = state
+                        .runs
+                        .get(&reference.run_id)
+                        .ok_or(AgentFailure::Conflict)?;
+                    if source.admitted.receipt.continuation().as_ref() != Some(reference)
+                        || source.admitted.receipt.session_id != request.session_id
+                        || source.admitted.receipt.execution_profile != request.execution_profile
+                    {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    (Some(reference.run_id), reference.level)
+                }
+            };
             let session = state
                 .sessions
                 .get_mut(&request.session_id)
@@ -84,7 +114,9 @@ impl ConversationRepository for MemoryRepository {
             }
             session.revision += 1;
             session.active_run = Some(request.run_id);
-            session.transcript.push(request.user_message);
+            if matches!(request.mode, crate::TurnMode::New) {
+                session.transcript.push(request.user_message);
+            }
             let receipt = RunReceipt {
                 run_id: request.run_id,
                 command_id: request.command_id,
@@ -98,6 +130,9 @@ impl ConversationRepository for MemoryRepository {
                 session_revision: session.revision,
                 aggregate_revision: 1,
                 executor_generation: 1,
+                continuation_of,
+                continuation_level,
+                execution_profile: request.execution_profile,
             };
             receipt.validate()?;
             let admitted = AdmittedTurn {
@@ -417,6 +452,8 @@ fn request(
         principal: "person-a".into(),
         prompt: prompt.into(),
         request_context_digest: [1; 32],
+        mode: crate::TurnMode::New,
+        execution_profile: "test-local".into(),
         bounded_context: BoundedContext {
             text: String::new(),
             coverage: DependencyCoverage::Independent,
@@ -552,6 +589,61 @@ async fn cancelled_root_is_terminalized_without_model_dispatch_and_releases_the_
         .unwrap();
     assert_eq!(next.state, RunState::Completed);
     assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn deadline_continuation_is_generation_bound_and_does_not_duplicate_the_user_message() {
+    let repository = Arc::new(MemoryRepository::default());
+    let session_id = Uuid::new_v4();
+    repository.add_session(session_id, "person-a");
+    let service = service(Arc::clone(&repository));
+    let model = AnswerModel::default();
+    let mut initial = request(CommandId::new(), session_id, 0, "finish this");
+    initial.deadline = tokio::time::Instant::now() - std::time::Duration::from_secs(1);
+
+    let timed_out = service.run_turn(initial, ports(&model)).await.unwrap();
+    assert_eq!(timed_out.state, RunState::TimedOut);
+    assert_eq!(timed_out.issue, Some(AgentFailure::DeadlineExceeded));
+    let reference = timed_out.continuation().unwrap();
+
+    let mut stale = request(
+        CommandId::new(),
+        session_id,
+        timed_out.session_revision,
+        "finish this",
+    );
+    stale.mode = crate::TurnMode::Continue(crate::ContinuationRef {
+        executor_generation: reference.executor_generation + 1,
+        ..reference.clone()
+    });
+    assert_eq!(
+        service.run_turn(stale, ports(&model)).await,
+        Err(AgentFailure::Conflict)
+    );
+
+    let mut continuation = request(
+        CommandId::new(),
+        session_id,
+        timed_out.session_revision,
+        "finish this",
+    );
+    continuation.mode = crate::TurnMode::Continue(reference);
+    let completed = service.run_turn(continuation, ports(&model)).await.unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(completed.continuation_of, Some(timed_out.run_id));
+    assert_eq!(completed.continuation_level, 1);
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let state = repository.state.lock().unwrap();
+    let session = state.sessions.get(&session_id).unwrap();
+    assert_eq!(
+        session
+            .transcript
+            .iter()
+            .filter(|message| message.role == floe_agent_contract::MessageRole::User)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

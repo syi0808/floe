@@ -10,7 +10,7 @@ use floe_kernel::{AgentFailure, RunId, TraceContext};
 use crate::{
     ContinuationSnapshot, ConversationPorts, ConversationRepository, ManagerConfig,
     RecoveryReceipt, RecoveryRequest, RunReceipt, RunState, RunTerminal, TurnAdmission,
-    TurnAdmissionRequest, TurnRequest,
+    TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::recovery::project_continuation;
@@ -38,6 +38,29 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
     ) -> Result<RunReceipt, AgentFailure> {
         request.validate()?;
         let request_digest = turn_digest(&request);
+        if let Some(receipt) = self.repository.find_command(request.command_id).await? {
+            verify_existing(&request, request_digest, &receipt)?;
+            return Ok(receipt);
+        }
+        let continuation = match &request.mode {
+            TurnMode::New => None,
+            TurnMode::Continue(reference) => {
+                let snapshot = continuation(
+                    self.repository.as_ref(),
+                    reference.run_id,
+                    &request.principal,
+                )
+                .await?;
+                if snapshot.reference != *reference
+                    || snapshot.session_id != request.session_id
+                    || snapshot.session_revision != request.expected_session_revision
+                    || snapshot.execution_profile != request.execution_profile
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                Some(snapshot)
+            }
+        };
         let run_id = RunId::new();
         let admission = self
             .repository
@@ -48,6 +71,8 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                 expected_session_revision: request.expected_session_revision,
                 principal: request.principal.clone(),
                 request_digest,
+                mode: request.mode.clone(),
+                execution_profile: request.execution_profile.clone(),
                 user_message: AgentMessage {
                     message_id: request.command_id.as_uuid(),
                     role: MessageRole::User,
@@ -71,10 +96,25 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             || admitted.receipt.principal != request.principal
             || admitted.receipt.request_digest != request_digest
             || admitted.receipt.state != RunState::Working
-            || admitted.transcript.last().is_none_or(|message| {
-                message.message_id != request.command_id.as_uuid()
-                    || message.role != MessageRole::User
-            })
+            || admitted.receipt.execution_profile != request.execution_profile
+            || match &request.mode {
+                TurnMode::New => {
+                    admitted.receipt.continuation_of.is_some()
+                        || admitted.receipt.continuation_level != 0
+                        || admitted.transcript.last().is_none_or(|message| {
+                            message.message_id != request.command_id.as_uuid()
+                                || message.role != MessageRole::User
+                        })
+                }
+                TurnMode::Continue(reference) => {
+                    admitted.receipt.continuation_of != Some(reference.run_id)
+                        || admitted.receipt.continuation_level != reference.level
+                        || admitted
+                            .transcript
+                            .iter()
+                            .any(|message| message.message_id == request.command_id.as_uuid())
+                }
+            }
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -113,7 +153,23 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
                     .await;
             }
         };
-        let ledger = BudgetLedger::new(self.config.budget, Default::default());
+        let completed_iterations = continuation
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.completed_iterations);
+        let prior_usage = continuation
+            .as_ref()
+            .map_or_else(Default::default, |snapshot| snapshot.usage);
+        if completed_iterations >= self.config.max_iterations {
+            return self
+                .repository
+                .finish_run(
+                    run_id,
+                    expected_aggregate_revision,
+                    RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+                )
+                .await;
+        }
+        let ledger = BudgetLedger::new(self.config.budget, prior_usage);
         let scope = ExecutionScope::root(
             request.cancellation,
             request.deadline,
@@ -121,17 +177,21 @@ impl<Repository: ConversationRepository> ConversationService<Repository> {
             TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
         );
         let base_coverage = request.bounded_context.coverage.clone();
+        let (messages, mut continuation_replay) = continuation
+            .map(|snapshot| (snapshot.messages, snapshot.replay))
+            .unwrap_or_else(|| (admitted.transcript, Vec::new()));
+        continuation_replay.extend(request.replay);
         let engine_request = EngineRequest {
             principal: request.principal,
             role_spec: self.config.role_spec.clone(),
             prompt: request.prompt,
             scope,
             bounded_context: request.bounded_context,
-            messages: admitted.transcript,
+            messages,
             allowed_catalog: request.allowed_catalog,
-            max_iterations: self.config.max_iterations,
+            max_iterations: self.config.max_iterations - completed_iterations,
             max_output_bytes: self.config.max_output_bytes,
-            replay: request.replay,
+            replay: continuation_replay,
         };
         let result = self
             .engine
@@ -224,13 +284,15 @@ pub async fn continuation<Repository: ConversationRepository>(
 
 fn turn_digest(request: &TurnRequest) -> [u8; 32] {
     input_digest(&format!(
-        "{}\0{}\0{}\0{}\0{}\0{:?}",
+        "{}\0{}\0{}\0{}\0{}\0{:?}\0{:?}\0{}",
         request.command_id,
         request.session_id,
         request.expected_session_revision,
         request.principal,
         request.prompt,
-        request.request_context_digest
+        request.request_context_digest,
+        request.mode,
+        request.execution_profile,
     ))
 }
 

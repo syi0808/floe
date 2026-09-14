@@ -26,9 +26,9 @@ pub use agent_action::{
 };
 #[cfg(unix)]
 pub use agent_calendar::{
-    CalendarAgentProposal, CalendarAgentTurnRequest, CalendarAgentTurnResult,
-    CalendarExpertEndpointRequest, CalendarExpertEndpointResult, CalendarExpertSettlement,
-    CalendarExpertTaskCompletion, CALENDAR_EXPERT_SETTLEMENT_OWNER,
+    CALENDAR_EXPERT_SETTLEMENT_OWNER, CalendarAgentProposal, CalendarAgentTurnRequest,
+    CalendarAgentTurnResult, CalendarExpertEndpointRequest, CalendarExpertEndpointResult,
+    CalendarExpertSettlement, CalendarExpertTaskCompletion,
 };
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,
@@ -43,9 +43,9 @@ pub use agent_vault::{
     RemotePairingChallenge, RemoteProducerIdentity, RemoteViewGrantBinding,
     RemoteViewSourceReference, SessionCompactionResult, SessionSearchHit,
     VaultConversationActivation, VaultConversationAdmission, VaultConversationAdmissionRequest,
-    VaultConversationJournalEntry, VaultConversationRunRecord, VaultConversationRunState,
-    VaultConversationTerminal, VaultKey,
-    VaultKeyProvider, VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
+    VaultConversationContinuationRef, VaultConversationJournalEntry, VaultConversationRunRecord,
+    VaultConversationRunState, VaultConversationTerminal, VaultKey, VaultKeyProvider,
+    VaultTaskActivation, VaultTaskAdmission, VaultTaskRecord,
 };
 pub use calendar_action::{
     ActionBlockReason, ActionFailure, CalendarAction, CalendarActionPolicy, CalendarActionProvider,

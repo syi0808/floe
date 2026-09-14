@@ -49,6 +49,8 @@ fn request(
         expected_session_revision: 0,
         request_digest: [7; 32],
         text: "hello".into(),
+        continuation: None,
+        model_placement: ModelPlacement::DeviceLocal,
     }
 }
 
@@ -166,6 +168,84 @@ async fn admission_journal_and_terminal_claim_commit_survive_reopen() {
         vault.conversation_run(run_id).await.unwrap(),
         Some(terminal)
     );
+}
+
+#[tokio::test]
+async fn continuation_admission_is_generation_bound_and_preserves_one_user_message() {
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let person_id = PersonId::new();
+    let vault = EncryptedAgentVault::create(root.path(), person_id, Keys::default())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let session = vault.create_session().await.unwrap();
+    let run_id = RunId::new();
+    let VaultConversationAdmission::Created { record, .. } = vault
+        .admit_conversation_turn(request(person_id, session.id, run_id, CommandId::new()))
+        .await
+        .unwrap()
+    else {
+        panic!("expected created admission");
+    };
+    let timed_out = vault
+        .finish_conversation_run(
+            run_id,
+            1,
+            VaultConversationTerminal {
+                state: VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let stopped_session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(
+        stopped_session.continuation,
+        Some(AgentContinuation {
+            turn_id: run_id.as_uuid(),
+            level: 0,
+            usage: AgentUsage::default(),
+            placement: ModelPlacement::DeviceLocal,
+        })
+    );
+
+    let next_run_id = RunId::new();
+    let next_command_id = CommandId::new();
+    let mut continuation = request(person_id, session.id, next_run_id, next_command_id);
+    continuation.expected_session_revision = timed_out.session_revision;
+    continuation.continuation = Some(VaultConversationContinuationRef {
+        run_id,
+        executor_generation: record.executor_generation + 1,
+        level: 1,
+    });
+    assert_eq!(
+        vault.admit_conversation_turn(continuation.clone()).await,
+        Err(AgentFailure::Conflict)
+    );
+
+    continuation
+        .continuation
+        .as_mut()
+        .unwrap()
+        .executor_generation = record.executor_generation;
+    let VaultConversationAdmission::Created {
+        record: continued,
+        session: active_session,
+    } = vault.admit_conversation_turn(continuation).await.unwrap()
+    else {
+        panic!("expected continuation admission");
+    };
+    assert_eq!(continued.continuation_of, Some(run_id));
+    assert_eq!(continued.continuation_level, 1);
+    assert_eq!(active_session.messages.len(), 1);
+    assert!(matches!(
+        active_session.messages.as_slice(),
+        [AgentMessage::User { turn_id, .. }] if *turn_id == run_id.as_uuid()
+    ));
 }
 
 #[tokio::test]

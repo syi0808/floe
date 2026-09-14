@@ -14,6 +14,33 @@ pub enum RunState {
     Interrupted,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContinuationRef {
+    pub run_id: RunId,
+    pub executor_generation: u64,
+    pub level: u8,
+}
+
+impl ContinuationRef {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if !self.run_id.is_valid()
+            || self.executor_generation == 0
+            || self.level == 0
+            || self.level > 3
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum TurnMode {
+    #[default]
+    New,
+    Continue(ContinuationRef),
+}
+
 impl RunState {
     pub fn is_terminal(self) -> bool {
         self != Self::Working
@@ -34,6 +61,9 @@ pub struct RunReceipt {
     pub session_revision: u64,
     pub aggregate_revision: u64,
     pub executor_generation: u64,
+    pub continuation_of: Option<RunId>,
+    pub continuation_level: u8,
+    pub execution_profile: String,
 }
 
 impl RunReceipt {
@@ -49,12 +79,20 @@ impl RunReceipt {
             || self.session_revision == 0
             || self.aggregate_revision == 0
             || self.executor_generation == 0
+            || self.continuation_level > 3
+            || self.execution_profile.trim() != self.execution_profile
+            || self.execution_profile.is_empty()
+            || self.execution_profile.len() > 64
+            || self.execution_profile.chars().any(char::is_control)
             || self.coverage.validate().is_err()
             || self
                 .output
                 .as_ref()
                 .is_some_and(|output| output.len() > floe_agent_contract::MAX_OUTPUT_BYTES)
         {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        if self.continuation_of.is_some() != (self.continuation_level > 0) {
             return Err(AgentFailure::StorageUnavailable);
         }
         let valid = match self.state {
@@ -77,6 +115,22 @@ impl RunReceipt {
         };
         valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
     }
+
+    pub fn continuation(&self) -> Option<ContinuationRef> {
+        matches!(
+            (self.state, self.issue),
+            (RunState::TimedOut, Some(AgentFailure::DeadlineExceeded))
+                | (RunState::Failed, Some(AgentFailure::BudgetExceeded))
+        )
+        .then(|| self.continuation_level.checked_add(1))
+        .flatten()
+        .filter(|level| *level <= 3)
+        .map(|level| ContinuationRef {
+            run_id: self.run_id,
+            executor_generation: self.executor_generation,
+            level,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +141,8 @@ pub struct TurnAdmissionRequest {
     pub expected_session_revision: u64,
     pub principal: String,
     pub request_digest: [u8; 32],
+    pub mode: TurnMode,
+    pub execution_profile: String,
     pub user_message: AgentMessage,
 }
 
@@ -101,12 +157,19 @@ impl TurnAdmissionRequest {
             || self.principal.len() > 256
             || self.principal.chars().any(char::is_control)
             || self.request_digest == [0; 32]
+            || self.execution_profile.trim() != self.execution_profile
+            || self.execution_profile.is_empty()
+            || self.execution_profile.len() > 64
+            || self.execution_profile.chars().any(char::is_control)
             || self.user_message.message_id != self.command_id.as_uuid()
             || self.user_message.role != floe_agent_contract::MessageRole::User
             || self.user_message.call_id.is_some()
             || self.user_message.coverage != DependencyCoverage::Independent
         {
             return Err(AgentFailure::InvalidInput);
+        }
+        if let TurnMode::Continue(reference) = &self.mode {
+            reference.validate()?;
         }
         Ok(())
     }
@@ -127,10 +190,20 @@ impl AdmittedTurn {
                 .transcript
                 .iter()
                 .any(|message| message.validate().is_err())
-            || !self.transcript.iter().any(|message| {
-                message.message_id == self.receipt.command_id.as_uuid()
-                    && message.role == floe_agent_contract::MessageRole::User
-            })
+            || if self.receipt.continuation_of.is_some() {
+                self.transcript
+                    .iter()
+                    .any(|message| message.message_id == self.receipt.command_id.as_uuid())
+                    || !self
+                        .transcript
+                        .iter()
+                        .any(|message| message.role == floe_agent_contract::MessageRole::User)
+            } else {
+                !self.transcript.iter().any(|message| {
+                    message.message_id == self.receipt.command_id.as_uuid()
+                        && message.role == floe_agent_contract::MessageRole::User
+                })
+            }
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -179,10 +252,14 @@ pub struct JournalEntry {
 
 #[derive(Clone, Debug)]
 pub struct ContinuationSnapshot {
-    pub run_id: RunId,
+    pub reference: ContinuationRef,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub execution_profile: String,
     pub messages: Vec<AgentMessage>,
     pub replay: Vec<ReplayReceipt>,
     pub completed_iterations: u32,
+    pub usage: floe_execution::budget::ModelUsage,
 }
 
 impl RecoveryReceipt {

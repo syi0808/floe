@@ -5,13 +5,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use floe_agent::SessionStore;
+use floe_agent::{ModelPlacement, SessionStore};
 use floe_agent_contract::{
     AllowedCatalog, BoundedContext, DelegationPort, DelegationRequest, ModelPort, ModelRequest,
     ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolPort, ToolResult,
 };
 use floe_conversation::{
-    ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnRequest,
+    ConversationPorts, ConversationService, FinalPayloadValidator, ManagerConfig, TurnMode,
+    TurnRequest,
 };
 use floe_core::{FloeCore, VaultConversationAdmissionRequest, VaultKey};
 use floe_domain::PersonId;
@@ -140,6 +141,8 @@ fn request(
         principal: String::new(),
         prompt: "hello".into(),
         request_context_digest: [1; 32],
+        mode: TurnMode::New,
+        execution_profile: "device_local".into(),
         bounded_context: BoundedContext {
             text: String::new(),
             coverage: DependencyCoverage::Independent,
@@ -257,6 +260,8 @@ async fn encrypted_journal_projects_only_settled_continuation_work() {
             expected_session_revision: 0,
             request_digest: [9; 32],
             text: "continue safely".into(),
+            continuation: None,
+            model_placement: ModelPlacement::DeviceLocal,
         })
         .await
         .unwrap();
@@ -315,15 +320,53 @@ async fn encrypted_journal_projects_only_settled_continuation_work() {
         )
         .await
         .unwrap();
-    let repository = VaultConversationRepository::new(vault);
-    let continuation = floe_conversation::continuation(&repository, run_id, &person_id.to_string())
-        .await
-        .unwrap();
+    let repository = Arc::new(VaultConversationRepository::new(Arc::clone(&vault)));
+    let continuation =
+        floe_conversation::continuation(repository.as_ref(), run_id, &person_id.to_string())
+            .await
+            .unwrap();
     assert_eq!(continuation.completed_iterations, 1);
     assert_eq!(continuation.messages.len(), 2);
     assert_eq!(continuation.replay.len(), 1);
     assert_eq!(continuation.replay[0].call_id, call.call_id);
     assert_eq!(continuation.replay[0].result, result.text);
+
+    let service = build_service(Arc::clone(&repository));
+    let model = Model::default();
+    let mut turn = request(
+        floe_agent_contract::CommandId::new(),
+        session.id,
+        floe_execution::Cancellation::default(),
+    );
+    turn.principal = person_id.to_string();
+    turn.expected_session_revision = continuation.session_revision;
+    turn.prompt = "continue safely".into();
+    turn.mode = TurnMode::Continue(continuation.reference);
+    let completed = service
+        .run_turn(
+            turn,
+            ConversationPorts {
+                model: &model,
+                tools: &NoTools,
+                delegation: &NoDelegation,
+                validator: &Validator,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.state, RunState::Completed);
+    assert_eq!(completed.continuation_of, Some(run_id));
+    assert_eq!(completed.continuation_level, 1);
+    let session = vault.load(person_id, session.id).await.unwrap();
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| matches!(message, AgentMessage::User { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(session.continuation, None);
 }
 
 #[tokio::test]
@@ -348,6 +391,8 @@ async fn open_vault_activation_interrupts_an_unfinished_conversation_run() {
             expected_session_revision: 0,
             request_digest: [9; 32],
             text: "unfinished".into(),
+            continuation: None,
+            model_placement: ModelPlacement::DeviceLocal,
         })
         .await
         .unwrap();

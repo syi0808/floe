@@ -8,6 +8,8 @@ use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::TurnMode;
+
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {
     pub role_spec: RoleSpec,
@@ -46,6 +48,8 @@ pub struct TurnRequest {
     pub principal: String,
     pub prompt: String,
     pub request_context_digest: [u8; 32],
+    pub mode: TurnMode,
+    pub execution_profile: String,
     pub bounded_context: BoundedContext,
     pub allowed_catalog: AllowedCatalog,
     pub replay: Vec<ReplayReceipt>,
@@ -63,10 +67,17 @@ impl TurnRequest {
             || self.principal.chars().any(char::is_control)
             || self.prompt.trim().is_empty()
             || self.request_context_digest == [0; 32]
+            || self.execution_profile.trim() != self.execution_profile
+            || self.execution_profile.is_empty()
+            || self.execution_profile.len() > 64
+            || self.execution_profile.chars().any(char::is_control)
             || self.prompt.len() > floe_agent_contract::MAX_OUTPUT_BYTES
             || self.replay.len() > 128
         {
             return Err(AgentFailure::InvalidInput);
+        }
+        if let TurnMode::Continue(reference) = &self.mode {
+            reference.validate()?;
         }
         self.bounded_context
             .coverage

@@ -554,6 +554,133 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
 }
 
 #[test]
+fn production_continuation_uses_the_persisted_conversation_run_without_duplicate_user_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Create {});
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    perform(&worker, person, AgentVaultActionDto::Lock {});
+    drop(worker);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let vault = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys.clone()))
+        .unwrap();
+    runtime
+        .block_on(vault.activate_conversation_executor())
+        .unwrap();
+    let run_id = floe_agent_contract::RunId::new();
+    runtime
+        .block_on(vault.admit_conversation_turn(
+            floe_core::VaultConversationAdmissionRequest {
+                run_id,
+                command_id: floe_agent_contract::CommandId::new(),
+                session_id: session.id,
+                person_id: person,
+                expected_session_revision: session.revision,
+                request_digest: [7; 32],
+                text: "Finish after the deadline".into(),
+                continuation: None,
+                model_placement: floe_agent::ModelPlacement::DeviceLocal,
+            },
+        ))
+        .unwrap();
+    runtime
+        .block_on(vault.finish_conversation_run(
+            run_id,
+            1,
+            floe_core::VaultConversationTerminal {
+                state: floe_core::VaultConversationRunState::TimedOut,
+                output: None,
+                coverage: floe_agent_contract::DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::DeadlineExceeded),
+                appended_messages: vec![],
+            },
+        ))
+        .unwrap();
+    drop(vault);
+
+    let worker = Worker::new(root, keys).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    let (mut route, server) = answer_server(vec![floe_agent::ModelStep::Answer {
+        text: "Continued once".into(),
+    }]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-continuation-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let action = AgentVaultActionDto::ConversationTurn {
+            request: floe_protocol::AgentConversationTurnRequestDto {
+                session_id: session.id.to_string(),
+                expected_revision: session.revision + 2,
+                text: "Finish after the deadline".into(),
+                device_id: "mac-local".into(),
+                continuation: true,
+                remote_route: Some(route),
+            },
+        };
+    let request_id = Uuid::new_v4();
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit {
+                action: action.clone(),
+            },
+        )
+        .unwrap();
+    let result = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(result.failure, None, "continuation: {result:?}");
+    let continued = result.session.clone().unwrap();
+    assert_eq!(
+        continued
+            .messages
+            .iter()
+            .filter(|message| matches!(message, AgentMessage::User { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        continued.messages.last(),
+        Some(AgentMessage::Assistant { text, .. }) if text == "Continued once"
+    ));
+    assert_eq!(continued.continuation, None);
+
+    worker
+        .request(
+            person,
+            request_id,
+            AgentVaultOperationDto::Submit { action },
+        )
+        .unwrap();
+    let replay = wait(&worker, person, request_id);
+    worker
+        .request(person, request_id, AgentVaultOperationDto::Release {})
+        .unwrap();
+    assert_eq!(replay.failure, None, "continuation replay: {replay:?}");
+    assert_eq!(replay.session, result.session);
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
 fn production_builtin_expert_persists_access_denial_through_registered_task() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("vaults");
