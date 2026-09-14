@@ -1021,6 +1021,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn storage_release_binds_target_and_rechecks_actual_key_health() {
+        let root = root();
+        let person = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = Vault::create(root.path(), person, keys.clone())
+            .await
+            .unwrap();
+        let session = vault.create_session().await.unwrap();
+        let mut connection = vault.connection().unwrap();
+        let transaction = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+            .await
+            .unwrap();
+        let authority = super::super::VaultTransactionAuthority {
+            vault: &vault,
+            transaction: &transaction,
+            session_id: session.id,
+            session_revision: 1,
+        };
+        let recipient = floe_access::ReleaseRecipient::Storage {
+            person_id: person,
+            vault_id: vault.vault_id,
+        };
+        for (target, session_id, revision) in [
+            (
+                floe_access::ReleaseRecipient::Storage {
+                    person_id: PersonId::new(),
+                    vault_id: vault.vault_id,
+                },
+                session.id,
+                1,
+            ),
+            (
+                floe_access::ReleaseRecipient::Storage {
+                    person_id: person,
+                    vault_id: Uuid::new_v4(),
+                },
+                session.id,
+                1,
+            ),
+            (recipient, Uuid::new_v4(), 1),
+            (recipient, session.id, 2),
+        ] {
+            assert!(matches!(
+                floe_access::admit_release(
+                    &DependencyCoverage::Independent,
+                    target,
+                    session_id,
+                    revision,
+                    &authority
+                )
+                .await,
+                Err(AgentFailure::PolicyDenied)
+            ));
+        }
+        let permit = floe_access::admit_release(
+            &DependencyCoverage::Unknown,
+            recipient,
+            session.id,
+            1,
+            &authority,
+        )
+        .await
+        .unwrap();
+        keys.0.lock().unwrap().clear();
+        assert_eq!(
+            floe_access::consume_release(permit).await,
+            Err(AgentFailure::VaultUnavailable)
+        );
+        transaction.rollback().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoked_grant_cannot_release_a_recorded_answer() {
+        let root = root();
+        let person = PersonId::new();
+        let vault = Vault::create(root.path(), person, TestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let turn_id = Uuid::new_v4();
+        let dependency = authorized_dependency(&vault, b"revoked-before-storage").await;
+        let store = vault.governed_general_store(session.id);
+        store
+            .record_dependency(turn_id, dependency.clone())
+            .await
+            .unwrap();
+        vault
+            .revoke_data_access_grant(dependency.grant_id(), dependency.grant_authority())
+            .await
+            .unwrap();
+        session.revision = 1;
+        session.messages.push(AgentMessage::Assistant {
+            turn_id,
+            text: "Must not be released".into(),
+        });
+        assert_eq!(
+            store.compare_and_swap(&session, 0).await,
+            Err(AgentFailure::PolicyDenied)
+        );
+        let mut saved = vault.load(person, session.id).await.unwrap();
+        assert_eq!(saved.revision, 0);
+        assert!(saved.messages.is_empty());
+        let independent_turn = Uuid::new_v4();
+        saved.revision = 1;
+        saved.messages.push(AgentMessage::User {
+            turn_id: independent_turn,
+            text: "Independent input".into(),
+        });
+        store.compare_and_swap(&saved, 0).await.unwrap();
+        let saved = vault.load(person, session.id).await.unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.messages.len(), 1);
+        assert_eq!(
+            read(&vault, person, session.id, turn_id).await.unwrap(),
+            DependencyCoverage::Unknown
+        );
+    }
+
+    #[tokio::test]
     async fn dependent_release_rechecks_live_evidence_inside_final_transaction() {
         struct Liveness(std::sync::atomic::AtomicBool);
 

@@ -1,10 +1,12 @@
 pub mod application;
 mod data_access_grant;
+pub mod ports;
 
 pub use application::{
     AccessGrantMutation, GrantPolicyError, ReadAuthorityEvidence, ReadAuthorityIdentity,
-    ReplayRequest, ReplayTrust, admit_replay, apply_grant_mutation, authorize_grant, create_grant,
-    validate_read_authority, validate_read_continuity,
+    ReleasePermit, ReleaseRecipient, ReplayRequest, ReplayTrust, admit_release, admit_replay,
+    apply_grant_mutation, authorize_grant, consume_release, create_grant,
+    validate_grant_dependency, validate_read_authority, validate_read_continuity,
 };
 pub use data_access_grant::{DataAccessGrant, GrantState, GrantTransitionError};
 pub use floe_context_contract::{
@@ -16,3 +18,4 @@ pub use floe_context_contract::{
     ResourceHandle, SourceAuthority,
 };
 pub use floe_kernel::PersonId;
+pub use ports::CurrentAuthority;

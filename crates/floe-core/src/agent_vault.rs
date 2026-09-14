@@ -107,6 +107,49 @@ pub struct GovernedAgentSessionStore<'vault, Keys> {
     liveness: Option<&'vault dyn GovernedDependencyLiveness>,
 }
 
+struct VaultTransactionAuthority<'vault, 'transaction, Keys> {
+    vault: &'vault EncryptedAgentVault<Keys>,
+    transaction: &'transaction turso::transaction::Transaction<'transaction>,
+    session_id: Uuid,
+    session_revision: u64,
+}
+
+impl<Keys: VaultKeyProvider> floe_access::CurrentAuthority
+    for VaultTransactionAuthority<'_, '_, Keys>
+{
+    fn validate_target(
+        &self,
+        recipient: floe_access::ReleaseRecipient,
+        session_id: Uuid,
+        session_revision: u64,
+    ) -> Result<(), AgentFailure> {
+        let floe_access::ReleaseRecipient::Storage {
+            person_id,
+            vault_id,
+        } = recipient;
+        self.vault.check_access()?;
+        if person_id != self.vault.person_id
+            || vault_id != self.vault.vault_id
+            || session_id != self.session_id
+            || session_revision != self.session_revision
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
+
+    fn validate<'a>(
+        &'a self,
+        dependency: &'a ContextDependency,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AgentFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            self.vault
+                .validate_current_authority_in_transaction(self.transaction, dependency)
+                .await
+        })
+    }
+}
+
 impl<Keys: VaultKeyProvider> GovernedAgentSessionStore<'_, Keys> {
     pub fn session_id(&self) -> Uuid {
         self.session_id
@@ -437,7 +480,10 @@ impl<Keys: VaultKeyProvider> SessionStore for GovernedAgentSessionStore<'_, Keys
                 previous_revision,
                 &snapshot,
                 self.liveness,
-                true,
+                Some(floe_access::ReleaseRecipient::Storage {
+                    person_id: session.person_id,
+                    vault_id: self.vault.vault_id,
+                }),
             )
             .await
     }
@@ -852,7 +898,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             previous_revision,
             coverage,
             None,
-            false,
+            None,
         )
         .await
     }
@@ -863,7 +909,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         previous_revision: u64,
         coverage: &BTreeMap<Uuid, DependencyCoverage>,
         liveness: Option<&dyn GovernedDependencyLiveness>,
-        authorize_release: bool,
+        release_recipient: Option<floe_access::ReleaseRecipient>,
     ) -> Result<(), AgentFailure> {
         if previous_revision.checked_add(1) != Some(session.revision) {
             return Err(AgentFailure::Conflict);
@@ -897,18 +943,30 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(AgentFailure::PolicyDenied);
             }
             let mut turns = std::collections::BTreeSet::new();
+            let mut release_permits = Vec::new();
+            let authority = VaultTransactionAuthority {
+                vault: self,
+                transaction: &transaction,
+                session_id: candidate.id,
+                session_revision: candidate.revision,
+            };
             for message in &candidate.messages[stored.messages.len()..] {
                 if turns.insert(message.turn_id()) {
                     let turn_coverage = coverage
                         .get(&message.turn_id())
                         .cloned()
                         .unwrap_or(DependencyCoverage::Unknown);
-                    if authorize_release {
-                        self.validate_context_dependency_coverage_in_transaction(
-                            &transaction,
-                            &turn_coverage,
-                        )
-                        .await?;
+                    if let Some(recipient) = release_recipient {
+                        release_permits.push(
+                            floe_access::admit_release(
+                                &turn_coverage,
+                                recipient,
+                                candidate.id,
+                                candidate.revision,
+                                &authority,
+                            )
+                            .await?,
+                        );
                     }
                     context_dependencies::merge_context_dependency_coverage(
                         &transaction,
@@ -923,6 +981,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.sanitize_session_for_context_cleanup(&transaction, &mut candidate)
                 .await?;
             let payload = self.payload(&candidate)?;
+            for permit in release_permits {
+                floe_access::consume_release(permit).await?;
+            }
             if let Some(liveness) = liveness {
                 for turn_id in turns {
                     if let Some(DependencyCoverage::Dependent { dependencies }) =

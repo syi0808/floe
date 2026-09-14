@@ -435,6 +435,29 @@ fn storage(_: impl std::fmt::Debug) -> AgentFailure {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(super) async fn validate_current_authority_in_transaction(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        dependency: &floe_domain::ContextDependency,
+    ) -> Result<(), AgentFailure> {
+        let connector = dependency.source().connector().as_str();
+        if connector == ATTENTION_CONNECTOR {
+            self.validate_attention_dependency_in_transaction(transaction, dependency)
+                .await?;
+        } else if connector.starts_with("calendar.") {
+            self.validate_access_grant_dependency_in_transaction(transaction, dependency)
+                .await?;
+            self.validate_calendar_dependency_policy_in_transaction(transaction, dependency)
+                .await?;
+        } else {
+            self.validate_access_grant_dependency_in_transaction(transaction, dependency)
+                .await?;
+            self.validate_remote_view_dependency_policy_in_transaction(transaction, dependency)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn validate_context_dependency_coverage_in_transaction(
         &self,
         transaction: &turso::transaction::Transaction<'_>,
@@ -450,21 +473,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if dependency.expires_at() <= Utc::now() {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let connector = dependency.source().connector().as_str();
-            if connector == ATTENTION_CONNECTOR {
-                self.validate_attention_dependency_in_transaction(transaction, dependency)
-                    .await?;
-            } else if connector.starts_with("calendar.") {
-                self.validate_access_grant_dependency_in_transaction(transaction, dependency)
-                    .await?;
-                self.validate_calendar_dependency_policy_in_transaction(transaction, dependency)
-                    .await?;
-            } else {
-                self.validate_access_grant_dependency_in_transaction(transaction, dependency)
-                    .await?;
-                self.validate_remote_view_dependency_policy_in_transaction(transaction, dependency)
-                    .await?;
-            }
+            self.validate_current_authority_in_transaction(transaction, dependency)
+                .await?;
         }
         Ok(())
     }
@@ -509,26 +519,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 AgentFailure::NotFound => AgentFailure::PolicyDenied,
                 other => other,
             })?;
-        if grant.state() != floe_domain::GrantState::Active
-            || grant.review_required()
-            || grant.authority() != dependency.grant_authority()
-            || grant.source() != dependency.source()
-            || dependency
-                .resources()
-                .iter()
-                .any(|resource| !grant.scope().resources().contains(resource))
-            || dependency
-                .categories()
-                .iter()
-                .any(|category| !grant.scope().categories().contains(category))
-            || !grant.scope().operations().contains(&dependency.operation())
-            || !grant.scope().purposes().contains(&dependency.purpose())
-            || !grant.scope().consumers().contains(dependency.consumer())
-            || grant.scope().processing() != dependency.processing()
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        Ok(())
+        floe_access::validate_grant_dependency(&grant, dependency)
     }
 
     async fn validate_attention_dependency_in_transaction(
