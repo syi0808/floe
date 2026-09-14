@@ -15,6 +15,7 @@ fn fixture(name: &str) -> Value {
         "get_message" => include_str!("fixtures/app_wire_v2/get_message.json"),
         "message" => include_str!("fixtures/app_wire_v2/message.json"),
         "resync_required" => include_str!("fixtures/app_wire_v2/resync_required.json"),
+        "events" => include_str!("fixtures/app_wire_v2/events.json"),
         _ => panic!("unknown fixture"),
     };
     serde_json::from_str(source).unwrap()
@@ -39,6 +40,7 @@ fn app_wire_v2_golden_fixtures_are_stable() {
     assert_round_trip::<AppQueryRequestDto>("get_message");
     assert_round_trip::<AppResponseDto<AppQueryResultDto>>("message");
     assert_round_trip::<AppResponseDto<AppEventsResultDto>>("resync_required");
+    assert_round_trip::<AppResponseDto<AppEventsResultDto>>("events");
 }
 
 #[test]
@@ -92,4 +94,13 @@ fn app_wire_validates_continuation_and_event_bounds() {
     }))
     .unwrap();
     assert_eq!(request.validate(), Err("limit"));
+
+    let request: floe_protocol::AppEventsRequestDto = serde_json::from_value(json!({
+        "schema_version": 2,
+        "request_id": "00000000-0000-0000-0000-000000000006",
+        "runtime_epoch": 7,
+        "limit": 16
+    }))
+    .unwrap();
+    assert_eq!(request.validate(), Err("cursor"));
 }

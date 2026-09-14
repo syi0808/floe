@@ -162,6 +162,7 @@ pub(crate) struct VaultBridge {
     core: Arc<FloeCore>,
     worker: RefCell<Option<Worker>>,
     local_context: Arc<LocalContextStore>,
+    app_events: Arc<crate::app_events::AppEventBuffer>,
 }
 
 impl VaultBridge {
@@ -175,6 +176,7 @@ impl VaultBridge {
             core,
             worker: RefCell::new(None),
             local_context,
+            app_events: Arc::new(crate::app_events::AppEventBuffer::default()),
         }
     }
 
@@ -206,6 +208,10 @@ impl VaultBridge {
         self.worker()?.conversation_query(person, query)
     }
 
+    pub(crate) fn app_events(&self) -> &crate::app_events::AppEventBuffer {
+        self.app_events.as_ref()
+    }
+
     pub(crate) fn start_conversation(
         &self,
         person: PersonId,
@@ -234,6 +240,7 @@ impl VaultBridge {
                 PlatformVaultKeys,
                 self.core.clone(),
                 self.local_context.clone(),
+                Arc::clone(&self.app_events),
             )?);
         }
         Ok(RefMut::map(worker, |worker| {
@@ -252,6 +259,7 @@ struct Worker {
     run_cancellations: Arc<floe_conversation::RunCancellationRegistry>,
     closing: Arc<AtomicBool>,
     learner_scheduling: floe_knowledge::LearnerScheduling,
+    app_events: Arc<crate::app_events::AppEventBuffer>,
 }
 
 struct OpenVault<Keys> {
@@ -377,6 +385,7 @@ struct Job {
     admission: Mutex<Option<Result<floe_conversation::RunReceipt, AgentFailure>>>,
     admission_ready: Condvar,
     progress: Mutex<Progress>,
+    app_events: Arc<crate::app_events::AppEventBuffer>,
 }
 
 impl Job {
@@ -384,6 +393,9 @@ impl Job {
         if let Ok(mut admission) = self.admission.lock()
             && admission.is_none()
         {
+            if let Ok(receipt) = &result {
+                self.app_events.publish_command(receipt);
+            }
             *admission = Some(result);
             self.admission_ready.notify_all();
         }
@@ -548,6 +560,7 @@ impl Worker {
         keys: Keys,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextStore>,
+        app_events: Arc<crate::app_events::AppEventBuffer>,
     ) -> Result<Self, AgentFailure> {
         let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(MAX_IN_FLIGHT_VAULT_JOBS);
         let closing = Arc::new(AtomicBool::new(false));
@@ -891,6 +904,7 @@ impl Worker {
             run_cancellations,
             closing,
             learner_scheduling,
+            app_events,
         })
     }
 
@@ -1058,6 +1072,7 @@ impl Worker {
             admission: Mutex::new(None),
             admission_ready: Condvar::new(),
             progress: Mutex::new(Progress::default()),
+            app_events: Arc::clone(&self.app_events),
         });
         self.learner_scheduling.foreground_submitted()?;
         if self.sender.try_send(WorkerMessage::Job(job.clone())).is_err() {
@@ -1585,6 +1600,26 @@ async fn execute_conversation_turn_action<Keys: VaultKeyProvider + 'static>(
             return Err(failure);
         }
     };
+    let admitted = job
+        .admission
+        .lock()
+        .ok()
+        .and_then(|admission| match admission.as_ref() {
+            Some(Ok(receipt)) => Some(receipt.clone()),
+            Some(Err(_)) | None => None,
+        });
+    if let Some(admitted) = admitted
+        && let Ok(Some(receipt)) = floe_conversation::get_run(
+            vault.conversation_repository.as_ref(),
+            floe_conversation::RunQuery {
+                principal: job.person.to_string(),
+                run_id: admitted.run_id,
+            },
+        )
+        .await
+    {
+        job.app_events.publish_run(&receipt);
+    }
     Ok(VaultExecutionResult {
         session: Some(session),
         ..VaultExecutionResult::ready()
@@ -3681,6 +3716,7 @@ mod tests {
                 keys,
                 Arc::new(core),
                 Arc::new(LocalContextStore::default()),
+                Arc::new(crate::app_events::AppEventBuffer::default()),
             )
         }
     }

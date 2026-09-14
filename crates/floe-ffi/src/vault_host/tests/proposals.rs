@@ -303,6 +303,7 @@ fn proposal_jobs_read_absent_and_published_actions_without_republishing_after_re
         keys.clone(),
         core.clone(),
         Arc::new(LocalContextStore::default()),
+        Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
     assert_eq!(

@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-4000-8000-000000000010",
+  "status": "ok",
+  "result": {
+    "kind": "events",
+    "runtime_epoch": 7,
+    "next_cursor": 42,
+    "events": [
+      {
+        "cursor": 42,
+        "aggregate_revision": 2,
+        "runtime_epoch": 7,
+        "event": {
+          "kind": "run_updated",
+          "run": {
+            "run_id": "00000000-0000-4000-8000-000000000011",
+            "session_id": "00000000-0000-4000-8000-000000000012",
+            "revision": 2,
+            "runtime_epoch": 7,
+            "executor_generation": 1,
+            "state": "finished",
+            "progress": "cancelled",
+            "task_refs": [],
+            "attempt_refs": [],
+            "report": {
+              "execution": "cancelled",
+              "reply": "not_produced",
+              "issues": [],
+              "action_refs": []
+            }
+          }
+        }
+      }
+    ]
+  }
+}

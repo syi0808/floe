@@ -4,12 +4,17 @@ use floe_conversation::{RunReceipt, RunState};
 use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 use floe_protocol::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
-    AppCommandResultDto, AppCommandStatusDto, AppMessageDto, AppMessageRoleDto, AppQueryDto,
-    AppQueryRequestDto, AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto,
-    AppTurnExecutionDto, AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
+    AppCommandResultDto, AppCommandStatusDto, AppEventDto, AppEventKindDto, AppEventsRequestDto,
+    AppEventsResultDto, AppMessageDto, AppMessageRoleDto, AppQueryDto, AppQueryRequestDto,
+    AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto,
+    AppTurnModeDto, AppTurnReportDto, AppWireErrorCodeDto, AppWireErrorDto,
 };
 
-use crate::{FloeHandle, vault_host::ConversationQuery};
+use crate::{
+    FloeHandle,
+    app_events::{EventPayload, EventRead, RunEventRecord},
+    vault_host::ConversationQuery,
+};
 
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
 
@@ -155,6 +160,63 @@ pub(crate) fn query(
     }
 }
 
+pub(crate) fn events(
+    handle: &FloeHandle,
+    request: AppEventsRequestDto,
+) -> AppWireResult<AppEventsResultDto> {
+    request.validate().map_err(request_validation)?;
+    let host_request = handle
+        .app
+        .request(request.request_id)
+        .map_err(host_failure)?;
+    let runtime_epoch = host_request.caller().runtime_epoch();
+    let read = host_request.services().agent_vault.app_events().read(
+        runtime_epoch,
+        request.runtime_epoch,
+        request.cursor,
+        request.limit,
+    );
+    Ok(match read {
+        EventRead::Events {
+            next_cursor,
+            events,
+        } => AppEventsResultDto::Events {
+            runtime_epoch,
+            next_cursor,
+            events: events
+                .into_iter()
+                .map(|event| AppEventDto {
+                    cursor: event.cursor,
+                    aggregate_revision: event.aggregate_revision,
+                    runtime_epoch,
+                    event: match event.payload {
+                        EventPayload::CommandUpdated {
+                            command_id,
+                            run_id,
+                            session_revision,
+                        } => AppEventKindDto::CommandUpdated {
+                            receipt: AppCommandReceiptDto {
+                                command_id: command_id.as_uuid(),
+                                admission: AppCommandStatusDto::Accepted,
+                                run_id: Some(run_id.as_uuid()),
+                                session_revision: Some(session_revision),
+                                issue: None,
+                            },
+                        },
+                        EventPayload::RunUpdated(run) => AppEventKindDto::RunUpdated {
+                            run: run_event_snapshot(run, runtime_epoch),
+                        },
+                    },
+                })
+                .collect(),
+        },
+        EventRead::ResyncRequired { snapshot_cursor } => AppEventsResultDto::ResyncRequired {
+            runtime_epoch,
+            snapshot_cursor,
+        },
+    })
+}
+
 fn command_receipt(receipt: &RunReceipt) -> AppCommandReceiptDto {
     AppCommandReceiptDto {
         command_id: receipt.command_id.as_uuid(),
@@ -179,6 +241,50 @@ fn run_snapshot(receipt: RunReceipt, runtime_epoch: u64) -> AppRunSnapshotDto {
             AppRunStateDto::Finished
         },
         progress: match receipt.state {
+            RunState::Working => "executing",
+            RunState::Completed => "completed",
+            RunState::Failed => "failed",
+            RunState::Cancelled => "cancelled",
+            RunState::TimedOut => "timed_out",
+            RunState::Interrupted => "interrupted",
+        }
+        .into(),
+        task_refs: Vec::new(),
+        attempt_refs: Vec::new(),
+        report,
+    }
+}
+
+fn run_event_snapshot(run: RunEventRecord, runtime_epoch: u64) -> AppRunSnapshotDto {
+    let report = run.state.is_terminal().then(|| AppTurnReportDto {
+        execution: match run.state {
+            RunState::Completed => AppTurnExecutionDto::Completed,
+            RunState::Failed if run.generated_reply => AppTurnExecutionDto::Partial,
+            RunState::Failed | RunState::TimedOut => AppTurnExecutionDto::Failed,
+            RunState::Cancelled => AppTurnExecutionDto::Cancelled,
+            RunState::Interrupted | RunState::Working => AppTurnExecutionDto::Indeterminate,
+        },
+        reply: if run.generated_reply {
+            AppReplyStatusDto::Generated
+        } else {
+            AppReplyStatusDto::NotProduced
+        },
+        issues: run.issue.map(agent_failure).into_iter().collect(),
+        action_refs: Vec::new(),
+        final_message_ref: run.generated_reply.then(|| run.run_id.as_uuid()),
+    });
+    AppRunSnapshotDto {
+        run_id: run.run_id.as_uuid(),
+        session_id: run.session_id,
+        revision: run.aggregate_revision,
+        runtime_epoch,
+        executor_generation: run.executor_generation,
+        state: if run.state == RunState::Working {
+            AppRunStateDto::Executing
+        } else {
+            AppRunStateDto::Finished
+        },
+        progress: match run.state {
             RunState::Working => "executing",
             RunState::Completed => "completed",
             RunState::Failed => "failed",

@@ -168,11 +168,71 @@ void main() {
     await expectLater(client.getCommand(command.commandId), throwsStateError);
     expect(transport.closed, isTrue);
   });
+
+  test(
+    'events require resync then enforce epoch revision and cursor order',
+    () async {
+      final identifiers = Queue.of([
+        '00000000-0000-4000-8000-000000000241',
+        '00000000-0000-4000-8000-000000000242',
+      ]);
+      final transport = FakeTransport();
+      final client = FloeClient(transport, newId: identifiers.removeFirst);
+      transport.events = (request) async {
+        if (!request.containsKey('cursor')) {
+          return {
+            'kind': 'resync_required',
+            'runtime_epoch': 7,
+            'snapshot_cursor': 10,
+          };
+        }
+        return {
+          'kind': 'events',
+          'runtime_epoch': 7,
+          'next_cursor': 11,
+          'events': [
+            {
+              'cursor': 11,
+              'aggregate_revision': 2,
+              'runtime_epoch': 7,
+              'event': {
+                'kind': 'run_updated',
+                'run': {
+                  'run_id': '00000000-0000-4000-8000-000000000243',
+                  'session_id': '00000000-0000-4000-8000-000000000244',
+                  'revision': 2,
+                  'runtime_epoch': 7,
+                  'executor_generation': 1,
+                  'state': 'finished',
+                  'progress': 'cancelled',
+                  'task_refs': <Object?>[],
+                  'attempt_refs': <Object?>[],
+                  'report': {
+                    'execution': 'cancelled',
+                    'reply': 'not_produced',
+                    'issues': <Object?>[],
+                    'action_refs': <Object?>[],
+                  },
+                },
+              },
+            },
+          ],
+        };
+      };
+
+      final initial = await client.readEvents();
+      final cursor = (initial as AppEventsResyncRequired).snapshotCursor;
+      final page = await client.readEvents(after: cursor) as AppEventsPage;
+      expect(page.cursor.cursor, 11);
+      expect((page.events.single as AppRunUpdated).run.progress, 'cancelled');
+    },
+  );
 }
 
 final class FakeTransport implements AppWireTransport {
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? command;
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? query;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? events;
   final List<Map<String, dynamic>> commandRequests = [];
   bool closed = false;
 
@@ -190,6 +250,12 @@ final class FakeTransport implements AppWireTransport {
     Map<String, dynamic> request, {
     Duration timeout = const Duration(seconds: 3),
   }) => query!(request);
+
+  @override
+  Future<Map<String, dynamic>> eventsV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => events!(request);
 
   @override
   Future<void> close() async {

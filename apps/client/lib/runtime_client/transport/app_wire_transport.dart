@@ -11,5 +11,10 @@ abstract interface class AppWireTransport {
     Duration timeout = const Duration(seconds: 3),
   });
 
+  Future<Map<String, dynamic>> eventsV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  });
+
   Future<void> close();
 }

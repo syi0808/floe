@@ -167,6 +167,16 @@ pub unsafe extern "C" fn floe_core_query_v2(
 
 #[unsafe(no_mangle)]
 #[allow(clippy::missing_safety_doc)]
+#[cfg(unix)]
+pub unsafe extern "C" fn floe_core_events_v2(
+    handle_ptr: *mut FloeHandle,
+    request_json: *const c_char,
+) -> *mut c_char {
+    invoke_json_v2(handle_ptr, request_json, app_wire::events)
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn floe_core_calendar_actions(
     handle_ptr: *mut FloeHandle,
     request_json: *const c_char,

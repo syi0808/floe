@@ -41,6 +41,13 @@ void main() {
           ),
         ),
       );
+      final initialEvents = await client.readEvents();
+      final eventCursor =
+          (initialEvents as AppEventsResyncRequired).snapshotCursor;
+      expect(eventCursor.runtimeEpoch, greaterThan(0));
+      final emptyEvents =
+          await client.readEvents(after: eventCursor) as AppEventsPage;
+      expect(emptyEvents.events, isEmpty);
 
       final command = client.prepareStartTurn(
         sessionId: '00000000-0000-4000-8000-000000000106',

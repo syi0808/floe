@@ -78,6 +78,11 @@ impl Core {
         let request = CString::new(request.to_string()).unwrap();
         take_json(unsafe { floe_core_command_v2(self.0, request.as_ptr()) })
     }
+
+    fn events_v2(&self, request: Value) -> Value {
+        let request = CString::new(request.to_string()).unwrap();
+        take_json(unsafe { floe_core_events_v2(self.0, request.as_ptr()) })
+    }
 }
 
 #[test]
@@ -109,6 +114,17 @@ fn product_open_binds_native_identity_before_database_side_effects() {
     let mut injected = query;
     injected["query"]["bearer_token"] = json!("must-not-cross-app-wire");
     assert_eq!(core.query_v2(injected)["error"]["code"], "validation");
+
+    let events_request_id = Uuid::new_v4();
+    let initial_events = core.events_v2(json!({
+        "schema_version": 2,
+        "request_id": events_request_id,
+        "limit": 16
+    }));
+    assert_eq!(initial_events["request_id"], events_request_id.to_string());
+    assert_eq!(initial_events["result"]["kind"], "resync_required");
+    assert_eq!(initial_events["result"]["snapshot_cursor"], 0);
+    assert!(initial_events["result"]["runtime_epoch"].as_u64().unwrap() > 0);
 
     let start_request_id = Uuid::new_v4();
     let start = json!({

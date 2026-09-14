@@ -59,6 +59,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         Keys::default(),
         core.clone(),
         Arc::new(LocalContextStore::default()),
+        Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
     assert!(
@@ -331,6 +332,7 @@ fn fixture_schedule_runs_through_the_durable_registered_task() {
         keys.clone(),
         Arc::clone(&core),
         Arc::new(LocalContextStore::default()),
+        Arc::new(crate::app_events::AppEventBuffer::default()),
     )
     .unwrap();
     assert_eq!(
@@ -889,6 +891,10 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
     let directory = tempfile::tempdir().unwrap();
     let person = PersonId::new();
     let worker = Worker::new(directory.path().join("vaults"), Keys::default()).unwrap();
+    assert_eq!(
+        worker.app_events.read(7, None, None, 16),
+        crate::app_events::EventRead::ResyncRequired { snapshot_cursor: 0 }
+    );
     perform(&worker, person, AgentVaultActionDto::Create {});
     let session = perform(
         &worker,
@@ -922,6 +928,19 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         )
         .unwrap();
     assert_eq!(admitted.state, floe_conversation::RunState::Working);
+    assert!(matches!(
+        worker.app_events.read(7, Some(7), Some(0), 16),
+        crate::app_events::EventRead::Events {
+            next_cursor: 1,
+            events
+        } if matches!(
+            events.as_slice(),
+            [crate::app_events::BufferedEvent {
+                payload: crate::app_events::EventPayload::CommandUpdated { run_id, .. },
+                ..
+            }] if *run_id == admitted.run_id
+        )
+    ));
     assert_eq!(
         worker
             .start_conversation(
@@ -976,6 +995,20 @@ fn t08_cancel_run_is_principal_bound_and_cancels_the_admitted_production_root() 
         .unwrap()
         .unwrap();
     assert_eq!(command.state, floe_conversation::RunState::Cancelled);
+    assert!(matches!(
+        worker.app_events.read(7, Some(7), Some(1), 16),
+        crate::app_events::EventRead::Events {
+            next_cursor: 2,
+            events
+        } if matches!(
+            events.as_slice(),
+            [crate::app_events::BufferedEvent {
+                payload: crate::app_events::EventPayload::RunUpdated(run),
+                ..
+            }] if run.run_id == admitted.run_id
+                && run.state == floe_conversation::RunState::Cancelled
+        )
+    ));
     assert_eq!(
         worker.cancel_conversation(person, cancel_command_id, admitted.run_id),
         Ok(floe_conversation::CancelRunStatus::Inactive)

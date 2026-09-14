@@ -4,6 +4,7 @@
   "status": "ok",
   "result": {
     "kind": "resync_required",
+    "runtime_epoch": 7,
     "snapshot_cursor": 41
   }
 }

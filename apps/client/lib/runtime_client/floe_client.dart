@@ -107,6 +107,60 @@ final class AppMessage {
   final String text;
 }
 
+final class AppEventCursor {
+  const AppEventCursor({required this.runtimeEpoch, required this.cursor});
+
+  final int runtimeEpoch;
+  final int cursor;
+}
+
+sealed class AppEventsRead {
+  const AppEventsRead();
+}
+
+final class AppEventsPage extends AppEventsRead {
+  const AppEventsPage({required this.cursor, required this.events});
+
+  final AppEventCursor cursor;
+  final List<AppRuntimeEvent> events;
+}
+
+final class AppEventsResyncRequired extends AppEventsRead {
+  const AppEventsResyncRequired(this.snapshotCursor);
+
+  final AppEventCursor snapshotCursor;
+}
+
+sealed class AppRuntimeEvent {
+  const AppRuntimeEvent({
+    required this.cursor,
+    required this.aggregateRevision,
+  });
+
+  final int cursor;
+  final int aggregateRevision;
+}
+
+final class AppCommandUpdated extends AppRuntimeEvent {
+  const AppCommandUpdated({
+    required super.cursor,
+    required super.aggregateRevision,
+    required this.receipt,
+  });
+
+  final AppCommandReceipt receipt;
+}
+
+final class AppRunUpdated extends AppRuntimeEvent {
+  const AppRunUpdated({
+    required super.cursor,
+    required super.aggregateRevision,
+    required this.run,
+  });
+
+  final AppRunSnapshot run;
+}
+
 final class FloeClient {
   FloeClient(this._transport, {String Function()? newId})
     : _newId = newId ?? _uuidV4;
@@ -259,6 +313,108 @@ final class FloeClient {
         return AppMessage(messageId: returnedId, role: role, text: text);
       }
       throw const FormatException('Invalid app message response.');
+    });
+  }
+
+  Future<AppEventsRead> readEvents({
+    AppEventCursor? after,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) return Future.error(StateError('FloeClient is closed.'));
+    if (limit <= 0 ||
+        limit > 256 ||
+        (after != null && (after.runtimeEpoch <= 0 || after.cursor < 0))) {
+      return Future.error(const FormatException('Invalid event cursor.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final request = <String, dynamic>{
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'limit': limit,
+      };
+      if (after != null) {
+        request['runtime_epoch'] = after.runtimeEpoch;
+        request['cursor'] = after.cursor;
+      }
+      final result = await _transport.eventsV2(request, timeout: timeout);
+      final runtimeEpoch = result['runtime_epoch'];
+      if (runtimeEpoch is! int || runtimeEpoch <= 0) {
+        throw const FormatException('Invalid event runtime epoch.');
+      }
+      if (result['kind'] == 'resync_required') {
+        final snapshotCursor = result['snapshot_cursor'];
+        if (snapshotCursor is! int || snapshotCursor < 0) {
+          throw const FormatException('Invalid event resync cursor.');
+        }
+        return AppEventsResyncRequired(
+          AppEventCursor(runtimeEpoch: runtimeEpoch, cursor: snapshotCursor),
+        );
+      }
+      final nextCursor = result['next_cursor'];
+      final rawEvents = result['events'];
+      if (result['kind'] != 'events' ||
+          after == null ||
+          runtimeEpoch != after.runtimeEpoch ||
+          nextCursor is! int ||
+          nextCursor < after.cursor ||
+          rawEvents is! List) {
+        throw const FormatException('Invalid event batch.');
+      }
+      var expectedCursor = after.cursor;
+      final events = rawEvents
+          .map((raw) {
+            final event = _map(raw);
+            final cursor = event['cursor'];
+            final aggregateRevision = event['aggregate_revision'];
+            if (cursor is! int ||
+                cursor != ++expectedCursor ||
+                aggregateRevision is! int ||
+                aggregateRevision <= 0 ||
+                event['runtime_epoch'] != runtimeEpoch) {
+              throw const FormatException('Invalid app event.');
+            }
+            final payload = _map(event['event']);
+            switch (payload['kind']) {
+              case 'command_updated':
+                final receiptSource = _map(payload['receipt'])
+                  ..['kind'] = 'command_receipt';
+                return AppCommandUpdated(
+                  cursor: cursor,
+                  aggregateRevision: aggregateRevision,
+                  receipt: _commandReceipt(
+                    receiptSource,
+                    expectedCommandId: receiptSource['command_id'] as String,
+                  ),
+                );
+              case 'run_updated':
+                final runSource = _map(payload['run'])
+                  ..['kind'] = 'run_snapshot';
+                final run = _runSnapshot(
+                  runSource,
+                  expectedRunId: runSource['run_id'] as String,
+                );
+                if (run.revision != aggregateRevision) {
+                  throw const FormatException('Mismatched Run event revision.');
+                }
+                return AppRunUpdated(
+                  cursor: cursor,
+                  aggregateRevision: aggregateRevision,
+                  run: run,
+                );
+              default:
+                throw const FormatException('Unknown app event.');
+            }
+          })
+          .toList(growable: false);
+      if (nextCursor != expectedCursor) {
+        throw const FormatException('Mismatched event batch cursor.');
+      }
+      return AppEventsPage(
+        cursor: AppEventCursor(runtimeEpoch: runtimeEpoch, cursor: nextCursor),
+        events: events,
+      );
     });
   }
 
