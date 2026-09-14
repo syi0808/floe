@@ -38,12 +38,20 @@ struct ConversationTurnInputs<'a, Keys: VaultKeyProvider> {
     local_context: &'a LocalContextStore,
     person_id: PersonId,
     request: &'a AgentConversationTurnRequestDto,
+    task_coordinator: &'a floe_experts::TaskCoordinator<
+        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+    >,
+    schedule_endpoint: &'a expert_dispatch::schedule::ScheduleEndpoint<Keys>,
 }
 
-pub(super) async fn run<Keys: VaultKeyProvider>(
+pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     core: &FloeCore,
     vault: &EncryptedAgentVault<Keys>,
     local_context: &LocalContextStore,
+    task_coordinator: &floe_experts::TaskCoordinator<
+        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+    >,
+    schedule_endpoint: &expert_dispatch::schedule::ScheduleEndpoint<Keys>,
     person_id: PersonId,
     request: &AgentConversationTurnRequestDto,
     cancellation: floe_agent::Cancellation,
@@ -81,6 +89,8 @@ pub(super) async fn run<Keys: VaultKeyProvider>(
         local_context,
         person_id,
         request,
+        task_coordinator,
+        schedule_endpoint,
     };
     Box::pin(expert_dispatch::run(&inputs, context, cancellation, emit)).await
 }
@@ -106,7 +116,7 @@ async fn conversation_context(
     })
 }
 
-async fn run_general_turn<Keys: VaultKeyProvider>(
+async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_agent::Cancellation,
@@ -205,7 +215,13 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         vault,
         person_id,
     };
-    let expert_cards = vault.enabled_expert_cards().await?;
+    let mut expert_cards = vault.enabled_expert_cards().await?;
+    if let Some(schedule_card) =
+        expert_dispatch::schedule::eligible_card(vault, &request.device_id).await?
+        && !expert_cards.iter().any(|card| card.id == schedule_card.id)
+    {
+        expert_cards.push(schedule_card);
+    }
     let builtin_setup = vault
         .builtin_expert_overview()
         .await?
@@ -223,6 +239,13 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         remote_reader: remote_reader
             .as_ref()
             .map(|reader| reader as &dyn floe_context::SourceReader),
+    };
+    let schedule_runner = expert_dispatch::RegisteredScheduleTaskRunner {
+        coordinator: inputs.task_coordinator,
+        endpoint: inputs.schedule_endpoint,
+        turn_request: request,
+        context: &context,
+        recorder: Some(&result_recorder),
     };
     let experts = ConversationExperts {
         model: &model,
@@ -242,6 +265,7 @@ async fn run_general_turn<Keys: VaultKeyProvider>(
         task_views: &[],
         cards: expert_cards,
         builtin_setup: Some(builtin_setup),
+        schedule_runner: Some(&schedule_runner),
     };
     let agents = InProcessA2ATransport::new(&experts);
     let runtime = AgentRuntime {
@@ -1338,7 +1362,7 @@ fn default_communication_limit() -> usize {
     25
 }
 
-mod expert_dispatch;
+pub(in crate::vault_host) mod expert_dispatch;
 use expert_dispatch::ConversationExperts;
 
 #[cfg(test)]
@@ -2119,6 +2143,113 @@ mod tests {
         .collect()
     }
 
+    struct FixtureScheduleRunner {
+        calls: AtomicUsize,
+    }
+
+    impl expert_dispatch::ScheduleTaskRunner for FixtureScheduleRunner {
+        fn run<'a>(
+            &'a self,
+            request: A2ASendMessageRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async move {
+                Ok(A2ATask {
+                    id: request.message.task_id.unwrap(),
+                    context_id: request.message.context_id,
+                    agent_id: request.agent_id,
+                    state: A2ATaskState::Completed,
+                    history: vec![request.message],
+                    artifacts: vec![],
+                    failure: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn schedule_delegation_uses_registered_task_runner() {
+        let model = Model::new(Some(AgentRemoteRouteDto {
+            base_url: "http://127.0.0.1:1".into(),
+            bearer_token: "test_token_that_is_long_enough_to_validate".into(),
+            purpose: "everyday_assistance".into(),
+            external: false,
+            allow_external: false,
+            recipient: None,
+            calendar_connections: vec![],
+            pairing: None,
+        }))
+        .unwrap();
+        let policy = policy(&model, None);
+        let context = AgentContext {
+            projection_version: 1,
+            persona: None,
+            optional_context_issues: vec![],
+            memories: vec![],
+            evidence: vec![],
+        };
+        let local_context = LocalContextStore::default();
+        let person_id = PersonId::new();
+        let runner = FixtureScheduleRunner {
+            calls: AtomicUsize::new(0),
+        };
+        let experts = ConversationExperts {
+            model: &model,
+            source_client: None,
+            policy: &policy,
+            context: &context,
+            local_context: &local_context,
+            attention: None,
+            people_reader: None,
+            feasibility_reader: None,
+            wellbeing_reader: None,
+            recorder: None,
+            remote_reader: None,
+            context_reader: None,
+            task_views: &[],
+            cards: vec![AgentCard {
+                schema_version: AGENT_VERSION,
+                protocol_version: floe_agent::A2A_PROTOCOL_VERSION.into(),
+                id: BuiltinExpertKind::Schedule.package_id().into(),
+                version: "1.0.0".into(),
+                name: "Schedule Expert".into(),
+                description: "Reviews an authorized calendar view".into(),
+                domain_tags: vec!["schedule".into()],
+                skills: vec!["Review a calendar assignment".into()],
+            }],
+            builtin_setup: None,
+            schedule_runner: Some(&runner),
+        };
+        let task_id = Uuid::new_v4();
+        let task = experts
+            .handle_message(A2ASendMessageRequest {
+                usage: floe_agent::UsageLedger::default(),
+                schema_version: AGENT_VERSION,
+                person_id,
+                session_id: Uuid::new_v4(),
+                parent_turn_id: Uuid::new_v4(),
+                agent_id: BuiltinExpertKind::Schedule.package_id().into(),
+                message: floe_agent::A2AMessage {
+                    message_id: Uuid::new_v4(),
+                    context_id: Uuid::new_v4(),
+                    task_id: Some(task_id),
+                    role: A2AMessageRole::User,
+                    parts: vec![A2APart::Text {
+                        text: "Review my calendar".into(),
+                    }],
+                },
+                max_output_bytes: 16_384,
+                deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                cancellation: Cancellation::default(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.state, A2ATaskState::Completed);
+        assert_eq!(runner.calls.load(Ordering::Acquire), 1);
+    }
+
     fn test_builtin_setup(
         person_id: PersonId,
         source: BuiltinContextSource,
@@ -2552,6 +2683,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: Some(test_builtin_setup(person_id, BuiltinContextSource::Mail)),
+            schedule_runner: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2709,6 +2841,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         let cards = experts.agent_cards(PersonId::new());
         assert_eq!(cards.len(), 7);
@@ -2750,6 +2883,7 @@ mod tests {
             task_views: &[],
             cards: vec![],
             builtin_setup: None,
+            schedule_runner: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {
@@ -2949,6 +3083,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         let task_id = uuid::Uuid::new_v4();
         let task = experts
@@ -3170,6 +3305,7 @@ mod tests {
             task_views: &tasks,
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         let task = experts
             .handle_message(A2ASendMessageRequest {
@@ -3366,6 +3502,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         let mut results = Vec::new();
         for agent_id in [WORK_CONTEXT_AGENT_ID, LIFE_LOGISTICS_AGENT_ID] {
@@ -3634,6 +3771,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         for (agent_id, _, _, _, _, source_handle) in cases {
             let result = experts
@@ -3703,6 +3841,7 @@ mod tests {
             task_views: &[],
             cards: test_expert_cards(),
             builtin_setup: None,
+            schedule_runner: None,
         };
         let result = experts
             .handle_message(A2ASendMessageRequest {

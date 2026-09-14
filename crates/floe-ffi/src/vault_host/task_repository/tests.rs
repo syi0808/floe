@@ -6,7 +6,7 @@ use std::{
 };
 
 use floe_agent_contract::{DependencyCoverage, InvocationKey, TaskSnapshot, TaskState};
-use floe_core::VaultKey;
+use floe_core::{FloeCore, VaultKey};
 use floe_domain::PersonId;
 use uuid::Uuid;
 
@@ -110,7 +110,13 @@ async fn adapter_round_trips_durable_records_and_recovers_after_reopen() {
     let reopened = EncryptedAgentVault::open(root.path(), person_id, keys)
         .await
         .unwrap();
-    let opened = OpenVault::activate(reopened).await.unwrap();
+    let opened = OpenVault::activate(
+        reopened,
+        Arc::new(FloeCore::open(":memory:").await.unwrap()),
+        Arc::new(crate::local_context::LocalContextStore::default()),
+    )
+    .await
+    .unwrap();
     assert_eq!(opened._recovered_tasks.len(), 1);
     assert_eq!(opened._recovered_tasks[0].snapshot.task_id, task_id);
     assert_eq!(

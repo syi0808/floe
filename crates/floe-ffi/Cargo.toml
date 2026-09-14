@@ -20,6 +20,8 @@ floe-infra = { path = "../floe-infra" }
 floe-knowledge = { path = "../modules/knowledge" }
 floe-context = { path = "../modules/context" }
 floe-experts = { path = "../modules/experts" }
+floe-execution = { path = "../runtime/execution" }
+floe-kernel = { path = "../contracts/kernel" }
 floe-protocol = { path = "../floe-protocol" }
 serde.workspace = true
 serde_json.workspace = true

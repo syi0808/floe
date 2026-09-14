@@ -604,8 +604,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             executor_generation,
             task_snapshot,
         } = completion;
-        let coverage = DependencyCoverage::Dependent {
-            dependencies: settlement.dependencies.clone(),
+        let coverage = if settlement.dependencies.is_empty() {
+            DependencyCoverage::Independent
+        } else {
+            DependencyCoverage::Dependent {
+                dependencies: settlement.dependencies.clone(),
+            }
         };
         coverage
             .validate()

@@ -1,5 +1,6 @@
 use floe_agent::{
-    AgentMessage, CalendarExpertSetup, RegistryConfiguration, RegistryConfigurationTarget,
+    AgentMessage, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
+    RegistryConfiguration, RegistryConfigurationTarget,
 };
 
 use super::*;
@@ -205,7 +206,7 @@ fn native_grants_capture_authority_only_on_explicit_review() {
     );
     assert_eq!(session.failure, None);
     let session = session.session.unwrap();
-    let (route, server) = answer_server(vec![
+    let (mut route, server) = answer_server(vec![
         floe_agent::ModelStep::Answer {
             text: "Hello!".into(),
         },
@@ -214,17 +215,26 @@ fn native_grants_capture_authority_only_on_explicit_review() {
             message: "Read my calendar".into(),
         },
         floe_agent::ModelStep::Call {
-            capability_id: "calendar.read".into(),
+            capability_id: "schedule.find_free_windows".into(),
             input: serde_json::json!({
+                "minimum_minutes": 60,
                 "range_start_unix_ms": chrono::Utc::now().timestamp_millis(),
-                "range_end_unix_ms": chrono::Utc::now().timestamp_millis() + 60_000,
+                "range_end_unix_ms": chrono::Utc::now().timestamp_millis() + 7_200_000,
             })
             .to_string(),
         },
         floe_agent::ModelStep::Answer {
-            text: "Calendar is unavailable; we can still chat.".into(),
+            text: "Your calendar is clear.".into(),
+        },
+        floe_agent::ModelStep::Answer {
+            text: "Your calendar is clear.".into(),
         },
     ]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "calendar-expert-test".into(),
+        person_id: person.to_string(),
+        device_id: "iphone".into(),
+    });
     let run = |session: &AgentSession, text: &str| {
         perform(
             &worker,
@@ -257,14 +267,205 @@ fn native_grants_capture_authority_only_on_explicit_review() {
         Some(floe_agent::AgentOutcome::Completed),
         "session: {calendar:?}; requests: {requests:?}"
     );
-    assert!(calendar.messages.iter().any(|message| matches!(message,
-        AgentMessage::Delegation { task, .. } if task.failure == Some(AgentFailure::CapabilityDenied))));
-    assert_eq!(requests.len(), 4);
+    assert!(calendar.messages.iter().any(|message| matches!(
+        message,
+        AgentMessage::Delegation { task, .. }
+            if task.state == floe_agent::A2ATaskState::Completed
+    )));
+    assert_eq!(requests.len(), 5);
     assert!(
         requests
             .iter()
             .all(|request| request.starts_with("POST /v1/agent "))
     );
+}
+
+#[test]
+fn fixture_schedule_runs_through_the_durable_registered_task() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let core = Arc::new(
+        runtime
+            .block_on(FloeCore::open(directory.path().join("core.db")))
+            .unwrap(),
+    );
+    let setup_id = Uuid::new_v4();
+    runtime
+        .block_on(core.set_calendar_scope(
+            person,
+            setup_id.to_string(),
+            1,
+            "mac-local".into(),
+            floe_domain::CalendarProvider::Fixture,
+            vec![floe_domain::CalendarSelection {
+                calendar_id: "fixture-calendar".into(),
+                calendar_name: "Fixture".into(),
+            }],
+            floe_domain::CalendarScope::Selected,
+        ))
+        .unwrap();
+    let local = chrono::Local::now();
+    runtime
+        .block_on(core.import_calendar(
+            person,
+            1,
+            floe_domain::CalendarRange {
+                start_date: local.date_naive(),
+                end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
+                timezone_offset_seconds: local.offset().local_minus_utc(),
+                end_timezone_offset_seconds: None,
+            },
+            vec![],
+            chrono::Utc::now(),
+        ))
+        .unwrap();
+    let worker = Worker::with_core(
+        root.clone(),
+        keys.clone(),
+        Arc::clone(&core),
+        Arc::new(LocalContextStore::default()),
+    )
+    .unwrap();
+    assert_eq!(
+        perform(&worker, person, AgentVaultActionDto::Create {}).failure,
+        None
+    );
+    let empty = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarExperts { setup: None },
+    )
+    .calendar_experts
+    .unwrap();
+    let installed = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarExperts {
+            setup: Some(
+                encode_contract(&CalendarExpertSetup {
+                    instance_id: empty.registry.instance_id,
+                    expected_revision: empty.registry.revision,
+                    setup_id,
+                    provider: floe_domain::CalendarProvider::Fixture,
+                    device_id: "mac-local".into(),
+                    calendar_ids: vec!["fixture-calendar".into()],
+                    connection_scope: floe_domain::CalendarScope::Selected,
+                    connection_revision: 2,
+                    source_authority: None,
+                    reviewed_native_subject_fingerprint: None,
+                })
+                .unwrap(),
+            ),
+        },
+    )
+    .calendar_experts
+    .unwrap();
+    let enabled = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::CalendarAccess {
+            change: encode_contract(&CalendarAccessConfiguration {
+                instance_id: installed.registry.instance_id,
+                expected_revision: installed.registry.revision,
+                setup_id,
+                change: CalendarAccessChange::SetEnabled { enabled: true },
+            })
+            .unwrap(),
+        },
+    );
+    assert_eq!(enabled.failure, None);
+    let session = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationSession {
+            operation: AgentConversationSessionOperationDto::Start {},
+        },
+    )
+    .session
+    .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    let (mut route, server) = answer_server(vec![
+        floe_agent::ModelStep::Delegate {
+            agent_id: floe_agent::BuiltinExpertKind::Schedule.package_id().into(),
+            message: "Find an open hour".into(),
+        },
+        floe_agent::ModelStep::Call {
+            capability_id: "schedule.find_free_windows".into(),
+            input: serde_json::json!({
+                "minimum_minutes": 60,
+                "range_start_unix_ms": now,
+                "range_end_unix_ms": now + 7_200_000,
+            })
+            .to_string(),
+        },
+        floe_agent::ModelStep::Answer {
+            text: "The fixture calendar has an open hour.".into(),
+        },
+        floe_agent::ModelStep::Answer {
+            text: "You have an open hour.".into(),
+        },
+    ]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "calendar-expert-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let result = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationTurn {
+            request: floe_protocol::AgentConversationTurnRequestDto {
+                session_id: session.id.to_string(),
+                expected_revision: session.revision,
+                text: "Find an open hour".into(),
+                device_id: "mac-local".into(),
+                continuation: false,
+                remote_route: Some(route),
+            },
+        },
+    );
+    assert_eq!(result.failure, None, "result: {result:?}");
+    let session = result.session.unwrap();
+    assert_eq!(
+        session.last_outcome,
+        Some(floe_agent::AgentOutcome::Completed),
+        "session: {session:?}"
+    );
+    let task_id = session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            AgentMessage::Delegation { task, .. }
+                if task.state == floe_agent::A2ATaskState::Completed =>
+            {
+                Some(task.id)
+            }
+            _ => None,
+        })
+        .expect("completed Schedule delegation");
+    assert_eq!(server.join().unwrap().len(), 4);
+    assert_eq!(
+        perform(&worker, person, AgentVaultActionDto::Lock {}).failure,
+        None
+    );
+    let reopened = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    let task = runtime
+        .block_on(reopened.task(floe_agent_contract::TaskId::from_uuid(task_id).unwrap()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Completed
+    );
+    assert!(task.snapshot.result.is_some());
 }
 
 fn answer_server(
@@ -279,7 +480,11 @@ fn answer_server(
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let mut requests = vec![];
-        for step in steps {
+        for (index, mut step) in steps.into_iter().enumerate() {
+            let has_call = matches!(step, floe_agent::ModelStep::Call { .. });
+            if let floe_agent::ModelStep::Call { capability_id, .. } = &mut step {
+                *capability_id = remote_tool_name(capability_id);
+            }
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
                 match listener.accept() {
@@ -317,10 +522,20 @@ fn answer_server(
                     }
                 }
             }
+            let output = if has_call {
+                serde_json::json!({
+                    "output": [step],
+                    "used_tokens": 10,
+                    "call_ids": [format!("call-{index}")],
+                    "replay": [{"type": "reasoning", "encrypted_content": format!("replay-{index}")}],
+                })
+            } else {
+                serde_json::json!({"output": [step], "used_tokens": 10})
+            };
             let response = serde_json::json!({
                 "schema_version": 1, "purpose": "everyday_assistance", "trace_id": "a".repeat(32),
                 "routing": { "placement": "server_local", "external_transfer": false, "replay_source": "a".repeat(64) },
-                "output": serde_json::json!({ "output": [step], "used_tokens": 10 }).to_string(),
+                "output": output.to_string(),
             }).to_string();
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).unwrap();
         }
@@ -339,6 +554,15 @@ fn answer_server(
         },
         server,
     )
+}
+
+fn remote_tool_name(identifier: &str) -> String {
+    let hash = identifier
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, value| {
+            (hash ^ u64::from(value)).wrapping_mul(0x100000001b3)
+        });
+    format!("floe_{hash:016x}")
 }
 
 #[test]

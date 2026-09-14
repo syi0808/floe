@@ -1,20 +1,36 @@
-use std::{future::Future, pin::Pin};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use floe_agent::{
-    AgentBudget, AgentEvent, AgentFailure, DataClass, InferencePolicyDecision, ModelPlacement,
-    ModelRequest, ModelResponse, ModelRunner, SessionStore,
+    AgentFailure, BuiltinExpertKind, InferencePolicyDecision, ModelPlacement, ModelRequest,
+    ModelResponse, ModelRunner,
+};
+use floe_agent_contract::{
+    AgentCard as ContractAgentCard, AgentDefinition, AgentEndpoint, BoxFuture, DelegationPort,
+    DelegationRequest, DependencyCoverage, EndpointInvocation, ExpertReport, TaskId, TaskReceipt,
+    TaskState,
 };
 use floe_core::{
-    CalendarAgentTurnRequest, CalendarReadAccess, CalendarReadAccessAdmission,
-    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarTimelineGrant,
-    ProjectedCalendarItem, ProjectedCalendarObservation, RemoteCalendarGrantBinding,
+    CalendarExpertEndpointRequest, CalendarReadAccess, CalendarReadAccessAdmission,
+    CalendarReadAccessRequest, CalendarReadAccessStamp, CalendarTimelineGrant, EncryptedAgentVault,
+    FloeCore, ProjectedCalendarItem, ProjectedCalendarObservation, RemoteCalendarGrantBinding,
     VaultKeyProvider,
 };
 use floe_domain::{CalendarBatch, CalendarConnection, CalendarProvider, CalendarRecord, PersonId};
+use floe_execution::{
+    ExecutionScope,
+    budget::{BudgetConfig, BudgetLedger},
+};
+use floe_experts::TaskCoordinator;
 use floe_infra::{
     RemoteAuthorizationClient, calendar_query_sha256, native_calendar::NativeCalendarReadAccess,
     parse_calendar_challenge,
 };
+use floe_kernel::{RunId, TraceContext};
 use floe_protocol::{
     CalendarBatchDto, LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,
     LocalContextAcquisitionResultDto, PROTOCOL_VERSION,
@@ -26,34 +42,277 @@ use crate::{
     remote_model::ServerModelRunner,
 };
 
-use super::super::super::session_uuid;
-use super::{ConversationTurnInputs, external_transfer_consent};
+use super::external_transfer_consent;
+use crate::vault_host::task_repository::VaultTaskRepository;
 
-pub(in crate::vault_host::conversation_turn) async fn try_run<
-    Keys: VaultKeyProvider,
-    Emit: FnMut(AgentEvent) + Send,
->(
-    inputs: &ConversationTurnInputs<'_, Keys>,
-    context: floe_agent::AgentContext,
-    cancellation: floe_agent::Cancellation,
-    emit: &mut Emit,
-) -> Result<Option<floe_agent::AgentSession>, AgentFailure> {
-    let core = inputs.core;
-    let vault = inputs.vault;
-    let local_context = inputs.local_context;
-    let person_id = inputs.person_id;
-    let request = inputs.request;
-    let propose_focus = request.text.trim() == "/focus";
-    let session_id = session_uuid(&request.session_id)?;
-    let session = vault.load(person_id, session_id).await?;
-    if session.scope.is_some()
-        || session.data_classes != [DataClass::Personal]
-        || session.revision != request.expected_revision
-    {
-        return Err(AgentFailure::Conflict);
+const SCHEDULE_DEFINITION_REVISION: u64 = 1;
+
+#[derive(Clone)]
+pub(in crate::vault_host) struct ScheduleEndpointContext {
+    pub request: floe_protocol::AgentConversationTurnRequestDto,
+    pub context: floe_agent::AgentContext,
+    pub max_output_bytes: usize,
+}
+
+pub(in crate::vault_host) struct ScheduleEndpoint<Keys> {
+    core: Arc<FloeCore>,
+    vault: Arc<EncryptedAgentVault<Keys>>,
+    local_context: Arc<LocalContextStore>,
+    contexts: Mutex<HashMap<Uuid, ScheduleEndpointContext>>,
+}
+
+impl<Keys> ScheduleEndpoint<Keys> {
+    pub(in crate::vault_host) fn new(
+        core: Arc<FloeCore>,
+        vault: Arc<EncryptedAgentVault<Keys>>,
+        local_context: Arc<LocalContextStore>,
+    ) -> Self {
+        Self {
+            core,
+            vault,
+            local_context,
+            contexts: Mutex::new(HashMap::new()),
+        }
     }
+
+    pub(in crate::vault_host) fn stage(
+        &self,
+        run_id: Uuid,
+        context: ScheduleEndpointContext,
+    ) -> Result<(), AgentFailure> {
+        if run_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut contexts = self
+            .contexts
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if contexts.len() >= 4 || contexts.insert(run_id, context).is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
+    pub(in crate::vault_host) fn clear(&self, run_id: Uuid) -> Result<(), AgentFailure> {
+        self.contexts
+            .lock()
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .remove(&run_id);
+        Ok(())
+    }
+}
+
+pub(in crate::vault_host) fn schedule_definition() -> AgentDefinition {
+    AgentDefinition {
+        card: ContractAgentCard {
+            schema_version: floe_agent_contract::AGENT_SCHEMA_VERSION,
+            protocol_version: floe_agent_contract::A2A_PROTOCOL_VERSION.into(),
+            id: BuiltinExpertKind::Schedule.package_id().into(),
+            version: "1.0.0".into(),
+            name: "Schedule Expert".into(),
+            description: "Reviews the currently authorized calendar view".into(),
+            domain_tags: vec!["schedule".into(), "calendar".into()],
+            skills: vec!["Analyze an authorized calendar assignment".into()],
+        },
+        definition_revision: SCHEDULE_DEFINITION_REVISION,
+    }
+}
+
+pub(in crate::vault_host::conversation_turn) async fn eligible_card<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    device_id: &str,
+) -> Result<Option<floe_agent::AgentCard>, AgentFailure> {
+    let selected = match select_active_setup(vault, device_id).await {
+        Ok(selected) => selected,
+        Err(AgentFailure::CapabilityDenied) => return Ok(None),
+        Err(failure) => return Err(failure),
+    };
+    if selected.ambiguous {
+        return Ok(None);
+    }
+    let card = schedule_definition().card;
+    Ok(Some(floe_agent::AgentCard {
+        schema_version: floe_agent::AGENT_VERSION,
+        protocol_version: floe_agent::A2A_PROTOCOL_VERSION.into(),
+        id: card.id,
+        version: card.version,
+        name: card.name,
+        description: card.description,
+        domain_tags: card.domain_tags,
+        skills: card.skills,
+    }))
+}
+
+impl<Keys: VaultKeyProvider + 'static> AgentEndpoint for ScheduleEndpoint<Keys> {
+    fn execute<'a>(
+        &'a self,
+        invocation: EndpointInvocation,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<ExpertReport, AgentFailure>> {
+        Box::pin(async move {
+            let run_id = invocation
+                .request
+                .parent_run_id
+                .ok_or(AgentFailure::InvalidInput)?;
+            let staged = self
+                .contexts
+                .lock()
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .remove(&run_id)
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+            if invocation.request.principal != self.vault.person_id().to_string()
+                || staged.request.device_id.trim().is_empty()
+            {
+                return Err(AgentFailure::CapabilityDenied);
+            }
+            let selected = select_active_setup(&self.vault, &staged.request.device_id).await?;
+            if selected.ambiguous {
+                return Err(AgentFailure::AccessReviewRequired);
+            }
+            let local = chrono::Local::now();
+            let range = floe_domain::CalendarRange {
+                start_date: local.date_naive(),
+                end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
+                timezone_offset_seconds: local.offset().local_minus_utc(),
+                end_timezone_offset_seconds: None,
+            };
+            let (mut starts_at, ends_at) = range_bounds(&range)?;
+            let now = chrono::Utc::now();
+            let propose_focus = staged.request.text.trim() == "/focus";
+            if propose_focus {
+                starts_at = starts_at.max(now + chrono::Duration::minutes(1));
+                if starts_at >= ends_at || selected.binding.calendar_ids.len() != 1 {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                }
+            }
+            let remote_acquisition = staged.request.remote_route.is_some()
+                && matches!(
+                    selected.binding.provider,
+                    CalendarProvider::Google | CalendarProvider::Microsoft
+                );
+            let model = if remote_acquisition {
+                Model::Foundation(FoundationModelRunner::encrypted())
+            } else {
+                Model::conversation(staged.request.remote_route.clone())?
+            };
+            let remote_backend = match staged.request.remote_route.as_ref() {
+                Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
+                    &self.vault,
+                    &self.core,
+                    route,
+                    self.vault.person_id(),
+                    selected.binding.provider,
+                    selected.binding.calendar_ids.clone(),
+                    selected.binding.connection_revision,
+                )?),
+                _ => None,
+            };
+            let access = BoundAccess {
+                core: &self.core,
+                setup: &selected.setup,
+                binding: &selected.binding,
+                request_device_id: &staged.request.device_id,
+                remote_route: staged.request.remote_route.as_ref(),
+                ambiguous: selected.ambiguous,
+                access: Access::new(
+                    self.vault.person_id(),
+                    selected.binding.provider,
+                    selected.binding.device_id.clone(),
+                    selected.binding.calendar_ids.clone(),
+                    selected.setup.setup_id.to_string(),
+                    selected.binding.connection_revision,
+                    &model,
+                    &self.local_context,
+                    &self.core,
+                    selected.binding.source_authority,
+                    remote_backend
+                        .as_ref()
+                        .map(|backend| backend as &dyn RemoteCalendarBackend),
+                ),
+            };
+            let placement = model.placement();
+            let endpoint = self
+                .core
+                .run_calendar_expert_endpoint(
+                    &self.vault,
+                    &access,
+                    &model,
+                    CalendarExpertEndpointRequest {
+                        person_id: self.vault.person_id(),
+                        usage: Default::default(),
+                        context: staged.context,
+                        policy: InferencePolicyDecision {
+                            purpose: "everyday-assistance".into(),
+                            data_classes: vec![selected.binding.data_class()],
+                            allowed_placements: vec![placement],
+                            performance_class: "interactive".into(),
+                            projection_version: 1,
+                            external_transfer_consent: external_transfer_consent(
+                                placement,
+                                staged.request.remote_route.as_ref(),
+                            ),
+                            bounded_sensitive_projection: false,
+                        },
+                        grant: CalendarTimelineGrant {
+                            person_id: self.vault.person_id(),
+                            handle: selected.setup.view_handle,
+                            provider: selected.binding.provider,
+                            device_id: selected.binding.device_id.clone(),
+                            calendar_ids: selected.binding.calendar_ids.clone(),
+                            connection_revision: selected.binding.connection_revision,
+                            day: range,
+                            starts_at,
+                            ends_at,
+                            expires_at: now + chrono::Duration::minutes(2),
+                        },
+                        assignment_id: selected.setup.expert_assignment_id,
+                        invocation_id: invocation.request.invocation_key.as_uuid(),
+                        assignment: invocation.request.message.clone(),
+                        propose_focus,
+                        max_output_bytes: staged.max_output_bytes,
+                        deadline: scope.deadline(),
+                        cancellation: scope.cancellation().clone(),
+                    },
+                    chrono::Utc::now,
+                )
+                .await?;
+            let coverage = if endpoint.dependencies.is_empty() {
+                DependencyCoverage::Independent
+            } else {
+                DependencyCoverage::Dependent {
+                    dependencies: endpoint.dependencies,
+                }
+            };
+            coverage
+                .validate()
+                .map_err(|_| AgentFailure::InvalidModelOutput)?;
+            Ok(ExpertReport {
+                task_id: invocation.request.task_id,
+                principal: invocation.request.principal,
+                agent_id: invocation.request.selected_agent_id,
+                definition_revision: invocation.request.selected_definition_revision,
+                result: serde_json::to_string(&endpoint.report)
+                    .map_err(|_| AgentFailure::InvalidModelOutput)?,
+                artifacts: vec![],
+                coverage,
+                settlement: Some(endpoint.settlement.into_endpoint_settlement()?),
+            })
+        })
+    }
+}
+
+struct SelectedSetup {
+    setup: floe_agent::CalendarExpertSetupReceipt,
+    binding: floe_agent::CalendarViewBinding,
+    ambiguous: bool,
+}
+
+async fn select_active_setup<Keys: VaultKeyProvider>(
+    vault: &EncryptedAgentVault<Keys>,
+    device_id: &str,
+) -> Result<SelectedSetup, AgentFailure> {
     let overview = vault.calendar_expert_overview().await?;
-    let active_setups: Vec<_> = overview
+    let active: Vec<_> = overview
         .setups
         .iter()
         .filter_map(|setup| {
@@ -79,149 +338,147 @@ pub(in crate::vault_host::conversation_turn) async fn try_run<
                         .iter()
                         .any(|entry| entry.id == *id && entry.enabled)
                 });
-            (installations_enabled && assignments_enabled).then_some((setup, binding))
+            (installations_enabled && assignments_enabled)
+                .then_some((setup.clone(), binding.clone()))
         })
         .collect();
-    if active_setups.is_empty() {
-        if propose_focus {
-            return Err(AgentFailure::AccessReviewRequired);
-        }
-        return Ok(None);
-    }
-    let candidates: Vec<_> = active_setups
+    let candidates: Vec<_> = active
         .iter()
-        .copied()
-        .filter(|(_, binding)| binding.device_id == request.device_id)
+        .filter(|(_, binding)| binding.device_id == device_id)
+        .cloned()
         .collect();
     let ambiguous = candidates.len() != 1;
-    let (setup, binding) = candidates.first().copied().unwrap_or(active_setups[0]);
-    if propose_focus && (ambiguous || binding.calendar_ids.len() != 1) {
-        return Err(AgentFailure::AccessReviewRequired);
-    }
-    if propose_focus && binding.provider != CalendarProvider::EventKit {
-        return Err(AgentFailure::CapabilityUnavailable);
-    }
-    let local = chrono::Local::now();
-    let offset = local.offset().local_minus_utc();
-    let range = floe_domain::CalendarRange {
-        start_date: local.date_naive(),
-        end_date_exclusive: local.date_naive() + chrono::Duration::days(1),
-        timezone_offset_seconds: offset,
-        end_timezone_offset_seconds: None,
+    let (setup, binding) = candidates
+        .first()
+        .or_else(|| active.first())
+        .cloned()
+        .ok_or(AgentFailure::CapabilityDenied)?;
+    Ok(SelectedSetup {
+        setup,
+        binding,
+        ambiguous,
+    })
+}
+
+pub(in crate::vault_host::conversation_turn) async fn run_registered<
+    Keys: VaultKeyProvider + 'static,
+>(
+    endpoint: &ScheduleEndpoint<Keys>,
+    coordinator: &TaskCoordinator<VaultTaskRepository<Keys>>,
+    request: floe_agent::A2ASendMessageRequest,
+    turn_request: &floe_protocol::AgentConversationTurnRequestDto,
+    context: &floe_agent::AgentContext,
+    recorder: Option<&dyn super::ResultRecorder>,
+) -> Result<floe_agent::A2ATask, AgentFailure> {
+    let task_uuid = request.message.task_id.ok_or(AgentFailure::InvalidInput)?;
+    let task_id = TaskId::from_uuid(task_uuid).ok_or(AgentFailure::InvalidInput)?;
+    let run_id = RunId::from_uuid(request.parent_turn_id).ok_or(AgentFailure::InvalidInput)?;
+    endpoint.stage(
+        request.parent_turn_id,
+        ScheduleEndpointContext {
+            request: turn_request.clone(),
+            context: context.clone(),
+            max_output_bytes: request.max_output_bytes,
+        },
+    )?;
+    let ledger = BudgetLedger::new(BudgetConfig::new(50_000, 100_000), Default::default());
+    let root_scope = ExecutionScope::root(
+        request.cancellation.clone(),
+        request.deadline,
+        ledger.work_lease(),
+        TraceContext::new(request.message.message_id).with_run_id(run_id),
+    );
+    let scope = root_scope.child_scope(request.deadline, 40_960, 50_000, Some(task_id));
+    let delegation = DelegationRequest {
+        task_id,
+        parent_run_id: Some(request.parent_turn_id),
+        principal: request.person_id.to_string(),
+        invocation_key: floe_agent_contract::InvocationKey::from_uuid(task_uuid)
+            .ok_or(AgentFailure::InvalidInput)?,
+        selected_agent_id: request.agent_id.clone(),
+        selected_definition_revision: SCHEDULE_DEFINITION_REVISION,
+        message: request.message.text()?.to_owned(),
+        context_refs: vec![],
     };
-    let (mut starts_at, ends_at) = range_bounds(&range)?;
-    let now = chrono::Utc::now();
-    if propose_focus {
-        starts_at = starts_at.max(now + chrono::Duration::minutes(1));
-        if starts_at >= ends_at {
-            return Err(AgentFailure::CapabilityUnavailable);
+    let receipt = coordinator.delegate(delegation, &scope).await;
+    let clear = endpoint.clear(request.parent_turn_id);
+    let receipt = receipt?;
+    clear?;
+    record_task_coverage(recorder, request.parent_turn_id, task_uuid, &receipt)?;
+    task_receipt_to_a2a(request, receipt)
+}
+
+fn record_task_coverage(
+    recorder: Option<&dyn super::ResultRecorder>,
+    turn_id: Uuid,
+    result_id: Uuid,
+    receipt: &TaskReceipt,
+) -> Result<(), AgentFailure> {
+    let Some(recorder) = recorder else {
+        return Ok(());
+    };
+    match &receipt.snapshot.coverage {
+        DependencyCoverage::Independent => recorder.record_independent(turn_id, result_id),
+        DependencyCoverage::Dependent { dependencies } => {
+            for dependency in dependencies {
+                recorder.record(turn_id, result_id, dependency.clone())?;
+            }
+            Ok(())
         }
+        DependencyCoverage::Unknown => Ok(()),
     }
-    let remote_acquisition = request.remote_route.is_some()
-        && matches!(
-            binding.provider,
-            CalendarProvider::Google | CalendarProvider::Microsoft
-        );
-    let model = if remote_acquisition {
-        Model::Foundation(FoundationModelRunner::encrypted())
+}
+
+fn task_receipt_to_a2a(
+    request: floe_agent::A2ASendMessageRequest,
+    receipt: TaskReceipt,
+) -> Result<floe_agent::A2ATask, AgentFailure> {
+    let state = match receipt.snapshot.state {
+        TaskState::Submitted => floe_agent::A2ATaskState::Submitted,
+        TaskState::Working => floe_agent::A2ATaskState::Working,
+        TaskState::Completed => floe_agent::A2ATaskState::Completed,
+        TaskState::Rejected => floe_agent::A2ATaskState::Rejected,
+        TaskState::Cancelled => floe_agent::A2ATaskState::Cancelled,
+        TaskState::Failed | TaskState::TimedOut | TaskState::Interrupted => {
+            floe_agent::A2ATaskState::Failed
+        }
+    };
+    let artifacts = if receipt.snapshot.state == TaskState::Completed {
+        let result = receipt
+            .snapshot
+            .result
+            .as_deref()
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let report: floe_agent::ExpertResult =
+            serde_json::from_str(result).map_err(|_| AgentFailure::StorageUnavailable)?;
+        vec![floe_agent::A2AArtifact {
+            artifact_id: Uuid::new_v4(),
+            name: "Schedule expert result".into(),
+            parts: vec![
+                floe_agent::A2APart::Text {
+                    text: report
+                        .summary
+                        .clone()
+                        .ok_or(AgentFailure::InvalidModelOutput)?,
+                },
+                floe_agent::A2APart::Data {
+                    media_type: floe_agent::EXPERT_RESULT_MEDIA_TYPE.into(),
+                    data: result.into(),
+                },
+            ],
+        }]
     } else {
-        Model::conversation(request.remote_route.clone())?
+        vec![]
     };
-    let placement = model.placement();
-    let external_consent = external_transfer_consent(placement, request.remote_route.as_ref());
-    let remote_backend = match request.remote_route.as_ref() {
-        Some(route) if remote_acquisition => Some(VaultRemoteCalendarBackend::new(
-            vault,
-            core,
-            route,
-            person_id,
-            binding.provider,
-            binding.calendar_ids.clone(),
-            binding.connection_revision,
-        )?),
-        _ => None,
-    };
-    let result = Box::pin(
-        core.run_calendar_agent_turn(
-            vault,
-            &BoundAccess {
-                core,
-                setup,
-                binding,
-                request_device_id: &request.device_id,
-                remote_route: request.remote_route.as_ref(),
-                ambiguous,
-                access: Access::new(
-                    person_id,
-                    binding.provider,
-                    binding.device_id.clone(),
-                    binding.calendar_ids.clone(),
-                    setup.setup_id.to_string(),
-                    binding.connection_revision,
-                    &model,
-                    local_context,
-                    core,
-                    binding.source_authority,
-                    remote_backend
-                        .as_ref()
-                        .map(|backend| backend as &dyn RemoteCalendarBackend),
-                ),
-            },
-            &model,
-            CalendarAgentTurnRequest {
-                command: floe_agent::AgentCommand {
-                    schema_version: PROTOCOL_VERSION,
-                    person_id,
-                    session_id,
-                    expected_revision: request.expected_revision,
-                    text: if propose_focus {
-                        "Ask the schedule expert to propose a 60-minute focus block today for my review. Do not execute it.".into()
-                    } else {
-                        request.text.trim().to_owned()
-                    },
-                },
-                context,
-                policy: InferencePolicyDecision {
-                    purpose: "everyday-assistance".into(),
-                    data_classes: vec![DataClass::Personal],
-                    allowed_placements: vec![placement],
-                    performance_class: "interactive".into(),
-                    projection_version: 1,
-                    external_transfer_consent: external_consent,
-                    bounded_sensitive_projection: false,
-                },
-                budget: AgentBudget::default(),
-                grant: CalendarTimelineGrant {
-                    person_id,
-                    handle: setup.view_handle,
-                    provider: binding.provider,
-                    device_id: binding.device_id.clone(),
-                    calendar_ids: binding.calendar_ids.clone(),
-                    connection_revision: binding.connection_revision,
-                    day: range,
-                    starts_at,
-                    ends_at,
-                    expires_at: now + chrono::Duration::minutes(2),
-                },
-                assignment_id: setup.expert_assignment_id,
-                feasibility: None,
-                wellbeing: None,
-                destination: propose_focus.then(|| floe_core::ExpertCalendarDestination {
-                    provider: binding.provider,
-                    calendar_id: binding.calendar_ids[0].clone(),
-                    connection_revision: binding.connection_revision,
-                    timezone: "UTC".into(),
-                }),
-                propose_focus,
-                cancellation,
-                continuation: request.continuation,
-            },
-            chrono::Utc::now,
-            emit,
-        ),
-    )
-    .await?;
-    Ok(Some(result.session))
+    Ok(floe_agent::A2ATask {
+        id: receipt.task_id.as_uuid(),
+        context_id: request.message.context_id,
+        agent_id: request.agent_id,
+        state,
+        history: vec![request.message],
+        artifacts,
+        failure: receipt.snapshot.issue,
+    })
 }
 
 struct BoundAccess<'host> {

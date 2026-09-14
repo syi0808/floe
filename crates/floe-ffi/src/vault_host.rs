@@ -33,7 +33,7 @@ use floe_domain::{
     GrantDataCategory, GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, GrantState,
     PersonId, ProcessingRestriction, ResourceHandle,
 };
-use floe_experts::{Directory, TaskCoordinator};
+use floe_experts::{Directory, DirectoryEntry, TaskCoordinator};
 use floe_infra::remote_authorization::{RemoteAuthorizationClient, RemotePairingClient};
 use floe_knowledge::{KnowledgeActor, KnowledgeDecisionKind};
 use floe_protocol::*;
@@ -174,15 +174,37 @@ struct Worker {
 
 struct OpenVault<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
-    _directory: Directory,
-    _task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
+    task_coordinator: TaskCoordinator<VaultTaskRepository<Keys>>,
+    schedule_endpoint: Arc<conversation_turn::expert_dispatch::schedule::ScheduleEndpoint<Keys>>,
     _recovered_tasks: Vec<floe_agent_contract::TaskReceipt>,
 }
 
-impl<Keys: VaultKeyProvider> OpenVault<Keys> {
-    async fn activate(vault: EncryptedAgentVault<Keys>) -> Result<Self, AgentFailure> {
+impl<Keys: VaultKeyProvider + 'static> OpenVault<Keys> {
+    async fn activate(
+        vault: EncryptedAgentVault<Keys>,
+        core: Arc<FloeCore>,
+        local_context: Arc<LocalContextStore>,
+    ) -> Result<Self, AgentFailure> {
         let vault = Arc::new(vault);
         let directory = Directory::default();
+        let schedule_endpoint = Arc::new(
+            conversation_turn::expert_dispatch::schedule::ScheduleEndpoint::new(
+                core,
+                Arc::clone(&vault),
+                local_context,
+            ),
+        );
+        let definition = conversation_turn::expert_dispatch::schedule::schedule_definition();
+        directory.register(
+            DirectoryEntry {
+                definition,
+                reviewed: true,
+                enabled: true,
+                admitted_principals: vec![vault.person_id().to_string()],
+                purposes: vec!["everyday-assistance".into()],
+            },
+            schedule_endpoint.clone(),
+        )?;
         let repository = Arc::new(VaultTaskRepository::new(Arc::clone(&vault)));
         let (task_coordinator, recovered_tasks) = TaskCoordinator::activate(
             directory.clone(),
@@ -193,8 +215,8 @@ impl<Keys: VaultKeyProvider> OpenVault<Keys> {
         .await?;
         Ok(Self {
             vault,
-            _directory: directory,
-            _task_coordinator: task_coordinator,
+            task_coordinator,
+            schedule_endpoint,
             _recovered_tasks: recovered_tasks,
         })
     }
@@ -893,11 +915,11 @@ impl VaultExecutionResult {
     }
 }
 
-async fn execute<Keys: VaultKeyProvider + Clone>(
+async fn execute<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
-    core: &FloeCore,
-    local_context: &LocalContextStore,
+    core: &Arc<FloeCore>,
+    local_context: &Arc<LocalContextStore>,
     current: &mut Option<(PersonId, OpenVault<Keys>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
@@ -921,11 +943,11 @@ async fn execute<Keys: VaultKeyProvider + Clone>(
     .await
 }
 
-async fn execute_action<Keys: VaultKeyProvider + Clone>(
+async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
     root: &std::path::Path,
     keys: &Keys,
-    core: &FloeCore,
-    local_context: &LocalContextStore,
+    core: &Arc<FloeCore>,
+    local_context: &Arc<LocalContextStore>,
     current: &mut Option<(PersonId, OpenVault<Keys>)>,
     job: &Job,
 ) -> Result<VaultExecutionResult, AgentFailure> {
@@ -949,6 +971,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
             }
             let vault = OpenVault::activate(
                 EncryptedAgentVault::create(root, job.person, keys.clone()).await?,
+                Arc::clone(core),
+                Arc::clone(local_context),
             )
             .await?;
             *current = Some((job.person, vault));
@@ -960,6 +984,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
             }
             let vault = OpenVault::activate(
                 EncryptedAgentVault::open(root, job.person, keys.clone()).await?,
+                Arc::clone(core),
+                Arc::clone(local_context),
             )
             .await?;
             *current = Some((job.person, vault));
@@ -1365,6 +1391,8 @@ async fn execute_action<Keys: VaultKeyProvider + Clone>(
                 core,
                 vault,
                 local_context,
+                &vault.task_coordinator,
+                &vault.schedule_endpoint,
                 job.person,
                 request,
                 job.cancellation.clone(),

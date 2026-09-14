@@ -1,23 +1,48 @@
 use super::*;
 
-mod schedule;
+pub(in crate::vault_host) mod schedule;
 
-pub(super) async fn run<Keys: VaultKeyProvider>(
+pub(super) trait ScheduleTaskRunner: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        request: A2ASendMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>>;
+}
+
+pub(super) struct RegisteredScheduleTaskRunner<'a, Keys: VaultKeyProvider> {
+    pub coordinator: &'a floe_experts::TaskCoordinator<
+        crate::vault_host::task_repository::VaultTaskRepository<Keys>,
+    >,
+    pub endpoint: &'a schedule::ScheduleEndpoint<Keys>,
+    pub turn_request: &'a floe_protocol::AgentConversationTurnRequestDto,
+    pub context: &'a AgentContext,
+    pub recorder: Option<&'a dyn super::ResultRecorder>,
+}
+
+impl<Keys: VaultKeyProvider + 'static> ScheduleTaskRunner
+    for RegisteredScheduleTaskRunner<'_, Keys>
+{
+    fn run<'a>(
+        &'a self,
+        request: A2ASendMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<A2ATask, AgentFailure>> + Send + 'a>> {
+        Box::pin(schedule::run_registered(
+            self.endpoint,
+            self.coordinator,
+            request,
+            self.turn_request,
+            self.context,
+            self.recorder,
+        ))
+    }
+}
+
+pub(super) async fn run<Keys: VaultKeyProvider + 'static>(
     inputs: &ConversationTurnInputs<'_, Keys>,
     context: AgentContext,
     cancellation: floe_agent::Cancellation,
-    mut emit: impl FnMut(AgentEvent) + Send,
+    emit: impl FnMut(AgentEvent) + Send,
 ) -> Result<floe_agent::AgentSession, AgentFailure> {
-    if let Some(session) = Box::pin(schedule::try_run(
-        inputs,
-        context.clone(),
-        cancellation.clone(),
-        &mut emit,
-    ))
-    .await?
-    {
-        return Ok(session);
-    }
     Box::pin(run_general_turn(inputs, context, cancellation, emit)).await
 }
 
@@ -37,6 +62,7 @@ pub(super) struct ConversationExperts<'model> {
     pub(super) task_views: &'model [NativeContextView],
     pub(super) cards: Vec<AgentCard>,
     pub(super) builtin_setup: Option<BuiltinExpertSetupReceipt>,
+    pub(super) schedule_runner: Option<&'model dyn ScheduleTaskRunner>,
 }
 
 impl ConversationExperts<'_> {
@@ -122,8 +148,15 @@ impl InProcessAgent for ConversationExperts<'_> {
             invocation_id = %request.message.task_id.unwrap(),
             "expert_invocation_started"
         );
-        self.require_source(&request.agent_id, expert.mandatory_source())?;
         let assignment = request.message.text()?.to_owned();
+        if expert == BuiltinExpertKind::Schedule {
+            return self
+                .schedule_runner
+                .ok_or(AgentFailure::CapabilityUnavailable)?
+                .run(request)
+                .await;
+        }
+        self.require_source(&request.agent_id, expert.mandatory_source())?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_err(|_| AgentFailure::StaleContext)?;
@@ -220,7 +253,7 @@ impl InProcessAgent for ConversationExperts<'_> {
             },
         };
         let (summary, data) = match expert {
-            BuiltinExpertKind::Schedule => return Err(AgentFailure::CapabilityDenied),
+            BuiltinExpertKind::Schedule => unreachable!("schedule uses the registered task runner"),
             BuiltinExpertKind::Commitments => {
                 let source_view = self
                     .read_remote(
