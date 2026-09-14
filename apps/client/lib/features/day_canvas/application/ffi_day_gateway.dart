@@ -11,6 +11,7 @@ import 'calendar_observation_publisher.dart';
 import 'calendar_action_gateway.dart';
 import '../infrastructure/native_calendar_action_gateway.dart';
 import '../../server/local_server_client.dart';
+import '../../server/remote_inference_route.dart';
 import '../../agent/agent_fixture_gateway.dart';
 import '../../agent/infrastructure/native_agent_fixture_gateway.dart';
 import '../../agent/agent_vault_gateway.dart';
@@ -73,51 +74,8 @@ final class FfiDayGateway
     resolveRemoteRoute: _remoteRoute,
   );
 
-  Future<Map<String, Object?>?> _remoteRoute() async {
-    try {
-      final connection = await serverClient.connection();
-      if (connection == null) return null;
-      final availability = await serverClient.purposes(connection);
-      final route = availability[InferencePurpose.everydayAssistance];
-      if (route == null || !route.available) return null;
-      final consentCoversRoute =
-          !route.requiresExternalConsent ||
-          connection.coversExternalRecipient(route.recipient);
-      final catalog = await serverClient.connectorCatalog(connection);
-      final calendarConnections = catalog.connectors
-          .where(
-            (connector) =>
-                connector.status == ServerConnectorStatus.connected &&
-                const {
-                  'calendar.google',
-                  'calendar.microsoft',
-                }.contains(connector.id),
-          )
-          .map(
-            (connector) => {
-              'connector_id': connector.id,
-              'connection_id': connector.connectionId,
-              'connection_revision': connector.connectionRevision,
-            },
-          )
-          .toList(growable: false);
-      return {
-        'base_url': connection.address,
-        'bearer_token': connection.token,
-        'purpose': InferencePurpose.everydayAssistance.wireName,
-        'external': route.requiresExternalConsent,
-        'allow_external': consentCoversRoute,
-        'pairing': {
-          'client_id': connection.clientId,
-          'person_id': connection.personId,
-          'device_id': connection.deviceId,
-        },
-        'calendar_connections': calendarConnections,
-      };
-    } on ServerConnectionException {
-      return null;
-    }
-  }
+  Future<Map<String, Object?>?> _remoteRoute() =>
+      resolveRemoteInferenceRoute(serverClient);
 
   Future<Map<String, dynamic>> _vaultRequest(
     Map<String, Object?> request,
