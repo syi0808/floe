@@ -1733,3 +1733,54 @@ foreground-priority scheduler/scope ownership and owner repository storage
 remain pending, as do full T11/T28/T31 and Apple learner-flow acceptance.
 Neither the final 22-crate architecture gate nor full-plan completion is claimed.
 No local application data or external account/provider data was reset.
+
+## P08/P09 optional Memory acquisition — 2026-09-14
+
+Code checkpoint `0f8ea95`: Knowledge owns MemoryContextReader and acquisition
+classification. The production conversation path uses that port instead of
+directly propagating every memory-context failure. CapabilityUnavailable,
+CapabilityDenied and BudgetExceeded produce a typed Memory issue with no partial
+memory payload. StorageUnavailable, VaultUnavailable, PolicyDenied, cancellation
+and other errors remain failures; SQL errors are not assumed to be temporary.
+Core implements the reader using the existing person-bound encrypted Vault.
+Its strict learner-facing memory method remains strict. Context projection now
+validates Memory summaries and continues integrity/source checks beyond budget
+exhaustion, including the final key-health check, before returning BudgetExceeded.
+
+The context contract owns bounded source/reason types. AgentContext and its
+model envelope carry optional issues separately from memories/evidence. Admission
+rejects duplicate sources, more than three issues and a Memory issue combined
+with Memory payload. Shared behavior-kernel revision 3 tells Manager and Experts
+to distinguish unavailable from empty, explain relevant limitations and continue
+unrelated help. Constructors in legacy fixtures were updated mechanically;
+generic AgentContext/envelope ownership remains a later migration seam.
+
+Validation passed: workspace all-target check, Knowledge tests (14) and all-target
+Clippy with `-D warnings`, Core encrypted-Vault tests (19), FFI conversation tests
+(16), native model adapter tests (8), and migration checker (17 nodes / 50 edges /
+0 errors). Luna also ran the Agent suite and, after the shared prompt change,
+Agent library, policy and runtime suites successfully. New Core regression admits
+32 saved memories, reports the 33rd as a context budget issue without losing the
+saved overview, and still fails when keys are blocked. New FFI composition
+regression uses the production acquisition helper and governed encrypted store:
+three optional failure variants preserve general/source-request completion;
+storage/key/policy/cancellation variants do not reach model execution. The model
+there is scripted; this is not independent evidence of model comprehension.
+
+Direct Apple evidence: bare `cargo run` lacked the native bundle and returned
+ModelUnavailable. The documented signed native smoke wrapper then compiled the
+Swift library, reported the on-device Foundation model Available, and ran
+`--exercise-optional-memory` successfully. Given only a fictional request and a
+structured Memory Unavailable issue, the real model said it could not determine
+the person's preferred meeting time and offered a general preparation tip.
+It did not invent a saved preference. The smoke uses no personal source payload,
+credentials or persistence. This validates one on-device answer, not the full
+chat UI, which was not rebuilt or re-exercised in this checkpoint.
+
+Full T11 remains unproven: Tasks/Notes acquisition is not cut over, and this does
+not prove every source-request, cancellation or UI scenario. P08 evidence
+coverage/purpose/current-state ports, Inference-backed learner dispatch,
+foreground-priority scope ownership, repository SQL ownership and T28/T31 remain
+pending. The earlier Flutter decision:null fixture discrepancy and Apple app
+secure-storage UI failure remain unresolved. No normal Floe app data, Vault keys
+or external provider/account data was reset. The full goal remains active.
