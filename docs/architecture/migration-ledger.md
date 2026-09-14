@@ -1692,3 +1692,44 @@ owner repository storage remain pending. Generic model adaptation and mixed
 legacy regression placement are removal seams, not the final runtime boundary.
 No complete T11/T28/T31, Apple learner flow or full-plan acceptance is claimed.
 No external account/provider data or local application data was reset.
+
+## P08 Memory overview and review snapshots — 2026-09-14
+
+Code checkpoint `1ab1262`: Knowledge owns MemoryOverviewSnapshot,
+MemoryReviewSnapshot, MemorySummary, origin classification and overview limits.
+Owner projection validates person/schema, active or pending state, Memory
+payload, source-reference shape, confidence, inference consistency and validity
+intervals. Unsupported summary actors fail closed instead of being labeled
+Learned. FFI only maps the validated snapshot into unchanged wire DTOs.
+
+Core reads saved count, pending count and bounded summaries in one deferred
+transaction, with the existing final key-health check. Review reads likewise
+produce a transactional snapshot; they are not approval permits. Decisions
+still use the existing immediate transaction and authoritative source,
+independence and revision checks. The superseded personal_memory_overview API
+was removed, and its existing Core regression now asserts the typed snapshot.
+Other repository APIs used by context and existing callers remain temporary
+storage seams.
+
+Validation passed: Knowledge tests (14), Knowledge all-target Clippy with
+`-D warnings`, workspace check, targeted Core encrypted-Vault memory tests (3),
+FFI memory/review tests (4), and migration checker (17 nodes / 50 edges / 0
+errors). The new production-Worker regression stages two candidates in a real
+encrypted Vault, approves one and rejects the other through FFI, checks saved
+and pending counts and summary metadata, then verifies the same snapshot after
+lock/unlock. No model or external provider is used.
+
+The three focused Flutter memory test files yielded six passes and one failure:
+the existing native-gateway review test expects an omitted decision property,
+while the current encoder emits decision: null. No client files changed in this
+checkpoint; the assertion was not weakened to obtain a passing run. This wire
+fixture discrepancy remains unresolved. This checkpoint did not rebuild or
+directly exercise the Apple UI; the prior checkpoint's secure-storage UI failure
+is not claimed resolved by these tests.
+
+P08 remains incomplete: optional-context failure semantics, richer evidence
+coverage/purpose/current-state ports, Inference-backed model dispatch,
+foreground-priority scheduler/scope ownership and owner repository storage
+remain pending, as do full T11/T28/T31 and Apple learner-flow acceptance.
+Neither the final 22-crate architecture gate nor full-plan completion is claimed.
+No local application data or external account/provider data was reset.
