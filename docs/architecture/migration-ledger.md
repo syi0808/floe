@@ -3638,3 +3638,38 @@ gap/resync behavior are absent. The next executable P16/P17 task is a durable
 cancel-command record plus bounded Run event observation; only then should the
 visible Flutter conversation controller cut over. P16, P17 and V1 remain
 partial.
+
+### P12/P16 durable CancelRun command checkpoint (2026-09-15)
+
+Code checkpoint `2b01d20` supersedes the temporary cancellation replay gap in
+`e9020e7`. ConversationRepository now admits a typed CancelRun command before
+signalling its live cancellation handle. The encrypted Vault persists a
+principal, command kind and target Run in a bounded command table. Exact
+CommandId/RunId replay returns the existing receipt after reopen; changing the
+target or colliding with a StartTurn CommandId fails with conflict before a
+second cancellation can be signalled. A replay still re-signals a live root,
+so acknowledgement loss between durable admission and the cancellation signal
+does not strand the accepted intent.
+
+The Conversation schema marker advances from 5 to 6 and validates the new
+table and foreign-key target. This intentionally uses a clean current schema
+rather than a compatibility migration because Floe local development data is
+disposable under the approved implementation policy; an older local test Vault
+must be reset. The product cancellation receipt remains an accepted-intent
+receipt, while authoritative terminal state is observed through GetRun.
+
+Direct validation persisted a cancellation command, closed and reopened the
+Vault, replayed the same receipt, and rejected changed-target and cross-kind
+reuse. The production T08 flow also cancelled a model-blocked root, replayed
+the same cancel command after terminalization and rejected a changed target.
+All 195 floe-core library tests, all 99 FFI library tests, all 11 Conversation
+tests, the workspace all-target check, diff check and migration boundary gate
+passed (23 nodes / 72 edges / no errors). Focused Conversation Clippy passed
+with warnings denied; broad core/protocol Clippy remains blocked by recorded
+pre-existing legacy lint debt.
+
+Blocker/remove-by: bounded event observation with cursor gap/resync semantics is
+still absent, so the visible Flutter controller remains on Submit/Poll/Release.
+The next executable P16/P17 task is the runtime-scoped event buffer and typed
+Dart event reader backed by durable GetRun resynchronization, followed by the
+conversation controller cutover. P16, P17 and V1 remain partial.
