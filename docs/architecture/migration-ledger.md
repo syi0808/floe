@@ -3398,11 +3398,11 @@ requires the later native ownership cutover rather than waiting indefinitely in
 
 Direct validation passed all three AppHost lifecycle tests, all 97 FFI library
 tests, the focused native-handle close C-ABI test, workspace all-target checks,
-and the migration boundary gate (21 nodes / 70 edges / no errors). The broader
-C-ABI file remains red in the pre-existing `action_authority_defaults_to_ask_and_persists`
-case because its test expects the legacy SetAuthority mutation while the
-production boundary already returns PolicyDenied; this checkpoint does not
-weaken that authorization boundary to satisfy the stale assertion.
+and the migration boundary gate (21 nodes / 70 edges / no errors). Follow-up
+checkpoint `b817075` aligns the stale legacy authority assertion with the
+production boundary: SetAuthority remains PolicyDenied and reopening still
+projects the default Ask policy. All 12 C-ABI tests now pass without weakening
+that authorization boundary.
 
 Blocker/remove-by: provider/native adapters still need to supply the verified
 local identity and host-selected inference handles, and the service bundle is
