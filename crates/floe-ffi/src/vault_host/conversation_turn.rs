@@ -243,8 +243,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
     let builtin_setup = vault
         .builtin_expert_overview()
         .await?
-        .ok_or(AgentFailure::VaultUnavailable)?
-        .setup;
+        .map(|overview| overview.setup);
     let capabilities = ConversationCapabilities {
         model: &model,
         policy: &policy,
@@ -282,7 +281,7 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
         context_reader: Some(&context_reader),
         task_views: &[],
         cards: expert_cards.clone(),
-        builtin_setup: Some(builtin_setup.clone()),
+        builtin_setup: builtin_setup.clone(),
         schedule_runner: Some(&schedule_runner),
     };
     {
@@ -294,7 +293,9 @@ async fn run_general_turn<Keys: VaultKeyProvider + 'static>(
                 .map(engine_ports::contract_definition)
                 .collect(),
             tools: engine_ports::contract_tools(&legacy_capabilities),
-            revision: builtin_setup.expected_revision.max(1),
+            revision: builtin_setup
+                .as_ref()
+                .map_or(1, |setup| setup.expected_revision.max(1)),
         };
         let budget = AgentBudget::default();
         let duration = std::time::Duration::from_millis(budget.deadline_ms);

@@ -1424,22 +1424,27 @@ async fn execute_action<Keys: VaultKeyProvider + Clone + 'static>(
         }
         AgentVaultActionDto::ConversationTurn { request } => {
             let (_, vault) = current.as_ref().ok_or(AgentFailure::VaultUnavailable)?;
-            if let Err(failure) = Box::pin(ensure_builtin_experts(
-                vault,
-                core,
-                local_context,
-                job.person,
-                request.remote_route.as_ref(),
-                job.cancellation.clone(),
-            ))
-            .await
+            if vault.builtin_expert_overview().await?.is_some()
+                && let Err(failure) = Box::pin(ensure_builtin_experts(
+                    vault,
+                    core,
+                    local_context,
+                    job.person,
+                    request.remote_route.as_ref(),
+                    job.cancellation.clone(),
+                ))
+                .await
             {
-                tracing::error!(
-                    failure = ?failure,
-                    stage = "ensure_builtin_experts",
-                    "conversation_turn_failed"
-                );
-                return Err(failure);
+                match failure {
+                    AgentFailure::Cancelled
+                    | AgentFailure::VaultUnavailable
+                    | AgentFailure::StorageUnavailable => return Err(failure),
+                    _ => tracing::warn!(
+                        failure = ?failure,
+                        stage = "refresh_builtin_experts",
+                        "conversation_turn_degraded"
+                    ),
+                }
             }
             vault.sync_expert_directory().await?;
             let session = match Box::pin(conversation_turn::run(
@@ -2583,7 +2588,8 @@ async fn ensure_builtin_experts<Keys: VaultKeyProvider>(
             chrono::Utc::now(),
         )
         .await
-        .map_err(|_| AgentFailure::StorageUnavailable)?;
+        .ok()
+        .flatten();
     let calendar_state = match calendar.as_ref().map(|snapshot| snapshot.connection.state) {
         Some(ConnectionState::Ready | ConnectionState::Degraded) => BuiltinSourceState::Available,
         Some(ConnectionState::Disconnected | ConnectionState::Revoked) => {

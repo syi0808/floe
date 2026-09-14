@@ -2,6 +2,7 @@ use floe_agent::{
     AgentMessage, CalendarAccessChange, CalendarAccessConfiguration, CalendarExpertSetup,
     RegistryConfiguration, RegistryConfigurationTarget,
 };
+use std::os::unix::fs::PermissionsExt;
 
 use super::*;
 
@@ -551,6 +552,70 @@ fn production_conversation_replays_the_same_request_without_model_redispatch() {
         .unwrap();
     assert_eq!(conflict.failure, Some(AgentFailure::Conflict));
     assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn production_general_turn_does_not_require_or_install_builtin_setup() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("vaults");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let person = PersonId::new();
+    let keys = Keys::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let vault = runtime
+        .block_on(EncryptedAgentVault::create(&root, person, keys.clone()))
+        .unwrap();
+    let session = runtime.block_on(vault.create_session()).unwrap();
+    assert!(runtime
+        .block_on(vault.builtin_expert_overview())
+        .unwrap()
+        .is_none());
+    drop(vault);
+
+    let worker = Worker::new(root.clone(), keys.clone()).unwrap();
+    perform(&worker, person, AgentVaultActionDto::Unlock {});
+    let (mut route, server) = answer_server(vec![floe_agent::ModelStep::Answer {
+        text: "General answer without experts".into(),
+    }]);
+    route.pairing = Some(floe_protocol::AgentRemotePairingDto {
+        client_id: "conversation-without-builtins-test".into(),
+        person_id: person.to_string(),
+        device_id: "mac-local".into(),
+    });
+    let result = perform(
+        &worker,
+        person,
+        AgentVaultActionDto::ConversationTurn {
+            request: floe_protocol::AgentConversationTurnRequestDto {
+                session_id: session.id.to_string(),
+                expected_revision: session.revision,
+                text: "Answer without expert setup".into(),
+                device_id: "mac-local".into(),
+                continuation: false,
+                remote_route: Some(route),
+            },
+        },
+    );
+    assert_eq!(result.failure, None, "general turn: {result:?}");
+    assert!(matches!(
+        result.session.unwrap().messages.last(),
+        Some(AgentMessage::Assistant { text, .. }) if text == "General answer without experts"
+    ));
+    assert_eq!(server.join().unwrap().len(), 1);
+    perform(&worker, person, AgentVaultActionDto::Lock {});
+    drop(worker);
+
+    let vault = runtime
+        .block_on(EncryptedAgentVault::open(&root, person, keys))
+        .unwrap();
+    assert!(runtime
+        .block_on(vault.builtin_expert_overview())
+        .unwrap()
+        .is_none());
 }
 
 #[test]
