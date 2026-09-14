@@ -228,6 +228,16 @@ func (console *Console) authorityEngine() *authorization.Engine {
 	return console.authorization
 }
 
+func (console *Console) RequiredSecurityError() error {
+	if console.producerUnavailable.Load() {
+		return errors.New("producer identity unavailable")
+	}
+	if console.trustUnavailable.Load() {
+		return errors.New("trust store unavailable")
+	}
+	return nil
+}
+
 func (console *Console) latchTrustUnavailable() {
 	console.trustUnavailable.Store(true)
 }
@@ -347,27 +357,29 @@ func (console *Console) hasLegacyConnectorCredential(connectorID, namespace stri
 	return false
 }
 
-func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) {
+func (console *Console) SetGmailAuth(runtime ConnectorAuthRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	if console.bindConfiguredOAuthRuntime("gmail", runtime) != nil {
+	if err := console.bindConfiguredOAuthRuntime("gmail", runtime); err != nil {
 		console.gmail = nil
-		return
+		return err
 	}
 	console.gmail = runtime
 	console.retryPendingCleanupsLocked()
+	return nil
 }
 
-func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) {
+func (console *Console) SetMicrosoftMail(auth ConnectorOAuthRuntime, runtime CommunicationRuntime) error {
 	console.mu.Lock()
 	defer console.mu.Unlock()
-	if console.bindConfiguredOAuthRuntime("microsoft.mail", auth) != nil {
+	if err := console.bindConfiguredOAuthRuntime("microsoft.mail", auth); err != nil {
 		console.microsoftAuth, console.microsoftMail = nil, nil
-		return
+		return err
 	}
 	console.microsoftAuth = auth
 	console.microsoftMail = runtime
 	console.retryPendingCleanupsLocked()
+	return nil
 }
 
 func (console *Console) bindConfiguredOAuthRuntime(connectorID string, runtime ConnectorOAuthRuntime) error {

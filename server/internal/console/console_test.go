@@ -131,10 +131,13 @@ type fakeConnectorRuntime struct {
 	view          any
 	logisticsView any
 	err           error
+	bindError     error
 }
 
-func (*fakeConnectorRuntime) Ready() bool                 { return true }
-func (*fakeConnectorRuntime) BindCredential(string) error { return nil }
+func (*fakeConnectorRuntime) Ready() bool { return true }
+func (runtime *fakeConnectorRuntime) BindCredential(string) error {
+	return runtime.bindError
+}
 
 type fakeContextRuntime struct {
 	snapshot any
@@ -315,6 +318,35 @@ func TestBlockedCredentialStatusDoesNotBlockInferenceAuthentication(test *testin
 	}
 	close(runtime.release)
 	<-stateDone
+}
+
+func TestOAuthBindingFailureIsReturnedAndRuntimeIsCleared(test *testing.T) {
+	fixture := setup(test)
+	fixture.console.mu.Lock()
+	fixture.console.state.Connections["gmail-connection"] = connectionRecord{ConnectionID: "gmail-connection", ConnectorID: "gmail", PersonID: fixturePersonID, Credential: "gmail:fixture"}
+	fixture.console.state.Connections["microsoft-connection"] = connectionRecord{ConnectionID: "microsoft-connection", ConnectorID: "microsoft.mail", PersonID: fixturePersonID, Credential: "microsoft:fixture"}
+	fixture.console.mu.Unlock()
+
+	bindError := errors.New("credential binding failed")
+	if err := fixture.console.SetGmailAuth(&fakeConnectorRuntime{bindError: bindError}); !errors.Is(err, bindError) {
+		test.Fatalf("gmail binding error = %v", err)
+	}
+	fixture.console.mu.Lock()
+	gmailCleared := fixture.console.gmail == nil
+	fixture.console.mu.Unlock()
+	if !gmailCleared {
+		test.Fatal("failed Gmail binding retained runtime")
+	}
+
+	if err := fixture.console.SetMicrosoftMail(&clientOAuthRuntime{bindError: bindError}, nil); !errors.Is(err, bindError) {
+		test.Fatalf("Microsoft mail binding error = %v", err)
+	}
+	fixture.console.mu.Lock()
+	microsoftCleared := fixture.console.microsoftAuth == nil && fixture.console.microsoftMail == nil
+	fixture.console.mu.Unlock()
+	if !microsoftCleared {
+		test.Fatal("failed Microsoft mail binding retained runtime")
+	}
 }
 
 func (fixture *fixture) call(method, path string, body any, token string) *httptest.ResponseRecorder {

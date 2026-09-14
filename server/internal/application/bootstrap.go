@@ -30,6 +30,9 @@ func NewLocal(config LocalConfig) (*LocalServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRequiredSecurity, err)
 	}
+	if err := management.RequiredSecurityError(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRequiredSecurity, err)
+	}
 	return &LocalServer{Management: management}, nil
 }
 

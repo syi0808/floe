@@ -116,7 +116,11 @@ func main() {
 					gmailAuth = nil
 					return serviceError
 				}
-				management.SetGmailAuth(gmailService)
+				if err := management.SetGmailAuth(gmailService); err != nil {
+					gmailAuth.Close()
+					gmailAuth = nil
+					return err
+				}
 				syncContext, stopSync := context.WithCancel(context.Background())
 				stopGmailSync = stopSync
 				go func() { _ = gmailService.Run(syncContext, 5*time.Minute) }()
@@ -192,7 +196,11 @@ func main() {
 					microsoftAuth = nil
 					return serviceError
 				}
-				management.SetMicrosoftMail(microsoftAuth, microsoftService)
+				if err := management.SetMicrosoftMail(microsoftAuth, microsoftService); err != nil {
+					microsoftAuth.Close()
+					microsoftAuth = nil
+					return err
+				}
 				return nil
 			})
 			if mailStatus.Available {
