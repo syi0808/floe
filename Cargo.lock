@@ -782,6 +782,7 @@ dependencies = [
  "chrono",
  "floe-agent-contract",
  "floe-domain",
+ "floe-execution",
  "jsonschema",
  "serde",
  "serde_json",
@@ -845,6 +846,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "uuid",
+]
+
+[[package]]
+name = "floe-execution"
+version = "0.1.0"
+dependencies = [
+ "floe-kernel",
+ "serde",
+ "tokio",
 ]
 
 [[package]]

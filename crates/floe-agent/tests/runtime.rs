@@ -602,6 +602,22 @@ impl CapabilityHost for Host {
     }
 }
 
+struct ChildCancellingHost {
+    cancellation: Mutex<Option<Cancellation>>,
+}
+
+impl CapabilityHost for ChildCancellingHost {
+    fn descriptors(&self, person_id: PersonId) -> Vec<CapabilityDescriptor> {
+        Host::default().descriptors(person_id)
+    }
+
+    async fn invoke(&self, invocation: CapabilityInvocation) -> Result<String, AgentFailure> {
+        *self.cancellation.lock().unwrap() = Some(invocation.cancellation.clone());
+        invocation.cancellation.cancel();
+        Err(AgentFailure::Cancelled)
+    }
+}
+
 struct JournalModel<'model> {
     store: &'model Store,
     inner: &'model Model,
@@ -2193,6 +2209,74 @@ async fn stop_and_deadline_drop_pending_model_without_final_text() {
                 .is_cancelled()
         );
     }
+}
+
+#[tokio::test]
+async fn model_call_guard_cancels_only_its_child_scope() {
+    let store = Store::new();
+    let model = Model::new(vec![answer()]);
+    model
+        .responses
+        .lock()
+        .unwrap()
+        .push_front(Err(AgentFailure::Cancelled));
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let root = Cancellation::default();
+    let sibling = root.child_scope();
+    let session = runtime
+        .run_turn(store.command(), context(), root.clone(), |_| {})
+        .await
+        .unwrap();
+
+    halted(&session, AgentFailure::Cancelled);
+    assert!(!root.is_cancelled());
+    assert!(!sibling.is_cancelled());
+    assert_eq!(
+        model.requests.lock().unwrap()[0].cancellation.reason(),
+        Some(CancelReason::OwnerDropped)
+    );
+}
+
+#[tokio::test]
+async fn tool_request_uses_a_child_scope_when_tool_cancels_itself() {
+    let store = Store::new();
+    let model = Model::new(vec![call(), answer()]);
+    let host = ChildCancellingHost {
+        cancellation: Mutex::new(None),
+    };
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let root = Cancellation::default();
+    let sibling = root.child_scope();
+    runtime
+        .run_turn(store.command(), context(), root.clone(), |_| {})
+        .await
+        .unwrap();
+
+    assert!(!root.is_cancelled());
+    assert!(!sibling.is_cancelled());
+    assert_eq!(
+        host.cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Cancellation::reason),
+        Some(CancelReason::User)
+    );
 }
 
 #[tokio::test]

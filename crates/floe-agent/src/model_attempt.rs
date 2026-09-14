@@ -28,7 +28,7 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
         if request.deadline <= tokio::time::Instant::now() {
             return Err(AgentFailure::DeadlineExceeded);
         }
-        let accounting = request.usage.begin(
+        let mut accounting = request.usage.begin(
             &mut request.remaining_tokens,
             &mut request.remaining_cost_micros,
         )?;
@@ -42,8 +42,8 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             failure: None,
             usage: crate::ModelUsage {
                 attempts: 1,
-                tokens: request.remaining_tokens.min(4096),
-                estimated_tokens: request.remaining_tokens.min(4096),
+                tokens: accounting.estimated_tokens(),
+                estimated_tokens: accounting.estimated_tokens(),
                 cost_micros: 0,
             },
         };
@@ -52,9 +52,12 @@ pub async fn generate_with_recovery<Model: ModelRunner>(
             biased;
             _ = request.cancellation.cancelled() => Err(AgentFailure::Cancelled),
             _ = tokio::time::sleep_until(request.deadline) => Err(AgentFailure::DeadlineExceeded),
-            result = model.generate(request.clone()) => result,
+            result = async {
+                accounting.mark_dispatched();
+                model.generate(request.clone()).await
+            } => result,
         };
-        let mut consumed_tokens = 4096;
+        let mut consumed_tokens = accounting.estimated_tokens();
         let mut consumed_cost = 0;
         let result = result.and_then(|response| {
             consumed_tokens = response.used_tokens;

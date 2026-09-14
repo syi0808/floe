@@ -148,4 +148,5 @@ pub use registry::{
     PackageKind, PackageRef, RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview,
     RegistrySnapshot,
 };
-pub use runtime::{AgentRuntime, Cancellation};
+pub use floe_execution::{CancelReason, Cancellation};
+pub use runtime::AgentRuntime;

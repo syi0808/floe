@@ -59,7 +59,7 @@ impl FloeCore {
         emit: impl FnMut(AgentEvent) + Send,
     ) -> Result<CalendarAgentTurnResult, AgentFailure> {
         let parent = request.cancellation.clone();
-        let child = Cancellation::default();
+        let child = parent.child_scope();
         let _cancel = CancelTurn(child.clone());
         let mut request = request;
         request.cancellation = child.clone();
@@ -185,7 +185,6 @@ impl FloeCore {
                 historical_dependencies: Mutex::new(Vec::new()),
                 deadline,
                 cancellation: request.cancellation,
-                parent: parent.clone(),
             };
             let guarded_model = CalendarModel { turn: &turn, model };
             let transport = InProcessA2ATransport::new(&turn);
@@ -282,10 +281,7 @@ impl FloeCore {
         tokio::pin!(operation);
         tokio::select! {
             biased;
-            _ = parent.cancelled() => {
-                child.cancel();
-                operation.await
-            }
+            _ = parent.cancelled() => operation.await,
             result = &mut operation => result,
         }
     }
@@ -365,7 +361,7 @@ struct CancelTurn(Cancellation);
 
 impl Drop for CancelTurn {
     fn drop(&mut self) {
-        self.0.cancel();
+        self.0.cancel_with_reason(CancelReason::OwnerDropped);
     }
 }
 
@@ -672,7 +668,6 @@ struct CalendarTurn<'host, Keys, Access, Clock, Model> {
     historical_dependencies: Mutex<Vec<ContextDependency>>,
     deadline: Instant,
     cancellation: Cancellation,
-    parent: Cancellation,
 }
 
 impl<
@@ -683,9 +678,6 @@ impl<
 > CalendarTurn<'_, Keys, Access, Clock, Model>
 {
     fn check_running(&self) -> Result<(), AgentFailure> {
-        if self.parent.is_cancelled() {
-            self.cancellation.cancel();
-        }
         check_running(self.deadline, &self.cancellation)
     }
 

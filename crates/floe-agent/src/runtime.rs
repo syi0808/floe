@@ -1,40 +1,9 @@
 use std::{future::Future, time::SystemTime};
 
-use tokio::{
-    sync::watch,
-    time::{Duration, Instant},
-};
+use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::*;
-
-#[derive(Clone)]
-pub struct Cancellation(watch::Sender<bool>);
-
-impl Default for Cancellation {
-    fn default() -> Self {
-        Self(watch::channel(false).0)
-    }
-}
-
-impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.send_replace(true);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        *self.0.borrow()
-    }
-
-    pub async fn cancelled(&self) {
-        let mut receiver = self.0.subscribe();
-        while !*receiver.borrow_and_update() {
-            if receiver.changed().await.is_err() {
-                return;
-            }
-        }
-    }
-}
 
 pub struct AgentRuntime<'runtime, Store, Model, Host> {
     pub store: &'runtime Store,
@@ -462,9 +431,8 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             session.usage = *usage;
                             if let Err(failure) = self.commit(session).await {
                                 session.model_attempts = previous;
-                                if record.state == ModelAttemptState::Started {
-                                    ledger.undispatched(record.usage.tokens);
-                                } else if let Some(saved) = session.model_attempts.iter_mut().find(|saved| saved.id == record.id) {
+                                if record.state != ModelAttemptState::Started
+                                    && let Some(saved) = session.model_attempts.iter_mut().find(|saved| saved.id == record.id) {
                                     saved.usage = record.usage;
                                 }
                                 let _ = update.acknowledged.send(Err(failure));
@@ -599,6 +567,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 },
                 emit,
             );
+            let model_cancellation = cancellation.child_scope();
             let replay = session
                 .messages
                 .iter()
@@ -655,7 +624,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 remaining_cost_micros: budget.max_cost_micros - usage.cost_micros,
                 max_output_bytes: budget.max_output_bytes,
                 deadline,
-                cancellation: cancellation.clone(),
+                cancellation: model_cancellation.clone(),
             };
             if encoded_len(&request.capabilities)?
                 .saturating_add(encoded_len(&request.active_agents)?)
@@ -677,7 +646,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                     turn_id,
                     emit,
                     deadline,
-                    cancellation,
+                    &model_cancellation,
                 )
                 .await
                 .map_err(DriveStop::from_call)?;
@@ -794,6 +763,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             replay: response.replay_for(call_index)?,
                         };
                         call_index += 1;
+                        let call_cancellation = cancellation.child_scope();
                         let invocation = CapabilityInvocation {
                             usage: ledger.clone(),
                             schema_version: AGENT_VERSION,
@@ -805,7 +775,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             input: input.clone(),
                             max_output_bytes: budget.max_output_bytes,
                             deadline,
-                            cancellation: cancellation.clone(),
+                            cancellation: call_cancellation.clone(),
                         };
                         let result = self
                             .recorded(
@@ -813,7 +783,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                     &ledger,
                                     execution,
                                     deadline,
-                                    cancellation,
+                                    &call_cancellation,
                                     budget.max_output_bytes,
                                     Box::pin(async {
                                         self.authorize(context)?;
@@ -837,7 +807,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 turn_id,
                                 emit,
                                 deadline,
-                                cancellation,
+                                &call_cancellation,
                             )
                             .await
                             .map_err(DriveStop::from_call)?;
@@ -911,8 +881,9 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                             message: request_message.clone(),
                             max_output_bytes: budget.max_output_bytes,
                             deadline,
-                            cancellation: cancellation.clone(),
+                            cancellation: cancellation.child_scope(),
                         };
+                        let delegation_cancellation = request.cancellation.clone();
                         let result = self
                             .recorded(
                                 agents.send_message(request),
@@ -923,7 +894,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                                 turn_id,
                                 emit,
                                 deadline,
-                                cancellation,
+                                &delegation_cancellation,
                             )
                             .await;
                         if let Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded) =
@@ -1170,8 +1141,16 @@ async fn bounded<ResultValue>(
     let result = tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
-        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| AgentFailure::DeadlineExceeded)?,
+        result = tokio::time::timeout_at(deadline, future) => {
+            result.map_err(|_| {
+                cancellation.cancel_with_reason(CancelReason::Deadline);
+                AgentFailure::DeadlineExceeded
+            })?
+        },
     };
+    if matches!(result, Err(AgentFailure::DeadlineExceeded)) {
+        cancellation.cancel_with_reason(CancelReason::Deadline);
+    }
     if !matches!(
         result,
         Err(AgentFailure::Cancelled | AgentFailure::DeadlineExceeded)
@@ -1186,7 +1165,7 @@ struct CallCancellationGuard(Option<Cancellation>);
 impl Drop for CallCancellationGuard {
     fn drop(&mut self) {
         if let Some(cancellation) = &self.0 {
-            cancellation.cancel();
+            cancellation.cancel_with_reason(CancelReason::OwnerDropped);
         }
     }
 }

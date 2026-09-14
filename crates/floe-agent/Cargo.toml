@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 chrono.workspace = true
 floe-agent-contract = { path = "../floe-agent-contract" }
+floe-execution = { path = "../runtime/execution" }
 floe-domain = { path = "../floe-domain" }
 jsonschema = { version = "0.55.1", default-features = false }
 serde.workspace = true
