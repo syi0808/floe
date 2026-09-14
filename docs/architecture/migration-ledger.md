@@ -1503,3 +1503,46 @@ the Floe app by path and bundle ID both timed out while retrieving accessibility
 state. No actual UI conversation was exercised or claimed. Flutter tests include
 HTTP and fake gateway flows plus a status-only ABI guard, not a complete model
 attempt through the Apple UI. No external account/provider data was modified.
+
+## P08 memory candidate admission ownership — 2026-09-14
+
+Code checkpoint `1e84e71`: the canonical Knowledge crate now owns six memory
+and learning request/value types, their version constant, stage-input policy,
+and completed-personal-session evidence metadata validation. Legacy Agent
+re-exports the moved types; their serialized shapes are unchanged. Core obtains
+the evidence snapshot from the actual session inside the existing immediate
+transaction and delegates validation to Knowledge. The snapshot is metadata,
+not an authorization permit: transactional source-independence checks, content
+deduplication, revision checks, key-health checks and rollback remain in place.
+
+Parent verification passed: Knowledge tests (2), Knowledge all-target Clippy
+with `-D warnings`, workspace check, and three focused Core memory tests. A new
+encrypted-Vault regression rejects a real turn belonging to another session and
+asserts no pending candidate was written; existing persistence, idempotency,
+lineage revocation and user-review assertions remain. The new policy tests
+retain actor, inference classification, duplicate evidence, revision, completion,
+personal scope and actual-turn guards. Migration checker reports 17 nodes /
+47 edges / 0 errors, not the final architecture gate.
+
+P08 is not complete. Candidate/revision/review and playbook workflows, learner
+ownership, authoritative evidence ports and SQL repository ownership remain
+legacy. Optional memory-context failure still needs a typed distinction from
+integrity/key-health failures before it can safely become an empty context.
+No T11/T28/T31 or full-plan acceptance is claimed.
+
+## Apple UI access and disposable Day data reset — 2026-09-14
+
+Computer-use selection now succeeds. The existing P07 macOS debug build initially
+displayed a Day load error for a missing `connection_id` in old local test data.
+After quitting Floe and confirming no process or DB holder remained, only its
+local `floe.db` and `floe.db-wal` were reversibly moved into
+`~/Library/Containers/app.floe.floeClient/Data/Library/Application Support/app.floe.floeClient/people/00000000-0000-4000-8000-000000000001/floe-day-backup.Gh9uYD/`.
+No shared-memory file was present. The Agent Vault directory, secure-storage
+keys, preferences and external account/provider data were not reset or changed.
+
+After relaunch, the Day view loaded and displayed its empty-calendar state.
+Opening the Agent panel directly displayed a secure-storage access failure and
+the assurance that saved conversations had not been replaced. This confirms
+the observed UI failure remains closed; it does not establish the underlying
+Vault failure cause. No conversation, model dispatch or memory-review UI flow
+was exercised, and the app was not yet rebuilt with the P08 checkpoint.
