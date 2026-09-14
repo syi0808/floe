@@ -434,6 +434,7 @@ struct Fixture {
     assignment: Uuid,
     expert_id: String,
     revision: u64,
+    task_generation: u64,
     root: tempfile::TempDir,
 }
 
@@ -459,6 +460,11 @@ impl Fixture {
         let vault = EncryptedAgentVault::create(root.path(), person, keys.clone())
             .await
             .unwrap();
+        let task_generation = vault
+            .activate_task_executor()
+            .await
+            .unwrap()
+            .executor_generation;
         let core = FloeCore::open(root.path().join("core.db")).await.unwrap();
         let day = CalendarRange {
             start_date: now().date_naive(),
@@ -658,6 +664,7 @@ impl Fixture {
             assignment: fixture_assignment,
             expert_id: fixture_expert_id,
             revision: fixture_revision,
+            task_generation,
             root,
             grant: CalendarTimelineGrant {
                 person_id: person,
@@ -738,6 +745,41 @@ impl Fixture {
         self.vault.expert_registry().await.unwrap().unwrap()
     }
 
+    async fn working_task(&self, invocation_id: Uuid) -> VaultTaskRecord {
+        let task_id = TaskId::new();
+        let submitted = VaultTaskRecord {
+            snapshot: floe_agent_contract::TaskSnapshot {
+                task_id,
+                parent_run_id: None,
+                principal: self.session.person_id.to_string(),
+                agent_id: "floe.builtin.schedule".into(),
+                definition_revision: 1,
+                state: floe_agent_contract::TaskState::Submitted,
+                result: None,
+                artifacts: vec![],
+                coverage: DependencyCoverage::Unknown,
+                issue: None,
+            },
+            invocation_key: floe_agent_contract::InvocationKey::from_uuid(invocation_id).unwrap(),
+            request_digest: [9; 32],
+            aggregate_revision: 1,
+            executor_generation: self.task_generation,
+        };
+        self.vault.admit_task(submitted.clone()).await.unwrap();
+        self.vault
+            .compare_and_swap_task(
+                task_id,
+                submitted.aggregate_revision,
+                submitted.executor_generation,
+                floe_agent_contract::TaskSnapshot {
+                    state: floe_agent_contract::TaskState::Working,
+                    ..submitted.snapshot
+                },
+            )
+            .await
+            .unwrap()
+    }
+
     fn configure_model(&self, model: &Model<'_>) {
         if self.expert_id == "schedule" {
             return;
@@ -750,10 +792,11 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn direct_schedule_endpoint_returns_provenance_without_mutating_session() {
+async fn direct_schedule_endpoint_settles_task_and_registry_atomically_without_mutating_session() {
     let fixture = Fixture::with_class(DataClass::Personal).await;
     let model = Model::default();
     let invocation_id = Uuid::new_v4();
+    let working = fixture.working_task(invocation_id).await;
     let before = fixture
         .vault
         .load(fixture.session.person_id, fixture.session.id)
@@ -771,6 +814,51 @@ async fn direct_schedule_endpoint_returns_provenance_without_mutating_session() 
         )
         .await
         .unwrap();
+    assert_eq!(fixture.state().await.revision, fixture.revision);
+    let coverage = DependencyCoverage::Dependent {
+        dependencies: result.dependencies.clone(),
+    };
+    let completed_snapshot = floe_agent_contract::TaskSnapshot {
+        state: floe_agent_contract::TaskState::Completed,
+        result: Some(serde_json::to_string(&result.report).unwrap()),
+        artifacts: vec![],
+        coverage,
+        issue: None,
+        ..working.snapshot.clone()
+    };
+    let mut forged_snapshot = completed_snapshot.clone();
+    forged_snapshot.result = Some("forged result".into());
+    assert_eq!(
+        fixture
+            .vault
+            .settle_calendar_expert_task_checked(
+                CalendarExpertTaskCompletion {
+                    settlement: result.settlement.clone(),
+                    task_id: working.snapshot.task_id,
+                    expected_task_revision: working.aggregate_revision,
+                    executor_generation: working.executor_generation,
+                    task_snapshot: forged_snapshot,
+                },
+                || Ok(()),
+            )
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    assert_eq!(fixture.state().await.revision, fixture.revision);
+    let completed = fixture
+        .vault
+        .settle_calendar_expert_task_checked(
+            CalendarExpertTaskCompletion {
+                settlement: result.settlement,
+                task_id: working.snapshot.task_id,
+                expected_task_revision: working.aggregate_revision,
+                executor_generation: working.executor_generation,
+                task_snapshot: completed_snapshot,
+            },
+            || Ok(()),
+        )
+        .await
+        .unwrap();
     let after = fixture
         .vault
         .load(fixture.session.person_id, fixture.session.id)
@@ -781,6 +869,10 @@ async fn direct_schedule_endpoint_returns_provenance_without_mutating_session() 
     assert!(!result.report.action_proposals.is_empty());
     assert!(!result.dependencies.is_empty());
     assert_eq!(after, before);
+    assert_eq!(
+        completed.snapshot.state,
+        floe_agent_contract::TaskState::Completed
+    );
     let registry = fixture.state().await;
     let assignment = registry
         .assignments
@@ -805,6 +897,61 @@ async fn direct_schedule_endpoint_returns_provenance_without_mutating_session() 
             .await,
         Err(AgentFailure::Conflict)
     ));
+}
+
+#[tokio::test]
+async fn direct_schedule_settlement_rolls_back_task_and_registry_together() {
+    let fixture = Fixture::with_class(DataClass::Personal).await;
+    let invocation_id = Uuid::new_v4();
+    let working = fixture.working_task(invocation_id).await;
+    let result = fixture
+        .core
+        .run_calendar_expert_endpoint(
+            &fixture.vault,
+            &Access::default(),
+            &Model::default(),
+            fixture.endpoint_request(invocation_id),
+            now,
+        )
+        .await
+        .unwrap();
+    let completed_snapshot = floe_agent_contract::TaskSnapshot {
+        state: floe_agent_contract::TaskState::Completed,
+        result: Some(serde_json::to_string(&result.report).unwrap()),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Dependent {
+            dependencies: result.dependencies,
+        },
+        issue: None,
+        ..working.snapshot.clone()
+    };
+
+    assert_eq!(
+        fixture
+            .vault
+            .settle_calendar_expert_task_checked(
+                CalendarExpertTaskCompletion {
+                    settlement: result.settlement,
+                    task_id: working.snapshot.task_id,
+                    expected_task_revision: working.aggregate_revision,
+                    executor_generation: working.executor_generation,
+                    task_snapshot: completed_snapshot,
+                },
+                || Err(AgentFailure::Cancelled),
+            )
+            .await,
+        Err(AgentFailure::Cancelled)
+    );
+    assert_eq!(fixture.state().await.revision, fixture.revision);
+    assert_eq!(
+        fixture
+            .vault
+            .task(working.snapshot.task_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        working
+    );
 }
 
 #[tokio::test]

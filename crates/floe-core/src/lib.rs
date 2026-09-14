@@ -27,7 +27,8 @@ pub use agent_action::{
 #[cfg(unix)]
 pub use agent_calendar::{
     CalendarAgentProposal, CalendarAgentTurnRequest, CalendarAgentTurnResult,
-    CalendarExpertEndpointRequest, CalendarExpertEndpointResult,
+    CalendarExpertEndpointRequest, CalendarExpertEndpointResult, CalendarExpertSettlement,
+    CalendarExpertTaskCompletion,
 };
 pub use agent_fixture::{
     AgentFixturePrompt, AgentFixtureResult, AgentFixtureTurn, recover_agent_sample,

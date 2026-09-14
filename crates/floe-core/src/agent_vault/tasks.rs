@@ -80,7 +80,7 @@ impl VaultTaskRecord {
         Ok(())
     }
 
-    fn transition(
+    pub(super) fn transition(
         &self,
         expected_aggregate_revision: u64,
         executor_generation: u64,
@@ -352,7 +352,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(record)
     }
 
-    async fn task_on(
+    pub(super) async fn task_on(
         &self,
         connection: &turso::Connection,
         task_id: TaskId,
@@ -382,7 +382,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(Some(record))
     }
 
-    async fn active_executor_generation(
+    pub(super) async fn active_executor_generation(
         &self,
         connection: &turso::Connection,
     ) -> Result<u64, AgentFailure> {
@@ -528,7 +528,7 @@ async fn executor_generation_on(connection: &turso::Connection) -> Result<u64, A
     Ok(value as u64)
 }
 
-async fn write_task(
+pub(super) async fn write_task(
     transaction: &Transaction<'_>,
     next: &VaultTaskRecord,
     expected_revision: u64,

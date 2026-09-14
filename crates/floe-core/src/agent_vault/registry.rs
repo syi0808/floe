@@ -1,7 +1,9 @@
 use floe_agent::{AgentMessage, AgentRegistry, ExpertResult, RegistrySnapshot};
+use floe_agent_contract::{TaskId, TaskSnapshot, TaskState};
 use floe_domain::DependencyCoverage;
 use turso::transaction::TransactionBehavior;
 
+use super::tasks::VaultTaskRecord;
 use super::*;
 
 const MAX_REGISTRY_BYTES: usize = 262_144;
@@ -170,9 +172,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         None,
                         Some(setup.setup_id),
                         None,
+                        None,
                         &check,
                     )
-                    .await?
+                    .await?;
                 }
                 None => {
                     self.initialize_expert_registry_checked(&registry.snapshot(), &check)
@@ -210,6 +213,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &registry.snapshot(),
                 None,
                 Some(setup.setup_id),
+                None,
                 None,
                 || {
                     if cancellation.is_cancelled() {
@@ -406,6 +410,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 Some(configuration.setup_id),
                 None,
                 None,
+                None,
                 &check,
             )
             .await?;
@@ -559,11 +564,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None,
             None,
             None,
+            None,
             check,
         )
-        .await
+        .await?;
+        Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn save_expert_completion_checked(
         &self,
         expected_revision: u64,
@@ -577,9 +585,55 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             None,
             None,
             Some(assignment_id),
+            None,
             check,
         )
-        .await
+        .await?;
+        Ok(())
+    }
+
+    pub async fn settle_calendar_expert_task_checked(
+        &self,
+        completion: crate::CalendarExpertTaskCompletion,
+        check: impl Fn() -> Result<(), AgentFailure> + Sync,
+    ) -> Result<VaultTaskRecord, AgentFailure> {
+        let crate::CalendarExpertTaskCompletion {
+            settlement,
+            task_id,
+            expected_task_revision,
+            executor_generation,
+            task_snapshot,
+        } = completion;
+        let coverage = DependencyCoverage::Dependent {
+            dependencies: settlement.dependencies.clone(),
+        };
+        coverage
+            .validate()
+            .map_err(|_| AgentFailure::PolicyDenied)?;
+        if settlement.assignment_id.is_nil()
+            || settlement.invocation_id.is_nil()
+            || task_snapshot.state != TaskState::Completed
+            || task_snapshot.coverage != coverage
+            || task_snapshot.result.as_deref() != Some(settlement.task_result.as_str())
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        self.save_expert_registry_change_checked(
+            settlement.expected_registry_revision,
+            &settlement.staged_registry,
+            None,
+            None,
+            Some(settlement.assignment_id),
+            Some((
+                task_id,
+                expected_task_revision,
+                executor_generation,
+                &task_snapshot,
+            )),
+            check,
+        )
+        .await?
+        .ok_or(AgentFailure::StorageUnavailable)
     }
 
     pub(super) async fn save_expert_registry_change_checked(
@@ -589,8 +643,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         mutable_calendar_setup: Option<uuid::Uuid>,
         mutable_builtin_setup: Option<uuid::Uuid>,
         mutable_assignment: Option<uuid::Uuid>,
+        task_completion: Option<(TaskId, u64, u64, &TaskSnapshot)>,
         check: impl Fn() -> Result<(), AgentFailure> + Sync,
-    ) -> Result<(), AgentFailure> {
+    ) -> Result<Option<VaultTaskRecord>, AgentFailure> {
         check()?;
         let payload = self.registry_payload(snapshot)?;
         if expected_revision.checked_add(1) != Some(snapshot.revision) {
@@ -882,9 +937,61 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await?;
             self.update_registry(&transaction, expected_revision, snapshot.revision, payload)
                 .await?;
+            let completed_task = if let Some((
+                task_id,
+                expected_task_revision,
+                executor_generation,
+                task_snapshot,
+            )) = task_completion
+            {
+                if self.active_executor_generation(&transaction).await? != executor_generation {
+                    return Err(AgentFailure::Conflict);
+                }
+                let assignment_id = mutable_assignment.ok_or(AgentFailure::Conflict)?;
+                let invocation_id = snapshot
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.id == assignment_id)
+                    .and_then(|assignment| assignment.private_state.last_invocation_id)
+                    .ok_or(AgentFailure::Conflict)?;
+                let current = self
+                    .task_on(&transaction, task_id)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                if current.invocation_key.as_uuid() != invocation_id
+                    || current.snapshot.agent_id != "floe.builtin.schedule"
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                let next = current.transition(
+                    expected_task_revision,
+                    executor_generation,
+                    task_snapshot.clone(),
+                    self.person_id,
+                )?;
+                self.validate_context_dependency_coverage_in_transaction(
+                    &transaction,
+                    &next.snapshot.coverage,
+                )
+                .await?;
+                if super::tasks::write_task(
+                    &transaction,
+                    &next,
+                    expected_task_revision,
+                    executor_generation,
+                )
+                .await?
+                    != 1
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                Some(next)
+            } else {
+                None
+            };
             self.check_access()?;
             check()?;
-            Ok(())
+            Ok(completed_task)
         }
         .await;
         self.finish_registry_transaction_checked(transaction, result)

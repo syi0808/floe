@@ -63,6 +63,25 @@ pub struct CalendarExpertEndpointRequest {
 pub struct CalendarExpertEndpointResult {
     pub report: ExpertResult,
     pub dependencies: Vec<ContextDependency>,
+    pub settlement: CalendarExpertSettlement,
+}
+
+#[derive(Clone)]
+pub struct CalendarExpertSettlement {
+    pub(crate) expected_registry_revision: u64,
+    pub(crate) staged_registry: RegistrySnapshot,
+    pub(crate) assignment_id: Uuid,
+    pub(crate) invocation_id: Uuid,
+    pub(crate) dependencies: Vec<ContextDependency>,
+    pub(crate) task_result: String,
+}
+
+pub struct CalendarExpertTaskCompletion {
+    pub settlement: CalendarExpertSettlement,
+    pub task_id: floe_agent_contract::TaskId,
+    pub expected_task_revision: u64,
+    pub executor_generation: u64,
+    pub task_snapshot: floe_agent_contract::TaskSnapshot,
 }
 
 impl FloeCore {
@@ -264,18 +283,23 @@ impl FloeCore {
             .lock()
             .map_err(|_| AgentFailure::StorageUnavailable)?
             .snapshot();
-        vault
-            .save_expert_completion_checked(revision, &staged, request.assignment_id, || {
-                check_running(request.deadline, &request.cancellation)?;
-                for dependency in &dependencies {
-                    views.validate_dependency_liveness(dependency)?;
-                }
-                Ok(())
-            })
-            .await?;
+        check_running(request.deadline, &request.cancellation)?;
+        for dependency in &dependencies {
+            views.validate_dependency_liveness(dependency)?;
+        }
+        let task_result =
+            serde_json::to_string(&report).map_err(|_| AgentFailure::InvalidModelOutput)?;
         Ok(CalendarExpertEndpointResult {
             report,
-            dependencies,
+            dependencies: dependencies.clone(),
+            settlement: CalendarExpertSettlement {
+                expected_registry_revision: revision,
+                staged_registry: staged,
+                assignment_id: request.assignment_id,
+                invocation_id: request.invocation_id,
+                dependencies,
+                task_result,
+            },
         })
     }
 
