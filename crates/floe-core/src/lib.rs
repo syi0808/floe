@@ -6,6 +6,8 @@ mod agent_fixture;
 #[cfg(unix)]
 mod agent_vault;
 mod context_evidence;
+mod context_history;
+pub use context_history::bounded_model_history_start;
 mod calendar;
 mod calendar_action;
 mod calendar_lease;

@@ -674,6 +674,15 @@ pub struct ModelResponse {
 pub trait ModelRunner {
     fn placement(&self) -> ModelPlacement;
 
+    fn history_start(
+        &self,
+        _messages: &[AgentMessage],
+        _current_turn: Uuid,
+        _max_bytes: usize,
+    ) -> Result<usize, AgentFailure> {
+        Ok(0)
+    }
+
     fn generate(
         &self,
         request: ModelRequest,

@@ -1122,6 +1122,15 @@ impl<
     Model: ModelRunner + Sync,
 > ModelRunner for CalendarModel<'_, '_, Keys, Access, Clock, Model>
 {
+    fn history_start(
+        &self,
+        messages: &[AgentMessage],
+        current_turn: Uuid,
+        max_bytes: usize,
+    ) -> Result<usize, AgentFailure> {
+        crate::bounded_model_history_start(messages, current_turn, max_bytes)
+    }
+
     fn placement(&self) -> ModelPlacement {
         self.model.placement()
     }

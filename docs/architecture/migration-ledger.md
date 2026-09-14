@@ -2208,3 +2208,53 @@ ArchiveReader, bounded full history projection, SourceViews, removal of Calendar
 prefix guards and final Conversation/Vault ownership remain pending. This
 temporary Core facade must move with the Conversation composition; it does not
 authorize a final Vault-to-Context dependency. P09 and P00–P25 remain incomplete.
+
+### P09 bounded history integration checkpoint (2026-09-14)
+
+Context now selects the largest contiguous latest-history suffix that fits its
+message byte allowance, preserving every message of each retained turn and the
+entire current turn. JSON array brackets/separators are counted alongside encoded
+message bytes. Interleaved turn identifiers cannot be split across the cut. If
+the mandatory current turn does not fit, selection fails rather than dropping
+active calls/results or weakening the budget.
+
+The temporary legacy ModelRunner history_start hook lets Core CalendarModel and
+FFI GovernedModel call this Context policy before runtime clones model history.
+Runtime itself has no new Context dependency. It independently verifies the
+returned suffix index, current-turn retention, interleaved-turn closure and byte
+allowance before cloning. Both prior context-budget checks remain enforced on
+the selected messages; fixed context/catalog/policy overhead is subtracted before
+selection. Replay is derived from selected current-turn messages. Other runners
+default to full history, retaining their previous selection behavior. This hook
+must disappear with the old runtime/Conversation migration; it is not a new final
+ModelPort responsibility.
+
+Review identified a legacy-guard risk: cutting away a Calendar/compaction boundary
+could hide it from the existing prefix-based projector while retaining later
+derived text. The Core adapter therefore keeps only the current turn when such a
+boundary is removed, or rejects an interleaved unsafe suffix. The regression
+asserts that later derived history cannot escape this conservative fallback.
+Coverage authorization and post-model revalidation are still required and are
+not replaced by byte selection. Prefix guard removal still awaits full provenance
+acceptance.
+
+A real encrypted Vault/general runtime fixture with two oversized historical
+turns now completes an unrelated greeting under a 4096-byte context budget. The
+controlled model sees only bounded current context; the original transcript
+prefix remains exactly equal as typed messages and the persisted
+session equals the completed result. No archive write, compaction or user data
+deletion is used to make the flow pass. This is not a live Apple model/UI test.
+
+Validation passed: Context tests (29), legacy runtime integration tests (46),
+Core history adapter tests (2), Core Calendar runtime tests (37), FFI library
+tests (79), workspace all-target check, Context all-target Clippy with
+`-D warnings`, diff check and migration gate (18 nodes / 57 edges / no errors).
+New tests cover exact JSON/Unicode size accounting, whole/interleaved turn cuts,
+mandatory current-turn preservation, unsafe hook rejection, legacy boundary
+preservation and the encrypted end-to-end long-history flow. Existing replay,
+budget, revocation and persistence assertions remain intact.
+
+The adapter still scans/serializes message sizes, and existing runtime context
+accounting is not a complete provider wire-request-size accounting scheme.
+ArchiveReader, safe archive selection/recovery integration, SourceViews, final
+Conversation ownership and full T28/P09/P00–P25 acceptance remain pending.

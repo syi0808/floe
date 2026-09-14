@@ -394,6 +394,15 @@ struct GovernedModel<'a, Keys, Runner: ModelRunner + ?Sized = Model> {
 impl<Keys: VaultKeyProvider, Runner: ModelRunner + ?Sized + Sync> ModelRunner
     for GovernedModel<'_, Keys, Runner>
 {
+    fn history_start(
+        &self,
+        messages: &[floe_agent::AgentMessage],
+        current_turn: Uuid,
+        max_bytes: usize,
+    ) -> Result<usize, AgentFailure> {
+        floe_core::bounded_model_history_start(messages, current_turn, max_bytes)
+    }
+
     fn placement(&self) -> ModelPlacement {
         self.model.placement()
     }
@@ -1509,6 +1518,116 @@ mod tests {
     }
 
     struct PositiveFakeModel;
+
+    #[tokio::test]
+    async fn bounded_history_completes_without_truncating_the_encrypted_transcript() {
+        struct RecordingModel(Mutex<Vec<ModelRequest>>);
+
+        impl ModelRunner for RecordingModel {
+            fn placement(&self) -> ModelPlacement {
+                ModelPlacement::DeviceLocal
+            }
+
+            async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+                self.0.lock().unwrap().push(request);
+                Ok(ModelResponse {
+                    replay: None,
+                    schema_version: AGENT_VERSION,
+                    output: vec![ModelStep::Answer {
+                        text: "Hello".into(),
+                    }],
+                    used_tokens: 1,
+                    cost_micros: 0,
+                })
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let person_id = PersonId::new();
+        let vault = EncryptedAgentVault::create(root.path(), person_id, AttentionTestKeys::default())
+            .await
+            .unwrap();
+        let mut session = vault.create_session().await.unwrap();
+        let store = vault.governed_general_store(session.id);
+        let old_turns = [Uuid::new_v4(), Uuid::new_v4()];
+        for turn_id in old_turns {
+            session.messages.push(AgentMessage::User {
+                turn_id,
+                text: "old input".repeat(800),
+            });
+            session.messages.push(AgentMessage::Assistant {
+                turn_id,
+                text: "old answer".repeat(800),
+            });
+        }
+        session.revision = 1;
+        store.compare_and_swap(&session, 0).await.unwrap();
+        let saved_messages = session.messages.clone();
+        let local_context = LocalContextStore::default();
+        let resolver = personal_grants::PersonalDependencyResolver {
+            vault: &vault,
+            local_context: &local_context,
+            person_id,
+            device_id: "test-device",
+        };
+        let model = RecordingModel(Mutex::new(Vec::new()));
+        let runner = GovernedModel {
+            model: &model,
+            store: &store,
+            resolver: &resolver,
+        };
+        let policy = policy(&Model::Foundation(FoundationModelRunner::encrypted()), None);
+        let budget = AgentBudget {
+            max_context_bytes: 4096,
+            ..AgentBudget::default()
+        };
+        let completed = AgentRuntime {
+            store: &store,
+            model: &runner,
+            capabilities: &NoCapabilities,
+            policy: &policy,
+            budget,
+        }
+        .run_turn(
+            AgentCommand {
+                schema_version: AGENT_VERSION,
+                person_id,
+                session_id: session.id,
+                expected_revision: session.revision,
+                text: "Hello".into(),
+            },
+            AgentContext {
+                projection_version: 1,
+                persona: None,
+                optional_context_issues: vec![],
+                memories: vec![],
+                evidence: vec![],
+            },
+            Cancellation::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            completed.last_outcome,
+            Some(floe_agent::AgentOutcome::Completed)
+        );
+        assert_eq!(
+            &completed.messages[..saved_messages.len()],
+            saved_messages.as_slice()
+        );
+        assert_eq!(vault.load(person_id, session.id).await.unwrap(), completed);
+        let requests = model.0.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .messages
+                .iter()
+                .all(|message| !old_turns.contains(&message.turn_id()))
+        );
+        assert!(serde_json::to_vec(&requests[0].messages).unwrap().len() <= budget.max_context_bytes);
+    }
 
     struct UnavailableMemoryReader(AgentFailure);
 

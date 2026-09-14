@@ -563,6 +563,149 @@ impl ModelRunner for Model {
     }
 }
 
+struct ProjectingModel<'model> {
+    inner: &'model Model,
+    history_start: Result<usize, AgentFailure>,
+}
+
+impl ModelRunner for ProjectingModel<'_> {
+    fn placement(&self) -> ModelPlacement {
+        self.inner.placement()
+    }
+
+    fn history_start(
+        &self,
+        _messages: &[AgentMessage],
+        _current_turn: Uuid,
+        _max_bytes: usize,
+    ) -> Result<usize, AgentFailure> {
+        self.history_start.clone()
+    }
+
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, AgentFailure> {
+        self.inner.generate(request).await
+    }
+}
+
+#[tokio::test]
+async fn bounded_history_projection_clones_only_the_selected_suffix() {
+    let store = Store::new();
+    let old_turn = Uuid::new_v4();
+    {
+        let mut session = store.session.lock().unwrap();
+        session.messages = vec![
+            AgentMessage::User {
+                turn_id: old_turn,
+                text: "Earlier question".into(),
+            },
+            AgentMessage::Assistant {
+                turn_id: old_turn,
+                text: "Earlier answer".into(),
+            },
+        ];
+    }
+    let inner = Model::new(vec![answer()]);
+    let model = ProjectingModel {
+        inner: &inner,
+        history_start: Ok(2),
+    };
+    let host = Host::default();
+    let policy = policy();
+    let runtime = AgentRuntime {
+        store: &store,
+        model: &model,
+        capabilities: &host,
+        policy: &policy,
+        budget: AgentBudget::default(),
+    };
+    let result = runtime
+        .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(result.messages.len(), 4);
+    assert_eq!(inner.requests.lock().unwrap()[0].messages.len(), 1);
+    assert_eq!(store.snapshot().messages, result.messages);
+}
+
+#[tokio::test]
+async fn history_projection_rejects_current_turn_omission_and_split_turns() {
+    for (history, start) in [
+        (
+            vec![AgentMessage::Assistant {
+                turn_id: Uuid::new_v4(),
+                text: "Earlier answer".into(),
+            }],
+            2,
+        ),
+        (
+            {
+                let turn_id = Uuid::new_v4();
+                vec![
+                    AgentMessage::User {
+                        turn_id,
+                        text: "Earlier question".into(),
+                    },
+                    AgentMessage::Assistant {
+                        turn_id,
+                        text: "Earlier answer".into(),
+                    },
+                ]
+            },
+            1,
+        ),
+        (
+            {
+                let old_turn = Uuid::new_v4();
+                vec![
+                    AgentMessage::User {
+                        turn_id: old_turn,
+                        text: "Earlier question".into(),
+                    },
+                    AgentMessage::User {
+                        turn_id: Uuid::new_v4(),
+                        text: "Another question".into(),
+                    },
+                    AgentMessage::Assistant {
+                        turn_id: old_turn,
+                        text: "Earlier answer".into(),
+                    },
+                ]
+            },
+            1,
+        ),
+    ] {
+        let store = Store::new();
+        store.session.lock().unwrap().messages = history;
+        let inner = Model::new(vec![answer()]);
+        let model = ProjectingModel {
+            inner: &inner,
+            history_start: Ok(start),
+        };
+        let host = Host::default();
+        let policy = policy();
+        let runtime = AgentRuntime {
+            store: &store,
+            model: &model,
+            capabilities: &host,
+            policy: &policy,
+            budget: AgentBudget::default(),
+        };
+        let result = runtime
+            .run_turn(store.command(), context(), Cancellation::default(), |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.last_outcome,
+            Some(AgentOutcome::Halted {
+                reason: AgentFailure::InvalidInput
+            })
+        );
+        assert_eq!(inner.calls(), 0);
+    }
+}
+
 struct Host {
     calls: AtomicUsize,
     output: Result<String, AgentFailure>,

@@ -1,4 +1,4 @@
-use std::{future::Future, time::SystemTime};
+use std::{collections::HashSet, future::Future, time::SystemTime};
 
 use tokio::time::{Duration, Instant};
 use uuid::Uuid;
@@ -525,11 +525,6 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             ledger.sync(usage);
             check_drive_running(deadline, cancellation)?;
             self.authorize(context)?;
-            if encoded_len(context)?.saturating_add(encoded_len(&session.messages)?)
-                > budget.max_context_bytes
-            {
-                return Err(AgentFailure::BudgetExceeded.into());
-            }
             if usage.tokens >= budget.max_tokens || usage.cost_micros > budget.max_cost_micros {
                 return Err(DriveStop::soft(AgentFailure::BudgetExceeded));
             }
@@ -559,6 +554,29 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if active_agents.len() > 16 {
                 return Err(AgentFailure::BudgetExceeded.into());
             }
+            let fixed_context_bytes = encoded_len(context)?
+                .saturating_add(encoded_len(&descriptors)?)
+                .saturating_add(encoded_len(&active_agents)?)
+                .saturating_add(encoded_len(self.policy)?);
+            let history_budget = budget
+                .max_context_bytes
+                .checked_sub(fixed_context_bytes)
+                .ok_or(AgentFailure::BudgetExceeded)?;
+            let history_start =
+                self.model
+                    .history_start(&session.messages, turn_id, history_budget)?;
+            validate_history_start(&session.messages, turn_id, history_start)?;
+            let projected_messages = session
+                .messages
+                .get(history_start..)
+                .ok_or(AgentFailure::InvalidInput)?;
+            let projected_bytes = encoded_len(&projected_messages)?;
+            if projected_bytes > history_budget
+                || encoded_len(context)?.saturating_add(projected_bytes) > budget.max_context_bytes
+            {
+                return Err(AgentFailure::BudgetExceeded.into());
+            }
+            let messages = projected_messages.to_vec();
             emit_event(
                 session,
                 turn_id,
@@ -569,8 +587,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 emit,
             );
             let model_cancellation = cancellation.child_scope();
-            let replay = session
-                .messages
+            let replay = messages
                 .iter()
                 .filter_map(|message| match message {
                     AgentMessage::Capability {
@@ -618,7 +635,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
                 turn_id,
                 policy: self.policy.clone(),
                 context: context.clone(),
-                messages: session.messages.clone(),
+                messages,
                 capabilities: descriptors.clone(),
                 active_agents: active_agents.clone(),
                 remaining_tokens: budget.max_tokens - usage.tokens,
@@ -630,7 +647,7 @@ impl<Store: SessionStore, Model: ModelRunner, Host: CapabilityHost>
             if encoded_len(&request.capabilities)?
                 .saturating_add(encoded_len(&request.active_agents)?)
                 .saturating_add(encoded_len(context)?)
-                .saturating_add(encoded_len(&session.messages)?)
+                .saturating_add(encoded_len(&request.messages)?)
                 .saturating_add(encoded_len(self.policy)?)
                 > budget.max_context_bytes
             {
@@ -1063,6 +1080,34 @@ fn encoded_len(value: &impl serde::Serialize) -> Result<usize, AgentFailure> {
     serde_json::to_vec(value)
         .map(|encoded| encoded.len())
         .map_err(|_| AgentFailure::InvalidInput)
+}
+
+fn validate_history_start(
+    messages: &[AgentMessage],
+    current_turn: Uuid,
+    history_start: usize,
+) -> Result<(), AgentFailure> {
+    if current_turn.is_nil() || history_start > messages.len() {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let current_start = messages
+        .iter()
+        .position(|message| message.turn_id() == current_turn)
+        .ok_or(AgentFailure::InvalidInput)?;
+    if history_start > current_start {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let retained_turns = messages[history_start..]
+        .iter()
+        .map(AgentMessage::turn_id)
+        .collect::<HashSet<_>>();
+    if messages[..history_start]
+        .iter()
+        .any(|message| retained_turns.contains(&message.turn_id()))
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
 }
 
 fn soft_continuation(

@@ -16,7 +16,7 @@ pub use application::assembler::{
 };
 pub use application::consumed::ConsumedLineage;
 pub use application::coverage::{CoverageAccumulator, CoverageMessageFact, CoverageRegistry};
-pub use application::history::read_history_coverage;
+pub use application::history::{HistoryMessageSize, bounded_history_start, read_history_coverage};
 pub use application::leases::{
     MAX_LEASE_BYTES, MAX_LIVE_LEASES, SourceLeaseRegistry, SourceLeaseReservation,
 };
