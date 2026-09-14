@@ -2980,3 +2980,36 @@ global worker-job lifetime and Calendar-root removal remain pending P12/P13 and
 P16/P19 cutovers. The next executable P12 task is to stop requiring built-in
 setup for an otherwise valid general Manager turn while preserving the
 Directory revision and eligible-card catalog checks. P12 remains partial.
+
+### P12 setup-independent Manager turn checkpoint (2026-09-15)
+
+Code checkpoint `7857d10` removes built-in Expert installation as a success
+condition of the production general-conversation root. `ConversationTurn` now
+accepts a Vault with no built-in setup, supplies an empty eligible-card catalog
+with a valid revision, and still executes the same Conversation-owned Manager
+Engine. It neither creates a registry nor silently installs Experts during that
+turn. Existing installations continue to refresh their source availability and
+resynchronize the shared Directory before catalog construction; cancellation,
+Vault failure and registry storage failure remain fatal, while an optional
+calendar connector lookup failure is represented as unavailable rather than
+blocking unrelated conversation.
+
+Implemented and wired: optional built-in setup projection in the production
+caller and setup-independent general turns. Direct validation created an
+encrypted Vault and personal Session without any Expert registry, reopened the
+actual Vault worker, completed a remote-server-local general turn, and then
+reopened the Vault again to prove the turn had not installed setup as a side
+effect. The existing durable built-in denial and Schedule Task flows also
+passed. All 90 FFI library tests, workspace all-target check, diff check and the
+migration boundary gate passed (20 nodes / 68 edges / no errors). No Apple UI,
+device-local model or live provider was exercised.
+
+Blocker/remove-by: `ConversationSession::Start` still performs the legacy
+default built-in bootstrap, although a pre-existing setup-free Session no
+longer depends on it at execution time. Multi-hop continuation does not yet
+carry cumulative settled observations and usage across every ancestor Run;
+Engine progress is terminal-only, and archive/compaction, global worker-job
+lifetime and Calendar-root removal remain pending. The next executable P02/P12
+task is to make continuation budget and settled replay state cumulative across
+the bounded continuation chain without re-executing any recorded tool or Task.
+P12 remains partial.
