@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
-| P12 | Partial: encrypted Run repository and Engine lifecycle wired in FFI; production conversation caller pending |
+| P12 | Partial: encrypted Run lifecycle and activation recovery wired in FFI; production conversation caller pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2722,3 +2722,44 @@ implemented. The Core DTO and tables are a P13 bridge: P13 moves them behind
 executable task is Conversation executor activation that atomically interrupts
 or recovers unfinished Runs before admission, followed by the actual FFI caller
 cutover. P12 remains partial.
+
+### P12 Conversation executor activation checkpoint (2026-09-15)
+
+Code checkpoints `802718a` and `cb5dc9c` add a persisted Conversation executor
+generation and wire activation into the real `OpenVault` create/unlock
+composition path. Each activation advances the generation in the same immediate
+encrypted transaction that finds every Working Run, marks it Interrupted,
+records the interruption outcome, advances the Run and Session revisions, and
+releases the matching Session claim. Admission, journal append and finalization
+now require the in-memory executor generation to match the durable generation;
+terminal receipts expose their executor generation. A late pre-crash terminal
+write therefore cannot replace the recovered terminal state, and activation
+does not invoke a model, tool, Task endpoint or other settled operation.
+
+The Conversation store shape is explicitly version 2. Version 1 was introduced
+only by the immediately preceding local-development checkpoint; no compatibility
+migration is retained because Floe-owned local data is disposable under the
+current development policy. A version-1 local test Vault must be reset rather
+than silently accepted with the new executor contract.
+
+Implemented and wired: atomic orphan interruption, generation fencing and
+Session claim release on `OpenVault::activate`. Direct validation passed 3 Core
+Conversation transaction tests, including a real encrypted Vault close/reopen,
+exact replay of the recovered Interrupted receipt, rejection of a late terminal
+CAS and admission of a new command after claim release. Two focused FFI tests
+passed: the existing ConversationService encrypted execution/replay flow and an
+actual `OpenVault` unlock activation that surfaced one recovered Run. All 3
+Conversation tests passed. Focused Conversation Clippy passed with warnings
+denied; focused Core/FFI Clippy passed with the repository's existing lint
+classes allowed; workspace all-target check, diff check and the migration
+boundary gate passed (20 nodes / 68 edges / no errors). No Apple UI, live
+provider/model or production conversation turn caller was exercised.
+
+Blocker/remove-by: production `run_general_turn` still invokes the legacy
+`floe-agent::AgentRuntime`, and the extracted Engine does not yet have FFI
+adapters for the governed model, tools and Directory-backed Task delegation.
+Durable journal replay reads and continuation recovery also remain pending. The
+next executable task is to implement those three FFI Engine port adapters and
+route the production general-conversation caller through `ConversationService`,
+while leaving Calendar-independent prompts on the same Manager root. P12
+remains partial.
