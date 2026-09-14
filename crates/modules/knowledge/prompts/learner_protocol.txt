@@ -1,20 +1,17 @@
 No capabilities, tools, experts, delegation, network, credentials, or external actions are available.
 
-Return exactly one JSON object as the answer text. It must have schema_version 1 and a proposal field.
-
-For no change:
+Return exactly one JSON object with schema_version 1 and a proposal field. For no change:
 {"schema_version":1,"proposal":null}
 
-For a Memory proposal, proposal must contain only observation_kind, value, target_id, and base_revision. The value must contain kind, statement, epistemic_status, confidence_millis, valid_from, valid_until, and observed_at. Use null for absent optional values. Do not wrap JSON in Markdown.
+For a proposal, include only observation_kind, value, target_id, and base_revision. Value includes kind, statement, epistemic_status, confidence_millis, valid_from, valid_until, and observed_at. Use null for absent optionals. Do not use Markdown.
 
-Use only these exact enum values:
-- observation_kind: explicit_remember, user_correction, outcome_conflict, reusable_procedure. Use explicit_remember for an explicit request to remember a preference, not fact or preference.
-- value.kind: fact, observation, inference, preference, commitment.
-- value.epistemic_status: fact or inference, never confirmed. Use inference exactly when value.kind is inference; otherwise use fact.
+Enums are exact: observation_kind is explicit_remember, user_correction, outcome_conflict, or reusable_procedure; value.kind is fact, observation, inference, preference, or commitment; epistemic_status is fact or inference, and is inference exactly when kind is inference.
 
-confidence_millis must be an integer from 0 to 1000. statement must be a nonempty string.
-For a new memory, target_id and base_revision must both be null. Never use a person's name as target_id. For a revision, copy the exact UUID target_id and integer revision from one supplied current memory into target_id and base_revision.
-valid_from and valid_until must be null unless the user explicitly specifies when the preference starts or expires. A conversation's "Observed at" timestamp is NOT a validity period: never copy it into valid_from or valid_until. When both validity dates are present, valid_until must be later. Dates must be RFC 3339 strings. observed_at is overwritten by the runtime; use "1970-01-01T00:00:00Z" as its placeholder.
+confidence_millis is an integer 0 through 1000. statement is nonempty and preserves the exact named person or entity from evidence; never replace a named fictional person with "the user".
 
-New preference example (replace only the statement with supported evidence):
-{"schema_version":1,"proposal":{"observation_kind":"explicit_remember","value":{"kind":"preference","statement":"Prefers afternoon meetings","epistemic_status":"fact","confidence_millis":1000,"valid_from":null,"valid_until":null,"observed_at":"1970-01-01T00:00:00Z"},"target_id":null,"base_revision":null}}
+For a new memory, target_id and base_revision are null. Never use a person's name as target_id. For a revision, copy the exact UUID target_id and positive integer base_revision from one supplied current memory.
+
+valid_from and valid_until are null unless evidence explicitly says when the preference starts or expires. Select the timeless form otherwise. Never copy the conversation's Observed at timestamp, use model knowledge, or invent a date. If dates are explicit, they are real RFC 3339 calendar timestamps and valid_until is later than valid_from. observed_at is runtime-owned; use "1970-01-01T00:00:00Z" as its placeholder.
+
+New preference example (replace only the subject and claim with supported evidence):
+{"schema_version":1,"proposal":{"observation_kind":"explicit_remember","value":{"kind":"preference","statement":"A contact: prefers tea","epistemic_status":"fact","confidence_millis":1000,"valid_from":null,"valid_until":null,"observed_at":"1970-01-01T00:00:00Z"},"target_id":null,"base_revision":null}}

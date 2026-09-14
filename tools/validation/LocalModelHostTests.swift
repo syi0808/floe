@@ -145,11 +145,11 @@ struct LocalModelHostTests {
     precondition(emptyObject["schema_version"] as? Int == 1 && emptyObject["proposal"] is NSNull)
     let learnerValue = GeneratedLearnerMemoryValue(
       kind: .preference,
-      statement: "Prefers afternoon meetings",
+      subject: "Alex",
+      claim: "prefers afternoon meetings",
       epistemicStatus: .fact,
       confidenceMillis: 1000,
-      validFrom: nil,
-      validUntil: nil)
+      validity: .timeless)
     let learnerProposal = GeneratedLearnerProposal(
       observationKind: .explicitRemember,
       value: learnerValue,
@@ -161,18 +161,29 @@ struct LocalModelHostTests {
     let encodedFields = encodedValue["value"] as! [String: Any]
     precondition(encodedObject["schema_version"] as? Int == 1)
     precondition(encodedValue["target_id"] is NSNull && encodedValue["base_revision"] is NSNull)
+    precondition(encodedFields["statement"] as? String == "Alex: prefers afternoon meetings")
     precondition(encodedFields["observed_at"] as? String == "1970-01-01T00:00:00Z")
     precondition(encodedFields["valid_from"] is NSNull && encodedFields["valid_until"] is NSNull)
     var invalidLearner = learnerProposal
-    invalidLearner.value.validFrom = "not-a-date"
+    invalidLearner.value.subject = " "
     precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
-    invalidLearner.value.validFrom = "2026-09-14T00:00:00Z"
-    invalidLearner.value.validUntil = "2026-09-14T00:00:00Z"
+    invalidLearner = learnerProposal
+    invalidLearner.value.claim = " "
     precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
-    invalidLearner.value.validUntil = "2026-09-15T00:00:00Z"
+    invalidLearner = learnerProposal
+    invalidLearner.value.validity = .starts(validFrom: "not-a-date")
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
+    invalidLearner.value.validity = .starts(validFrom: "2026-09-14T00:00:00Z")
     precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
-    invalidLearner.value.validFrom = "2026-09-14T00:00:00.123456Z"
-    invalidLearner.value.validUntil = "2026-09-15T00:00:00.123456Z"
+    invalidLearner.value.validity = .expires(validUntil: "2026-09-15T00:00:00Z")
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
+    invalidLearner.value.validity = .expires(validUntil: "not-a-date")
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
+    invalidLearner.value.validity = .range(validFrom: "2026-09-14T00:00:00Z", validUntil: "2026-09-14T00:00:00Z")
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) == nil)
+    invalidLearner.value.validity = .range(validFrom: "2026-09-14T00:00:00Z", validUntil: "2026-09-15T00:00:00Z")
+    precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
+    invalidLearner.value.validity = .range(validFrom: "2026-09-14T00:00:00.123456Z", validUntil: "2026-09-15T00:00:00.123456Z")
     precondition((try? learnerOutputText(GeneratedLearnerAnswer(proposal: invalidLearner))) != nil)
     let malformed = floeLocalModel(nil, 0)!
     precondition(String(cString: malformed).contains("invalid_input"))

@@ -138,8 +138,22 @@ general semantic verifier. Inspect the answer for other unsupported claims.
 
 The 2026-09-14 live runs exposed unsupported dates and a dropped subject, including
 one structurally valid pending candidate. That run is not semantic acceptance;
-the strengthened fixture must not count it as a pass. The learner live acceptance
-remains open even when routing, native schema and encrypted staging tests pass.
+the strengthened fixture must not count it as a pass. The later subject/claim and
+explicit-validity schema passed the original fixed fixture with its subject
+preserved, null dates and one pending candidate. This is narrow synthetic evidence,
+not acceptance of all learner outputs or the normal application's review UI.
+
+To check that avoiding fabricated dates did not remove end-only validity support:
+
+```sh
+bash tools/validation/run-local-model-smoke.sh --exercise-learner-expiry
+```
+
+This separate fixed synthetic fixture supplies an explicit expiry and no start
+date. It requires a pending candidate with that exact expiry, no start date and
+the original subject/preference. Neither fixture approves the candidate. Both
+use the same Knowledge service as production and inspect persisted completion
+and candidate-ID/snapshot correspondence; locally settled failures fail the smoke.
 
 ## Still required
 

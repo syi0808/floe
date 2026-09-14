@@ -237,14 +237,28 @@ enum GeneratedLearnerEpistemicStatus {
 @Generable
 struct GeneratedLearnerMemoryValue {
   var kind: GeneratedLearnerMemoryKind
-  var statement: String
+  @Guide(description: "Copy the exact named person or entity from the evidence. Use the user only when no other subject is named.")
+  var subject: String
+  @Guide(description: "Only the claim after the subject, such as 'prefers tea'. Do not omit or rename the named subject from the evidence.")
+  var claim: String
   var epistemicStatus: GeneratedLearnerEpistemicStatus
   @Guide(description: "Confidence as an integer from 0 to 1000, for example 950.", .range(0...1000))
   var confidenceMillis: Int
-  @Guide(description: "Use null unless the user explicitly states when this memory starts being valid. Never invent dates or use the conversation observation time. A supplied date must be RFC3339.")
-  var validFrom: String?
-  @Guide(description: "Use null unless the user explicitly states when this memory expires. Never invent dates or use the conversation observation time. A supplied date must be RFC3339 and later than validFrom.")
-  var validUntil: String?
+  @Guide(description: "Choose expires when evidence gives only an expiry, starts for only a start date, range for both, and timeless only when neither is stated. Copy explicit dates exactly; never discard a stated expiry.")
+  var validity: GeneratedLearnerValidity
+}
+
+#if os(macOS)
+@available(macOS 26.0, *)
+#elseif os(iOS)
+@available(iOS 26.0, *)
+#endif
+@Generable
+enum GeneratedLearnerValidity {
+  case timeless
+  case starts(validFrom: String)
+  case expires(validUntil: String)
+  case range(validFrom: String, validUntil: String)
 }
 
 #if os(macOS)
@@ -431,29 +445,48 @@ private func learnerProposalObject(_ proposal: GeneratedLearnerProposal) throws 
     throw LocalModelFailure("invalid_model_output")
   }
   let value = proposal.value
-  let validFrom = value.validFrom
-  let validUntil = value.validUntil
-  guard !value.statement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+  let subject = value.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+  let claim = value.claim.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !subject.isEmpty, !claim.isEmpty,
         (0...1000).contains(value.confidenceMillis),
         (value.epistemicStatus == .inference) == (value.kind == .inference) else {
     throw LocalModelFailure("invalid_model_output")
   }
-  if let validFrom, learnerValidityDate(validFrom) == nil {
-    throw LocalModelFailure("invalid_model_output")
-  }
-  if let validUntil, learnerValidityDate(validUntil) == nil {
-    throw LocalModelFailure("invalid_model_output")
-  }
-  if let validFrom, let validUntil,
-     let from = learnerValidityDate(validFrom),
-     let until = learnerValidityDate(validUntil), until <= from {
-    throw LocalModelFailure("invalid_model_output")
+  let validFrom: String?
+  let validUntil: String?
+  switch value.validity {
+  case .timeless:
+    validFrom = nil
+    validUntil = nil
+  case let .starts(from):
+    guard learnerValidityDate(from) != nil,
+          !from.isEmpty else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    validFrom = from
+    validUntil = nil
+  case let .expires(until):
+    guard learnerValidityDate(until) != nil,
+          !until.isEmpty else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    validUntil = until
+    validFrom = nil
+  case let .range(from, until):
+    guard learnerValidityDate(from) != nil,
+          learnerValidityDate(until) != nil,
+          let parsedFrom = learnerValidityDate(from),
+          let parsedUntil = learnerValidityDate(until), parsedUntil > parsedFrom else {
+      throw LocalModelFailure("invalid_model_output")
+    }
+    validFrom = from
+    validUntil = until
   }
   return [
     "observation_kind": learnerObservationKindName(proposal.observationKind),
     "value": [
       "kind": learnerMemoryKindName(value.kind),
-      "statement": value.statement,
+      "statement": "\(subject): \(claim)",
       "epistemic_status": learnerEpistemicStatusName(value.epistemicStatus),
       "confidence_millis": value.confidenceMillis,
       "valid_from": validFrom.map { $0 as Any } ?? NSNull(),

@@ -58,7 +58,7 @@ impl VaultKeyProvider for SmokeKeys {
     }
 }
 
-pub(super) async fn run() -> Result<Value, AgentFailure> {
+pub(super) async fn run(with_expiry: bool) -> Result<Value, AgentFailure> {
     let root = tempfile::tempdir().map_err(|_| AgentFailure::StorageUnavailable)?;
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))
         .map_err(|_| AgentFailure::StorageUnavailable)?;
@@ -69,7 +69,11 @@ pub(super) async fn run() -> Result<Value, AgentFailure> {
     session.messages = vec![
         AgentMessage::User {
             turn_id,
-            text: "Please remember for later: fictional Alex prefers afternoon meetings.".into(),
+            text: if with_expiry {
+                "Please remember for later: fictional Alex prefers afternoon meetings. This preference expires at 2027-01-01T00:00:00Z, with no start date."
+            } else {
+                "Please remember for later: fictional Alex prefers afternoon meetings."
+            }.into(),
         },
         AgentMessage::Assistant {
             turn_id,
@@ -105,6 +109,7 @@ pub(super) async fn run() -> Result<Value, AgentFailure> {
     let pending = vault.memory_review_snapshot().await?;
     if pending.candidates.len() != usize::from(settled.candidate_id.is_some())
         || pending.candidates.first().map(|candidate| candidate.id) != settled.candidate_id
+        || (with_expiry && pending.candidates.is_empty())
     {
         return Err(AgentFailure::Conflict);
     }
@@ -113,8 +118,17 @@ pub(super) async fn run() -> Result<Value, AgentFailure> {
             return Err(AgentFailure::InvalidModelOutput);
         };
         let statement = value.statement.to_lowercase();
+        let expected_expiry = if with_expiry {
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2027-01-01T00:00:00Z")
+                    .map_err(|_| AgentFailure::InvalidInput)?
+                    .with_timezone(&Utc),
+            )
+        } else {
+            None
+        };
         if value.valid_from.is_some()
-            || value.valid_until.is_some()
+            || value.valid_until != expected_expiry
             || !statement.contains("alex")
             || !statement.contains("afternoon")
         {
@@ -129,5 +143,6 @@ pub(super) async fn run() -> Result<Value, AgentFailure> {
         "disposable_encrypted_vault": true,
         "pending_candidates": pending.candidates.len(),
         "auto_approved": false,
+        "explicit_expiry": with_expiry,
     }))
 }

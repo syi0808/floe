@@ -17,12 +17,14 @@ async fn main() -> std::process::ExitCode {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let optional_memory = arguments == ["--exercise-optional-memory"];
     let learner = arguments == ["--exercise-learner"];
+    let learner_expiry = arguments == ["--exercise-learner-expiry"];
     if arguments != ["--availability"]
         && arguments != ["--exercise"]
         && !optional_memory
         && !learner
+        && !learner_expiry
     {
-        eprintln!("Use --availability, --exercise, --exercise-optional-memory, or --exercise-learner (synthetic only)");
+        eprintln!("Use --availability, --exercise, --exercise-optional-memory, --exercise-learner, or --exercise-learner-expiry (synthetic only)");
         return std::process::ExitCode::FAILURE;
     }
     let model = FoundationModelRunner::synthetic();
@@ -46,8 +48,8 @@ async fn main() -> std::process::ExitCode {
     if availability != LocalModelAvailability::Available {
         return std::process::ExitCode::FAILURE;
     }
-    if learner {
-        return match learner::run().await {
+    if learner || learner_expiry {
+        return match learner::run(learner_expiry).await {
             Ok(result) => {
                 println!("{result}");
                 std::process::ExitCode::SUCCESS
