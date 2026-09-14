@@ -1897,3 +1897,52 @@ Conversation/repository SQL ownership in P12/P13, Playbook delivery, T28/T31 and
 full T11 Tasks/Notes acquisition. The earlier Flutter fixture discrepancy and
 normal Apple app secure-storage failure remain unresolved. No normal app data,
 keys or external provider/account data was reset.
+
+## P08 learner coordination and foreground priority leases — 2026-09-14
+
+Code checkpoint `aa132e1`: Knowledge LearnerService owns bounded discovery,
+claim, runtime invocation and settlement through LearnerJobRepository and the
+existing MemoryCandidateSink. FFI learner_worker now only supplies the actual
+Foundation transport and Vault adapter. Core implements the repository port by
+delegating to its existing transaction-bound methods; discovery/evidence,
+lease/attempt/CAS, encryption and final key checks are unchanged. SQL placement
+remains a P13 seam, not a new Knowledge-to-Core dependency.
+
+Knowledge LearnerScheduling replaces the FFI foreground atomic plus manually
+registered background cancellation slot. It grants one RAII learner lease with
+an independent cancellation token, excludes pending foreground work, and cancels
+only that learner on foreground submission. Lease drop cancels orphan work and
+releases ownership; closure cancels active work and refuses new leases. FFI
+retains its existing single-worker queue and cadence as a temporary host. It
+finishes foreground priority before publishing the job as done under the progress
+lock, so a later accepted submission cannot have its pending state cleared by
+the previous job's completion.
+
+Direct encrypted-Vault service regression exercises cancelled-before-discovery,
+discovery, claim, no-change completion, repeat polling, an empty candidate review
+and unchanged source session. The existing fatal-storage-versus-local-model
+settlement regression now calls the owner service with all assertions retained.
+The existing actual Worker foreground-preemption test now acquires the real owner
+lease rather than manually filling a private cancellation slot. Two Knowledge
+tests exercise learner/foreground/expert cancellation isolation, exclusive
+ownership, RAII cancellation, fresh subsequent leases and closed admission.
+
+The signed synthetic learner helper now invokes the same LearnerService and
+checks persisted terminal state and candidate-ID/snapshot correspondence. A
+locally settled model failure is not mistaken for smoke success. Its fixed
+subject/no-invented-date assertions remain in place. Live native output quality
+is a separate ongoing investigation; this coordination checkpoint does not
+claim a successful real-model learner result or Apple application UI validation.
+
+Validation passed: Knowledge tests (21), targeted FFI learner tests (4), full
+FFI library tests (77), workspace all-target check, Knowledge all-target Clippy
+with `-D warnings`, diff check and migration gate (17 nodes / 52 edges / no
+errors). The new discovery fixture initially omitted an assistant outcome and
+was correctly ineligible; it was corrected to a completed conversation rather
+than weakening admission. No ordinary app data, keys or external data was reset.
+
+P08 and the full plan remain incomplete. The generic ExecutionScope budget and
+trace integration, final app-host/scheduler placement, Conversation and repository
+ownership, full Playbook delivery, real learner quality, Apple review UI and
+complete T11/T28/T31 evidence still require work. The previously recorded Flutter
+fixture and normal-app secure-storage failures remain open.
