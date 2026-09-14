@@ -2488,3 +2488,38 @@ Worker-lifetime activation and exact DTO conversion in FFI. Schedule completion
 and the Task terminal result are not yet one atomic durable operation, so P15
 must not route production dispatch through this repository until that crash
 window and Task/Note provenance are closed. P11 remains pending.
+
+### P11 Worker Task activation checkpoint (2026-09-15)
+
+The production FFI Vault host now owns an `floe-experts::TaskCoordinator` for
+the full unlocked-Vault lifetime. Vault create and unlock construct one shared
+encrypted-Vault repository, activate its store-authoritative executor generation
+before reporting Ready, retain the recovered Interrupted receipts, and keep the
+same coordinator until lock, person change, or Vault failure drops the opened
+state. Foreground jobs no longer have an opportunity to activate a new Task
+generation per conversation turn.
+
+`vault_host::task_repository` is an explicit conversion adapter between the
+Experts-owned Task record and the temporary Core Vault storage DTO. Admission,
+exact retry, get, revision/generation CAS and activation recovery all delegate
+to the encrypted repository without using a second in-process Task map. A
+focused reopen test admits and advances a Task through the adapter, then proves
+that `OpenVault` startup returns its durable Interrupted receipt. Existing
+Worker create/lock/unlock coverage proves that the new activation boundary does
+not break the user-visible Vault lifecycle.
+
+Implemented and wired: FFI repository conversion plus Worker-lifetime Task
+activation. Direct validation passed the focused adapter/recovery test, the
+existing unlocked Worker lifecycle and Calendar authority round trip, workspace
+all-target check, focused FFI Clippy with only pre-existing dependency/crate lint
+classes allowed, diff check and the migration gate (19 nodes / 61 edges / no
+errors). No Apple UI, live provider account or actual model was exercised.
+
+Blocker/remove-by: the retained Directory is still empty and the common Manager
+root does not yet borrow this coordinator. The protected Schedule endpoint still
+commits its registry completion before the Task terminal result, so registering
+and dispatching it now would preserve a crash window. P15 must first make
+Schedule completion and Task/result provenance one atomic durable settlement;
+then FFI can register the endpoint and replace `schedule::try_run`. The adapter
+and Core DTO remain temporary until P13 moves the repository to `floe-vault`.
+P11 remains pending.
