@@ -47,7 +47,7 @@ P00 baseline/tooling is implemented; its shared T37 product acceptance remains p
 | P09 | Pending |
 | P10 | Pending |
 | P11 | Partial: durable Task coordinator and Schedule production dispatch wired; target ownership move pending |
-| P12 | Partial: encrypted Run lifecycle and activation recovery wired in FFI; production conversation caller pending |
+| P12 | Partial: production new-turn caller uses ConversationService; continuation and legacy Expert bridges pending |
 | P13 | Pending |
 | P14 | Pending |
 | P15 | Partial: protected endpoint and common Manager Task cutover implemented; Apple/live acceptance pending |
@@ -2763,3 +2763,51 @@ next executable task is to implement those three FFI Engine port adapters and
 route the production general-conversation caller through `ConversationService`,
 while leaving Calendar-independent prompts on the same Manager root. P12
 remains partial.
+
+### P12 production new-turn caller checkpoint (2026-09-15)
+
+Code checkpoint `e2f13cc` routes the production non-continuation
+`ConversationTurn` caller through `ConversationService`, the extracted Manager
+Engine and the encrypted `VaultConversationRepository`. The outer Vault request
+UUID is now the stable CommandId, so a retry after the worker Release boundary
+reaches the durable command receipt instead of dispatching another model call.
+The complete conversation request, including route and device binding, is
+hashed into the admission identity; bearer credentials are not stored in the
+Run record. A changed payload under the same CommandId conflicts.
+
+The FFI transition adapters preserve the existing governed model projection and
+post-response authority fence. Only read-only capability descriptors enter the
+Engine tool catalog, and the tool adapter checks that property again before
+invocation and propagates the recorded result coverage. Schedule delegation
+continues through the registered durable `TaskCoordinator` and protected
+endpoint. Other enabled read-only built-in Experts remain behind an explicit
+FFI leaf bridge so the caller cutover does not silently remove current product
+behavior; that bridge is not a second root, but it still bypasses the target
+Experts-owned durable Task transition and must be removed.
+
+Implemented and wired: production new-turn admission, Manager model/tool and
+delegation ports, encrypted finalization, stable replay identity and request
+binding. Direct validation exercised the actual Vault worker with a remote model
+fixture: the first request committed an encrypted answer, an identical request
+after Release returned the same Session with one total HTTP/model dispatch, and
+a changed payload conflicted without another dispatch. The existing production
+fixture Schedule flow also passed through the new root and its durable
+registered Task. All 86 FFI library tests and all 3 Conversation tests passed.
+Focused Conversation Clippy passed with warnings denied; focused Core/FFI
+Clippy passed with the repository's existing lint classes allowed; workspace
+all-target check, staged diff check and the migration boundary gate passed (20
+nodes / 68 edges / no errors). The broader `cargo test -p floe-ffi` run exposed
+one unrelated current C-ABI failure,
+`action_authority_defaults_to_ask_and_persists`, which reproduces alone as a
+`PolicyDenied` response; 11 other C-ABI tests passed. No Apple UI, device-local
+model or live provider was exercised.
+
+Blocker/remove-by: continuation and explicit recovery still call the legacy
+`AgentRuntime`; non-Schedule Expert delegation is not yet owned by the durable
+Directory/Task coordinator; builtin installation remains a turn prerequisite;
+and Engine progress is currently projected only as a terminal Finished event.
+Durable journal replay reads and complete tool/delegation transcript projection
+also remain pending. The next executable task is to register staged endpoints
+for every enabled built-in Expert in the shared Directory and route all
+delegations through `TaskCoordinator`, removing the non-Schedule leaf bridge.
+P12 remains partial.
